@@ -586,6 +586,77 @@ impl Importer<'_> {
                 value,
             });
         }
+        let receipts = if let Some(contract) = &fn_abi.receipts {
+            if !contract.captures.is_empty()
+                || !contract.inventory.is_empty()
+                || contract.result.is_some()
+            {
+                return unsupported("receipt calls with captures, inventory or result custody");
+            }
+            let mut carriers = Vec::new();
+            for parameter in &contract.parameters {
+                if parameter.mode != hirsel_lir::sealed_payload_source::ReceiptMode::Borrow {
+                    return unsupported("receipt call requires borrowed metadata custody");
+                }
+                let argument = arguments
+                    .iter()
+                    .find(|a| a.parameter.0 == parameter.source)
+                    .ok_or_else(|| PassError::Malformed("receipt call source parameter".into()))?;
+                let place = &self.body.places[argument.value.place.0 as usize];
+                if !place.projection.is_empty() {
+                    return unsupported(
+                        "receipt call projected argument requires complete payload transport",
+                    );
+                }
+                let ordinal = self
+                    .body
+                    .parameters
+                    .iter()
+                    .position(|local| *local == place.root)
+                    .ok_or_else(|| {
+                        PassError::Unsupported(
+                            "receipt call argument has no incoming metadata snapshot".into(),
+                        )
+                    })?;
+                let binding = self
+                    .out
+                    .tables
+                    .receipt_entry
+                    .as_ref()
+                    .and_then(|entry| entry.parameters.iter().find(|p| p.source == ordinal as u32))
+                    .cloned()
+                    .ok_or_else(|| {
+                        PassError::Unsupported(
+                            "receipt call argument has no incoming metadata snapshot".into(),
+                        )
+                    })?;
+                let metadata = self.whole(binding.slot);
+                let address = self.address(&metadata)?;
+                let loan = self.synthetic_loan(address);
+                let receipt = self.value(metadata.ty, Holding::Borrowed(loan));
+                let reaching = self.reaching(binding.slot)?;
+                self.push(Inst::Read {
+                    result: receipt,
+                    address,
+                    reaching,
+                    mode: ReadMode::Borrow,
+                });
+                capture_loans.push(loan);
+                carriers.push(hirsel_lir::receipt_transport::ReceiptArgument::Borrow {
+                    parameter: parameter.source,
+                    receipt,
+                });
+            }
+            Some(hirsel_lir::receipt_transport::ReceiptCall {
+                contract: contract
+                    .content()
+                    .map_err(|e| PassError::Malformed(e.into()))?,
+                arguments: carriers,
+                result: None,
+            })
+        } else {
+            None
+        };
         let dest = returns
             .map(|r| {
                 let dest = self.place(r.destination)?;
@@ -628,7 +699,7 @@ impl Importer<'_> {
         let arguments = PoolRange::push(&mut self.out.pools.call_arguments, args);
         let call = CallId(self.out.tables.calls.len() as u32);
         self.out.tables.calls.push(CallSite {
-            receipts: None,
+            receipts,
             pretransfer_failure,
             forward_caller: match callee {
                 tir::Callee::Definition { .. } => true,

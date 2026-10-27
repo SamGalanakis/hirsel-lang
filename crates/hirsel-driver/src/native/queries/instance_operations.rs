@@ -7,6 +7,7 @@ use hirsel_syntax::{ContentHash, DefPath};
 
 pub(super) struct InstanceOperations<'a> {
     pub declarations: &'a (dyn OperationDeclarations + Sync),
+    pub receipts: Option<&'a super::receipt_requests::Sources>,
     pub source: Option<(&'a DefPath, ContentHash)>,
     pub all_sources: bool,
     pub pretransfer: Option<Vec<hirsel_lir::pretransfer::AdapterReference>>,
@@ -46,7 +47,9 @@ impl OperationDeclarations for InstanceOperations<'_> {
         definition: &DefPath,
         instance: ContentHash,
     ) -> Option<hirsel_lir::sealed_payload_source::ReceiptSource> {
-        self.declarations.receipt_source(definition, instance)
+        self.receipts
+            .and_then(|sources| sources.get(&(definition.clone(), instance)).cloned())
+            .or_else(|| self.declarations.receipt_source(definition, instance))
     }
 
     fn seal_source_witness(
@@ -86,6 +89,18 @@ impl OperationDeclarations for InstanceOperations<'_> {
         table: &LayoutTable,
         target: &TargetSpec,
     ) -> Result<hirsel_lir::sealed::SealDescriptor, LayoutError> {
+        if let Some(selected) = self
+            .receipts
+            .and_then(|sources| sources.get(&(definition.clone(), instance)))
+        {
+            return super::receipt_requests::descriptor(
+                selected,
+                self.declarations,
+                source,
+                table,
+                target,
+            );
+        }
         self.declarations
             .seal_descriptor_for_source(definition, instance, source, table, target)
     }

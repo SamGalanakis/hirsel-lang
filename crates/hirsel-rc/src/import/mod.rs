@@ -2214,6 +2214,7 @@ pub(crate) fn repr_of(kind: &LayoutKind) -> ValueRepr {
         | LayoutKind::SealedRegion { .. } => ValueRepr::Handle,
         LayoutKind::Path => ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::U64),
         LayoutKind::Arena => ValueRepr::Arena,
+        LayoutKind::PayloadReceipt { .. } => ValueRepr::PayloadReceipt,
         LayoutKind::Header => ValueRepr::Token,
         _ => ValueRepr::Aggregate,
     }

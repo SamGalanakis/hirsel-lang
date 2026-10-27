@@ -284,6 +284,8 @@ pub struct Instances {
     pub elided: HashMap<InstanceId, std::collections::HashSet<hirsel_tir::LocalId>>,
     selection_reads: std::sync::Mutex<std::collections::BTreeSet<SelectionRead>>,
     by_key: HashMap<InstanceKey, InstanceId>,
+    receipt_sources: HashMap<InstanceId, hirsel_lir::sealed_payload_source::ReceiptSource>,
+    lexical_keys: HashMap<InstanceId, InstanceKey>,
     function_entries: BTreeMap<DefPath, BodyId>,
     producers: BTreeMap<DefPath, HashMap<(BodyId, hirsel_tir::LocalId), Option<Producer>>>,
 }
@@ -314,6 +316,8 @@ impl Instances {
             elided: HashMap::new(),
             selection_reads: Default::default(),
             by_key: HashMap::new(),
+            receipt_sources: HashMap::new(),
+            lexical_keys: HashMap::new(),
             function_entries: BTreeMap::new(),
             producers: BTreeMap::new(),
         }
@@ -534,6 +538,69 @@ impl Instances {
     pub fn view(&self, id: InstanceId) -> &InstanceView {
         &self.views[id.index()]
     }
+    /// Source discovery keeps its lexical address even when native transport
+    /// selects a distinct receipt-aware implementation of that same body.
+    pub fn lexical_key(&self, id: InstanceId) -> &InstanceKey {
+        self.lexical_keys.get(&id).unwrap_or(&self.view(id).key)
+    }
+
+    pub fn receipt_source(
+        &self,
+        id: InstanceId,
+    ) -> Option<&hirsel_lir::sealed_payload_source::ReceiptSource> {
+        self.receipt_sources.get(&id)
+    }
+
+    /// Bind an independently selected source request after lexical discovery.
+    /// This registers producer inputs; only strict C can accept their custody.
+    pub fn bind_receipt_request(
+        &mut self,
+        id: InstanceId,
+        request: &crate::sealed_source::contract::registry::Request,
+        layouts: &mut LayoutBuilder<'_>,
+    ) -> Result<(), InstanceError> {
+        if self.lexical_key(id) != request.ordinary_key()
+            || self.view(id).body.0 != request.declaration().entry().reference().body
+        {
+            return Err(InstanceError::Malformed(
+                "receipt request differs from lexical source".into(),
+            ));
+        }
+        let Some(source) = request
+            .receipt_source()
+            .map_err(|e| InstanceError::Malformed(format!("receipt source: {e:?}")))?
+        else {
+            return Ok(());
+        };
+        if let Some(previous) = self.receipt_sources.get(&id) {
+            return if previous == &source {
+                Ok(())
+            } else {
+                Err(InstanceError::Malformed(
+                    "conflicting receipt request".into(),
+                ))
+            };
+        }
+        let key = request
+            .aware_key()
+            .ok_or_else(|| InstanceError::Malformed("missing aware key".into()))?
+            .clone();
+        if self.by_key.get(&key).is_some_and(|other| *other != id) {
+            return Err(InstanceError::Malformed(
+                "receipt key already names another instance".into(),
+            ));
+        }
+        let abi = layouts
+            .receipt_fn_abi(self.abis[id.index()], &source.contract)
+            .map_err(|e| InstanceError::Layout(key.definition().clone(), e))?;
+        self.lexical_keys.insert(id, self.view(id).key.clone());
+        self.views[id.index()].key = key.clone();
+        self.abis[id.index()] = abi;
+        self.by_key.insert(key, id);
+        self.receipt_sources.insert(id, source);
+        Ok(())
+    }
+
     /// Source callable of a proof owner, never an appended Value-unit index.
     pub(crate) fn callable(&self, id: InstanceId) -> &FunctionType {
         match self.types.get(self.callables[id.index()]) {

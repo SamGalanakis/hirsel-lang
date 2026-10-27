@@ -39,6 +39,7 @@ type R<T> = Result<T, PassError>;
 pub trait Layouts {
     fn layout(&mut self, types: &TypeInterner, ty: TypeId) -> Result<LayoutId, LayoutError>;
     fn record(&self, id: LayoutId) -> &LayoutRecord;
+    fn payload_receipt(&mut self, root: &hirsel_lir::operation::NativeType) -> LayoutId;
     fn fn_abi(
         &mut self,
         types: &TypeInterner,
@@ -83,6 +84,9 @@ pub trait Layouts {
 impl Layouts for LayoutBuilder<'_> {
     fn layout(&mut self, types: &TypeInterner, ty: TypeId) -> Result<LayoutId, LayoutError> {
         LayoutBuilder::layout(self, types, ty)
+    }
+    fn payload_receipt(&mut self, root: &hirsel_lir::operation::NativeType) -> LayoutId {
+        LayoutBuilder::payload_receipt(self, root)
     }
     fn record(&self, id: LayoutId) -> &LayoutRecord {
         LayoutBuilder::record(self, id)

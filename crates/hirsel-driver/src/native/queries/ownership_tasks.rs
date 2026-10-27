@@ -237,6 +237,7 @@ impl OwnershipTasks {
                 .operations(&request.owner, &environment)?;
             let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
             let operations = super::instance_operations::InstanceOperations {
+                receipts: None,
                 declarations: &declarations,
                 all_sources: false,
                 source: (!owner.templates.library).then_some((
@@ -265,6 +266,7 @@ impl OwnershipTasks {
             .collect::<Vec<_>>();
         let binding = Binding::new(environment.target, &closures)?;
         let operations = super::instance_operations::InstanceOperations {
+            receipts: None,
             declarations: environment.operations,
             all_sources: true,
             source: None,
@@ -295,6 +297,7 @@ impl OwnershipTasks {
                 .operations(&request.owner, &environment)?;
             let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
             let operations = super::instance_operations::InstanceOperations {
+                receipts: None,
                 declarations: &declarations,
                 all_sources: false,
                 source: (!owner.templates.library).then_some((
@@ -533,6 +536,7 @@ impl OwnershipTasks {
             .operations(&request.owner, &environment)?;
         let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
         let operations = super::instance_operations::InstanceOperations {
+            receipts: None,
             declarations: &declarations,
             all_sources: false,
             source: (!owner.templates.library).then_some((

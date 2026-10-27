@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const SOURCE_RECIPE: Domain = Domain {
     kind: 0x4e00_0016,
-    schema: 1,
+    schema: 2,
 };
 const LIBRARY_RECIPE: Domain = Domain {
     kind: 0x4e00_0017,
@@ -59,6 +59,8 @@ impl NamedKey {
 pub(super) struct Request {
     key: NamedKey,
     recipe: Reference,
+    lexical: NamedKey,
+    receipt_roots: Option<Reference>,
     layouts: Option<Reference>,
     plan: Reference,
 }
@@ -115,6 +117,7 @@ pub struct DemandInstances {
     requests: BTreeMap<Vec<u8>, Request>,
     completed: BTreeMap<Vec<u8>, Arc<DiscoveredInstance>>,
     roots: Vec<InstanceAddress>,
+    receipt_sources: super::receipt_requests::Sources,
     pub imports: u64,
     pub recipe_decodes: u64,
 }
@@ -145,6 +148,7 @@ impl DemandInstances {
             requests: BTreeMap::new(),
             completed: BTreeMap::new(),
             roots: vec![],
+            receipt_sources: Default::default(),
             imports: 0,
             recipe_decodes: 0,
         }
@@ -201,6 +205,42 @@ impl DemandInstances {
             .map_or(&[][..], |d| d.constant_reads.as_slice());
         let action = self.action(source, request, options, reads, constants)?;
         serde_json::to_vec(&(request, action.0)).map_err(|e| e.to_string())
+    }
+    /// Current original receipt profiles paired with the caller's independent
+    /// ordinary declarations. C still admits every cached native output.
+    pub fn operation_declarations(
+        &self,
+        ordinary: Arc<dyn hirsel_lir::operation::OperationDeclarations + Send + Sync>,
+    ) -> Arc<dyn hirsel_lir::operation::OperationDeclarations + Send + Sync> {
+        if self.receipt_sources.is_empty() {
+            return ordinary;
+        }
+        Arc::new(super::receipt_requests::Declarations::new(
+            ordinary,
+            self.receipt_sources.clone(),
+        ))
+    }
+    pub(super) fn recheck_receipts(
+        &mut self,
+        source: &impl NativeSourceProvider,
+    ) -> Result<(), String> {
+        let roots = self
+            .requests
+            .values()
+            .filter_map(|r| r.receipt_roots.map(|root| (root.output.0, root)))
+            .collect::<BTreeMap<_, _>>();
+        self.receipt_sources.clear();
+        for roots in roots.into_values() {
+            let (_, sources) = super::receipt_requests::current(
+                source,
+                &self.records,
+                self.store.as_ref(),
+                &self.target,
+                Some(roots),
+            )?;
+            self.receipt_sources.extend(sources);
+        }
+        Ok(())
     }
     pub fn counts(&self) -> &InstanceQueryCounts {
         &self.queries.counts
@@ -287,6 +327,7 @@ impl DemandInstances {
             .ok_or("native operation scope has no original request")?;
         Ok(super::instance_operations::InstanceOperations {
             declarations: environment.operations,
+            receipts: Some(&self.receipt_sources),
             all_sources: false,
             source: request
                 .source_definition()
@@ -339,6 +380,7 @@ impl DemandInstances {
         instances: &Instances,
         id: InstanceId,
         table: &hirsel_lir::LayoutTable,
+        receipt_roots: Option<Reference>,
     ) -> Result<Request, String> {
         let key = &instances.view(id).key;
         let (recipe, layouts) = if instances.roles[id.index()].is_library() {
@@ -367,6 +409,8 @@ impl DemandInstances {
         };
         Ok(Request {
             key: NamedKey::of(key),
+            lexical: NamedKey::of(instances.lexical_key(id)),
+            receipt_roots: instances.receipt_source(id).and(receipt_roots),
             recipe,
             layouts,
             plan: self.put(
@@ -380,6 +424,16 @@ impl DemandInstances {
     }
     pub(super) fn admit(&mut self, request: Request) -> Result<InstanceAddress, String> {
         let key = request.key.bind()?;
+        let lexical = request.lexical.bind()?;
+        if key.definition() != lexical.definition()
+            || key.body() != lexical.body()
+            || (key != lexical && request.receipt_roots.is_none())
+            || request.receipt_roots.is_some_and(|r| {
+                r.domain != super::receipt_requests::ROOTS || self.store.get_content(r).is_none()
+            })
+        {
+            return Err("native request lacks its lexical or receipt roots".into());
+        }
         if ![SOURCE_RECIPE, LIBRARY_RECIPE].contains(&request.recipe.domain)
             || request.plan.domain != INSTANCE_PLAN
             || self.store.get_content(request.plan).is_none()
@@ -438,7 +492,7 @@ impl DemandInstances {
             plan.register(
                 &declarations.program,
                 &declarations.context,
-                &request.key.bind()?,
+                &request.lexical.bind()?,
                 request.source_definition().is_none(),
                 &mut layouts,
                 &mut instances,
@@ -447,8 +501,9 @@ impl DemandInstances {
         hirsel_rc::import::bind_pretransfer_inventory(registry, &declarations.program, &instances)
     }
 
-    /// Existing source/GEN-5 and constant root policy, with compact declaration
-    /// registration only. No Definition or Value is reconstructed here.
+    /// Register source/GEN-5 and constant roots. Seal-bearing selections first
+    /// reconstruct the current original demand/profile graph, so dispatch uses
+    /// aware keys while lexical source recipes keep their ordinary addresses.
     pub fn roots_from(
         &mut self,
         source: &impl NativeSourceProvider,
@@ -457,7 +512,7 @@ impl DemandInstances {
     }
     fn root_requests(
         &mut self,
-        engine: &impl NativeRecordSource,
+        engine: &impl NativeSourceProvider,
         declarations: &NativeDeclarations,
     ) -> Result<Vec<InstanceAddress>, String> {
         let owners = hirsel_rc::library::owners(
@@ -467,16 +522,48 @@ impl DemandInstances {
         .over(&declarations.program.owners);
         let mut layouts = LayoutBuilder::new(&self.target, &owners);
         layouts.prepare_native_controls();
-        let (instances, roots) = hirsel_rc::instance::seed_instances(
+        let (mut instances, roots) = hirsel_rc::instance::seed_instances(
             &declarations.program,
             &declarations.context,
             &mut layouts,
         )
         .map_err(|e| format!("native root registration: {e:?}"))?;
+        let requires_receipts = super::receipt_requests::required(engine)?;
+        let receipt_roots = if requires_receipts {
+            let inputs = roots
+                .iter()
+                .filter(|id| {
+                    instances.roles[id.index()] == hirsel_rc::instance::InstanceRole::Function
+                })
+                .map(|id| crate::native::receipt_source::factory::NamedInput {
+                    base: instances.lexical_key(*id).clone(),
+                    actuals: instances.actuals[id.index()].clone(),
+                })
+                .collect::<Vec<_>>();
+            let provider = engine
+                .receipt_provider()
+                .ok_or("receipt roots require current original source")?;
+            let (graph, sources) = super::receipt_requests::reconstruct(&provider, inputs.clone())?;
+            let reference = self.put(
+                super::receipt_requests::ROOTS,
+                &super::receipt_requests::encode(engine, &self.records, &inputs)?,
+            )?;
+            for selected in &graph.requests {
+                if let Some(id) = instances.get(selected.ordinary_key()) {
+                    instances
+                        .bind_receipt_request(id, selected, &mut layouts)
+                        .map_err(|e| format!("native root receipt selection: {e:?}"))?;
+                }
+            }
+            self.receipt_sources = sources;
+            Some(reference)
+        } else {
+            None
+        };
         let table = layouts.finish();
         let mut requests = roots
             .into_iter()
-            .map(|id| self.request(engine, &instances, id, &table))
+            .map(|id| self.request(engine, &instances, id, &table, receipt_roots))
             .collect::<Result<Vec<_>, _>>()?;
         requests.sort_by(|a, b| a.key.encoding.cmp(&b.key.encoding));
         let roots = requests
@@ -501,6 +588,24 @@ impl DemandInstances {
         } else {
             None
         };
+        let receipts = request
+            .receipt_roots
+            .map(|roots| {
+                let (_, sources) = super::receipt_requests::current(
+                    inputs,
+                    &self.records,
+                    self.store.as_ref(),
+                    &self.target,
+                    Some(roots),
+                )?;
+                Ok::<_, String>(
+                    sources
+                        .values()
+                        .map(hirsel_codec::to_text)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .transpose()?;
         let constants = constant_reads
             .iter()
             .map(|path| {
@@ -534,6 +639,7 @@ impl DemandInstances {
             inputs.verification() == Verify::On,
             request,
             source,
+            receipts,
             options.flat_walk,
             format!("{:?}", options.discharge.sites(&request.key.definition)),
             selection_reads
@@ -544,7 +650,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v12",
+            "hirsel.native.demand-import-action.v13",
             [bytes.as_slice()],
         )))
     }
@@ -560,7 +666,7 @@ impl DemandInstances {
             .ok_or("missing native discovery")?;
         let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         discovery.seal_demand.validate()?;
-        if discovery.schema != 9
+        if discovery.schema != INSTANCE_DISCOVERY_DOMAIN.schema
             || discovery.seal_demand.owner()
                 != &(key.instance.definition().clone(), key.instance.digest())
             || !discovery.discharge.canonical()
@@ -637,6 +743,34 @@ impl DemandInstances {
             .get(key.instance.encoding())
             .cloned()
             .ok_or("native instance was not discovered")?;
+        let receipt_graph = if request.recipe.domain == SOURCE_RECIPE
+            && (request.receipt_roots.is_some() || super::receipt_requests::required(inputs)?)
+        {
+            Some(super::receipt_requests::current(
+                inputs,
+                &self.records,
+                self.store.as_ref(),
+                &self.target,
+                request.receipt_roots,
+            )?)
+        } else {
+            None
+        };
+        let lexical = request.lexical.bind()?;
+        let selected_receipt = if let Some((graph, sources)) = &receipt_graph {
+            self.receipt_sources.extend(sources.clone());
+            let selected = graph
+                .requests
+                .iter()
+                .find(|r| r.ordinary_key() == &lexical)
+                .ok_or("native request is absent from current original receipt graph")?;
+            if selected.aware_key().unwrap_or(selected.ordinary_key()) != &key.instance {
+                return Err("native receipt request changed with current original source".into());
+            }
+            Some(selected)
+        } else {
+            None
+        };
         // Read ordinary prior dependency metadata before deciding a hit.
         // Only the later C lookup can admit the candidate as a native output.
         let previous = self
@@ -650,7 +784,8 @@ impl DemandInstances {
             .as_ref()
             .map_or(&[][..], |record| record.constant_reads.as_slice());
         let action = self.action(inputs, &request, options, selection_reads, constant_reads)?;
-        if previous.is_some()
+        if request.receipt_roots.is_none()
+            && previous.is_some()
             && let Some(output) = self.completed.get(key.instance.encoding())
             && output.product.product.action == action
         {
@@ -685,9 +820,16 @@ impl DemandInstances {
             .map(|reference| reference.adapter.clone())
             .collect::<Vec<_>>();
         let manifest = inputs.declarations().manifest()?;
+        let current_operations = super::instance_operations::InstanceOperations {
+            declarations: &operations,
+            receipts: Some(&self.receipt_sources),
+            source: None,
+            all_sources: true,
+            pretransfer: None,
+        };
         let environment = NativeEnvironment {
             target: &self.target,
-            operations: &operations,
+            operations: &current_operations,
             manifest: &manifest,
             discharge: Some(&options.discharge),
         };
@@ -723,7 +865,7 @@ impl DemandInstances {
             .transpose()?;
         let source = if request.recipe.domain == SOURCE_RECIPE {
             let recipe = SourceRecipe::decode(&self.records, inputs, &recipe_bytes)?;
-            if recipe.key()? != key.instance {
+            if recipe.key()? != request.lexical.bind()? {
                 return Err("source recipe differs from demanded key".into());
             }
             let (original, source_input) = match original_source {
@@ -732,7 +874,7 @@ impl DemandInstances {
             };
             if let Some(input) = &source_input {
                 input
-                    .demand_body(&key.instance)
+                    .demand_body(&request.lexical.bind()?)
                     .map_err(|e| format!("native original source: {e:?}"))?;
             }
             Some((recipe, original, source_input))
@@ -749,15 +891,14 @@ impl DemandInstances {
                 .map_err(|e| format!("native request layout binding: {e:?}"))?;
         layouts.prepare_native_controls();
         let (mut instances, id) = if let Some((recipe, original, source_input)) = source {
-            let restored = recipe.restore(
+            let restored = recipe.restore_selected(
                 &inputs.declarations().program,
                 &inputs.declarations().context,
                 original,
+                selected_receipt,
                 &mut layouts,
             )?;
-            // Keep the original snapshot through restoration. A future receipt
-            // factory consumes it here, with complete independent expansions;
-            // the current unavailable contract remains unavailable.
+            // Source input stays alive through lexical and aware registration.
             drop(source_input);
             restored
         } else {
@@ -776,6 +917,30 @@ impl DemandInstances {
             .map_err(|error| format!("native library cleanup discovery: {error:?}"))?;
             (instances, id)
         };
+        if let Some((graph, _)) = &receipt_graph {
+            for selected in &graph.requests {
+                if let Some(other) = instances.get(selected.ordinary_key()) {
+                    instances
+                        .bind_receipt_request(other, selected, &mut layouts)
+                        .map_err(|e| format!("native discovered receipt request: {e:?}"))?;
+                } else if selected.aware_key().is_some()
+                    && instances.ids().any(|other| {
+                        let key = instances.lexical_key(other);
+                        key.definition() == selected.ordinary_key().definition()
+                            && key.body() == selected.ordinary_key().body()
+                            && matches!(
+                                instances.roles[other.index()],
+                                hirsel_rc::instance::InstanceRole::Closure { .. }
+                            )
+                    })
+                {
+                    return Err(
+                        "receipt closure requires independently bound lexical environment custody"
+                            .into(),
+                    );
+                }
+            }
+        }
         self.imports += 1;
         let imported = hirsel_rc::import::import_instance(
             &inputs.declarations().program,
@@ -911,7 +1076,7 @@ impl DemandInstances {
         let mut requests = instances
             .ids()
             .filter(|&other| other != id)
-            .map(|other| self.request(inputs, &instances, other, &table))
+            .map(|other| self.request(inputs, &instances, other, &table, request.receipt_roots))
             .collect::<Result<Vec<_>, _>>()?;
         requests.sort_by(|a, b| a.key.encoding.cmp(&b.key.encoding));
         let mut callees = unit
@@ -959,7 +1124,7 @@ impl DemandInstances {
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {
-                schema: 9,
+                schema: INSTANCE_DISCOVERY_DOMAIN.schema,
                 owner: NamedKey::of(&key.instance),
                 ready_source,
                 seal_demand: hirsel_rc::seal_demand::equations::LocalDemandEquations::extract(
@@ -1017,11 +1182,18 @@ impl DemandInstances {
             &serde_json::to_vec(&(portable_statics, portable_finalizers))
                 .map_err(|e| e.to_string())?,
         )?;
+        let current_operations = super::instance_operations::InstanceOperations {
+            declarations: &operations,
+            receipts: Some(&self.receipt_sources),
+            source: None,
+            all_sources: true,
+            pretransfer: None,
+        };
         let inputs = Inputs {
             memo: Default::default(),
             target: &self.target,
             layouts: &table,
-            operations: &operations,
+            operations: &current_operations,
             manifest: &manifest,
             discharge: Some(&options.discharge),
         };

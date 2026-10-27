@@ -24,6 +24,10 @@ pub type OriginalSource = (
 pub trait NativeSourceProvider: NativeRecordSource {
     fn declarations(&self) -> &NativeDeclarations;
     fn verification(&self) -> Verify;
+    /// Current original reader for independently reconstructed receipt graphs.
+    fn receipt_provider(&self) -> Option<crate::native::receipt_source::provider::Front<'_>> {
+        None
+    }
     fn query_policy(&self) -> NativeQueryPolicy;
     /// The exact selected V output, including a task-local front Lower binding.
     fn source_output(
@@ -291,6 +295,11 @@ impl NativeRecordSource for FrozenNativeSource {
 impl NativeSourceProvider for FrozenNativeSource {
     fn declarations(&self) -> &NativeDeclarations {
         &self.inputs.declarations
+    }
+    fn receipt_provider(&self) -> Option<crate::native::receipt_source::provider::Front<'_>> {
+        Some(crate::native::receipt_source::provider::Front::new(
+            self.reader(),
+        ))
     }
     fn verification(&self) -> Verify {
         self.reader().verification()

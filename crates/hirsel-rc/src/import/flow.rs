@@ -265,9 +265,64 @@ impl Importer<'_> {
                 environment: Some(environment),
             });
         }
+        if let Some(source) = self.instances.receipt_source(self.id) {
+            let source = source.clone();
+            let contract = &source.contract;
+            if !contract.captures.is_empty()
+                || !contract.inventory.is_empty()
+                || contract.result.is_some()
+                || contract
+                    .parameters
+                    .iter()
+                    .any(|p| p.mode != hirsel_lir::sealed_payload_source::ReceiptMode::Borrow)
+            {
+                return unsupported(
+                    "receipt entry requires borrowed data parameters without captures, inventory or receipt results",
+                );
+            }
+            let mut parameters = Vec::new();
+            for parameter in &contract.parameters {
+                let profile = source
+                    .profile(hirsel_lir::sealed_payload_source::ReceiptPort::Parameter(
+                        parameter.source,
+                    ))
+                    .ok_or_else(|| {
+                        PassError::Malformed("receipt entry lacks full original profile".into())
+                    })?;
+                if !profile.functions.is_empty() {
+                    return unsupported(
+                        "receipt boundary callable profiles require environment custody",
+                    );
+                }
+                let layout = self.layouts.payload_receipt(&profile.root.ty);
+                let ty = self.intern(layout);
+                let slot =
+                    self.new_slot(ty, SlotKind::ReceiptParameter(parameter.source), ScopeId(0));
+                let version = self.value(ty, Holding::Plain);
+                self.constant_version[slot.index()] = Some(version);
+                self.versions[slot.index()] = Some(version);
+                parameters.push(hirsel_lir::ir::ReceiptEntrySlot {
+                    source: parameter.source,
+                    slot,
+                    version,
+                });
+            }
+            self.out.tables.receipt_entry = Some(hirsel_lir::ir::ReceiptEntry {
+                contract: contract
+                    .content()
+                    .map_err(|e| PassError::Malformed(e.into()))?,
+                parameters,
+                captures: vec![],
+                result: None,
+                environment: None,
+            });
+        }
         self.hole_slots()?;
         for (s, slot) in self.out.slots.iter().enumerate() {
-            let entered = matches!(slot.kind, SlotKind::Parameter(_) | SlotKind::Capture(_));
+            let entered = matches!(
+                slot.kind,
+                SlotKind::Parameter(_) | SlotKind::Capture(_) | SlotKind::ReceiptParameter(_)
+            );
             self.state.slots[s] = SlotState {
                 live: if entered || slot.kind == SlotKind::ReturnSlot {
                     Tri::Yes

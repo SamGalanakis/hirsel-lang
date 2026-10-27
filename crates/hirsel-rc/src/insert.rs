@@ -698,6 +698,7 @@ pub struct Facts {
     pub places: Vec<Option<Place>>,
     /// Per declared parameter: its convention and its slot, if any.
     pub parameters: Vec<(Passing, Option<SlotId>)>,
+    receipt_parameters: BTreeMap<SlotId, Passing>,
     /// The slot whose content a version name denotes.
     pub version_of: Vec<Option<SlotId>>,
     /// Per block, its version-join parameters as (ordinal, slot).
@@ -735,6 +736,27 @@ impl Facts {
                     .position(|s| s.kind == SlotKind::Parameter(p.source))
                     .map(|s| SlotId(s as u32));
                 (p.convention, slot)
+            })
+            .collect();
+        let receipt_parameters = unit
+            .tables
+            .receipt_entry
+            .as_ref()
+            .into_iter()
+            .flat_map(|entry| &entry.parameters)
+            .filter_map(|binding| {
+                let parameter = abi
+                    .receipts
+                    .as_ref()?
+                    .parameters
+                    .iter()
+                    .find(|p| p.source == binding.source)?;
+                let passing = match parameter.mode {
+                    hirsel_lir::sealed_payload_source::ReceiptMode::Borrow => Passing::Borrow,
+                    hirsel_lir::sealed_payload_source::ReceiptMode::Take => Passing::Take,
+                    hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot => Passing::Mut,
+                };
+                Some((binding.slot, passing))
             })
             .collect();
         let n = unit.values.len();
@@ -866,6 +888,11 @@ impl Facts {
                 version_of[v.index()] = Some(SlotId(s as u32));
             }
         }
+        if let Some(entry) = &unit.tables.receipt_entry {
+            for binding in &entry.parameters {
+                version_of[binding.version.index()] = Some(binding.slot);
+            }
+        }
         // Version joins and views flow through block parameters.
         let mut changed = true;
         while changed {
@@ -918,6 +945,7 @@ impl Facts {
             statics,
             backing,
             tag_views,
+            receipt_parameters,
             loan_slot,
             marks,
             paths: RefCell::default(),
@@ -935,6 +963,7 @@ impl Facts {
             .iter()
             .find(|&&(_, s)| s == Some(slot))
             .map(|&(p, _)| p)
+            .or_else(|| self.receipt_parameters.get(&slot).copied())
     }
 
     pub fn slot_of(&self, address: AddressId) -> Option<(SlotId, &[Step])> {
@@ -1711,9 +1740,18 @@ impl<S: Stage> Flow<'_, S> {
             .enumerate()
             .map(|(s, slot)| {
                 let id = SlotId(s as u32);
-                let entered = matches!(slot.kind, SlotKind::Parameter(_) | SlotKind::Capture(_));
+                let entered = matches!(
+                    slot.kind,
+                    SlotKind::Parameter(_) | SlotKind::Capture(_) | SlotKind::ReceiptParameter(_)
+                );
                 let versions = match slot.kind {
                     SlotKind::Capture(ordinal) => unit.captures.get(ordinal as usize).copied(),
+                    SlotKind::ReceiptParameter(ordinal) => unit
+                        .tables
+                        .receipt_entry
+                        .as_ref()
+                        .and_then(|entry| entry.parameters.iter().find(|p| p.source == ordinal))
+                        .map(|p| p.version),
                     _ => self
                         .facts
                         .parameters

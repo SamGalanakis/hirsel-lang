@@ -200,7 +200,7 @@ impl SourceRecipe {
             if !visited.insert(current) || instances.view(current).key.definition() != &definition {
                 return Err("cyclic or mixed source recipe ancestry".into());
             }
-            steps.push(Step::of(&instances.view(current).key));
+            steps.push(Step::of(instances.lexical_key(current)));
             match instances.roles[current.index()] {
                 InstanceRole::Function => break false,
                 InstanceRole::Finalizer => break true,
@@ -267,6 +267,19 @@ impl SourceRecipe {
         program: &Program,
         context: &DiscoveryContext,
         original: hirsel_tir::DefinitionRef,
+        layouts: &mut LayoutBuilder<'_>,
+    ) -> Result<(Instances, InstanceId), String> {
+        self.restore_selected(program, context, original, None, layouts)
+    }
+
+    /// Restore the lexical recipe, then bind the current independently selected
+    /// request. Full profiles stay with the instance until its import completes.
+    pub fn restore_selected(
+        &self,
+        program: &Program,
+        context: &DiscoveryContext,
+        original: hirsel_tir::DefinitionRef,
+        selected: Option<&hirsel_rc::sealed_source::contract::registry::Request>,
         layouts: &mut LayoutBuilder<'_>,
     ) -> Result<(Instances, InstanceId), String> {
         let source = context
@@ -355,6 +368,11 @@ impl SourceRecipe {
                 }
                 current = child;
             }
+        }
+        if let Some(selected) = selected {
+            instances
+                .bind_receipt_request(current, selected, layouts)
+                .map_err(|e| format!("source recipe receipt request: {e:?}"))?;
         }
         Ok((instances, current))
     }

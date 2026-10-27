@@ -83,7 +83,9 @@ impl Importer<'_> {
                     SlotKind::Parameter(k) => {
                         abi.parameters.get(k as usize).map(|p| p.convention) == Some(Passing::Take)
                     }
-                    SlotKind::Capture(_) | SlotKind::ReturnSlot => false,
+                    SlotKind::Capture(_) | SlotKind::ReturnSlot | SlotKind::ReceiptParameter(_) => {
+                        false
+                    }
                     _ => true,
                 };
                 let st = &self.state.slots[s.index()];

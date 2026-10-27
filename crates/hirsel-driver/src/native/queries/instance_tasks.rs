@@ -355,15 +355,9 @@ impl InstanceTasks {
     }
     /// Current independent source V rows for all actual completed source
     /// selections, assembled without source or candidate native body reads.
-    pub fn source_operations(
-        &self,
-        settled: ProductRef,
-    ) -> Result<hirsel_layout::operation::OperationRegistry, String> {
-        if self.completed.get() != Some(&settled) {
-            return Err("source operation inputs require settled native discovery".into());
-        }
+    fn current_source(&self) -> Result<super::source_inputs::FrozenNativeSource, String> {
         let entries = self.entries();
-        let mut source = if let Some(front) = &self.front {
+        let source = if let Some(front) = &self.front {
             let mut selected = BTreeMap::new();
             for entry in &entries {
                 if let Some(path) = entry.request.source_definition() {
@@ -388,6 +382,17 @@ impl InstanceTasks {
         } else {
             self.source.provider()
         };
+        Ok(source)
+    }
+    pub fn source_operations(
+        &self,
+        settled: ProductRef,
+    ) -> Result<hirsel_layout::operation::OperationRegistry, String> {
+        if self.completed.get() != Some(&settled) {
+            return Err("source operation inputs require settled native discovery".into());
+        }
+        let entries = self.entries();
+        let mut source = self.current_source()?;
         let mut registry = self.source.declarations.program.operation_registry();
         self.producer().bind_planned_adapters(
             &source,
@@ -447,6 +452,7 @@ impl InstanceTasks {
                 .ok_or("native discovery has an unfinished instance")?;
             products.attach_completed(&entry.key, output.clone())?;
         }
+        products.recheck_receipts(&self.current_source()?)?;
         products.bind_original_roots(&self.roots)?;
         Ok(products)
     }

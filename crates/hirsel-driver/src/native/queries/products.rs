@@ -131,6 +131,7 @@ impl NativeSnapshot {
         manifest: hirsel_core_contract::Manifest,
         operations: Arc<dyn hirsel_lir::operation::OperationDeclarations + Send + Sync>,
     ) -> Result<Arc<Self>, String> {
+        let operations = instances.operation_declarations(operations);
         let environment = NativeEnvironment {
             target: &options.target,
             manifest: &manifest,
@@ -527,12 +528,14 @@ impl NativeProducts for DemandProducts {
             .collect::<Vec<_>>();
         let binding = Binding::new(environment.target, &closures)?;
         let selected_operations = super::instance_operations::InstanceOperations {
+            receipts: None,
             declarations: environment.operations,
             source: None,
             all_sources: true,
             pretransfer: Some(adapters),
         };
         let operations = super::instance_operations::InstanceOperations {
+            receipts: None,
             declarations: environment.operations,
             source: None,
             all_sources: true,
