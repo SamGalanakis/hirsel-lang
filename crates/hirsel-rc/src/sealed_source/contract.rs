@@ -166,19 +166,31 @@ fn assemble(input: &Input<'_>, requirements: Requirements) -> Result<Declaration
     for capture in input.entry.captures() {
         let payload = requirements.payload_locals.contains(&capture.local);
         let retained = requirements.inventory_locals.contains(&capture.local);
-        if (payload || retained) && capture.usage != hirsel_types::UseKind::Borrow {
+        if (payload || retained) && capture.usage == hirsel_types::UseKind::Mut {
             return Err(SourceError::Unsupported(
-                "receipt capture needs complete environment transport schema",
+                "receipt mutable capture needs exclusive environment transport",
             ));
         }
         if payload {
             captures.push(ReceiptCapture {
                 ordinal: capture.ordinal,
                 ty: receipt_type(input, Port::Capture(capture.ordinal))?,
-                mode: ReceiptMode::Borrow,
+                // Copy and Take both install an owning ordinary capture. The
+                // companion has its own metadata holder in either case; the
+                // original usage remains bound by the observed closure entry.
+                mode: match capture.usage {
+                    hirsel_types::UseKind::Borrow => ReceiptMode::Borrow,
+                    hirsel_types::UseKind::Copy | hirsel_types::UseKind::Take => ReceiptMode::Take,
+                    hirsel_types::UseKind::Mut => unreachable!("checked demanded capture usage"),
+                },
             });
         }
         if retained {
+            if capture.usage != hirsel_types::UseKind::Borrow {
+                return Err(SourceError::Unsupported(
+                    "receipt owning inventory capture needs original grant transport",
+                ));
+            }
             if !matches!(&capture.ty.ty, NativeType::Named(path, args) if path.is_core("Arena") && args.is_empty())
             {
                 return Err(SourceError::Unsupported(

@@ -28,6 +28,18 @@ fn fixture_with_once(
     ClosureSite,
     ReceiptEntry,
 ) {
+    fixture_with_custody(once, false)
+}
+fn fixture_with_custody(
+    once: bool,
+    owned: bool,
+) -> (
+    LirUnit<Value>,
+    LayoutTable,
+    FnAbi,
+    ClosureSite,
+    ReceiptEntry,
+) {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let owners = Owners::default();
     let types = hirsel_types::TypeInterner::new(None);
@@ -36,7 +48,14 @@ fn fixture_with_once(
     ));
     let mut builder = LayoutBuilder::new(&target, &owners);
     let scalar = builder.layout(&types, ty).unwrap();
-    let mut ordinary = vec![(scalar, hirsel_core_contract::Passing::Borrow)];
+    let mut ordinary = vec![(
+        scalar,
+        if owned {
+            hirsel_core_contract::Passing::Take
+        } else {
+            hirsel_core_contract::Passing::Borrow
+        },
+    )];
     if once {
         ordinary.push((scalar, hirsel_core_contract::Passing::Take));
     }
@@ -49,6 +68,14 @@ fn fixture_with_once(
         )
         .unwrap();
     let hash = ContentHash::of_bytes(b"complete closure source profile");
+    let profile = ClosedStorageProfile {
+        schema: ClosedStorageProfile::SCHEMA,
+        root: ClosedStorageType {
+            ty: NativeType::Primitive(Primitive::U64),
+            source_type: hash,
+        },
+        functions: vec![],
+    };
     let contract = ReceiptContract::new(
         vec![],
         None,
@@ -56,16 +83,25 @@ fn fixture_with_once(
             ordinal: 0,
             ty: ReceiptType {
                 source_type: hash,
-                profile: hash,
+                profile: profile.content().unwrap(),
             },
-            mode: ReceiptMode::Borrow,
+            mode: if owned {
+                ReceiptMode::Take
+            } else {
+                ReceiptMode::Borrow
+            },
         }],
         vec![],
     )
     .unwrap();
-    let environment = builder
-        .borrowed_receipt_environment(base, &contract)
-        .unwrap();
+    let source = capture_source(contract.clone());
+    let environment = if owned {
+        builder.owning_receipt_environment(base, &source).unwrap()
+    } else {
+        builder
+            .borrowed_receipt_environment(base, &contract)
+            .unwrap()
+    };
     let meta = builder.payload_receipt(&NativeType::Primitive(Primitive::U64));
     let mut table = builder.finish();
     let abi = FnAbi {
@@ -127,7 +163,11 @@ fn fixture_with_once(
         },
         ValueInfo {
             ty: LirTypeId(1),
-            holding: Holding::Borrowed(LoanId(0)),
+            holding: if owned {
+                Holding::Owned
+            } else {
+                Holding::Borrowed(LoanId(0))
+            },
         },
         ValueInfo {
             ty: LirTypeId(1),
@@ -203,13 +243,21 @@ fn fixture_with_once(
         anchor: SourceAnchorId(0),
     });
     unit.terminators.push(Terminator::Return(None));
-    let captures = PoolRange::push(
-        &mut unit.pools.captures,
-        [CaptureValue {
-            value: ValueId(0),
-            usage: CaptureUse::Borrow,
-        }],
-    );
+    let mut ordinary_captures = vec![CaptureValue {
+        value: ValueId(0),
+        usage: if owned {
+            CaptureUse::Copy
+        } else {
+            CaptureUse::Borrow
+        },
+    }];
+    if once {
+        ordinary_captures.push(CaptureValue {
+            value: ValueId(3),
+            usage: CaptureUse::Take,
+        });
+    }
+    let captures = PoolRange::push(&mut unit.pools.captures, ordinary_captures);
     let site = ClosureSite {
         scoped: true,
         code: Some(ClosureCode {
@@ -243,6 +291,108 @@ fn fixture_with_once(
     unit.tables.closures.push(site.clone());
     unit.tables.receipt_entry = Some(entry.clone());
     (unit, table, abi, site, entry)
+}
+
+fn capture_source(contract: ReceiptContract) -> ReceiptSource {
+    let hash = ContentHash::of_bytes(b"complete closure source profile");
+    ReceiptSource {
+        original: hirsel_lir::invocations::ReferenceBody {
+            definition: DefPath::core("receipt_closure_fixture"),
+            body: 0,
+            instance: hash,
+        },
+        instance: hash,
+        source: hash,
+        implementation_revision: hash,
+        contract,
+        profiles: vec![ReceiptProfile {
+            port: ReceiptPort::Capture(0),
+            profile: ClosedStorageProfile {
+                schema: ClosedStorageProfile::SCHEMA,
+                root: ClosedStorageType {
+                    ty: NativeType::Primitive(Primitive::U64),
+                    source_type: hash,
+                },
+                functions: vec![],
+            },
+        }],
+    }
+}
+
+#[test]
+fn receipt_closure_129_owning_schema_preserves_copy_take_and_once_entry_bindings() {
+    for once in [false, true] {
+        let (unit, table, abi, site, entry) = fixture_with_custody(once, true);
+        let source = capture_source(abi.receipts.clone().unwrap());
+        entry
+            .check_with_source(&abi, &unit, &table, &source)
+            .unwrap();
+        assert!(entry.check(&abi, &unit, &table).is_err());
+        for usage in [CaptureUse::Copy, CaptureUse::Take] {
+            let mut unit = unit.clone();
+            unit.pools.captures[0].usage = usage;
+            site.receipts
+                .as_ref()
+                .unwrap()
+                .check_with_source(&site, &abi, &unit, &table, &source)
+                .unwrap();
+        }
+        unit.check_identity(&table).unwrap();
+        let restored: LirUnit<Value> =
+            hirsel_codec::from_text(&hirsel_codec::to_text(&unit)).unwrap();
+        assert_eq!(restored.tables.receipt_entry, unit.tables.receipt_entry);
+        assert_eq!(restored.tables.closures, unit.tables.closures);
+    }
+}
+
+#[test]
+fn receipt_closure_129_owning_schema_rejects_wrong_custody_and_original_types() {
+    let (unit, table, abi, site, entry) = fixture_with_custody(true, true);
+    let source = capture_source(abi.receipts.clone().unwrap());
+    site.receipts
+        .as_ref()
+        .unwrap()
+        .check_with_source(&site, &abi, &unit, &table, &source)
+        .unwrap();
+    for mutation in 0..8 {
+        let mut unit = unit.clone();
+        let mut site = site.clone();
+        let mut table = table.clone();
+        let mut source = source.clone();
+        match mutation {
+            0 => unit.pools.captures[0].usage = CaptureUse::Borrow,
+            1 => unit.values[1].holding = Holding::Borrowed(LoanId(0)),
+            2 => site.receipts.as_mut().unwrap().captures[0].ordinal = 1,
+            3 => source.profiles.clear(),
+            4 => source.profiles[0].profile.root.ty = NativeType::Primitive(Primitive::Bool),
+            5 => unit.types[1].layout = unit.types[0].layout,
+            6 => table.layouts[site.environment.0 as usize].drop.clear(),
+            7 => table.layouts[site.environment.0 as usize].copy = CopyRecipe::Bits,
+            _ => unreachable!(),
+        }
+        assert!(
+            site.receipts
+                .as_ref()
+                .unwrap()
+                .check_with_source(&site, &abi, &unit, &table, &source)
+                .is_err(),
+            "mutation {mutation}"
+        );
+    }
+    let mut missing = entry.clone();
+    missing.environment = None;
+    assert!(
+        missing
+            .check_with_source(&abi, &unit, &table, &source)
+            .is_err()
+    );
+    let mut wrong = unit.clone();
+    wrong.values[2].holding = Holding::Owned;
+    assert!(
+        entry
+            .check_with_source(&abi, &wrong, &table, &source)
+            .is_err()
+    );
 }
 fn hashed(value: &impl Hash) -> u64 {
     let mut hash = std::hash::DefaultHasher::new();

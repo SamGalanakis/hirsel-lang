@@ -1,4 +1,4 @@
-//! Private borrowed capture companions. Local schema/layout consistency is not
+//! Private capture companions. Local schema/layout consistency is not
 //! original-source authority, value/receipt pairing or executable custody proof.
 use crate::abi_types::FnAbi;
 use crate::ir::*;
@@ -6,6 +6,9 @@ use crate::layout_types::*;
 use crate::sealed_payload_source::{ReceiptContract, ReceiptMode};
 use hirsel_codec::snapshot_struct;
 use hirsel_syntax::ContentHash;
+
+mod owned;
+pub use owned::{owned_environment, owned_environment_key};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ReceiptClosureCapture {
@@ -38,6 +41,34 @@ impl ReceiptClosure {
         unit: &LirUnit<S>,
         layouts: &LayoutTable,
     ) -> Result<(), &'static str> {
+        self.check_inner(site, abi, unit, layouts, None)
+    }
+
+    /// Validate the owning schema against complete original capture profiles.
+    /// A current source provider and independent C/H pairing remain required.
+    pub fn check_with_source<S>(
+        &self,
+        site: &ClosureSite,
+        abi: &FnAbi,
+        unit: &LirUnit<S>,
+        layouts: &LayoutTable,
+        source: &crate::sealed_payload_source::ReceiptSource,
+    ) -> Result<(), &'static str> {
+        source.check_structure()?;
+        if abi.receipts.as_ref() != Some(&source.contract) {
+            return Err("receipt closure source differs from its complete code contract");
+        }
+        self.check_inner(site, abi, unit, layouts, Some(source))
+    }
+
+    fn check_inner<S>(
+        &self,
+        site: &ClosureSite,
+        abi: &FnAbi,
+        unit: &LirUnit<S>,
+        layouts: &LayoutTable,
+        source: Option<&crate::sealed_payload_source::ReceiptSource>,
+    ) -> Result<(), &'static str> {
         crate::abi::check_receipt_contract(abi, layouts)?;
         if !site.scoped
             || site
@@ -56,7 +87,19 @@ impl ReceiptClosure {
         if self.captures.len() != contract.captures.len() {
             return Err("receipt closure capture coverage differs");
         }
-        let (base, _) = borrowed_environment(layouts, site.environment, contract)?;
+        let owned = contract
+            .captures
+            .iter()
+            .any(|c| c.mode == ReceiptMode::Take);
+        let (base, _) = if owned {
+            owned_environment(
+                layouts,
+                site.environment,
+                source.ok_or("owning receipt closure needs complete original capture profiles")?,
+            )?
+        } else {
+            borrowed_environment(layouts, site.environment, contract)?
+        };
         let ordinary = site
             .captures
             .get(&unit.pools.captures)
@@ -78,8 +121,22 @@ impl ReceiptClosure {
             let capture = ordinary
                 .get(binding.ordinal as usize)
                 .ok_or("receipt closure names a foreign original capture")?;
-            if capture.usage != CaptureUse::Borrow {
-                return Err("receipt closure supports only borrowed capture custody");
+            let owned = match demanded.mode {
+                ReceiptMode::Borrow if capture.usage == CaptureUse::Borrow => false,
+                ReceiptMode::Take
+                    if matches!(capture.usage, CaptureUse::Copy | CaptureUse::Take) =>
+                {
+                    true
+                }
+                _ => return Err("receipt closure capture usage differs from metadata custody"),
+            };
+            let ordinary = unit
+                .values
+                .get(capture.value.index())
+                .and_then(|v| unit.types.get(v.ty.index()))
+                .ok_or("receipt closure has a foreign ordinary capture type")?;
+            if base.fields[binding.ordinal as usize].layout != ordinary.layout {
+                return Err("receipt closure base differs from its ordinary capture type");
             }
             let value = unit
                 .values
@@ -90,12 +147,29 @@ impl ReceiptClosure {
                 .get(value.ty.index())
                 .ok_or("receipt closure has a foreign receipt type")?;
             if ty.repr != ValueRepr::PayloadReceipt
-                || !matches!(value.holding, Holding::Borrowed(_))
+                || if owned {
+                    value.holding != Holding::Owned
+                } else {
+                    !matches!(value.holding, Holding::Borrowed(_))
+                }
                 || !layouts
                     .layout(ty.layout)
                     .is_some_and(|r| matches!(r.kind, LayoutKind::PayloadReceipt { .. }))
             {
-                return Err("receipt closure companion is not a borrowed metadata handle");
+                return Err("receipt closure companion has another metadata custody");
+            }
+            if let Some(source) = source {
+                let profile = source
+                    .profile(crate::sealed_payload_source::ReceiptPort::Capture(
+                        demanded.ordinal,
+                    ))
+                    .ok_or("receipt closure lacks its original capture profile")?;
+                if !matches!(layouts.layout(ty.layout).map(|r| &r.kind), Some(LayoutKind::PayloadReceipt { root }) if root == &profile.root.ty)
+                {
+                    return Err(
+                        "receipt closure companion describes another original capture type",
+                    );
+                }
             }
         }
         Ok(())

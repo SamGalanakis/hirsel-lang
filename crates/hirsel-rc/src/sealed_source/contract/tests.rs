@@ -539,12 +539,50 @@ fn demanded_borrowed_capture_rejects_another_original_profile() {
 }
 
 #[test]
-fn demanded_capture_custody_other_than_borrow_remains_unavailable() {
-    for usage in [UseKind::Take, UseKind::Copy, UseKind::Mut] {
-        let fixture = captured_fixture(usage, false);
+fn demanded_copy_and_take_captures_declare_owning_metadata_with_complete_profiles() {
+    for usage in [UseKind::Take, UseKind::Copy] {
+        let mut fixture = captured_fixture(usage, false);
+        let declaration = fixture.derive().unwrap();
+        let capture = &declaration.contract().unwrap().captures[0];
+        assert_eq!(capture.ordinal, 0);
+        assert_eq!(capture.mode, ReceiptMode::Take);
+        assert_eq!(
+            capture.ty.source_type,
+            fixture.entry.captures()[0].ty.source_type
+        );
+        assert_eq!(
+            capture.ty.profile,
+            fixture.profiles[&Port::Capture(0)].content().unwrap()
+        );
+        fixture.profiles.remove(&Port::Capture(0));
         assert_eq!(
             fixture.derive().unwrap_err(),
-            SourceError::Unsupported("receipt capture needs complete environment transport schema")
+            SourceError::Unsupported("receipt demand needs independently observed closed profile")
+        );
+    }
+}
+
+#[test]
+fn demanded_mutable_capture_requires_exclusive_environment_transport() {
+    let fixture = captured_fixture(UseKind::Mut, false);
+    assert_eq!(
+        fixture.derive().unwrap_err(),
+        SourceError::Unsupported("receipt mutable capture needs exclusive environment transport")
+    );
+}
+
+#[test]
+fn owning_inventory_captures_require_original_grant_transport() {
+    for usage in [UseKind::Take, UseKind::Copy] {
+        let fixture = captured_fixture(usage, false);
+        fixture.derive().unwrap();
+        let mut grant = captured_fixture(usage, true);
+        grant.calls.insert(0, sink(&[], &[0]));
+        assert_eq!(
+            grant.derive().unwrap_err(),
+            SourceError::Unsupported(
+                "receipt owning inventory capture needs original grant transport"
+            )
         );
     }
 }
