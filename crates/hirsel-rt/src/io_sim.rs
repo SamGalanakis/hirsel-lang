@@ -704,7 +704,17 @@ impl Adapter for SimIo {
     /// No host wait: idle scheduling points continue only toward the next recorded `ready`,
     /// which must belong to a parked request that has not waited past it.
     fn scripted_input(&self) -> bool {
-        self.state.next_child_gate().is_some() || self.state.process_batch_pending
+        self.state.next_child_gate().is_some()
+            || self.state.process_batch_pending
+            // A confirmed terminal input must reach wait even when only
+            // language objects are parked and no host request owns a token.
+            || (self.position == self.tape.len()
+                && !self.ending_observed
+                && matches!(
+                    self.ending,
+                    Some(hirsel_run_schema::RunOutcome::Blocked(_)
+                        | hirsel_run_schema::RunOutcome::Signaled(_))
+                ))
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         if self.position == self.tape.len() {
@@ -2452,7 +2462,13 @@ mod terminal_outcome_tests {
         let ending = O::Blocked(vec![]);
         let mut io = replay(binary(&ending));
         assert_eq!(io.finish(), Err(AdapterError::MissingInput(0)));
+        assert!(io.waits.is_empty());
+        assert!(
+            io.scripted_input(),
+            "idle scheduler must observe the trailer"
+        );
         assert_eq!(io.wait(), Ok(false));
+        assert!(!io.scripted_input());
         assert_eq!(io.finish_outcome(&ending), Ok(()));
         assert_eq!(
             io.finish_outcome(&O::Returned(hirsel_run_schema::Returned::Ok)),
@@ -2463,6 +2479,8 @@ mod terminal_outcome_tests {
     fn scripted_default_signal_is_a_recorded_stop() {
         let mut io = replay(binary(&O::Signaled(SignalKind::Interrupt)));
         assert_eq!(io.finish(), Err(AdapterError::MissingInput(0)));
+        assert!(io.waits.is_empty());
+        assert!(io.scripted_input());
         assert_eq!(
             io.wait(),
             Err(AdapterError::Signaled(SignalKind::Interrupt))
