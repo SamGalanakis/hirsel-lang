@@ -230,11 +230,17 @@ impl AdmittedRuntime {
     pub fn query_capacity_bytes(entries: usize) -> Option<u64> {
         u64::try_from(entries).ok()?.checked_mul(ENTRY_BYTES)
     }
+    /// Bytes left after the worker stacks this reservation actually admits.
+    /// Planners subtract query bookkeeping from this same layout before
+    /// assigning producer scratch and continuation grants.
+    pub fn working_bytes(jobs: Jobs, runtime_bytes: u64) -> Option<u64> {
+        runtime_layout(jobs, runtime_bytes, COMPILER_STACK_BYTES).map(|(_, bytes)| bytes)
+    }
     /// Original constructor capacity, including its effective worker-stack
     /// selection. Hosts can preserve subscriber/factory headroom when a small
     /// query inventory would otherwise reserve fewer rows than `new`.
     pub fn default_query_capacity(jobs: Jobs, runtime_bytes: u64) -> Option<usize> {
-        let (_, working) = runtime_layout(jobs, runtime_bytes, COMPILER_STACK_BYTES)?;
+        let working = Self::working_bytes(jobs, runtime_bytes)?;
         Some(((working / 16) / ENTRY_BYTES).min(usize::MAX as u64) as usize)
     }
     #[cfg(test)]

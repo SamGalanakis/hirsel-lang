@@ -211,6 +211,9 @@ impl ResultStore for DirStore {
         self.physical.clone()
     }
     fn lookup_product(&self, address: super::Address) -> Option<super::Association> {
+        // A front QueryId shares its logical address with its variant row.
+        // Keep the product index disjoint, as the byte providers do.
+        let address = super::Address(super::product_association_key(address).0);
         self.roots().find_map(|(_, store)| store.lookup(address))
     }
     fn associate_product(
@@ -225,6 +228,7 @@ impl ResultStore for DirStore {
         // Shared immutable roots may supply ordinary content, but local writes
         // and GC remain in the writable root. A missing reference is a miss.
         if self.get_content(reference).is_some() {
+            let address = super::Address(super::product_association_key(address).0);
             let _ = store.associate(address, action, reference);
         }
     }
@@ -316,6 +320,47 @@ impl ResultStore for DirStore {
 mod tests {
     use super::*;
     use crate::store::{Domain, ResultStore};
+
+    #[test]
+    fn query_variants_and_product_associations_survive_each_others_publication_and_reopen() {
+        use crate::store::{Action, Address, Entry, VariantRef};
+        for kind in [crate::QueryKind::Modes, crate::QueryKind::Lower] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = DirStore::new(directory.path().to_owned());
+            let key = EntryKey::new(
+                Default::default(),
+                &hirsel_syntax::DefPath::core("separate-query-and-product"),
+                Default::default(),
+                kind,
+                crate::LoweringPolicy::Reachable,
+            );
+            let variant =
+                VariantRef::publish(&store, &key, crate::Reads::empty(), b"body").unwrap();
+            let mut entry = Entry::default();
+            entry.insert(variant.clone());
+            store.put(&key, &entry.encode_for(&key));
+            let address = Address(key.0);
+            let action = Action(hirsel_syntax::ContentHash::of_bytes(b"selected product"));
+            store.associate_product(address, action, variant.output);
+            drop(store);
+            let reopened = DirStore::new(directory.path().to_owned());
+            assert_eq!(Entry::load(&reopened, &key), entry);
+            assert_eq!(
+                reopened.lookup_product(address).unwrap().reference,
+                variant.output
+            );
+            // Rewriting a variant row must preserve the selected association too.
+            reopened.put(&key, &entry.encode_for(&key));
+            let product = reopened.lookup_product(address).unwrap();
+            assert_eq!(product.action, action);
+            assert_eq!(product.reference, variant.output);
+            assert_eq!(&*reopened.get_content(product.reference).unwrap(), b"body");
+            let installed = DirStore::new(directory.path().join("local"))
+                .with_read_only_root(directory.path().to_owned());
+            assert_eq!(Entry::load(&installed, &key), entry);
+            assert_eq!(installed.lookup_product(address), Some(product));
+        }
+    }
 
     #[test]
     fn installed_only_verifier_is_host_local_and_never_writes_query_results() {

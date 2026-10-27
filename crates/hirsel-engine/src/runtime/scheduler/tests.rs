@@ -1474,21 +1474,27 @@ fn explicit_query_inventory_refuses_empty_overflow_and_insufficient_grants() {
 
 #[test]
 fn public_default_capacity_matches_effective_worker_stack_admission() {
-    for jobs in [Jobs::ONE, Jobs::new(16)] {
+    for jobs in [Jobs::ONE, Jobs::new(2), Jobs::new(16)] {
         for bytes in [
             COMPILER_STACK_BYTES as u64 - 1,
             COMPILER_STACK_BYTES as u64,
+            384 << 20,
             512 << 20,
         ] {
             let predicted = AdmittedRuntime::default_query_capacity(jobs, bytes);
+            let working = AdmittedRuntime::working_bytes(jobs, bytes);
             let actual = AdmittedRuntime::new(
                 jobs,
                 ProcessBudget::new(bytes).reserve(bytes).unwrap(),
                 errors(),
             );
             match (predicted, actual) {
-                (None, Err(_)) => (),
+                (None, Err(_)) => assert!(working.is_none()),
                 (Some(predicted), Ok(mut runtime)) => {
+                    assert_eq!(
+                        working,
+                        Some(bytes - runtime.stats().workers as u64 * COMPILER_STACK_BYTES as u64)
+                    );
                     assert_eq!(predicted, runtime.shared.lock().max_entries);
                     assert!(
                         AdmittedRuntime::query_capacity_bytes(predicted).unwrap()

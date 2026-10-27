@@ -848,9 +848,6 @@ impl Plan {
                 .map(|native| native.bytes().ok_or_else(|| uninstalled()))
                 .transpose()?
                 .unwrap_or(0);
-        let stacks = (config.jobs.get() as u64)
-            .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
-            .ok_or_else(|| uninstalled())?;
         // Each definition can name P, Lower, Evaluate and, when selected,
         // Run, and native selection adds its Run and definition rows. Growth/
         // Check, the selected SafeCheck root and the native bootstrap and
@@ -873,9 +870,7 @@ impl Plan {
         let query_capacity = inventory.max(default_capacity);
         let bookkeeping =
             AdmittedRuntime::query_capacity_bytes(query_capacity).ok_or_else(|| uninstalled())?;
-        let working = limits
-            .runtime_bytes
-            .checked_sub(stacks)
+        let working = AdmittedRuntime::working_bytes(config.jobs, limits.runtime_bytes)
             .and_then(|bytes| bytes.checked_sub(bookkeeping))
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
