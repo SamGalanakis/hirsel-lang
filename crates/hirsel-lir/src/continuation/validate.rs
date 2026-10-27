@@ -981,7 +981,9 @@ fn validate_plans(
     // Suspension propagates from callees to callers over reverse call edges.
     let mut callers: BTreeMap<ContentHash, BTreeSet<ContentHash>> = BTreeMap::new();
     let mut suspends = BTreeSet::new();
-    let none = BTreeSet::new();
+    // Resolve potential nested edges without propagating through reviewed Local
+    // calls: their implementation bodies do not determine the caller's class.
+    let known = index.keys().copied().collect();
     for (id, u) in &index {
         if !root_instruction_sites(u, inputs.table, isolate_environment(u, inputs.environments))
             .is_empty()
@@ -989,7 +991,7 @@ fn validate_plans(
             suspends.insert(*id);
         }
         for call in &u.tables.calls {
-            match call_effect(u, call, &index, &none, inputs.classify) {
+            match call_effect(u, call, &index, &known, inputs.classify) {
                 CallEffect::Local => {}
                 CallEffect::Nested(callee) => {
                     callers.entry(callee).or_default().insert(*id);
@@ -997,12 +999,6 @@ fn validate_plans(
                 CallEffect::Boundary(_) | CallEffect::Unknown(_) => {
                     suspends.insert(*id);
                 }
-            }
-            if let Some(symbol) = callee_symbol(u, call)
-                && let Some(callee) = symbol.instance
-                && index.contains_key(&callee)
-            {
-                callers.entry(callee).or_default().insert(*id);
             }
         }
     }

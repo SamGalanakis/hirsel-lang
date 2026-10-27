@@ -123,7 +123,7 @@ fn native_cleanup_cut_history(width: usize, source: &str, logs: usize, name: &st
     }
 }
 
-fn wide_cleanup_cuts(width: usize, name: &str) {
+fn wide_cleanup_source(width: usize, name: &str) -> String {
     let main = match name {
         "success" => {
             r#"
@@ -197,7 +197,11 @@ pub fn main(rt: Io) -> Result[(), AppError] {
         .lines()
         .position(|line| line.trim() == "failure.check(false, Bounds())")
         .map_or(0, |line| line + 1);
-    let source = source.replace("FAILURE_LINE", &format!("{failure_line}u64"));
+    source.replace("FAILURE_LINE", &format!("{failure_line}u64"))
+}
+
+fn wide_cleanup_cuts(width: usize, name: &str) {
+    let source = wide_cleanup_source(width, name);
     native_cleanup_cut_history(
         width,
         &source,

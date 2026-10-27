@@ -65,6 +65,7 @@ fn free_typed_preparation_prefixes_release_each_row_root() {
 }
 
 include!("support/cpu_pool/cleanup_cuts.rs");
+include!("support/cpu_pool/build_coverage.rs");
 #[test]
 fn native_wide_success_every_byte_cleanup_cut() {
     wide_cleanup_cuts(4, "success");
