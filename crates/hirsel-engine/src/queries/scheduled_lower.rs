@@ -1961,6 +1961,7 @@ mod retention_tests {
             + capacity
             + substitutions_bytes
             + std::mem::size_of::<(ReadKey, ContentHash)>()
+                .next_multiple_of(std::mem::align_of::<usize>())
             + 2 * std::mem::size_of::<usize>()
             + outcome.depth.retained_bytes();
         assert_eq!(outcome.retained_bytes(), Some(expected as u64));
