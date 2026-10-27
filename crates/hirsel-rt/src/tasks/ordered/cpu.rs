@@ -17,6 +17,7 @@ pub(super) struct Batch {
     owners: BTreeMap<TaskId, usize>,
     jobs: Jobs,
     pending: BTreeMap<TaskId, (u32, u64)>,
+    summaries: BTreeMap<TaskId, *mut super::ahead::cpu_handoff::Summary>,
 }
 
 impl Batch {
@@ -30,6 +31,7 @@ impl Batch {
             owners: BTreeMap::new(),
             jobs,
             pending: BTreeMap::new(),
+            summaries: BTreeMap::new(),
         }
     }
 
@@ -62,6 +64,40 @@ impl Batch {
 
     pub(super) fn limit(&self, task: TaskId) -> Option<u64> {
         self.owners.contains_key(&task).then_some(self.limit)
+    }
+
+    pub(super) fn owns(&self, task: TaskId, ordinal: u64) -> bool {
+        self.owners.get(&task).copied().map(|n| n as u64) == Some(ordinal)
+    }
+
+    /// The saved call owns this value and its retained roots until retirement.
+    /// Publishing transfers its Stretch, so a physical retry cannot append it
+    /// again or mistake it for settled budget.
+    pub(super) fn publish(
+        &mut self,
+        task: TaskId,
+        before: Stretch,
+        summary: *mut super::ahead::cpu_handoff::Summary,
+    ) {
+        let job = self.owners[&task];
+        assert!(self.summaries.insert(task, summary).is_none());
+        self.jobs.pause(job, before);
+    }
+
+    pub(super) fn retire_summary(
+        &mut self,
+        task: TaskId,
+        state: &mut Settled,
+    ) -> Option<(Stretch, Result<(), hirsel_run_schema::BudgetKind>)> {
+        let &summary = self.summaries.get(&task)?;
+        let (charges, result) = self.jobs.retire_published_at(self.owners[&task], state);
+        if result.is_ok() {
+            self.summaries.remove(&task);
+            // SAFETY: publication borrows a saved mapper's exclusive record.
+            // Only its logical head retires it, before returning to that frame.
+            unsafe { (*summary).phase = super::ahead::cpu_handoff::SUMMARY_RETIRED };
+        }
+        Some((charges, result.map_err(|stop| stop.kind)))
     }
 
     pub(super) fn settle(
@@ -438,6 +474,100 @@ mod tests {
         assert_eq!(state.fuel, 12);
         assert_eq!(state.limit, 90);
         assert_eq!(batch.jobs.retire().unwrap_err().job, 1);
+    }
+
+    #[test]
+    fn published_cpu_values_and_retained_roots_survive_until_once_only_head_retirement() {
+        use super::super::ahead::cpu_handoff::*;
+        use crate::budget::stretch::{Budgets, Event, summarise};
+        for width in [1, 4, 8, 16] {
+            let mut state = Settled {
+                level: 0,
+                limit: 100,
+                fuel: 20,
+            };
+            let mut batch = Batch::new(&grant(100), width, 2, state);
+            batch.claim(7, width, 0);
+            batch.claim(9, width, 1);
+            assert!(
+                !batch.owns(9 + (1 << 32), 1),
+                "a recycled slot has no claim"
+            );
+            assert!(!batch.owns(9, 0), "the ordinal is bound to its task");
+            let value = 42u64;
+            let retained = [std::ptr::NonNull::<crate::Header>::dangling().as_ptr()];
+            let mut summary = Summary {
+                version: VERSION,
+                phase: SUMMARY_PUBLISHED,
+                ordinal: 1,
+                value: (&raw const value).cast(),
+                value_bytes: 8,
+                descriptor: 0,
+                retained_count: 1,
+                retained: retained.as_ptr(),
+            };
+            let budgets = Budgets {
+                memory: true,
+                fuel: true,
+            };
+            batch.publish(
+                9,
+                summarise(budgets, &[Event::Fuel, Event::Alloc(60)]).unwrap(),
+                &raw mut summary,
+            );
+            for _ in 0..3 {
+                assert_eq!(summary.phase, SUMMARY_PUBLISHED);
+                assert_eq!(state.level, 0, "publication never settles a younger charge");
+                // SAFETY: this test retains both borrowed tables until retirement.
+                unsafe {
+                    assert_eq!(summary.value.cast::<u64>().read(), 42);
+                    assert_eq!(summary.retained.read(), retained[0]);
+                }
+            }
+            assert_eq!(
+                batch.settle(7, &Stretch::new(budgets), &mut state, true),
+                Some(Ok(()))
+            );
+            assert_eq!(summary.phase, SUMMARY_PUBLISHED);
+            let (_, result) = batch.retire_summary(9, &mut state).unwrap();
+            assert_eq!(result, Ok(()));
+            assert_eq!(summary.phase, SUMMARY_RETIRED);
+            assert_eq!(
+                state,
+                Settled {
+                    level: 60,
+                    limit: 100,
+                    fuel: 19
+                }
+            );
+            assert!(batch.retire_summary(9, &mut state).is_none());
+            assert_eq!(
+                state,
+                Settled {
+                    level: 60,
+                    limit: 100,
+                    fuel: 19
+                }
+            );
+            assert_eq!(
+                batch.settle(
+                    9,
+                    &summarise(budgets, &[Event::Free(60)]).unwrap(),
+                    &mut state,
+                    true
+                ),
+                Some(Ok(()))
+            );
+            assert_eq!(
+                state,
+                Settled {
+                    level: 0,
+                    limit: 100,
+                    fuel: 19
+                }
+            );
+            assert!(batch.owners.is_empty());
+        }
     }
 
     unsafe extern "C" fn job(ctx: *mut TaskCtx, env: *mut crate::Header, _: u64, _: u64) -> u8 {

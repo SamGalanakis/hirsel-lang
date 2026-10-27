@@ -70,6 +70,8 @@ pub(crate) struct Native {
     pub(super) cpu: bool,
     pub(super) cpu_phase: u32,
     pub(super) allocation: super::cpu_allocation::Request,
+    pub(super) summary: *mut super::cpu_handoff::Summary,
+    pub(super) summary_status: u32,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -319,6 +321,8 @@ impl Native {
             cpu: certificate.cpu,
             cpu_phase: if certificate.preclaimed { 2 } else { 0 },
             allocation: super::cpu_allocation::Request::new(),
+            summary: std::ptr::null_mut(),
+            summary_status: 0,
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -494,6 +498,15 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                     }
                 }
             }
+            if !pause && !(*native).summary.is_null() {
+                match super::cpu_handoff::serve(ctx, native) {
+                    Ok(ready) => pause = !ready,
+                    Err(stop) => {
+                        (*run).control.request_inside(stop);
+                        pause = true;
+                    }
+                }
+            }
             if pause {
                 if !private(ctx) && (*run).control.stopped().is_none() {
                     let task = super::super::engine::current(ctx);
@@ -536,6 +549,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                         .load(Ordering::Acquire)
                     && !(*native).pending_refill
                     && !(*native).allocation.pending()
+                    && (*native).summary.is_null()
                     && exec.leaving.get().is_none()
                 {
                     (*native).physical.points_left = 1024;

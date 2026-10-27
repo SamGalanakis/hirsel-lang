@@ -286,6 +286,15 @@ fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 }
 
 fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
+    let published = with_current_driver(ctx, |task, driver| {
+        assert!(driver.head_ready(task), "summaries retire only at head");
+        let state = &mut driver.frontier.as_mut().unwrap().settled;
+        driver.cpu_batch.as_mut()?.retire_summary(task, state)
+    });
+    if let Some((charges, result)) = published {
+        super::events::charges::partial(ctx, current(ctx), &charges, result);
+        result.map_err(Stop::BudgetExceeded)?;
+    }
     let (task, result) = with_current_driver(ctx, |task, driver| {
         assert!(
             driver.head_ready(task),
@@ -2438,13 +2447,58 @@ pub(crate) fn host_segment_barrier(ctx: *mut TaskCtx) -> Stopped<bool> {
     Ok(true)
 }
 
-/// Idle-side allocation barrier. The request retains this successful logical
-/// admission across backing refusal, so retry never settles its charge twice.
-/// Allocating CPU certificates will replace this head-only admission with job
-/// settlement; until then an allocation still ends the private segment.
-pub(crate) fn ahead_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<bool> {
+pub(crate) enum CpuAllocation {
+    Paused,
+    Summarized,
+    Settled,
+}
+
+/// An idle allocation records a non-head charge in its bound job's Stretch.
+/// Physical refusal retains that admission; retry never appends it again.
+pub(crate) fn ahead_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<CpuAllocation> {
+    let task = current(ctx);
+    let nonhead = with_driver(ctx, |d| {
+        d.frontier.as_ref().unwrap().head() != Some(task)
+            && d.cpu_batch
+                .as_ref()
+                .is_some_and(|batch| batch.limit(task).is_some())
+    });
+    if nonhead {
+        capture_fuel(ctx);
+        let accepted = with_driver(ctx, |d| {
+            let budgets = d.budgets;
+            if d.stretches
+                .get(&task)
+                .is_some_and(|stretch| stretch.allocation_pauses(bytes))
+            {
+                return false;
+            }
+            let frontier = d.frontier.as_mut().unwrap();
+            let fuel = frontier
+                .logged_fuel(task)
+                .saturating_add(d.stretches.get(&task).map_or(0, Stretch::fuel_charges));
+            if frontier.reserve(task, bytes, fuel).is_err() {
+                return false;
+            }
+            if d.memory {
+                d.stretches
+                    .entry(task)
+                    .or_insert_with(|| Stretch::new(budgets))
+                    .alloc(bytes)
+                    .expect("preflighted CPU allocation envelope");
+            }
+            true
+        });
+        if !accepted {
+            return Ok(CpuAllocation::Paused);
+        }
+        if with_driver(ctx, |d| d.memory) {
+            unsafe { (*ctx).ordered_charge_trace.allocation(bytes) };
+        }
+        return Ok(CpuAllocation::Summarized);
+    }
     if !host_segment_barrier(ctx)? {
-        return Ok(false);
+        return Ok(CpuAllocation::Paused);
     }
     let memory = with_driver(ctx, |d| d.memory);
     if memory {
@@ -2461,5 +2515,18 @@ pub(crate) fn ahead_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<bool> {
         let level = with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled.level);
         unsafe { (*ctx).heap_ref().meter.settled(level) };
     }
-    Ok(true)
+    Ok(CpuAllocation::Settled)
+}
+
+/// Publish one CPU prefix from idle without retiring any budget or operation.
+/// The request stays PUBLISHED across physical retries until its owner is head.
+pub(crate) fn ahead_summary(ctx: *mut TaskCtx, summary: *mut super::ahead::cpu_handoff::Summary) {
+    let before = stretch(ctx);
+    with_current_driver(ctx, |task, driver| {
+        driver
+            .cpu_batch
+            .as_mut()
+            .expect("a claimed CPU mapper")
+            .publish(task, before, summary);
+    });
 }

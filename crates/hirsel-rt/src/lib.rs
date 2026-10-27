@@ -324,6 +324,8 @@ pub const AHEAD_CPU_HELPERS: &[u8] = include_bytes!("tasks/ordered/ahead/cpu_wor
 pub const AHEAD_CPU_ALLOCATION_HELPERS: &[u8] =
     include_bytes!("tasks/ordered/ahead/cpu_allocation.rs");
 #[doc(hidden)]
+pub const AHEAD_CPU_HANDOFF_HELPERS: &[u8] = include_bytes!("tasks/ordered/ahead/cpu_handoff.rs");
+#[doc(hidden)]
 pub const AHEAD_SWITCH: &[u8] = include_bytes!("fiber.rs");
 /// The continuation ownership protocol compiler plans are bound to.
 #[doc(hidden)]

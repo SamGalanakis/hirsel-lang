@@ -882,14 +882,15 @@ typedef struct {
 _Static_assert(sizeof(hirsel_rt_v2_cpu_ahead_info_v6) == 56, "hirsel_rt_v2_cpu_ahead_info_v6 size");
 void hirsel_rt_v2_cpu_ahead_arm(hirsel_rt_v2_ctx *ctx);
 void hirsel_rt_v2_cpu_ahead_enter(hirsel_rt_v2_ahead_physical *state);
-/* CPU-only idle allocation; ends the private segment until job settlement is certified. */
+/* CPU-only idle allocation; preserves logical admission through physical refusal. */
 hirsel_rt_v2_header *hirsel_rt_v2_cpu_ahead_alloc(hirsel_rt_v2_ahead_physical *state, uint32_t index, uint64_t extent, uint64_t align);
-/* CPU storage and summary handoffs, record version 1. Until an allocating
- * certificate is admitted, return CPU_NOT_CERTIFIED without touching inputs.
+/* CPU storage and summary handoffs, record version 1. A checked saved frame
+ * and bound CPU ordinal are required; unsupported requests return NOT_CERTIFIED.
  * A summary borrows its value and retained table from the saved mapper frame;
  * those references stay live until return. Its charges belong to the runtime,
  * not to this ABI record, and publication never increments counted holders. */
 #define HIRSEL_RT_V2_CPU_HANDOFF_VERSION 1
+#define HIRSEL_RT_V2_CPU_HANDOFF_STACK_BYTES 80
 #define HIRSEL_RT_V2_CPU_ACCEPTED 0
 #define HIRSEL_RT_V2_CPU_NOT_CERTIFIED 1
 #define HIRSEL_RT_V2_CPU_SUMMARY_PENDING 0

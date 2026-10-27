@@ -8,7 +8,8 @@ use crate::{Header, TaskCtx};
 
 const IDLE: u32 = 0;
 const REQUESTED: u32 = 1;
-const CHARGED: u32 = 2;
+const SUMMARIZED: u32 = 2;
+const CHARGED: u32 = 3;
 pub(super) const REASON: u32 = 8;
 
 #[repr(C)]
@@ -75,8 +76,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_alloc(
 }
 
 /// Run only on idle, with the role held and the active task's stack saved.
-/// No stop or suspension occurs under a heap borrow. The request's CHARGED
-/// state survives repeated BackingFull responses and physical migration.
+/// No stop or suspension occurs under a heap borrow. SUMMARIZED and CHARGED
+/// survive repeated BackingFull responses and physical migration.
 pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bool> {
     assert!(
         crate::stop::running().is_null(),
@@ -94,12 +95,20 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bo
         let bytes = unsafe {
             crate::alloc::allocation_charge(ctx, request.index, request.extent, request.align)
         };
-        if !super::super::engine::ahead_allocation(ctx, bytes)? {
-            return Ok(false);
-        }
-        request.phase = CHARGED;
+        request.phase = match super::super::engine::ahead_allocation(ctx, bytes)? {
+            super::super::engine::CpuAllocation::Paused => return Ok(false),
+            super::super::engine::CpuAllocation::Summarized => SUMMARIZED,
+            super::super::engine::CpuAllocation::Settled => CHARGED,
+        };
     }
-    assert_eq!(request.phase, CHARGED);
+    if request.phase == SUMMARIZED {
+        let task = super::super::engine::current(ctx);
+        if super::super::engine::with_driver(ctx, |d| d.head_ready(task)) {
+            assert!(super::super::engine::host_segment_barrier(ctx)?);
+            request.phase = CHARGED;
+        }
+    }
+    assert!(matches!(request.phase, SUMMARIZED | CHARGED));
     if unsafe { crate::alloc::cpu_preflight(ctx, request.index, request.extent, request.align) }
         .is_err()
     {

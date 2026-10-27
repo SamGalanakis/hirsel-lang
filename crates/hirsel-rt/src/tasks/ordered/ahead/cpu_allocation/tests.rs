@@ -61,7 +61,7 @@ fn grant() -> hirsel_run_schema::CpuGrant {
     }
 }
 
-fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool) {
+fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool, nonhead: bool) {
     let grant = grant();
     let ledger = Ledger::new(&grant);
     let topology = ledger.topology(4).unwrap();
@@ -124,7 +124,36 @@ fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool) {
             // TLS only, so the saved private stack cannot execute Rust here.
             crate::stop::set_running(std::ptr::null_mut());
             crate::tasks::role::enter(ctx);
+            // A controlled frontier gives the saved call an older turn. Its
+            // allocation still uses the real heap, ledger, claim and charge log.
+            let task = engine::current(ctx);
+            let head = nonhead.then(|| {
+                engine::with_driver(ctx, |d| {
+                    let original = d.frontier.take().unwrap();
+                    let mut ahead = crate::ordered::Frontier::new(
+                        task.wrapping_add(1 << 32),
+                        crate::ordered::Policy::admit(&Default::default(), None),
+                        original.settled,
+                    );
+                    ahead.enqueue(task, crate::ordered::footprint::Held::empty());
+                    d.frontier = Some(ahead);
+                    original
+                })
+            });
             assert_eq!(serve(ctx, &raw mut *native), Ok(!refuse));
+            if let Some(head) = head {
+                assert!(refuse);
+                for _ in 0..3 {
+                    assert_eq!(native.allocation.phase, SUMMARIZED);
+                    assert_eq!(
+                        engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled),
+                        initial
+                    );
+                    assert_eq!(serve(ctx, &raw mut *native), Ok(false));
+                }
+                engine::with_driver(ctx, |d| d.frontier = Some(head));
+                assert_eq!(serve(ctx, &raw mut *native), Ok(false));
+            }
             let admitted = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
             assert_eq!(admitted.level, initial.level + bytes);
             assert_eq!(admitted.fuel, initial.fuel - 3);
@@ -184,7 +213,7 @@ fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool) {
 fn naked_cpu_allocation_hands_off_before_heap_borrow_and_returns_one_block() {
     for diagnostic in [false, true] {
         for (extent, align) in [(16, 8), (4097, 8), (31, 64)] {
-            run_request(false, extent, align, diagnostic);
+            run_request(false, extent, align, diagnostic, false);
         }
     }
 }
@@ -193,7 +222,16 @@ fn naked_cpu_allocation_hands_off_before_heap_borrow_and_returns_one_block() {
 fn refused_cpu_allocation_keeps_saved_request_and_settles_once_on_retry() {
     for diagnostic in [false, true] {
         for (extent, align) in [(16, 8), (4097, 8), (31, 64)] {
-            run_request(true, extent, align, diagnostic);
+            run_request(true, extent, align, diagnostic, false);
+        }
+    }
+}
+
+#[test]
+fn nonhead_cpu_backing_refusal_keeps_a_summary_until_promotion_and_retries_without_recharging() {
+    for diagnostic in [false, true] {
+        for (extent, align) in [(4097, 8), (31, 64)] {
+            run_request(true, extent, align, diagnostic, true);
         }
     }
 }

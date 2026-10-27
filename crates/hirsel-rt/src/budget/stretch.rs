@@ -270,23 +270,76 @@ impl Jobs {
         if let Some(stop) = self.stopped {
             return Err(stop);
         }
-        while let Some(Some((charges, complete))) = self.pending.get(self.next) {
-            if let Err(kind) = self.settled.settle(charges) {
-                let stop = JobStop {
-                    job: self.next,
-                    kind,
-                };
-                self.stopped = Some(stop);
-                return Err(stop);
-            }
+        while let Some(Some((_, complete))) = self.pending.get(self.next) {
             let complete = *complete;
-            self.pending[self.next] = None;
+            self.retire_one(self.next)?;
             if !complete {
                 break;
             }
-            self.next += 1;
         }
         Ok(self.next)
+    }
+
+    fn retire_one(&mut self, job: usize) -> Result<(), JobStop> {
+        assert_eq!(job, self.next, "CPU prefixes retire in job order");
+        let (charges, complete) = self.pending[job].as_ref().expect("a published prefix");
+        if let Err(kind) = self.settled.settle(charges) {
+            let stop = JobStop { job, kind };
+            self.stopped = Some(stop);
+            return Err(stop);
+        }
+        let complete = *complete;
+        self.pending[job] = None;
+        if complete {
+            self.next += 1;
+        }
+        Ok(())
+    }
+
+    /// Withdraw only unpublished retirement work. The owning mapper receives
+    /// each prefix back and decides which of its retained blocks can be freed.
+    /// Neither the serial cut nor settled bytes/fuel move on withdrawal.
+    pub fn withdraw_younger(&mut self, job: usize) -> Vec<(usize, Stretch, bool)> {
+        assert!(
+            job >= self.next && job < self.pending.len(),
+            "live CPU ordinal"
+        );
+        self.pending
+            .iter_mut()
+            .enumerate()
+            .skip(job + 1)
+            .filter_map(|(ordinal, slot)| {
+                slot.take()
+                    .map(|(charges, complete)| (ordinal, charges, complete))
+            })
+            .collect()
+    }
+
+    /// Retire exactly this already-published native prefix, never a younger
+    /// available job. The global frontier may contain orchestration or cleanup
+    /// charges between the two job prefixes; import those before settlement.
+    pub(crate) fn retire_published_at(
+        &mut self,
+        job: usize,
+        frontier: &mut Settled,
+    ) -> (Stretch, Result<(), JobStop>) {
+        assert_eq!(job, self.next, "native CPU prefixes retire in job order");
+        let charges = self.pending[job]
+            .as_ref()
+            .expect("a published native prefix")
+            .0
+            .clone();
+        if let Some(stop) = self.stopped {
+            return (charges, Err(stop));
+        }
+        self.settled = Settled {
+            limit: frontier.limit.min(self.settled.limit),
+            ..*frontier
+        };
+        let result = self.retire_one(job);
+        frontier.level = self.settled.level;
+        frontier.fuel = self.settled.fuel;
+        (charges, result)
     }
 
     pub fn settled(&self) -> Settled {
@@ -307,13 +360,16 @@ impl Jobs {
             return Err(stop);
         }
         assert_eq!(job, self.next, "native CPU prefixes retire in job order");
-        assert!(self.pending.iter().all(Option::is_none));
+        assert!(
+            self.pending[job].is_none(),
+            "published CPU prefix retires first"
+        );
         self.settled = Settled {
             limit: frontier.limit.min(self.settled.limit),
             ..*frontier
         };
         self.submit(job, charges, complete);
-        let result = self.retire().map(|_| ());
+        let result = self.retire_one(job);
         frontier.level = self.settled.level;
         frontier.fuel = self.settled.fuel;
         result
@@ -660,5 +716,115 @@ mod tests {
                 fuel: 6
             }
         );
+    }
+
+    #[test]
+    fn native_cpu_publications_wait_for_each_global_retirement_without_duplicate_charge() {
+        for width in [1, 4, 8, 16] {
+            let mut state = Settled {
+                level: 0,
+                limit: 100,
+                fuel: 20,
+            };
+            let mut jobs = Jobs::new(width, 2, state);
+            let younger = summarise(BOTH, &[Fuel, Alloc(60)]).unwrap();
+            jobs.pause(1, younger.clone());
+            jobs.retire_prefix_at(
+                0,
+                summarise(BOTH, &[Fuel, Alloc(30)]).unwrap(),
+                false,
+                &mut state,
+            )
+            .unwrap();
+            assert_eq!(
+                state,
+                Settled {
+                    level: 30,
+                    limit: 100,
+                    fuel: 19
+                }
+            );
+            jobs.retire_prefix_at(0, summarise(BOTH, &[Free(30)]).unwrap(), true, &mut state)
+                .unwrap();
+            assert_eq!(
+                state,
+                Settled {
+                    level: 0,
+                    limit: 100,
+                    fuel: 19
+                }
+            );
+            assert!(jobs.pending[1].is_some(), "job zero never retires job one");
+            // Orchestration between mapper prefixes belongs to the run frontier.
+            state.level = 10;
+            state.fuel -= 2;
+            let (recorded, result) = jobs.retire_published_at(1, &mut state);
+            assert_eq!(recorded, younger);
+            assert_eq!(result, Ok(()));
+            assert_eq!(
+                state,
+                Settled {
+                    level: 70,
+                    limit: 100,
+                    fuel: 16
+                }
+            );
+            jobs.retire_prefix_at(1, summarise(BOTH, &[Free(60)]).unwrap(), true, &mut state)
+                .unwrap();
+            assert_eq!(
+                state,
+                Settled {
+                    level: 10,
+                    limit: 100,
+                    fuel: 16
+                }
+            );
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    jobs.retire_published_at(1, &mut state)
+                }))
+                .is_err(),
+                "a summary cannot retire twice"
+            );
+        }
+    }
+
+    #[test]
+    fn withdrawing_younger_summaries_returns_owner_charges_without_settling_them() {
+        for width in [1, 4, 8, 16] {
+            let mut state = Settled {
+                level: 0,
+                limit: 100,
+                fuel: 20,
+            };
+            let mut jobs = Jobs::new(width, 2, state);
+            let younger = summarise(BOTH, &[Fuel, Alloc(60), Free(20)]).unwrap();
+            jobs.publish(1, younger.clone());
+            let withdrawn = jobs.withdraw_younger(0);
+            assert_eq!(withdrawn, vec![(1, younger.clone(), true)]);
+            assert!(
+                jobs.withdraw_younger(0).is_empty(),
+                "one withdrawal per prefix"
+            );
+            assert_eq!(jobs.settled(), state);
+            jobs.retire_prefix_at(
+                0,
+                summarise(BOTH, &[Fuel, Alloc(30)]).unwrap(),
+                true,
+                &mut state,
+            )
+            .unwrap();
+            jobs.publish(1, withdrawn.into_iter().next().unwrap().1);
+            let (_, result) = jobs.retire_published_at(1, &mut state);
+            assert_eq!(result, Ok(()));
+            assert_eq!(
+                state,
+                Settled {
+                    level: 70,
+                    limit: 100,
+                    fuel: 18
+                }
+            );
+        }
     }
 }
