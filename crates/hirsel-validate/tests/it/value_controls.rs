@@ -1233,7 +1233,7 @@ fn shared_nested_unique_storage_can_be_borrowed_without_exporting_its_claims() {
 
 #[test]
 fn nested_unique_local_transports_do_not_restore_exportable_receipts() {
-    for exported in [false, true] {
+    for (exported, environment) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut f = Fixture::unit();
         let mut bytes = ty(TypeKind::Primitive(Primitive::Bytes));
         bytes.modes.uniqueness = Uniqueness::Unique;
@@ -1242,8 +1242,10 @@ fn nested_unique_local_transports_do_not_restore_exportable_receipts() {
         let source = param(&mut f, kind.clone());
         let view = f.slot(kind.clone(), Storage::Temporary);
         let moved = f.slot(kind, Storage::Temporary);
-        for slot in [view, moved] {
-            row(&mut f, slot, |t| t.modes.relation = Relation::environment());
+        if environment {
+            for slot in [view, moved] {
+                row(&mut f, slot, |t| t.modes.relation = Relation::environment());
+            }
         }
         f.assign(view, Rvalue::Use(copy(source)), 0);
         f.assign(moved, Rvalue::Use(take(view)), 0);

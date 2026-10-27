@@ -675,7 +675,6 @@ impl Checker<'_> {
                 self.body.locals[place.root.0 as usize].storage,
                 Storage::Temporary | Storage::Local
             )
-            && self.t.row(expected).modes.relation.has_environment()
     }
 
     pub(super) fn has_unique_parts(&self, store: &TypeInterner, root: TypeId) -> bool {
@@ -737,6 +736,11 @@ impl Checker<'_> {
             // Such a slot retains the lost proof; calls, fields and returns
             // still check it before exporting any owned payload contract.
             || self.local_value_transport(destination)
+            || self.site.instruction.is_none()
+                && self.site.block.is_some_and(|block| {
+                    matches!(&self.body.blocks[block.0 as usize].terminator,
+                        Terminator::Call { callee, .. } if self.consuming_protocol(callee))
+                })
         {
             return;
         }
