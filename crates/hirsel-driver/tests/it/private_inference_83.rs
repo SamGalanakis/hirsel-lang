@@ -11,7 +11,7 @@ fn admitted_private_facts_reuse_unchanged_inputs_and_refuse_body_and_membership_
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"private_facts","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         let store = Arc::new(MemStore::default());
         let budget = ProcessBudget::new(512 << 20);
-        let source = "fn value(data: Bytes)->u8 { data[0] }\npub fn main()->u8 { 1u8 }\n";
+        let source = "fn value(take data: unique Bytes)->Bytes { let _ = data[0]; data }\npub fn main()->u8 { 1u8 }\n";
         let check = |text: &str, expected: usize| {
             std::fs::write(&path, text).unwrap();
             let mut program = COMPILER
@@ -82,15 +82,15 @@ fn private_facts_without_persistence_reuse_reads_after_an_unrelated_body_edit() 
         let budget = ProcessBudget::new(512 << 20);
         for (source, count) in [
             (
-                "fn value(data: Bytes)->u8 { data[0] }\npub fn main()->u8 { 1u8 }\n",
+                "fn value(take data: unique Bytes)->Bytes { let _ = data[0]; data }\npub fn main()->u8 { 1u8 }\n",
                 1,
             ),
             (
-                "fn value(data: Bytes)->u8 { data[0] }\npub fn main()->u8 { 2u8 }\n",
+                "fn value(take data: unique Bytes)->Bytes { let _ = data[0]; data }\npub fn main()->u8 { 2u8 }\n",
                 1,
             ),
             (
-                "fn value(data: Bytes)->u8 { data[1] }\npub fn main()->u8 { 2u8 }\n",
+                "fn value(take data: unique Bytes)->Bytes { let _ = data[1]; data }\npub fn main()->u8 { 2u8 }\n",
                 2,
             ),
         ] {
@@ -104,6 +104,36 @@ fn private_facts_without_persistence_reuse_reads_after_an_unrelated_body_edit() 
                 count
             );
             assert_eq!(engine.recompute_count(&value, QueryKind::Check), 0);
+            drop(reservation);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
+
+#[test]
+fn verify_cache_waits_for_all_module_proofs_before_comparing_signatures() {
+    with_compiler_stack(|| {
+        let store = Arc::new(MemStore::default());
+        let budget = ProcessBudget::new(512 << 20);
+        for verify in [store::VerifyStore::Off, store::VerifyStore::Recompute] {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_result_store(store.clone())
+                .with_verify_store(verify);
+            for module in ["a", "b"] {
+                let mut context = default_context();
+                context.modules = vec![module.into()];
+                let file = engine
+                    .sources
+                    .add(
+                        format!("{module}.hir"),
+                        "fn value(take data: unique Bytes)->Bytes { let _ = data[0]; data }\npub fn main()->u8 { 1u8 }\n".into(),
+                    )
+                    .unwrap();
+                engine.parse_file(file, &context).unwrap();
+            }
+            let reservation = engine
+                .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+                .unwrap();
             drop(reservation);
             assert_eq!(budget.reserved(), 0);
         }

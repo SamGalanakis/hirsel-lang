@@ -324,6 +324,8 @@ pub struct QueryEngine {
     private_unique_failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
     private_summary_revision: Option<crate::memo::Revision>,
     private_summary_active: bool,
+    private_signature_publications: BTreeSet<DefId>,
+    private_summary_failure: Option<(crate::memo::Revision, QueryError)>,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
     scalar_lower_calls: hirsel_syntax::DefMap<u64>,
@@ -674,6 +676,8 @@ impl QueryEngine {
             private_unique_failures: BTreeMap::new(),
             private_summary_revision: None,
             private_summary_active: false,
+            private_signature_publications: BTreeSet::new(),
+            private_summary_failure: None,
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
             scalar_lower_calls: Default::default(),
@@ -884,6 +888,12 @@ impl QueryEngine {
         &mut self,
         id: DefId,
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
+        if !self.private_summary_active
+            && let Some((revision, error)) = &self.private_summary_failure
+            && *revision == self.graph.revision()
+        {
+            return Err(error.clone());
+        }
         // Indexing marks each changed header/candidate and its subscribers.
         // An unmarked memo needs neither a text hash nor a path-based probe;
         // the graph stamps its own verified-at revision when it is read.
@@ -995,7 +1005,18 @@ impl QueryEngine {
         let mut entry = self.finish(key, text, reads, result.map(shared_output), observed);
         entry.covered = covered;
         let entry = Arc::new(entry);
-        self.store_signature(definition, &entry)?;
+        if self.private_summary_active
+            || self.private_summary_revision != Some(self.graph.revision())
+                && self
+                    .adapters
+                    .modes
+                    .as_ref()
+                    .is_some_and(|m| m.infers_private_unique())
+        {
+            self.private_signature_publications.insert(id);
+        } else {
+            self.store_signature(definition, &entry)?;
+        }
         keep(
             &mut self.signatures,
             &mut self.graph,

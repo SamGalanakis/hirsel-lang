@@ -184,13 +184,28 @@ impl Inference {
             .collect();
         for input in &self.inputs {
             let path = &input.syntax.item.definition;
+            // Published signatures also carry the previous inference proof.
+            // This computation reads every candidate body and module membership
+            // anew in `base`; do not inherit those old receipts through a
+            // declaration whose normalized header survived a body-only edit.
+            let signature_reads = Arc::new(
+                Reads::from_vec(
+                    input
+                        .reads
+                        .iter()
+                        .filter(|(key, _)| self.base.get(key).is_none())
+                        .copied()
+                        .collect(),
+                )
+                .map_err(|_| QueryError::NotImplemented)?,
+            );
             let done = worker.run_to(
                 parallel::Task {
                     index: 0,
                     definition: path.clone(),
                     syntax: input.syntax.clone(),
                     signature: Ok(input.signature.clone()),
-                    signature_reads: input.reads.clone(),
+                    signature_reads: signature_reads.clone(),
                     text: input.syntax.text_hash,
                     resolution: None,
                     checked: None,
@@ -211,7 +226,7 @@ impl Inference {
             })?;
             self.record_reads(
                 &mut reads,
-                observed.iter().chain(input.reads.iter()),
+                observed.iter().chain(signature_reads.iter()),
                 &candidates,
             );
             if let Some(checked) = done.checked.and_then(|p| p.result().ok()) {
@@ -370,8 +385,27 @@ impl QueryEngine {
             return Ok(reservation);
         }
         self.private_summary_active = true;
-        let result = self.infer_on_runtime(reservation);
+        self.private_summary_failure = None;
+        let result = self.infer_on_runtime(reservation).and_then(|reservation| {
+            // Normalization may visit other modules before their proofs have
+            // settled. Publish and verify those signatures only after all
+            // module facts have been installed, never as provisional headers.
+            while !self.private_signature_publications.is_empty() {
+                for id in std::mem::take(&mut self.private_signature_publications) {
+                    self.signature_query_id(id)?;
+                    if let Some(entry) = self.signatures.get(&id).cloned() {
+                        self.store_signature(id.path(), &entry)?;
+                    }
+                    self.private_signature_publications.remove(&id);
+                }
+            }
+            Ok(reservation)
+        });
         self.private_summary_active = false;
+        self.private_summary_failure = result
+            .as_ref()
+            .err()
+            .map(|error| (self.graph.revision(), error.clone()));
         result
     }
     fn infer_on_runtime(
@@ -388,10 +422,13 @@ impl QueryEngine {
         };
         let mut local = self.local_inference();
         let mut inferred = hirsel_syntax::DefMap::default();
+        let mut record_context = None;
+        let mut pending = Vec::new();
         self.private_summary_reads.clear();
         for ((package, module), paths) in self.inference_groups() {
-            let expected = local
-                .remove(&(package, module))
+            let previous = local.remove(&(package, module));
+            let resident = previous.is_some();
+            let expected = previous
                 .filter(|facts| {
                     facts
                         .reads
@@ -432,12 +469,33 @@ impl QueryEngine {
             if potential.is_empty() {
                 continue;
             }
-            // Closed `with` clauses register declarations before checking.
-            // Discover only possible private bodies, so public-only dependency
-            // modules retain their body-free startup path.
-            self.register_specializations(&potential);
-            let snapshot = self.signature_inputs();
-            let declarations = self.frozen_declarations();
+            // A signature may have survived a header-preserving body edit
+            // while carrying the old inference's representation/body receipts.
+            // Normalize missed candidates again before freezing this inference;
+            // the fresh declaration cannot inherit an invalid previous proof.
+            if resident {
+                for path in &potential {
+                    self.signatures.remove(&DefId::intern(path));
+                }
+                self.retire_snapshot();
+            }
+            pending.push((package, module, paths, potential, expected));
+        }
+        // Discover all missed private bodies before freezing the universe.
+        // Registering one module at a time would repeatedly rebuild every
+        // signature/private view when another module introduces an instance.
+        let potential: Vec<_> = pending
+            .iter()
+            .flat_map(|(_, _, _, paths, _)| paths.iter().cloned())
+            .collect();
+        self.register_specializations(&potential);
+        for path in &potential {
+            self.materialize(path)?;
+        }
+        let snapshot = (!pending.is_empty()).then(|| self.signature_inputs());
+        let declarations = self.frozen_declarations();
+        for (package, module, paths, potential, expected) in pending {
+            let snapshot = snapshot.as_ref().expect("pending inference snapshot");
             let mut base = ReadsBuilder::new();
             base.record(
                 ReadKey::NameSet(package, module),
@@ -505,7 +563,15 @@ impl QueryEngine {
                 continue;
             }
             let key = self.inference_key(&paths[0]);
-            let anchors = Arc::new(crate::NativeRecordContext::capture(self));
+            let stamp = (self.declarations.revision(), self.sources.anchors().count());
+            let anchors = match &record_context {
+                Some((previous, context)) if *previous == stamp => Arc::clone(context),
+                _ => {
+                    let context = Arc::new(crate::NativeRecordContext::capture(self));
+                    record_context = Some((stamp, context.clone()));
+                    context
+                }
+            };
             let cited = self
                 .source_paths()
                 .into_iter()
@@ -556,8 +622,8 @@ impl QueryEngine {
                 base: base.finish().map_err(|_| QueryError::NotImplemented)?,
                 types: self.types.clone(),
                 memo: self.memo.clone(),
-                snapshot,
-                declarations,
+                snapshot: snapshot.clone(),
+                declarations: declarations.clone(),
                 sources: self.sources.clone(),
                 items: self.items.clone(),
                 citations: crate::snapshot::OwnedSourceContext {
@@ -640,7 +706,7 @@ impl QueryEngine {
             }
             self.adopt_inference(facts, &mut inferred);
         }
-        self.publish_private_summaries(inferred);
+        self.publish_private_summaries(inferred)?;
         self.private_summary_revision = Some(self.graph.revision());
         Ok(reservation)
     }
@@ -650,9 +716,7 @@ impl QueryEngine {
         static BUDGET: OnceLock<Arc<ProcessBudget>> = OnceLock::new();
         let budget = BUDGET.get_or_init(|| ProcessBudget::new(256 << 20));
         if let Ok(reservation) = budget.reserve(256 << 20) {
-            if self.prepare_private_inference(reservation).is_err() {
-                self.publish_private_summaries(hirsel_syntax::DefMap::default());
-            }
+            let _ = self.prepare_private_inference(reservation);
         }
     }
 }

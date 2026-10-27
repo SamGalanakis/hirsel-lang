@@ -22,6 +22,12 @@ impl QueryEngine {
     }
 
     pub(super) fn observe_private_summary(&self, id: DefId, observed: &mut Observed) {
+        // Empty facts grant no capability. Keep their body receipts on the
+        // inference query; a later nonempty proof explicitly changes the
+        // signature and invalidates its subscribers during publication.
+        if self.private_summaries.get(&id).is_none_or(|s| s.is_empty()) {
+            return;
+        }
         if let Some(reads) = self.private_summary_reads.get(&id) {
             observed.merged.merge(reads);
         }
@@ -39,7 +45,7 @@ impl QueryEngine {
     pub(crate) fn publish_private_summaries(
         &mut self,
         inferred: hirsel_syntax::DefMap<UniqueInference>,
-    ) {
+    ) -> Result<(), QueryError> {
         // A failed source still gets its ordinary per-definition diagnostics.
         // No failed computation publishes optimistic candidate bits.
         {
@@ -65,13 +71,13 @@ impl QueryEngine {
                     && let Ok(output) = entry.result()
                 {
                     let mut output = (*output).clone();
-                    let signature_changed = output.value.metadata.inferred_unique != summary;
                     let mut signature = (*output.value).clone();
                     signature.metadata.inferred_unique = summary.clone();
                     if let Ok(fingerprint) =
                         hirsel_types::encoding::fingerprint(&self.types, &signature, &entry.covered)
                     {
                         signature.fingerprint = fingerprint;
+                        let signature_changed = output.value.fingerprint != fingerprint;
                         output.value = Arc::new(signature);
                         let mut observed = Observed::default();
                         observed.products = entry.products.clone();
@@ -92,7 +98,7 @@ impl QueryEngine {
                             &observed,
                         );
                         next.covered = entry.covered.clone();
-                        let _ = self.store_signature(id.path(), &next);
+                        self.private_signature_publications.insert(id);
                         self.signatures.insert(id, Arc::new(next));
                         if signature_changed || summary != previous {
                             changed.push(id.path().clone());
@@ -105,5 +111,6 @@ impl QueryEngine {
                 self.note_signatures(&changed);
             }
         }
+        Ok(())
     }
 }
