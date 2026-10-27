@@ -476,12 +476,12 @@ impl Reads {
     pub(crate) fn allocations(&self) -> impl Iterator<Item = (usize, usize)> {
         let rows = Some((
             self.rows.as_ptr() as usize,
-            2 * size_of::<usize>() + size_of_val(&*self.rows),
+            super::retained::arc_bytes(&*self.rows),
         ));
         let indices = self.indices.as_ref().map(|indices| {
             (
                 indices.as_ptr() as usize,
-                2 * size_of::<usize>() + size_of_val(&**indices),
+                super::retained::arc_bytes(&**indices),
             )
         });
         [rows, indices].into_iter().flatten()
@@ -868,6 +868,25 @@ mod tests {
     }
 
     #[test]
+    fn read_allocation_debit_matches_live_aligned_buffers_and_last_owner_release() {
+        let definitions = (0..32)
+            .map(|index| def(&format!("allocation{index}")))
+            .collect::<Vec<_>>();
+        for count in [0, 1, 2, 3, 32] {
+            let rows = definitions[..count]
+                .iter()
+                .map(|&id| (ReadKey::Signature(id), ContentHash::default()))
+                .collect::<Vec<_>>();
+            let (reads, allocated) =
+                crate::test_alloc::measured(|| Reads::from_vec(rows.clone()).unwrap());
+            let charged = reads.allocations().map(|(_, bytes)| bytes).sum::<usize>();
+            assert_eq!(charged as isize, allocated.live, "read count={count}");
+            let (_, released) = crate::test_alloc::measured(|| drop(reads));
+            assert_eq!(released.live, -allocated.live, "read count={count}");
+        }
+    }
+
+    #[test]
     fn read_allocation_layout_includes_even_the_empty_arc_header() {
         let empty = Reads::empty();
         assert_eq!(
@@ -878,7 +897,8 @@ mod tests {
         let subset = empty.share_rows(&complete).unwrap();
         assert_eq!(
             subset.allocations().map(|(_, bytes)| bytes).sum::<usize>(),
-            4 * size_of::<usize>() + size_of::<(ReadKey, ContentHash)>()
+            4 * size_of::<usize>()
+                + size_of::<(ReadKey, ContentHash)>().next_multiple_of(align_of::<usize>())
         );
     }
     #[test]

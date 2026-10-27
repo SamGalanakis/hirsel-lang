@@ -191,7 +191,7 @@ pub(crate) fn retained_lower_entry_bytes(
     weight.bytes
 }
 
-fn arc_bytes<T: ?Sized>(value: &T) -> usize {
+pub(super) fn arc_bytes<T: ?Sized>(value: &T) -> usize {
     Layout::new::<[usize; 2]>()
         .extend(Layout::for_value(value))
         .expect("an allocated Arc has a valid layout")

@@ -299,7 +299,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             bytes - base,
-            size_of::<(ReadKey, ContentHash)>() as u64,
+            size_of::<(ReadKey, ContentHash)>()
+                .next_multiple_of(align_of::<usize>().max(align_of::<(ReadKey, ContentHash)>()))
+                as u64,
             "read identities retain interned rows, not repeated wire spellings"
         );
         let independent = Arc::new((*checked).clone());
