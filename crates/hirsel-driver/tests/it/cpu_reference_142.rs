@@ -35,7 +35,6 @@ fn agree_in(
         let fixture = native::Fixture {
             cpu: cpu.clone(),
             tasks_free: free,
-            trace_roots: native,
             ..Default::default()
         };
         let run = run_observed_snapshot(
@@ -86,6 +85,8 @@ fn agree_in(
         .unwrap();
         assert_eq!(heap.observation, reference);
         if native {
+            let mut diagnostic_fixture = fixture.clone();
+            diagnostic_fixture.trace_roots = true;
             let root = tempfile::tempdir().unwrap();
             let mut tools = native::Toolchain::in_tree_diagnostic(
                 &root.path().join("runtime"),
@@ -119,7 +120,7 @@ fn agree_in(
                         record: None,
                         revocations: None,
                     },
-                    &fixture,
+                    &diagnostic_fixture,
                 )
                 .unwrap();
                 assert_eq!(
