@@ -251,7 +251,8 @@ fn zero_sized_capture_retirement_uses_the_actual_declaration_and_live_mask() {
         let bindings = [0, 2, 10, 7, 0, 0, 2, 11, 7, 1];
         let mut scope = std::mem::MaybeUninit::<CleanupScope>::uninit();
         unsafe {
-            let block = hirsel_rt::hirsel_rt_v2_alloc(ctx, 3, 0, 8, hirsel_rt::DOMAIN_HEAP, 0);
+            let block =
+                hirsel_rt::alloc::hirsel_rt_v2_alloc(ctx, 3, 0, 8, hirsel_rt::DOMAIN_HEAP, 0);
             assert!(!block.is_null());
             hirsel_rt_v2_ownership_cleanup_begin(
                 ctx,
@@ -264,7 +265,7 @@ fn zero_sized_capture_retirement_uses_the_actual_declaration_and_live_mask() {
             );
             let mask = mask.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
             assert_eq!(
-                hirsel_rt::hirsel_rt_v2_release(ctx, block, 3, mask, 0, 0),
+                hirsel_rt::release::hirsel_rt_v2_release(ctx, block, 3, mask, 0, 0),
                 0
             );
             hirsel_rt_v2_ownership_cleanup_end(ctx, scope.as_mut_ptr());

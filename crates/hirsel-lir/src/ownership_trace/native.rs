@@ -1657,11 +1657,10 @@ impl LeafPlan {
                 && record.finalizer.is_some()
                 && leaf(layouts, layout)
             {
-                if captures.iter().any(|prior| {
-                    prior.path.first() == path.first()
-                        && prior.offset == offset
-                        && prior.layout == layout
-                }) {
+                if captures
+                    .iter()
+                    .any(|prior| prior.path.first() == path.first() && prior.offset == offset)
+                {
                     return Err("ownership cleanup has ambiguous capture cells".into());
                 }
                 captures.push(CleanupCapture {

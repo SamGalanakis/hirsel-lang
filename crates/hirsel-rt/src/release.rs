@@ -1371,7 +1371,6 @@ unsafe fn run_step(
     anchor: u64,
     operation_site: u64,
     status: &mut u8,
-    #[cfg(feature = "ownership-trace")] base: *mut u8,
 ) -> *mut Header {
     // SAFETY: `at` addresses the step's field inside the value being dropped.
     unsafe {
@@ -1417,8 +1416,6 @@ unsafe fn run_step(
                         .unwrap_or_else(|| fault("finalizer retirement without admission"));
                     ctx.activations.retire(activation);
                 }
-                #[cfg(feature = "ownership-trace")]
-                crate::ownership_trace::retired(ctx, step.layout, at, base, step.field);
             }
             // The last root died: the value is ordinary again before its steps release it.
             STEP_THAW => crate::shared::thaw_value(ctx, step.layout, at),
@@ -1545,17 +1542,13 @@ unsafe fn walk_frames<const FINALIZERS: bool>(
                         let handle = at.cast::<u64>().read_unaligned();
                         return Walk::Close(handle, suspended(pc, &frame, nest));
                     }
-                    let child = run_step(
-                        ctx,
-                        step,
-                        at,
-                        &mut pc,
-                        anchor,
-                        operation_site,
-                        status,
-                        #[cfg(feature = "ownership-trace")]
-                        value,
-                    );
+                    let child = run_step(ctx, step, at, &mut pc, anchor, operation_site, status);
+                    #[cfg(feature = "ownership-trace")]
+                    if step.kind == STEP_END_FINALIZE
+                        && (*step.layout).flags & LAYOUT_IMPLEMENTATION_FINALIZER == 0
+                    {
+                        crate::ownership_trace::retired(ctx, step.layout, at, value, step.field);
+                    }
                     if !child.is_null() {
                         return Walk::Child(child, suspended(pc, &frame, nest));
                     }
