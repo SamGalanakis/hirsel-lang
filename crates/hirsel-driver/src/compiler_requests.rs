@@ -3,7 +3,9 @@ use crate::session::Session;
 use hirsel_engine::{CheckOutput, Compiler, ToolError};
 use std::path::Path;
 
+/// Explicit checks preserve this compiler's policy on immutable request graphs.
 pub trait CompilerRequestsExt {
+    /// Check a source or package, returning its current source diagnostics.
     fn check_path(&self, path: &Path) -> Result<CheckOutput, ToolError>;
 }
 impl CompilerRequestsExt for Compiler {
@@ -18,10 +20,9 @@ impl CompilerRequestsExt for Compiler {
         if output
             .as_ref()
             .is_ok_and(|output| output.completion == hirsel_engine::CheckCompletion::Complete)
+            && let Some(publication) = publication
         {
-            if let Some(publication) = publication {
-                let _ = publication.finish();
-            }
+            let _ = publication.finish();
         }
         output
     }
