@@ -1,5 +1,6 @@
 //! Uninstrumented bridges. The logical TSan fiber stays unchanged while the
-//! callback runs below the suspended native idle continuation.
+//! callback runs below the suspended native idle continuation. Explicit-PC
+//! memory callbacks retain the emitted access location across the stack bridge.
 
 core::arch::global_asm!(
     ".section .tbss,\"awT\",@nobits",
@@ -38,7 +39,7 @@ pub(crate) unsafe extern "C" fn clear() {
 }
 
 macro_rules! bridge {
-    ($name:ident, $target:path) => {
+    ($name:ident, $target:path, $pc:literal) => {
         /// # Safety
         /// Same integer-register ABI as the named compiler-rt entry. Private
         /// execution has a live idle binding installed by the dispatcher. The
@@ -47,6 +48,7 @@ macro_rules! bridge {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $name() {
             core::arch::naked_asm!(
+                $pc,
                 "cmp byte ptr fs:[hirsel_tsan_private@TPOFF], 0",
                 "je 2f",
                 "push r12",
@@ -65,13 +67,22 @@ macro_rules! bridge {
     };
 }
 macro_rules! callbacks {
-    ($(($name:ident, $target:ident),)*) => {
-        unsafe extern "C" { $(fn $target();)* }
-        $(bridge!($name, $target);)*
+    ($(($name:ident, $raw:ident, $target:ident, $pc:literal),)*) => {
+        $(mod $name {
+            unsafe extern "C" {
+                #[link_name = stringify!($target)]
+                pub(super) fn callback();
+            }
+        }
+        bridge!($name, $name::callback, $pc);)*
     };
 }
 hirsel_core_contract::tsan_callbacks!(callbacks);
-bridge!(hirsel_tsan_switch_target, crate::fiber::tsan_switch_target);
+bridge!(
+    hirsel_tsan_switch_target,
+    crate::fiber::tsan_switch_target,
+    ""
+);
 bridge!(
     hirsel_tsan_switch_to_fiber,
     crate::fiber::tsan_switch_to_fiber
@@ -90,7 +101,7 @@ pub(crate) mod tests {
         }
         0x123456789abcdef0
     }
-    bridge!(hirsel_tsan_callback_probe, target);
+    bridge!(hirsel_tsan_callback_probe, target, "");
 
     pub(crate) unsafe fn probe(out: *mut u64) -> u64 {
         unsafe extern "C" {
