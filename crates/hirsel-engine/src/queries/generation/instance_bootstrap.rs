@@ -338,6 +338,19 @@ impl QueryEngine {
             let mut paths = Vec::with_capacity(ordinary.len() + accepted.len());
             paths.extend(ordinary.iter().cloned());
             paths.extend(accepted.iter().map(|a| a.definition().clone()));
+            runtime = self
+                .prepare_private_inference_with_registrations(runtime, &accepted)
+                .map_err(admission_error)?;
+            // New body proofs change V's universe. Re-execute generators in
+            // that universe rather than carrying an earlier execution receipt
+            // into the final front. The settled proofs remain for the next
+            // round, so unchanged output reaches a stable accepted universe.
+            if accepted
+                .iter()
+                .any(|registration| registration.validate(self).is_err())
+            {
+                continue;
+            }
             let front = self
                 .front_body_queries_with_registrations(
                     &paths,
@@ -446,6 +459,7 @@ impl QueryEngine {
                 let retained = metadata
                     .split(weight.bytes())
                     .ok_or_else(|| refused("completed metadata exceeds its partition"))?;
+                paths.sort();
                 return Ok(FrontInstanceBootstrap {
                     definitions: paths,
                     registrations: accepted,

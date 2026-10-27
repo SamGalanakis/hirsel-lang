@@ -141,14 +141,31 @@ impl QueryEngine {
             let text = output.text()?.to_owned();
             let snapshot = self.snapshot(&definition)?;
             let body = generator(&snapshot).ok_or_else(refusal)?;
-            if output
+            if let Some(key) = output
                 .reads()
                 .first_changed(|key| self.observe(&definition, key))
-                .is_some()
-                || (self.verify != Verify::Off && output.acceptance().is_none())
+            {
+                if let Some((_, failure)) = &self.private_summary_failure {
+                    return Err(failure.clone());
+                }
+                return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "generated syntax acceptance".into(),
+                    message: format!(
+                        "{definition}: changed generator read {key:?}: {:?} -> {:?}",
+                        output.reads().get(&key),
+                        self.observe(&definition, &key)
+                    ),
+                }));
+            }
+            if (self.verify != Verify::Off && output.acceptance().is_none())
                 || !self.lower_acceptance_holds(output.acceptance())
             {
-                return Err(refusal());
+                return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "generated syntax acceptance".into(),
+                    message: format!(
+                        "{definition}: private execution acceptance is absent or stale"
+                    ),
+                }));
             }
             let site = snapshot.tree.expressions[body.0 as usize].origin.span;
             let logical = format!("<generated:{definition}>");

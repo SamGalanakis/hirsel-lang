@@ -1225,7 +1225,7 @@ pub(super) fn install(
     let errors = runtime_errors(store.as_ref())?;
     let runtime = program
         .engine
-        .prepare_private_inference(runtime)
+        .prepare_private_inference_with_registrations(runtime, registrations)
         .map_err(&query_error)?;
     let front = program
         .engine

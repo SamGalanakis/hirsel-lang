@@ -182,3 +182,89 @@ fn changing_the_root_does_not_reinfer_unchanged_dependency_modules() {
         }
     });
 }
+
+#[test]
+fn generated_private_results_keep_their_inferred_unique_proof() {
+    use hirsel_driver::{requests::*, resident::ObservedSession};
+    with_compiler_stack(|| {
+        let helpers = r#"
+fn make()->Result[Body[fn()->Bytes uses {}],String] uses {} {
+  Ok(codegen.body("fn()->Bytes uses {} {unique b\"x\"}"))
+}
+fn generated()->Bytes uses {} = comptime make()
+"#;
+        let main = "pub fn main()->unique Bytes uses {} {generated()}\n";
+        for source in [format!("{helpers}{main}"), format!("{main}{helpers}")] {
+            let directory = tempfile::tempdir().unwrap();
+            let manifest = directory.path().join("hirsel.json");
+            std::fs::write(directory.path().join("main.hir"), &source).unwrap();
+            std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"generated_proof","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+            let config = || CompileConfig {
+                store: Arc::new(MemStore::default()),
+                jobs: hirsel_intern::jobs::Jobs::new(1),
+                hold_bytes: 0,
+                ..Default::default()
+            };
+            let mut scalar = COMPILER
+                .with_config(config())
+                .with_owned_engines()
+                .load_program(&manifest)
+                .unwrap();
+            scalar.check_for_execution().unwrap();
+            let config = config();
+            let compiler = COMPILER.with_config(config.clone()).with_owned_engines();
+            let budget = ProcessBudget::new(1 << 30);
+            let selector = CompilerRequests::new(
+                compiler.clone(),
+                config.clone(),
+                budget.clone(),
+                RequestLimits {
+                    runtime_bytes: 512 << 20,
+                    snapshot_bytes: 128 << 20,
+                    transport_bytes: 32 << 20,
+                },
+            );
+            let limits = selector.input_limits();
+            let mut session = ObservedSession::new(manifest, compiler, config, selector, limits, 3);
+            {
+                let checked = session
+                    .request(CompileOperation::Check {
+                        lowering: LoweringPolicy::Reachable,
+                    })
+                    .unwrap();
+                let CompileResult::Check(checked) = &checked.result else {
+                    panic!("check result")
+                };
+                assert_eq!(checked.completion, CheckCompletion::Complete);
+                assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            }
+            let changed = source.replace(
+                "unique b\\\"x\\\"",
+                "let value = unique b\\\"x\\\"; let saved = copy value; value",
+            );
+            assert_ne!(changed, source);
+            std::fs::write(directory.path().join("main.hir"), changed).unwrap();
+            let diagnostics = match session.request(CompileOperation::Check {
+                lowering: LoweringPolicy::Reachable,
+            }) {
+                Ok(output) => {
+                    let CompileResult::Check(checked) = &output.result else {
+                        panic!("check result")
+                    };
+                    checked.diagnostics.clone()
+                }
+                Err(ToolError::Query {
+                    error: QueryError::Diagnostics(diagnostics),
+                    ..
+                }) => diagnostics,
+                Err(error) => panic!("{error:?}"),
+            };
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.rule.as_str() == "MODE-2"),
+                "{diagnostics:?}"
+            );
+        }
+    });
+}

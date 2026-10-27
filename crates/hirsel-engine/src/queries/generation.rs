@@ -389,6 +389,9 @@ impl QueryEngine {
         self.s1.leave();
         self.merge_execution(entry.reads());
         self.depth_requested(&depth, site);
+        if !self.private_summary_active && entry.result().is_ok() {
+            self.private_summary_revision = None;
+        }
         entry.result()
     }
 

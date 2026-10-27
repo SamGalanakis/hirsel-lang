@@ -35,6 +35,7 @@ struct Inference {
     environment: ContentHash,
     result: Mutex<Option<Result<Facts, QueryError>>>,
     expected: Option<Facts>,
+    complete: bool,
     reference: Reference,
     store: Option<Arc<dyn crate::store::ResultStore>>,
     records: crate::NativeRecords,
@@ -92,7 +93,9 @@ impl QueryTask for Task {
                 .encode(&*self.inference.citations.owners, facts)?;
             let record =
                 crate::store::product_domain(QueryKind::PrivateInference).reference(&bytes)?;
-            if let Some(store) = &self.inference.store {
+            if self.inference.complete
+                && let Some(store) = &self.inference.store
+            {
                 let variant =
                     VariantRef::publish(&**store, &self.inference.key, facts.reads.clone(), &bytes);
                 if let Some(variant) = variant {
@@ -289,7 +292,7 @@ impl QueryEngine {
         owner.0.name = "$private-unique".into();
         EntryKey::new(
             ContentHash::of_parts(
-                "hirsel.private-inference.v2",
+                "hirsel.private-inference.v3",
                 [self.environment_value().0.as_slice()],
             ),
             &owner,
@@ -378,29 +381,43 @@ impl QueryEngine {
         &mut self,
         reservation: MemoryReservation,
     ) -> Result<MemoryReservation, QueryError> {
+        self.private_inference_hosted = true;
+        self.prepare_private_inference_with_registrations(reservation, &[])
+    }
+    /// Infer accepted generated bodies along with their written module peers.
+    /// Before bootstrap, only written bodies can contribute provisional facts.
+    pub fn prepare_private_inference_with_registrations(
+        &mut self,
+        reservation: MemoryReservation,
+        registrations: &[Arc<AcceptedFrontRegistration>],
+    ) -> Result<MemoryReservation, QueryError> {
         self.note_environment();
         if self.private_summary_active
-            || self.private_summary_revision == Some(self.graph.revision())
+            || (registrations.is_empty()
+                && self.private_summary_revision == Some(self.graph.revision()))
         {
             return Ok(reservation);
         }
         self.private_summary_active = true;
         self.private_summary_failure = None;
-        let result = self.infer_on_runtime(reservation).and_then(|reservation| {
-            // Normalization may visit other modules before their proofs have
-            // settled. Publish and verify those signatures only after all
-            // module facts have been installed, never as provisional headers.
-            while !self.private_signature_publications.is_empty() {
-                for id in std::mem::take(&mut self.private_signature_publications) {
-                    self.signature_query_id(id)?;
-                    if let Some(entry) = self.signatures.get(&id).cloned() {
-                        self.store_signature(id.path(), &entry)?;
+        let result = self
+            .infer_on_runtime(reservation, registrations)
+            .and_then(|reservation| {
+                // Normalization may visit other modules before their proofs have
+                // settled. Publish and verify those signatures only after all
+                // module facts have been installed, never as provisional headers.
+                while !self.private_signature_publications.is_empty() {
+                    for id in std::mem::take(&mut self.private_signature_publications) {
+                        self.signature_query_id(id)?;
+                        if let Some(entry) = self.signatures.get(&id).cloned() {
+                            self.store_signature(id.path(), &entry)?;
+                        }
+                        self.private_signature_publications.remove(&id);
                     }
-                    self.private_signature_publications.remove(&id);
                 }
-            }
-            Ok(reservation)
-        });
+                self.private_summary_revision = Some(self.graph.revision());
+                Ok(reservation)
+            });
         self.private_summary_active = false;
         self.private_summary_failure = result
             .as_ref()
@@ -411,6 +428,7 @@ impl QueryEngine {
     fn infer_on_runtime(
         &mut self,
         mut reservation: MemoryReservation,
+        registrations: &[Arc<AcceptedFrontRegistration>],
     ) -> Result<MemoryReservation, QueryError> {
         let Some(modes) = self
             .adapters
@@ -420,14 +438,35 @@ impl QueryEngine {
         else {
             return Ok(reservation);
         };
+        for registration in registrations {
+            registration.validate(self)?;
+        }
         let mut local = self.local_inference();
         let mut inferred = hirsel_syntax::DefMap::default();
         let mut record_context = None;
         let mut pending = Vec::new();
         self.private_summary_reads.clear();
         for ((package, module), paths) in self.inference_groups() {
+            let mut generated = Vec::new();
+            for path in &paths {
+                if self.source_facts(path).is_some_and(|f| f.generator) {
+                    self.materialize(path)?;
+                    let syntax = self.snapshot(path)?;
+                    if syntax.item.visibility == hirsel_syntax::Visibility::Private
+                        && !generation::instance_bodied(&syntax)
+                        && generation::generator(&syntax).is_some()
+                    {
+                        generated.push(DefId::intern(path));
+                    }
+                }
+            }
             let previous = local.remove(&(package, module));
             let resident = previous.is_some();
+            let previous = previous.filter(|facts| {
+                generated
+                    .iter()
+                    .all(|id| facts.proofs.iter().any(|(proved, _)| proved == id))
+            });
             let expected = previous
                 .filter(|facts| {
                     facts
@@ -435,7 +474,12 @@ impl QueryEngine {
                         .first_changed(|key| self.observe(&paths[0], key))
                         .is_none()
                 })
-                .or_else(|| self.load_inference(&paths[0]));
+                .or_else(|| self.load_inference(&paths[0]))
+                .filter(|facts| {
+                    generated
+                        .iter()
+                        .all(|id| facts.proofs.iter().any(|(proved, _)| proved == id))
+                });
             if let Some(facts) = &expected {
                 for (id, proof) in &facts.proofs {
                     self.private_summaries.insert(*id, proof.summary.clone());
@@ -495,6 +539,7 @@ impl QueryEngine {
         let snapshot = (!pending.is_empty()).then(|| self.signature_inputs());
         let declarations = self.frozen_declarations();
         for (package, module, paths, potential, expected) in pending {
+            let mut complete = true;
             let snapshot = snapshot.as_ref().expect("pending inference snapshot");
             let mut base = ReadsBuilder::new();
             base.record(
@@ -529,7 +574,30 @@ impl QueryEngine {
                     continue;
                 }
                 self.materialize(path)?;
-                let syntax = self.snapshot(path)?;
+                let original = self.snapshot(path)?;
+                let registration = registrations.iter().find(|r| r.definition() == path);
+                if generation::instance_bodied(&original) {
+                    continue;
+                }
+                let generated_text = self.key_text(path, QueryKind::Check)?;
+                let mut generated_reads = None;
+                let syntax = if generation::generator(&original).is_some() {
+                    if let Some(registration) = registration {
+                        registration.syntax.clone()
+                    } else if let Some(entry) = self.checked.get(&DefId::intern(path)).cloned()
+                        && self.memo_valid(path, &entry, generated_text)
+                        && self.lower_acceptance_holds(entry.acceptance.as_ref())
+                        && let Ok(checked) = entry.result()
+                    {
+                        generated_reads = Some(entry.memo.reads.clone());
+                        checked.value.syntax.clone()
+                    } else {
+                        complete = false;
+                        continue;
+                    }
+                } else {
+                    original
+                };
                 if syntax
                     .item
                     .attributes
@@ -554,9 +622,20 @@ impl QueryEngine {
                         dependencies: vec![],
                         diagnostics: vec![],
                     }),
-                    reads: self
-                        .shared_memo_reads(path, QueryKind::Signature)
-                        .unwrap_or_else(|| Arc::new(Reads::empty())),
+                    reads: {
+                        let mut reads = ReadsBuilder::new();
+                        if let Some(signature) = self.shared_memo_reads(path, QueryKind::Signature)
+                        {
+                            reads.merge(&signature);
+                        }
+                        if let Some(registration) = registration {
+                            reads.merge(registration.reads());
+                        }
+                        if let Some(generated_reads) = generated_reads {
+                            reads.merge(&generated_reads);
+                        }
+                        Arc::new(reads.finish().map_err(|_| QueryError::NotImplemented)?)
+                    },
                 });
             }
             if inputs.is_empty() {
@@ -650,6 +729,7 @@ impl QueryEngine {
                 environment: self.environment_value(),
                 result: Mutex::new(None),
                 expected,
+                complete,
                 reference,
                 store: self.result_store.clone(),
                 records: crate::NativeRecords::new(
@@ -711,12 +791,106 @@ impl QueryEngine {
         Ok(reservation)
     }
     pub(super) fn standalone_private_inference(&mut self) {
+        if self
+            .adapters
+            .modes
+            .as_ref()
+            .is_none_or(|modes| !modes.infers_private_unique())
+        {
+            return;
+        }
         static SERIAL: Mutex<()> = Mutex::new(());
         let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         static BUDGET: OnceLock<Arc<ProcessBudget>> = OnceLock::new();
-        let budget = BUDGET.get_or_init(|| ProcessBudget::new(256 << 20));
-        if let Ok(reservation) = budget.reserve(256 << 20) {
-            let _ = self.prepare_private_inference(reservation);
+        let budget = BUDGET.get_or_init(|| ProcessBudget::new(512 << 20));
+        if let Ok(reservation) = budget.reserve(512 << 20) {
+            let _ = self.standalone_inference(reservation).inspect_err(|error| {
+                self.private_summary_failure = Some((self.graph.revision(), error.clone()));
+            });
         }
+    }
+    fn standalone_inference(&mut self, reservation: MemoryReservation) -> Result<(), QueryError> {
+        let mut reservation =
+            self.prepare_private_inference_with_registrations(reservation, &[])?;
+        if self.private_inference_hosted {
+            return Ok(());
+        }
+        let definitions = self.front_source_roots();
+        let generators = self.front_generator_roots(&definitions)?;
+        let missing = generators.iter().any(|path| {
+            self.snapshot(path).is_ok_and(|syntax| {
+                !generation::instance_bodied(&syntax)
+                    && syntax.item.visibility == hirsel_syntax::Visibility::Private
+                    && !self.private_summaries.contains_key(&DefId::intern(path))
+            })
+        });
+        if !missing {
+            return Ok(());
+        }
+        let refused = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "private generated inference".into(),
+                message: "standalone bootstrap exceeds its existing partition".into(),
+            })
+        };
+        let mut split = |bytes| reservation.split(bytes).ok_or_else(refused);
+        let admission = FrontInstanceBootstrapAdmission {
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            weight: MemoryWeight {
+                scratch: 8 << 20,
+                retained: 2 << 20,
+                stack: 0,
+            },
+            max_reads: definitions.len().saturating_mul(3).min(4096),
+            runtime: split(384 << 20)?,
+            front: split(32 << 20)?,
+            lower: split(32 << 20)?,
+            text: split(16 << 20)?,
+            syntax: split(16 << 20)?,
+            discovery: split(8 << 20)?,
+            metadata: split(8 << 20)?,
+        };
+        let reference = crate::store::Domain {
+            kind: KIND,
+            schema: 1,
+        }
+        .reference(b"private generated inference")
+        .ok_or_else(refused)?;
+        let errors = RuntimeErrors {
+            resource: reference,
+            cycle: reference,
+            cancelled: reference,
+            protocol: reference,
+            panicked: reference,
+        };
+        let previous = self.result_store.clone();
+        if previous.as_ref().is_none_or(|store| !store.enabled()) {
+            self.result_store = Some(Arc::new(crate::store::MemStore::default()));
+        }
+        let result = self.bootstrap_front_instances(
+            &definitions,
+            &definitions,
+            &generators,
+            admission,
+            errors,
+        );
+        self.result_store = previous;
+        result.map(|_| ()).map_err(|error| match error {
+            FrontInstanceBootstrapError::Bootstrap(FrontRegistrationBootstrapError::Admission(
+                error,
+            ))
+            | FrontInstanceBootstrapError::Discovery { error, .. }
+            | FrontInstanceBootstrapError::Front {
+                error: Some(error), ..
+            } => error,
+            FrontInstanceBootstrapError::Bootstrap(
+                FrontRegistrationBootstrapError::Acceptance(error),
+            ) => error.error,
+            FrontInstanceBootstrapError::Bootstrap(FrontRegistrationBootstrapError::Runtime {
+                error: Some(error),
+                ..
+            }) => error,
+            _ => refused(),
+        })
     }
 }
