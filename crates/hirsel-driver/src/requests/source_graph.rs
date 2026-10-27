@@ -143,7 +143,15 @@ struct ArtifactsExport {
     output: MemoryReservation,
 }
 
+struct Expansion {
+    text: Arc<str>,
+    _allowance: MemoryReservation,
+}
+
 struct SourceProducts {
+    hash_selection: Option<(Option<hirsel_syntax::PackageId>, DefPath)>,
+    native_sources: Option<(Vec<DefPath>, Arc<hirsel_engine::FrontNativeQueries>)>,
+    expansion: Option<Arc<Expansion>>,
     entry: DefPath,
     inputs: FrozenInputs,
     lowering: LoweringPolicy,
@@ -168,6 +176,15 @@ impl GraphProducts for SourceProducts {
     fn accepts(&self, operation: &CompileOperation) -> bool {
         match operation {
             CompileOperation::Check { lowering } => *lowering == self.lowering,
+            CompileOperation::Expand => self.expansion.is_some(),
+            CompileOperation::Hashes { package } => self
+                .hash_selection
+                .as_ref()
+                .is_some_and(|(selected, _)| package == selected),
+            CompileOperation::NativeSources { roots } => self
+                .native_sources
+                .as_ref()
+                .is_some_and(|(selected, _)| selected == roots),
             CompileOperation::CheckedProducts { lowering, .. } => {
                 *lowering == self.lowering && self.receipt.is_some()
             }
@@ -217,6 +234,20 @@ impl GraphProducts for SourceProducts {
             {
                 vec![self.check.query()]
             }
+            CompileOperation::Expand => vec![self.check.query()],
+            CompileOperation::Hashes { .. } => vec![
+                self.run
+                    .as_ref()
+                    .and_then(|run| run.query(&self.hash_selection.as_ref()?.1))
+                    .ok_or_else(|| uninstalled())?,
+            ],
+            CompileOperation::NativeSources { .. } => vec![
+                self.native_sources
+                    .as_ref()
+                    .ok_or_else(|| uninstalled())?
+                    .1
+                    .query(),
+            ],
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => vec![],
             CompileOperation::Tir { definition } => {
                 let entry = definition
@@ -246,6 +277,8 @@ impl GraphProducts for SourceProducts {
         let lower = self.lower.clone();
         let check = self.check.clone();
         let receipt = self.receipt.clone();
+        let expansion = self.expansion.clone();
+        let native_sources = self.native_sources.clone();
         let expected = check.query();
         let entry = match &operation {
             CompileOperation::NativeOwnership(request) => request
@@ -410,6 +443,62 @@ impl GraphProducts for SourceProducts {
                                 ))
                             }
                         }
+                        CompileOperation::Hashes { .. } => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            CompileResult::Hashes(
+                                run.as_ref()
+                                    .and_then(|run| run.outcome(*product))
+                                    .and_then(|output| output.definition_hashes.clone())
+                                    .ok_or_else(|| uninstalled())?,
+                            )
+                        }
+                        CompileOperation::NativeSources { .. } => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            CompileResult::NativeSources(
+                                native_sources
+                                    .as_ref()
+                                    .ok_or_else(|| uninstalled())?
+                                    .1
+                                    .outcome(*product)
+                                    .ok_or_else(|| uninstalled())?
+                                    .products,
+                            )
+                        }
+                        CompileOperation::Expand => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            let completed = check.outcome(*product).ok_or_else(|| uninstalled())?;
+                            if completed.checked.completion
+                                != hirsel_engine::CheckCompletion::Complete
+                            {
+                                return Err(ToolError::Query {
+                                    error: QueryError::NotImplemented,
+                                    phase: None,
+                                    sources: completed.checked.sources,
+                                });
+                            }
+                            if completed.checked.diagnostics.iter().any(|diagnostic| {
+                                diagnostic.severity == hirsel_diag::Severity::Error
+                            }) {
+                                return Err(ToolError::Query {
+                                    error: QueryError::Diagnostics(completed.checked.diagnostics),
+                                    phase: None,
+                                    sources: completed.checked.sources,
+                                });
+                            }
+                            CompileResult::Expansion(
+                                expansion
+                                    .as_ref()
+                                    .ok_or_else(|| uninstalled())?
+                                    .text
+                                    .clone(),
+                            )
+                        }
                         CompileOperation::Check { .. } => {
                             let [product] = products else {
                                 return Err(ToolError::Runtime(
@@ -505,6 +594,7 @@ impl SourceProducts {
         let run = self.run.clone();
         let native = self.native.clone();
         let ownership = self.ownership.clone();
+        let native_sources = self.native_sources.clone();
         Arc::new(move |reference| {
             if let Some(error) = ownership
                 .as_ref()
@@ -518,17 +608,22 @@ impl SourceProducts {
             {
                 return error;
             }
-            let selected = check
-                .failure(reference)
-                .or_else(|| {
-                    lower
-                        .failure(reference)
-                        .map(|error| (error, Some(QueryKind::Lower)))
-                })
-                .or_else(|| {
-                    let outcome = front.outcome(reference)?.outcome;
-                    outcome.result.err().map(|error| (error, outcome.phase))
-                });
+            let source_failure = native_sources
+                .as_ref()
+                .and_then(|(_, source)| source.failure(reference));
+            let selected = source_failure.map(|error| (error, None)).or_else(|| {
+                check
+                    .failure(reference)
+                    .or_else(|| {
+                        lower
+                            .failure(reference)
+                            .map(|error| (error, Some(QueryKind::Lower)))
+                    })
+                    .or_else(|| {
+                        let outcome = front.outcome(reference)?.outcome;
+                        outcome.result.err().map(|error| (error, outcome.phase))
+                    })
+            });
             let selected = selected.or_else(|| {
                 growth
                     .failure(reference)
@@ -894,10 +989,12 @@ pub(super) fn install(
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering }
         | CompileOperation::CheckedProducts { lowering, .. } => (*lowering, false),
-        CompileOperation::Tir { .. } | CompileOperation::NativeOwnership(_) => {
-            (LoweringPolicy::Reachable, true)
-        }
+        CompileOperation::Tir { .. }
+        | CompileOperation::Hashes { .. }
+        | CompileOperation::NativeOwnership(_)
+        | CompileOperation::NativeSources { .. } => (LoweringPolicy::Reachable, true),
         CompileOperation::SafeCheck => (config.lowering, true),
+        CompileOperation::Expand => (LoweringPolicy::Comptime, false),
         // The oracle export reads the check and TIR of every reachable body.
         CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
             (LoweringPolicy::Reachable, true)
@@ -999,18 +1096,21 @@ pub(super) fn install(
             Ok(generators) => !generators.is_empty(),
             Err(error) => return Err(loading.failed(program.error(error))),
         };
-        let native_catalogue =
-            if matches!(request.operation, CompileOperation::NativeOwnership(_)) && !generated {
-                match program
-                    .engine
-                    .front_native_definition_inputs(&definitions, limits.snapshot_bytes)
-                {
-                    Ok(inputs) => Some(inputs),
-                    Err(error) => return Err(loading.failed(program.error(error))),
-                }
-            } else {
-                None
-            };
+        let native_catalogue = if matches!(
+            request.operation,
+            CompileOperation::NativeOwnership(_) | CompileOperation::NativeSources { .. }
+        ) && !generated
+        {
+            match program
+                .engine
+                .front_native_definition_inputs(&definitions, limits.snapshot_bytes)
+            {
+                Ok(inputs) => Some(inputs),
+                Err(error) => return Err(loading.failed(program.error(error))),
+            }
+        } else {
+            None
+        };
         let selected = selected_definitions(&mut program.engine);
         if selected == definitions {
             break (footprint, run_inputs, native_catalogue);
@@ -1047,7 +1147,10 @@ pub(super) fn install(
                 CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_)
             ),
             matches!(&request.operation, CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native) if native.evidence.is_some()),
-            matches!(request.operation, CompileOperation::NativeOwnership(_)),
+            matches!(
+                request.operation,
+                CompileOperation::NativeOwnership(_) | CompileOperation::NativeSources { .. }
+            ),
             matches!(
                 request.operation,
                 CompileOperation::SafeCheck
@@ -1163,7 +1266,10 @@ pub(super) fn install(
                 },
             );
         }
-        if matches!(request.operation, CompileOperation::NativeOwnership(_)) {
+        if matches!(
+            request.operation,
+            CompileOperation::NativeOwnership(_) | CompileOperation::NativeSources { .. }
+        ) {
             native_catalogue = Some(
                 match program
                     .engine
@@ -1287,6 +1393,41 @@ pub(super) fn install(
     } else {
         None
     };
+    let expansion = if matches!(request.operation, CompileOperation::Expand) {
+        let mut generated = program
+            .engine
+            .generated_sources()
+            .filter(|(_, generated)| {
+                program.engine.sources.resolve(generated.site).file == program.primary
+            })
+            .collect::<Vec<_>>();
+        generated
+            .sort_by_key(|(_, generated)| program.engine.sources.resolve(generated.site).start);
+        let bytes = generated
+            .iter()
+            .try_fold(0usize, |bytes, (path, source)| {
+                bytes
+                    .checked_add(path.to_string().len())?
+                    .checked_add(source.text.len())?
+                    .checked_add(24)
+            })
+            .ok_or_else(|| uninstalled())?;
+        let allowance = check.split(bytes as u64).ok_or_else(|| uninstalled())?;
+        let mut text = String::with_capacity(bytes);
+        for (path, generated) in generated {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            use std::fmt::Write;
+            writeln!(text, "// generated body of {path}\n{}", generated.text).unwrap();
+        }
+        Some(Arc::new(Expansion {
+            text: text.into(),
+            _allowance: allowance,
+        }))
+    } else {
+        None
+    };
     let root_package = program.entry.0.package.clone();
     let check = program
         .engine
@@ -1379,6 +1520,31 @@ pub(super) fn install(
         )
     } else {
         drop(run);
+        None
+    };
+    let hash_selection = if let CompileOperation::Hashes { package } = &request.operation {
+        let selected = package.as_ref().unwrap_or(&root_package);
+        let roots = definitions
+            .iter()
+            .filter(|path| &path.0.package == selected)
+            .cloned()
+            .collect::<Vec<_>>();
+        let root = roots
+            .iter()
+            .find(|path| **path == program.entry)
+            .or_else(|| roots.first())
+            .cloned()
+            .ok_or_else(|| {
+                ToolError::Runtime("hash request selected an empty source package".into())
+            })?;
+        run = Some(
+            run.take()
+                .ok_or_else(|| uninstalled())?
+                .with_definition_hashes(roots)
+                .map_err(&query_error)?,
+        );
+        Some((package.clone(), root))
+    } else {
         None
     };
     // The export selects its own unshared Run view of the entry package; that
@@ -1497,6 +1663,53 @@ pub(super) fn install(
     } else {
         None
     };
+    let native_sources = if let CompileOperation::NativeSources { roots } = &request.operation {
+        let entry = roots
+            .first()
+            .cloned()
+            .or_else(|| definitions.iter().find(|p| **p == program.entry).cloned())
+            .or_else(|| {
+                definitions
+                    .iter()
+                    .find(|p| p.0.package == root_package)
+                    .cloned()
+            })
+            .ok_or_else(|| uninstalled())?;
+        let footprint = plan.ownership.as_ref().ok_or_else(|| uninstalled())?;
+        let mut allowance = ownership_allowance.take().ok_or_else(|| uninstalled())?;
+        let catalogue = program
+            .engine
+            .front_native_definition_queries_with_inputs(
+                front.clone(),
+                lower.clone(),
+                native_catalogue.take().ok_or_else(|| uninstalled())?,
+                plan.body,
+                allowance
+                    .split(footprint.catalogue)
+                    .ok_or_else(|| uninstalled())?,
+                errors,
+            )
+            .map_err(&query_error)?;
+        let source = program
+            .engine
+            .front_native_queries(
+                hirsel_engine::FrontNativePlan {
+                    entry,
+                    roots: roots.clone(),
+                    run: run.take().ok_or_else(|| uninstalled())?,
+                    definitions: catalogue,
+                },
+                plan.run,
+                allowance
+                    .split(footprint.source)
+                    .ok_or_else(|| uninstalled())?,
+                errors,
+            )
+            .map_err(&query_error)?;
+        Some((roots.clone(), source))
+    } else {
+        None
+    };
     // The ordinary source namespace is immutable before the first request.
     // Preserve the original small-graph subscription/factory headroom while
     // admitting every actual P/Lower/Evaluate/Run address of larger packages.
@@ -1535,6 +1748,17 @@ pub(super) fn install(
             inventory.insert((query.kind, query.address.0));
         }
     }
+    if let Some((_, source)) = &native_sources {
+        inventory.insert((source.query().kind, source.query().address.0));
+        for path in &definitions {
+            for query in [source.run_query(path), source.definition_query(path)]
+                .into_iter()
+                .flatten()
+            {
+                inventory.insert((query.kind, query.address.0));
+            }
+        }
+    }
     if inventory.len() > plan.query_capacity {
         return Err(ToolError::Runtime(
             "compiler query inventory exceeds its planned admission".into(),
@@ -1566,6 +1790,19 @@ pub(super) fn install(
         for (kind, factory) in ownership.factories() {
             runtime.register(kind, factory).map_err(registration)?;
         }
+    } else if let Some((_, source)) = &native_sources {
+        runtime
+            .register(hirsel_engine::FRONT_RUN_KIND, source.run_factory())
+            .map_err(registration)?;
+        runtime
+            .register(
+                hirsel_engine::FRONT_NATIVE_DEFINITION_KIND,
+                source.definition_factory(),
+            )
+            .map_err(registration)?;
+        runtime
+            .register(hirsel_engine::FRONT_NATIVE_ROOT_KIND, source.factory())
+            .map_err(registration)?;
     } else if let Some(run) = &run {
         runtime
             .register(hirsel_engine::FRONT_RUN_KIND, run.factory())
@@ -1630,6 +1867,9 @@ pub(super) fn install(
         *source_index.lock().unwrap_or_else(|e| e.into_inner()) = state;
     }
     let products = Arc::new(SourceProducts {
+        hash_selection,
+        native_sources,
+        expansion,
         entry: program.entry,
         inputs: request.inputs.clone(),
         lowering,

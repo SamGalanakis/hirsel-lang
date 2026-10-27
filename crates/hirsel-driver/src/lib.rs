@@ -220,67 +220,43 @@ pub fn export_tir_path(path: &Path) -> Result<String, ToolError> {
 /// per source definition of the checked program's package, sorted by path
 /// (LANG-6 definition hashes).
 pub fn hash_path(path: &Path) -> Result<String, ToolError> {
-    hirsel_engine::with_compiler_stack(|| {
-        let mut program = load_program(path)?;
-        let output = program
-            .check(hirsel_engine::LoweringPolicy::Comptime)
-            .map_err(|error| program.error(error))?;
-        if output
-            .diagnostics
-            .iter()
-            .any(|d| d.severity.as_str() == "error")
-        {
-            return Err(program.error(hirsel_engine::QueryError::Diagnostics(output.diagnostics)));
+    let output = session::request(
+        path,
+        hirsel_engine::Verify::On,
+        requests::CompileOperation::Hashes { package: None },
+    )?;
+    let requests::CompileResult::Hashes(hashes) = &output.result else {
+        return Err(ToolError::Runtime(
+            "hash request returned another operation".into(),
+        ));
+    };
+    let mut text = String::new();
+    for (definition, hash) in hashes
+        .iter()
+        .filter(|(path, _)| path.0.package == output.entry.0.package)
+    {
+        use std::fmt::Write;
+        for byte in hash.0 {
+            write!(text, "{byte:02x}").unwrap();
         }
-        let package = program.entry.0.package.clone();
-        let hashes = program
-            .engine
-            .package_definition_hashes(&package)
-            .map_err(|error| program.error(error))?;
-        let mut out = String::new();
-        for (definition, hash) in hashes
-            .hashes
-            .iter()
-            .filter(|(definition, _)| definition.0.package == package)
-        {
-            for byte in hash.0 {
-                out.push_str(&format!("{byte:02x}"));
-            }
-            out.push_str(&format!(" {definition}\n"));
-        }
-        Ok(out)
-    })
+        writeln!(text, " {definition}").unwrap();
+    }
+    Ok(text)
 }
 /// `hirsel expand <file>`: each generated body (CT-5) of the file's declarations, in
 /// source order, exactly as its generator wrote it, so diagnostic lines match.
 pub fn expand_path(path: &Path) -> Result<String, ToolError> {
-    hirsel_engine::with_compiler_stack(|| {
-        let mut program = load_program(path)?;
-        let output = program
-            .check(hirsel_engine::LoweringPolicy::Comptime)
-            .map_err(|error| program.error(error))?;
-        if output
-            .diagnostics
-            .iter()
-            .any(|d| d.severity.as_str() == "error")
-        {
-            return Err(program.error(hirsel_engine::QueryError::Diagnostics(output.diagnostics)));
-        }
-        let mut generated: Vec<_> = program
-            .engine
-            .generated_sources()
-            .filter(|(_, g)| program.engine.sources.resolve(g.site).file == program.primary)
-            .collect();
-        generated.sort_by_key(|(_, g)| program.engine.sources.resolve(g.site).start);
-        let mut out = String::new();
-        for (definition, g) in generated {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&format!("// generated body of {definition}\n{}\n", g.text));
-        }
-        Ok(out)
-    })
+    let output = session::request(
+        path,
+        hirsel_engine::Verify::On,
+        requests::CompileOperation::Expand,
+    )?;
+    match &output.result {
+        requests::CompileResult::Expansion(text) => Ok(text.to_string()),
+        _ => Err(ToolError::Runtime(
+            "expansion request returned another operation".into(),
+        )),
+    }
 }
 /// Narrow conformance adapter returns diagnostics with revision-1 completion.
 pub fn check_file(path: &Path) -> Result<CheckOutput, NotImplemented> {

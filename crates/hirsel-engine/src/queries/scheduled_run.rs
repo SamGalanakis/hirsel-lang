@@ -9,6 +9,7 @@ pub use proof_export::{
 /// Metadata consumed by interpreter/H/native hosts. No mutable query engine,
 /// body cache or native Value reconstruction is available through this output.
 pub struct FrontRunOutput {
+    pub definition_hashes: Option<Arc<BTreeMap<DefPath, ContentHash>>>,
     pub entry: DefPath,
     pub revision: ProgramRevision,
     pub code: CodeReach,
@@ -73,6 +74,7 @@ impl FrontRunInputs {
 /// One immutable input namespace, shared across selected Run roots. Each task
 /// waits for the ordered source transaction before reading semantic products.
 pub struct FrontRunQueries {
+    export_hashes: bool,
     native_roots: Vec<DefPath>,
     inputs: BTreeMap<DefPath, Input>,
     ids: BTreeMap<DefPath, QueryId>,
@@ -98,6 +100,25 @@ struct Ownership {
     _allowance: MemoryReservation,
 }
 impl FrontRunQueries {
+    /// Select LANG-6 hashes for an immutable package closure. Ordinary execution
+    /// does not retain this diagnostic map.
+    pub fn with_definition_hashes(
+        mut self: Arc<Self>,
+        roots: Vec<DefPath>,
+    ) -> Result<Arc<Self>, QueryError> {
+        self = self.with_source_roots(roots)?;
+        let this = Arc::get_mut(&mut self)
+            .ok_or_else(|| operational("hash selection requires an unshared Run view"))?;
+        this.export_hashes = true;
+        for id in this.ids.values_mut() {
+            id.address = hirsel_artifact_store::Address(ContentHash::of_parts(
+                "hirsel.front.run.definition-hashes.v1",
+                [id.address.0.0.as_slice()],
+            ));
+        }
+        Ok(self)
+    }
+
     /// Native selects the union of its source roots before this immutable view
     /// is shared with any factory. Ordinary launch identities stay rooted at
     /// the requested entry; the semantic handoff carries the selected union.
@@ -803,7 +824,15 @@ impl Task {
             unreplayable,
         ));
         let checked_runtime = Arc::new(snapshot.checked_runtime(queries.runtime.forget.as_ref())?);
+        let mut hash_bytes = crate::NativeMetadataWeight::default();
+        let definition_hashes = if queries.export_hashes {
+            hash_bytes.map(&hashes, |weight, path, _| weight.path(path));
+            Some(Arc::new(hashes))
+        } else {
+            None
+        };
         let output = Arc::new(FrontRunOutput {
+            definition_hashes,
             entry: self.root.clone(),
             revision,
             code,
@@ -816,7 +845,7 @@ impl Task {
             _owner: queries.ownership.clone(),
         });
         // Existing canonical launch encoders provide the compact published facts.
-        let bytes = queries
+        let mut bytes = queries
             .records
             .encode(
                 &queries.anchors,
@@ -830,7 +859,13 @@ impl Task {
                 ),
             )
             .ok_or(QueryError::NotImplemented)?;
-        if bytes.len() as u64 > queries.weight.retained {
+        if let Some(hashes) = &output.definition_hashes {
+            bytes = queries
+                .records
+                .encode(&queries.anchors, &(&bytes, &**hashes))
+                .ok_or(QueryError::NotImplemented)?;
+        }
+        if (bytes.len() as u64).saturating_add(hash_bytes.bytes()) > queries.weight.retained {
             return Err(operational("Run output exceeds admission"));
         }
         let record = queries
@@ -1098,6 +1133,7 @@ impl QueryEngine {
             })
             .collect();
         Ok(Arc::new(FrontRunQueries {
+            export_hashes: false,
             native_roots: Vec::new(),
             inputs,
             ids,

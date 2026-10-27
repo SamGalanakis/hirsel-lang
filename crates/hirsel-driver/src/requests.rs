@@ -56,6 +56,12 @@ pub enum CompileOperation {
         lowering: LoweringPolicy,
     },
     SafeCheck,
+    /// Generated bodies in primary-source order after the accepted Check.
+    Expand,
+    /// LANG-6 hashes of a package and its complete source closure.
+    Hashes {
+        package: Option<hirsel_syntax::PackageId>,
+    },
     /// Canonical TIR text from the accepted immutable Run closure.
     ExportTir,
     /// Explicit evidence collection; normal Check does not construct receipts.
@@ -75,6 +81,10 @@ pub enum CompileOperation {
     NativeRun(NativeRequest),
     /// Explicit source-selected Value-to-Ready ownership diagnostics.
     NativeOwnership(OwnershipRequest),
+    /// Checked source inventory and original Lower products, before native import.
+    NativeSources {
+        roots: Vec<DefPath>,
+    },
 }
 /// Backend and launch policy, independent of destination paths or host output
 /// writers. Build and run select the same compilation products; execution and
