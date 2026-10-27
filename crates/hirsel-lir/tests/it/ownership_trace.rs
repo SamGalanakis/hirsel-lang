@@ -4071,3 +4071,66 @@ fn ownership_trace_alias_proves_the_callable_parameters_actual_entry_version() {
         Error::InvalidBinding(MarkerId(100))
     );
 }
+
+#[test]
+fn ownership_trace_staged_return_keeps_original_token_and_refuses_forged_storage() {
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[(Passing::Take, l::BLK)], Some(l::BLK));
+    t.builder.unit.header.origin = UnitOrigin::Library;
+    let original = t.owned(l::BLK);
+    t.param(original);
+    let arena = t.plain(l::ARENA);
+    t.builder.push(
+        ENTRY,
+        Inst::ArenaOpen {
+            result: arena,
+            budget: None,
+        },
+    );
+    t.builder.ret(ENTRY, Some(original));
+    let (raw, table, _) = t.finish();
+    let before = checked_native_fixture(raw, &table);
+    let input = native::LeafPlan::prepare_value(&before, &table).unwrap();
+    let options = hirsel_rc::placement::Options {
+        regions: false,
+        noalloc: false,
+    };
+    let ordinary = hirsel_rc::placement::place(before.unit().clone(), &table, &options).unwrap();
+    let (placed, plan, recipe) =
+        hirsel_rc::placement::place_observed(before.unit().clone(), &table, &options, &input)
+            .unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&placed),
+        hirsel_codec::to_text(&ordinary)
+    );
+    check_transform(before.unit(), &input, &placed, &plan, Some(&recipe)).unwrap();
+    let row = plan
+        .observations
+        .iter()
+        .find(|row| matches!(row.point, Point::StagedReturn { .. }))
+        .unwrap();
+    let old = input
+        .observations
+        .iter()
+        .find(|old| old.marker.id == row.marker.id)
+        .unwrap();
+    assert_eq!(row.marker, old.marker);
+    let Point::StagedReturn { block, address } = row.point else {
+        unreachable!()
+    };
+    let mut forged = plan.clone();
+    forged
+        .observations
+        .iter_mut()
+        .find(|other| other.marker.id == row.marker.id)
+        .unwrap()
+        .point = Point::StagedReturn {
+        block,
+        address: AddressId(u32::MAX),
+    };
+    assert!(check(&placed, &forged).is_err());
+    let mut omitted = plan.clone();
+    omitted
+        .observations
+        .retain(|other| other.marker.id != row.marker.id);
+    assert!(check_transform(before.unit(), &input, &placed, &omitted, Some(&recipe)).is_err());
+}

@@ -69,7 +69,34 @@ pub(crate) fn finish<A: Stage, B: Stage>(
                 )),
                 Point::CallEntered(block) => Point::CallEntered(remap_block(block)?),
                 Point::CallReturned(block) => Point::CallReturned(remap_block(block)?),
-                Point::Return(block) => Point::Return(remap_block(block)?),
+                Point::Return(block) => {
+                    let block = remap_block(block)?;
+                    if let hirsel_lir::ir::Terminator::Return(Some(result)) =
+                        after.terminators[block.index()]
+                        && observation.marker.token != trace::Location::Value(result)
+                    {
+                        let original = observation.marker.token;
+                        let address = after
+                            .instructions
+                            .iter()
+                            .find_map(|inst| match *inst {
+                                hirsel_lir::ir::Inst::Store { address, value, .. }
+                                    if original == trace::Location::Value(value) =>
+                                {
+                                    Some(address)
+                                }
+                                _ => None,
+                            })
+                            .ok_or("ownership trace: staged return lost source store")?;
+                        Point::StagedReturn { block, address }
+                    } else {
+                        Point::Return(block)
+                    }
+                }
+                Point::StagedReturn { block, address } => Point::StagedReturn {
+                    block: remap_block(block)?,
+                    address,
+                },
                 Point::CompoundDrop {
                     block,
                     normal,

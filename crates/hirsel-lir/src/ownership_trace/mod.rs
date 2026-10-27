@@ -29,8 +29,9 @@ pub use check::{check, check_transform};
 mod compound;
 mod finalizer;
 pub mod native;
+mod staged;
 
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -111,6 +112,13 @@ pub enum Point {
     CallEntered(BlockId),
     CallReturned(BlockId),
     Return(BlockId),
+    /// An original return whose owned result is staged across region cleanup.
+    /// The original token remains immutable; the bundle checks its exact
+    /// store, successful take/return and failure cleanup custody.
+    StagedReturn {
+        block: BlockId,
+        address: AddressId,
+    },
     /// An unconditional semantic address drop lowered to adjacent Read Take and
     /// whole Release. The index names Release; the marker retains its original
     /// address identity instead of inventing a creation or move for the load.
@@ -143,6 +151,7 @@ snapshot_enum!(Point {
     CallEntered(block),
     CallReturned(block),
     Return(block),
+    StagedReturn { block, address },
     ReleaseDrop { block, index },
     FinalizerDrop { block },
     CompoundDrop { block, normal, index, failure }
@@ -278,6 +287,22 @@ impl<'a> CheckedPlan<'a> {
                     commits.extend(
                         finalizer::exits(unit, block, address).ok_or(Error::InvalidBinding(id))?,
                     );
+                }
+                Ok(commits)
+            }
+            Point::StagedReturn { .. } => {
+                let staged = staged::binding(unit, observation).ok_or(Error::InvalidBinding(id))?;
+                let mut commits = vec![staged.store, staged.take, Point::Return(staged.returning)];
+                for (block, _) in unit.blocks.iter().enumerate() {
+                    let block = BlockId(block as u32);
+                    if finalizer::begin(unit, block)
+                        .is_some_and(|(address, _)| address == staged.address)
+                    {
+                        commits.extend(
+                            finalizer::exits(unit, block, staged.address)
+                                .ok_or(Error::InvalidBinding(id))?,
+                        );
+                    }
                 }
                 Ok(commits)
             }

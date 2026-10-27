@@ -6,3 +6,11 @@ fn native_arena_scope_preserves_outer_resource_on_four_engines() {
         1,
     );
 }
+
+#[test]
+fn native_arena_callback_result_preserves_two_equal_resources_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        "resource type Token {value:u64}\ndrop(x){}\nfn body(a:Arena)->Token{Token(value:7u64)}\npub fn main()->Result[(),u64]{\nlet first=Token(value:7u64)\nlet n=arena.with(body)\nlet second=take first\nOk(())\n}\n",
+        2,
+    );
+}

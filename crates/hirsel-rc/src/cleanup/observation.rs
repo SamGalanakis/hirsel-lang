@@ -234,6 +234,10 @@ impl Reporter for Observations {
                     }
                 }
                 Point::Return(b) if b == block => Point::Return(tail),
+                Point::StagedReturn { block: b, address } if b == block => Point::StagedReturn {
+                    block: tail,
+                    address,
+                },
                 Point::CallEntered(b) if b == block => Point::CallEntered(tail),
                 Point::CallReturned(b) if b == block => Point::CallReturned(tail),
                 Point::CompoundDrop {

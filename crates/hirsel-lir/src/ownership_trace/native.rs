@@ -610,8 +610,85 @@ impl LeafPlan {
         let mut covered = std::collections::BTreeSet::new();
         let mut markers = BTreeMap::new();
         let mut commits = vec![];
+        let mut next_physical = plan
+            .observations
+            .iter()
+            .map(|row| row.marker.id.0)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or("ownership physical marker overflow")?;
         for observation in &plan.observations {
             let marker = &observation.marker;
+            if matches!(observation.point, Point::StagedReturn { .. }) {
+                let staged = super::staged::binding(body, observation)
+                    .ok_or("ownership staged return lost checked storage")?;
+                let mut transitions = vec![
+                    (
+                        staged.store,
+                        Kind::Move,
+                        Location::Value(staged.original),
+                        Location::Address(staged.address),
+                    ),
+                    (
+                        staged.take,
+                        Kind::Move,
+                        Location::Address(staged.address),
+                        Location::Value(staged.returned),
+                    ),
+                    (
+                        Point::Return(staged.returning),
+                        Kind::Move,
+                        Location::Value(staged.returned),
+                        Location::Return,
+                    ),
+                ];
+                transitions.extend(
+                    expected
+                        .plan
+                        .observations
+                        .iter()
+                        .filter(|row| {
+                            row.marker.kind == Kind::Drop
+                                && row.marker.token == Location::Address(staged.address)
+                        })
+                        .map(|row| {
+                            (
+                                row.point,
+                                row.marker.kind,
+                                row.marker.token,
+                                row.marker.owner,
+                            )
+                        }),
+                );
+                let mut physical = Vec::new();
+                for (point, kind, token, owner) in transitions {
+                    let row = expected
+                        .plan
+                        .observations
+                        .iter()
+                        .find(|row| {
+                            row.point == point
+                                && row.marker.kind == kind
+                                && row.marker.token == token
+                                && row.marker.owner == owner
+                        })
+                        .ok_or("staged return has no independent Ready transition")?;
+                    if !covered.insert(row.marker.id) {
+                        return Err("staged return covers a Ready transition twice".into());
+                    }
+                    let mut native = expected.markers[&row.marker.id][0];
+                    native.id = MarkerId(next_physical);
+                    next_physical = next_physical
+                        .checked_add(1)
+                        .ok_or("ownership physical marker overflow")?;
+                    native.site = marker.site;
+                    physical.push(native);
+                    commits.push((point, native));
+                }
+                markers.insert(marker.id, physical);
+                continue;
+            }
             let points = checked
                 .commits(body, marker.id)
                 .map_err(|error| error.to_string())?;
@@ -785,11 +862,21 @@ impl LeafPlan {
         if unit.digest() != self.plan.unit {
             return None;
         }
+        let original = self
+            .markers
+            .iter()
+            .find_map(|(original, markers)| {
+                markers
+                    .iter()
+                    .any(|marker| marker.id == id)
+                    .then_some(*original)
+            })
+            .unwrap_or(id);
         let observation = self
             .plan
             .observations
             .iter()
-            .find(|row| row.marker.id == id)?;
+            .find(|row| row.marker.id == original)?;
         let marker = &observation.marker;
         if marker.kind != Kind::Drop
             || marker.site

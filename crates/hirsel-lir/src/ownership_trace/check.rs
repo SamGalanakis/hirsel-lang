@@ -122,6 +122,24 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
                 return Err(Error::InvalidTransport(id));
             }
         }
+        if let Point::StagedReturn { address, .. } = new.point {
+            match old.point {
+                Point::Return(_) => {
+                    if after
+                        .addresses
+                        .get(address.index())
+                        .is_none_or(|info| match info.base {
+                            AddressBase::Slot(slot) => slot.index() < before.slots.len(),
+                            _ => true,
+                        })
+                    {
+                        return Err(Error::InvalidTransport(id));
+                    }
+                }
+                Point::StagedReturn { address: old, .. } if old == address => (),
+                _ => return Err(Error::InvalidTransport(id)),
+            }
+        }
         if old.marker.kind != new.marker.kind
             || old.marker.site != new.marker.site
             || new.point != relocation.point
@@ -652,6 +670,7 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
                 normal.is_some() && call.result.is_some_and(|v| moved(Return, Value(v)))
             }
         }
+        Point::StagedReturn { .. } => super::staged::binding(unit, observation).is_some(),
         Point::Return(b) => {
             matches!(term(b)?, Terminator::Return(Some(v)) if moved(Value(*v), Return))
         }
@@ -701,7 +720,7 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
             };
             source(unit.tables.calls.get(call.index())?.anchor)
         }
-        Point::Return(block) => block_site(block),
+        Point::Return(block) | Point::StagedReturn { block, .. } => block_site(block),
     }
 }
 
