@@ -102,7 +102,26 @@ fn o1_cells_agree_with_the_baseline_including_native_artifacts() {
 fn o2_warm_runs_equal_cold_after_every_scripted_edit() {
     let work = work("o2");
     let all = scenarios("o2");
-    let selected: Vec<_> = all.iter().filter(|s| !s.with_std).cloned().collect();
+    let mut selected: Vec<_> = all.iter().filter(|s| !s.with_std).cloned().collect();
+    for scenario in &mut selected {
+        if scenario.entry.ends_with(".hir") {
+            // These scenarios exercise core-only programs. An explicit fixture
+            // keeps every cold and warm cell from checking unrelated std bodies.
+            let manifest = serde_json::json!({
+                "schema": 1,
+                "package": {"name": "standalone", "version": "0"},
+                "sources": [{"path": scenario.entry, "module": []}],
+                "entry": {"module": [], "name": "main"},
+                "dependencies": []
+            })
+            .to_string();
+            let sidecar = format!("{}.json", scenario.entry);
+            assert!(!scenario.before.contains_key(&sidecar));
+            assert!(!scenario.after.contains_key(&sidecar));
+            scenario.before.insert(sidecar.clone(), manifest.clone());
+            scenario.after.insert(sidecar, manifest);
+        }
+    }
     assert!(selected.len() > 20, "{} scenarios", selected.len());
     let report = o2::run(
         Path::new(env!("CARGO_BIN_EXE_oracle")),

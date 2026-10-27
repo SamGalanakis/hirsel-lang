@@ -11,6 +11,25 @@ fn checked(relative: &str) -> CheckOutput {
     hirsel_driver::check_path(&root().join(relative)).unwrap()
 }
 
+fn core_source(dir: &Path, name: &str, source: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(format!("{name}.hir"));
+    std::fs::write(&path, source).unwrap();
+    std::fs::write(
+        path.with_extension("hir.json"),
+        serde_json::json!({
+            "schema": 1,
+            "package": {"name": "standalone", "version": "0"},
+            "sources": [{"path": format!("{name}.hir"), "module": []}],
+            "entry": {"module": [], "name": "main"},
+            "dependencies": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    path
+}
+
 #[test]
 fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
     hirsel_engine::with_compiler_stack(|| {
@@ -40,7 +59,13 @@ fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
                 "xs",
             ),
         ] {
-            let output = checked(case);
+            let source = std::fs::read_to_string(root().join(case)).unwrap();
+            let dir =
+                std::env::temp_dir().join(format!("hirsel-json-repair-{}", std::process::id()));
+            // These vectors use core declarations only. Keep their original
+            // bytes without repeatedly checking an unused std dependency.
+            let case_path = core_source(&dir, "case", &source);
+            let output = hirsel_driver::check_path(&case_path).unwrap();
             let d = output.diagnostics.first().unwrap();
             assert_eq!(d.rule.as_str(), rule, "{case}");
             assert_eq!(
@@ -49,7 +74,7 @@ fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
                 "{case}"
             );
             if d.severity == Severity::Warning {
-                let path = root().join(case);
+                let path = case_path;
                 assert_eq!(Compiler.evaluate(&path, &Expect::Accept).0, Status::Pass);
                 assert!(
                     matches!(
@@ -72,16 +97,11 @@ fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
             assert_eq!(fix["span"]["file_id"], json["primary"]["file_id"]);
             let start = fix["span"]["start"].as_u64().expect("replacement start") as usize;
             let end = fix["span"]["end"].as_u64().expect("replacement end") as usize;
-            let source = std::fs::read_to_string(root().join(case)).unwrap();
             assert_eq!(&source[start..end], before, "{case}");
             assert_eq!(fix["replacement"], after, "{case}");
             let mut repaired = source.clone();
             repaired.replace_range(start..end, fix["replacement"].as_str().unwrap());
-            let dir =
-                std::env::temp_dir().join(format!("hirsel-json-repair-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let path = dir.join("repair.hir");
-            std::fs::write(&path, repaired).unwrap();
+            let path = core_source(&dir, "repair", &repaired);
             let accepted = hirsel_driver::check_path(&path).unwrap();
             assert!(
                 !accepted
@@ -93,7 +113,8 @@ fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
             );
             // Existing accepted twins remain independently checked. The repair
             // need not be textually identical to the twin.
-            let twin = checked(twin);
+            let twin_source = std::fs::read_to_string(root().join(twin)).unwrap();
+            let twin = hirsel_driver::check_path(&core_source(&dir, "twin", &twin_source)).unwrap();
             assert!(
                 !twin
                     .diagnostics
