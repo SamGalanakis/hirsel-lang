@@ -57,7 +57,21 @@ int main(void) {
 "#,
         )
         .unwrap();
-        let executable = link(&target, &dir, &[("ahead.o", &object.bytes)], &[harness]);
+        let object_path = dir.join("ahead.o");
+        std::fs::write(&object_path, &object.bytes).unwrap();
+        let executable = dir.join("program");
+        output(
+            std::process::Command::new(llvm_prefix().join("bin/clang"))
+                .arg(format!(
+                    "--ld-path={}",
+                    llvm_prefix().join("bin/ld.lld").display()
+                ))
+                .args(["-std=c11", "-O1", "-Wall", "-Werror"])
+                .arg(harness)
+                .arg(object_path)
+                .arg("-o")
+                .arg(&executable),
+        );
         assert_eq!(run(&target, &executable), "468 chunk boundaries passed\n");
     }
 }
