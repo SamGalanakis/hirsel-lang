@@ -1,6 +1,7 @@
 //! The memo engine's data model: typed reads, revisions and durability
 //! (design §1b).
 mod reads;
+pub(crate) use reads::ReadPool;
 pub use reads::{
     Durability, Inconsistent, LookupKey, LookupSource, ModuleKey, PackageKey, ReadKey, ReadKind,
     Reads, ReadsBuilder, Revision, decode_def_path, encode_def_path, encoded_def_path_bytes,

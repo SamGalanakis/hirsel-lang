@@ -1513,6 +1513,9 @@ pub(super) fn install(
             errors,
         )
         .map_err(&query_error)?;
+    if matches!(request.operation, CompileOperation::NativeOwnership(_)) {
+        front.compact_retained_reads();
+    }
     // Before any task: this fresh graph adopts the selector's earlier accepted
     // front facts only where their text and reads still validate.
     if let Some(carry) = carry {

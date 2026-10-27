@@ -197,7 +197,8 @@ pub struct FrontBodyQueries {
     retention: Mutex<u64>,
     // Own immutable snapshot and output metadata admission until every task and
     // external output reader releases this view.
-    _allowance: MemoryReservation,
+    read_pool: std::sync::OnceLock<Mutex<crate::memo::ReadPool>>,
+    _allowance: Mutex<MemoryReservation>,
 }
 /// A held output shares its snapshot reservation; dropping the runtime cannot
 /// release admission while a caller still retains the checked body or sources.
@@ -320,6 +321,48 @@ impl FrontBodyQueries {
             )?
             .checked_add(std::mem::size_of::<Self>() as u64)
     }
+    /// Compact diagnostic retention within this source's original allowance.
+    /// Ordinary requests retain their flat read representation.
+    pub fn compact_retained_reads(&self) {
+        self.read_pool.get_or_init(Mutex::default);
+    }
+    fn pool_completion_reads(
+        &self,
+        outcome: &mut ModeResult,
+        checked: &mut CheckedProduct,
+        memos: &mut [(crate::memo::MemoKey, Arc<Reads>)],
+    ) -> Option<()> {
+        let Some(pool) = self.read_pool.get() else {
+            return Some(());
+        };
+        let mut pool = pool.lock().unwrap_or_else(|e| e.into_inner());
+        let mut remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        let mut allowance = self._allowance.lock().unwrap_or_else(|e| e.into_inner());
+        let mut shared = BTreeMap::<usize, Arc<Reads>>::new();
+        let mut intern = |reads: &mut Arc<Reads>| -> Option<()> {
+            let identity = Arc::as_ptr(reads) as usize;
+            let retained = if let Some(retained) = shared.get(&identity) {
+                retained.clone()
+            } else {
+                let retained = Arc::new(pool.intern(reads, &mut allowance, &mut remaining)?);
+                shared.insert(identity, retained.clone());
+                retained
+            };
+            *reads = retained;
+            Some(())
+        };
+        intern(&mut outcome.reads)?;
+        if let Some(summary) = &mut outcome.summary {
+            intern(&mut Arc::make_mut(summary).reads)?;
+        }
+        if let Some((_, reads)) = checked {
+            intern(reads)?;
+        }
+        for (_, reads) in memos {
+            intern(reads)?;
+        }
+        Some(())
+    }
     fn retain(
         &self,
         outcome: &ModeResult,
@@ -374,12 +417,20 @@ impl FrontBodyQueries {
     /// Captured rows and actual settled metadata owned by this producer view.
     /// Provider content bytes and active decode scratch have separate owners.
     pub fn retained_bytes(&self) -> u64 {
-        self._allowance.bytes() - *self.retention.lock().unwrap_or_else(|e| e.into_inner())
+        let pool = self
+            .read_pool
+            .get()
+            .map(|pool| pool.lock().unwrap_or_else(|e| e.into_inner()));
+        let remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        let allowance = self._allowance.lock().unwrap_or_else(|e| e.into_inner());
+        allowance.bytes() + pool.as_ref().map_or(0, |pool| pool.charged_bytes()) - *remaining
     }
 
     /// Immutable producer grant, including input rows and retained outcomes.
     pub fn admitted_bytes(&self) -> u64 {
-        self._allowance.bytes()
+        let pool = self.read_pool.get().map(|pool| pool.lock().unwrap_or_else(|e| e.into_inner()));
+        self._allowance.lock().unwrap_or_else(|e| e.into_inner()).bytes()
+            + pool.as_ref().map_or(0, |pool| pool.charged_bytes())
     }
 
     pub fn store_adoptions(&self) -> u64 {
@@ -1112,11 +1163,11 @@ impl BodyTask {
             &mut source,
             Some(&queries.records),
         );
-        let memo_rows = completed.memo_snapshot();
-        let checked = completed.checked_product();
+        let mut memo_rows = completed.memo_snapshot();
+        let mut checked = completed.checked_product();
         let mut dead_arms = completed.take_dead_arms();
         let published = completed.outcome().clone();
-        let outcome = ModeResult {
+        let mut outcome = ModeResult {
             definition: published.definition.clone(),
             result: match &published.result {
                 Err(error) => Err(error.clone()),
@@ -1256,6 +1307,9 @@ impl BodyTask {
             );
             (variant.output, variant.action(&input.key))
         };
+        queries
+            .pool_completion_reads(&mut outcome, &mut checked, &mut memo_rows)
+            .ok_or(queries.errors.resource)?;
         queries
             .retain(&outcome, &checked, table_keys.as_ref(), &memo_rows)
             .ok_or(queries.errors.resource)?;
@@ -1686,7 +1740,8 @@ impl QueryEngine {
             verify_store: self.verify_store,
             errors,
             retention: Mutex::new(allowance.bytes() - required),
-            _allowance: allowance,
+            read_pool: std::sync::OnceLock::new(),
+            _allowance: Mutex::new(allowance),
         }))
     }
 }

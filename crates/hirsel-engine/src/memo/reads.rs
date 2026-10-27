@@ -3,6 +3,9 @@
 use hirsel_intern::Symbol;
 use hirsel_syntax::{ContentHash, DefId, DefPath, FileContext, PackageId};
 use std::num::NonZeroU64;
+mod pool;
+pub(crate) use pool::ReadPool;
+use pool::Rows;
 
 /// One revision of a session's inputs. Revision 1 is the first.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -355,7 +358,7 @@ impl ReadKey {
 /// A memo's reads: `(ReadKey, observed value)` sorted by key, one entry per key.
 #[derive(Clone, Debug, Default)]
 pub struct Reads {
-    rows: std::sync::Arc<[(ReadKey, ContentHash)]>,
+    rows: Rows,
     // A sorted view into the same canonical rows. Normal receipts stay flat;
     // completed predecessor phases can share the final phase's allocation.
     indices: Option<std::sync::Arc<[u32]>>,
@@ -490,10 +493,7 @@ impl Reads {
     /// Actual distinct Arc backing allocations; the containing Reads value is
     /// accounted separately by its owner. This exposes no semantic identity.
     pub(crate) fn allocations(&self) -> impl Iterator<Item = (usize, usize)> {
-        let rows = Some((
-            self.rows.as_ptr() as usize,
-            super::retained::arc_bytes(&*self.rows),
-        ));
+        let rows = Some((self.rows.as_ptr() as usize, self.rows.allocation_bytes()));
         let indices = self.indices.as_ref().map(|indices| {
             (
                 indices.as_ptr() as usize,
