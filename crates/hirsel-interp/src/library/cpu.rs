@@ -62,8 +62,7 @@ fn refused(status: u32) -> OperationResult {
     let payload = match status {
         1..=8 => variant(status - 1, vec![]),
         10 => variant(10, vec![]),
-        11 => variant(9, vec![]),
-        12 => variant(11, vec![]),
+        9 | 11 => variant(status, vec![]),
         16..=19 => variant(8, vec![variant(status - 16, vec![])]),
         _ => unreachable!("CPU control status {status}"),
     };
@@ -463,7 +462,7 @@ mod tests {
                 trace_mode: TraceMode::Effects,
                 anchor: Some(&anchor),
             };
-            let mut recorded = None;
+            let mut recorded: Option<(Vec<u8>, hirsel_free::projection::Projection)> = None;
             for replay in [false, true] {
                 let mut library = Library::new(
                     &run,

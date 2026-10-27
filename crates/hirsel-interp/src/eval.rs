@@ -450,8 +450,11 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                 runnable.iter().find(|(id, _, _)| *id == start.parent)
             {
                 stack
+            } else if let Some((_, stack, _)) = parked.iter().find(|(id, _, _)| *id == start.parent)
+            {
+                stack
             } else {
-                return Err(invalid("spawned task has no runnable parent stack"));
+                return Err(invalid("spawned task has no parent stack"));
             };
             let mut invocation_types = Default::default();
             let (definition, body, captures, sizes) = match &start.callee {
