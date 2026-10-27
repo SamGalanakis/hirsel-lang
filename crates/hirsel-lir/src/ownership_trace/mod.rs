@@ -355,6 +355,9 @@ impl<'a> CheckedPlan<'a> {
             Point::StagedReturn { .. } => {
                 let staged = staged::binding(unit, observation).ok_or(Error::InvalidBinding(id))?;
                 let mut commits = vec![staged.store, staged.take, Point::Return(staged.returning)];
+                for (take, release, _) in &staged.releases {
+                    commits.extend([*take, *release]);
+                }
                 for (block, _) in unit.blocks.iter().enumerate() {
                     let block = BlockId(block as u32);
                     if finalizer::begin(unit, block)

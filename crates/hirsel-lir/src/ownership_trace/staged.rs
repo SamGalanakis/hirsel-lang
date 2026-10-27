@@ -8,6 +8,7 @@ pub(super) struct Staging {
     pub store: Point,
     pub take: Point,
     pub returning: BlockId,
+    pub releases: Vec<(Point, Point, ValueId)>,
 }
 pub(super) fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Option<Staging> {
     let Point::StagedReturn { block, address } = observation.point else {
@@ -45,6 +46,8 @@ pub(super) fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) ->
     let mut take = None;
     let mut version = None;
     let mut reaching = None;
+    let mut releases = Vec::new();
+    let mut release_versions = Vec::new();
     for (index, body) in unit.blocks.iter().enumerate() {
         for (offset, instruction) in body
             .instructions
@@ -81,6 +84,37 @@ pub(super) fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) ->
                             return None;
                         }
                         reaching = Some(input);
+                    } else {
+                        let code = body.instructions.get(&unit.instructions)?;
+                        let Inst::Release {
+                            value,
+                            live: MaskRef::All,
+                            anchor,
+                            ..
+                        } = *code.get(offset + 1)?
+                        else {
+                            return None;
+                        };
+                        let anchor = unit.tables.cleanup_anchors.get(anchor.index())?;
+                        if body.kind != BlockKind::FailureCleanup
+                            || value != result
+                            || unit.values.get(result.index())?.holding != Holding::Owned
+                            || unit.values.get(result.index())?.ty != slot_info.ty
+                            || anchor.cleanup != STATE_RELEASE
+                            || anchor.site != observation.marker.site
+                        {
+                            return None;
+                        }
+                        releases.push((
+                            point,
+                            Point::Instruction {
+                                block: BlockId(index as u32),
+                                index: offset as u32 + 1,
+                                moment: Moment::Before,
+                            },
+                            result,
+                        ));
+                        release_versions.push(input);
                     }
                 }
                 Inst::Store {
@@ -93,7 +127,7 @@ pub(super) fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) ->
             }
         }
     }
-    if version != reaching {
+    if version != reaching || release_versions.iter().any(|input| Some(*input) != version) {
         return None;
     }
     Some(Staging {
@@ -103,6 +137,7 @@ pub(super) fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) ->
         store: store?,
         take: take?,
         returning: block,
+        releases,
     })
 }
 fn same_slot<S>(unit: &LirUnit<S>, mut address: AddressId, slot: SlotId) -> bool {

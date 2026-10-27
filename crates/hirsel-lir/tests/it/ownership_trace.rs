@@ -5013,3 +5013,103 @@ fn ownership_trace_data_child_release_requires_its_exact_take_and_complete_clean
         );
     }
 }
+
+#[test]
+fn ownership_trace_staged_return_covers_failed_region_exit_release() {
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[], Some(l::BLK));
+    t.builder.unit.header.origin = UnitOrigin::Library;
+    let arena = t.plain(l::ARENA);
+    t.builder.push(
+        ENTRY,
+        Inst::ArenaOpen {
+            result: arena,
+            budget: None,
+        },
+    );
+    let normal = t.builder.block(BlockKind::Body, &[]);
+    let failure = t.builder.propagate();
+    let original = t
+        .call(ENTRY, &[], Some(l::BLK), &[], (normal, &[]), failure)
+        .unwrap();
+    t.builder.ret(normal, Some(original));
+    let (raw, table, _) = t.finish();
+    let before = checked_native_fixture(raw, &table);
+    let input = native::LeafPlan::prepare_value(&before, &table).unwrap();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let lowered = hirsel_rc::observed::lower(
+        before.unit().clone(),
+        &input,
+        &index,
+        &hirsel_rc::observed::Options {
+            placement: &hirsel_rc::placement::Options {
+                regions: false,
+                noalloc: false,
+            },
+            proofs: &Default::default(),
+            elide: true,
+            reuse: &Default::default(),
+            finalizers: &Default::default(),
+        },
+    )
+    .unwrap();
+    let ready = checked_native_fixture(lowered.unit, &table);
+    let native = native::LeafPlan::from_relocated(&ready, &table, &lowered.plan).unwrap();
+    let staged = lowered
+        .plan
+        .observations
+        .iter()
+        .find(|row| matches!(row.point, Point::StagedReturn { .. }))
+        .unwrap();
+    let commits = check(ready.unit(), &lowered.plan)
+        .unwrap()
+        .commits(ready.unit(), staged.marker.id)
+        .unwrap();
+    assert_eq!(
+        commits.len(),
+        5,
+        "normal store/take/return and failure take/release"
+    );
+    let failure_take = commits[3];
+    let failure_release = commits[4];
+    assert_eq!(native.at_point(failure_take).count(), 1);
+    let releases = native.at_point(failure_release).collect::<Vec<_>>();
+    assert_eq!(releases.len(), 1);
+    assert_eq!(releases[0].kind, 2);
+    for corruption in ["version", "released value", "anchor"] {
+        let mut forged = ready.unit().clone();
+        let Point::Instruction { block, index, .. } = failure_take else {
+            unreachable!()
+        };
+        let offset = forged.blocks[block.index()].instructions.start as usize + index as usize;
+        match corruption {
+            "version" => {
+                let Inst::Read { reaching, .. } = &mut forged.instructions[offset] else {
+                    unreachable!()
+                };
+                *reaching = original;
+            }
+            "released value" => {
+                let Inst::Release { value, .. } = &mut forged.instructions[offset + 1] else {
+                    unreachable!()
+                };
+                *value = original;
+            }
+            "anchor" => {
+                let Inst::Release { anchor, .. } = forged.instructions[offset + 1] else {
+                    unreachable!()
+                };
+                forged.tables.cleanup_anchors[anchor.index()].site.end += 1;
+            }
+            _ => unreachable!(),
+        }
+        let forged_plan = Plan {
+            unit: forged.digest(),
+            ..lowered.plan.clone()
+        };
+        assert_eq!(
+            check(&forged, &forged_plan).unwrap_err(),
+            Error::InvalidBinding(staged.marker.id),
+            "{corruption}"
+        );
+    }
+}

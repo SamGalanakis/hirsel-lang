@@ -797,6 +797,22 @@ impl LeafPlan {
                         Location::Return,
                     ),
                 ];
+                for &(take, release, value) in &staged.releases {
+                    transitions.extend([
+                        (
+                            take,
+                            Kind::Move,
+                            Location::Address(staged.address),
+                            Location::Value(value),
+                        ),
+                        (
+                            release,
+                            Kind::Drop,
+                            Location::Value(value),
+                            Location::Value(value),
+                        ),
+                    ]);
+                }
                 transitions.extend(
                     expected
                         .plan
