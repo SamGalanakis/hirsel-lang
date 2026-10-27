@@ -193,6 +193,10 @@ impl QueryEngine {
             for entry in self.signatures.values() {
                 headers += crate::memo::retained::source_signature_head_bytes(entry, &mut names)
                     .ok_or_else(invalid)?;
+            }
+            // Finish the global inspection before starting independent per-head
+            // inspections, whose epochs may conservatively displace its marks.
+            for entry in self.signatures.values() {
                 for (total, bytes) in
                     parts
                         .iter_mut()
@@ -203,7 +207,10 @@ impl QueryEngine {
                     *total += bytes;
                 }
             }
-            eprintln!("source carry allocation tracker: {:?}", names.stats());
+            eprintln!(
+                "source carry required: {total}; read-log allocation tracker: {:?}",
+                names.stats()
+            );
             eprintln!(
                 "source carry bound: metadata={} source={} headers={} header-reads={} header-detail={} header-values={} header-dependencies={} declarations={} catalog={} types={} graph={}",
                 weight.bytes(),
