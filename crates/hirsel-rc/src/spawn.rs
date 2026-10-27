@@ -20,6 +20,30 @@ pub struct OperationFreedom {
     callees: Vec<Function>,
 }
 impl OperationFreedom {
+    /// Owned descriptor buffers only. The containing allocation is charged by
+    /// the query owner; these ordinary equations carry no C proof authority.
+    pub fn retained_bytes(&self) -> u64 {
+        let mut bytes = self
+            .callees
+            .capacity()
+            .saturating_mul(size_of::<Function>());
+        for (path, _) in &self.callees {
+            bytes = bytes
+                .saturating_add(path.0.package.name.capacity())
+                .saturating_add(path.0.package.version.capacity())
+                .saturating_add(path.0.name.capacity())
+                .saturating_add(
+                    path.0
+                        .modules
+                        .capacity()
+                        .saturating_mul(size_of::<String>()),
+                );
+            for module in &path.0.modules {
+                bytes = bytes.saturating_add(module.capacity());
+            }
+        }
+        bytes as u64
+    }
     pub fn extract(u: &LirUnit<Value>, table: &LayoutTable) -> Self {
         let lay = Lay(table);
         let mut locally_safe = u

@@ -68,6 +68,22 @@ impl Request {
     pub(super) fn has_receipt_roots(&self) -> bool {
         self.receipt_roots.is_some()
     }
+    pub(super) fn retained_metadata_bytes(&self) -> u64 {
+        let Self {
+            key,
+            lexical,
+            recipe: _,
+            receipt_roots: _,
+            layouts: _,
+            plan: _,
+        } = self;
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        for key in [key, lexical] {
+            weight.path(&key.definition);
+            weight.flat_vec(&key.encoding);
+        }
+        weight.bytes()
+    }
     pub(super) fn source_definition(&self) -> Option<&hirsel_syntax::DefPath> {
         (self.recipe.domain == SOURCE_RECIPE).then_some(&self.key.definition)
     }
@@ -106,6 +122,39 @@ pub struct DiscoveredInstance {
     pub discharge: super::discharge::NativeDischargeFacts,
     /// Independent original plan selections, re-derived before C on every hit.
     pub adapters: Vec<hirsel_lir::ir::Symbol>,
+}
+
+impl DiscoveredInstance {
+    pub(super) fn retained_metadata_bytes(&self) -> u64 {
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.add(size_of::<Self>() + 2 * size_of::<usize>());
+        weight.arc(&self.product);
+        weight.vec(&self.callees, |w, (path, _)| w.path(path));
+        weight.vec(&self.dependencies, |w, key| {
+            w.path(key.instance.definition());
+            w.add(key.instance.retained_encoding_bytes());
+        });
+        weight.vec(&self.selection_reads, |w, read| {
+            w.path(&read.declaration);
+            if let Some(arguments) = &read.arguments {
+                w.vec(arguments, |w, argument| w.add(argument.capacity()));
+            }
+            if let Some(path) = &read.selected {
+                w.path(path);
+            }
+        });
+        weight.vec(&self.constant_reads, |w, path| w.path(path));
+        weight.vec(&self.templates.references, |w, (path, _)| w.path(path));
+        weight.vec(&self.emission.callbacks, |w, path| w.path(path));
+        weight.flat_vec(&self.emission.inline);
+        weight.vec(&self.adapters, |w, symbol| w.path(&symbol.definition));
+        weight
+            .bytes()
+            .saturating_add(self.ready_source.retained_metadata_bytes())
+            .saturating_add(self.seal_demand.retained_bytes())
+            .saturating_add(self.operation_freedom.retained_bytes())
+            .saturating_add(self.discharge.retained_metadata_bytes())
+    }
 }
 
 /// One immutable request snapshot. Source/native proof authority stays in the

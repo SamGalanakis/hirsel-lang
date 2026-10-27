@@ -62,6 +62,14 @@ pub struct NativeDischargeFacts {
     sites: Vec<Site>,
 }
 impl NativeDischargeFacts {
+    pub(super) fn retained_metadata_bytes(&self) -> u64 {
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.vec(&self.sites, |w, site| match &site.form {
+            SiteForm::Check(rule) | SiteForm::Projection { rule, .. } => w.add(rule.capacity()),
+            SiteForm::Integer | SiteForm::Negation => (),
+        });
+        weight.bytes()
+    }
     pub(super) fn checked(sites: &BTreeSet<Discharged>) -> Self {
         Self {
             sites: sites.iter().map(Site::from_site).collect(),

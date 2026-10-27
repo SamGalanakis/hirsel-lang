@@ -121,6 +121,15 @@ impl InstanceTasks {
         {
             return Err("native task frame exceeds retained allowance".into());
         }
+        let mut metadata = hirsel_engine::NativeMetadataWeight::default();
+        metadata.add(size_of::<Self>() + 2 * size_of::<usize>());
+        metadata.vec(&roots, |w, key| {
+            w.path(key.instance.definition());
+            w.add(key.instance.retained_encoding_bytes());
+        });
+        if metadata.bytes() > allowance.bytes() {
+            return Err("native task metadata exceeds retained allowance".into());
+        }
         let tasks = Arc::new(Self {
             source,
             front: None,
@@ -134,7 +143,7 @@ impl InstanceTasks {
             registry: Mutex::new(Registry {
                 entries: BTreeMap::new(),
                 inputs: BTreeMap::new(),
-                charged: 0,
+                charged: metadata.bytes(),
             }),
             completed: OnceLock::new(),
             weight,
@@ -212,8 +221,13 @@ impl InstanceTasks {
         let entries = requests
             .into_iter()
             .map(|(key, request)| {
-                let bytes = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-                let charge = 4096u64.saturating_add((bytes.len() as u64).saturating_mul(4));
+                let mut weight = hirsel_engine::NativeMetadataWeight::default();
+                weight.add(size_of::<Registered>() + 2 * size_of::<usize>());
+                weight.path(key.instance.definition());
+                weight.add(key.instance.retained_encoding_bytes());
+                let charge = weight
+                    .bytes()
+                    .saturating_add(request.retained_metadata_bytes());
                 Ok((
                     key.address(INSTANCE_KIND).0,
                     key.address(INSTANCE_INPUT_KIND).0,
@@ -229,7 +243,12 @@ impl InstanceTasks {
             })
             .collect::<Result<Vec<_>, String>>()?;
         let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
-        for (id, input, charge, entry) in entries {
+        let index_bytes = |len| {
+            let mut weight = hirsel_engine::NativeMetadataWeight::default();
+            weight.tree::<ContentHash, Arc<Registered>>(len);
+            weight.bytes().saturating_mul(2)
+        };
+        for (id, input, mut charge, entry) in entries {
             if let Some(previous) = registry.entries.get(&id) {
                 if previous.key != entry.key || previous.request != entry.request {
                     return Err(format!(
@@ -241,6 +260,13 @@ impl InstanceTasks {
                 }
                 continue;
             }
+            charge = charge.saturating_add(index_bytes(registry.entries.len() + 1).saturating_sub(
+                if registry.entries.is_empty() {
+                    0
+                } else {
+                    index_bytes(registry.entries.len())
+                },
+            ));
             if registry.entries.len() >= hirsel_rc::instance::MAX_INSTANCES
                 || charge > self.allowance.bytes().saturating_sub(registry.charged)
             {
@@ -271,29 +297,7 @@ impl InstanceTasks {
             .collect()
     }
     fn charge_output(&self, output: &DiscoveredInstance) -> Result<(), String> {
-        let ordinary = serde_json::to_vec(&(
-            &output.seal_demand,
-            &output.callees,
-            &output.selection_reads,
-            &output.constant_reads,
-            &output.templates,
-            &output.operation_freedom,
-            &output.emission,
-            &output.discharge,
-        ))
-        .map_err(|e| e.to_string())?;
-        let bytes = ordinary
-            .len()
-            .saturating_add(hirsel_codec::to_text(&output.adapters).len())
-            .saturating_add(output.ready_source.encode()?.len())
-            .saturating_add(
-                output
-                    .dependencies
-                    .iter()
-                    .map(|key| key.instance.encoding().len() + 256)
-                    .sum(),
-            );
-        let charge = 4096u64.saturating_add((bytes as u64).saturating_mul(4));
+        let charge = output.retained_metadata_bytes();
         let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
         if charge > self.allowance.bytes().saturating_sub(registry.charged) {
             return Err("native completed descriptor allowance exhausted".into());
@@ -623,6 +627,19 @@ impl QueryTask for InstanceTask {
                                     return Err("front Lower changed within a native input".into());
                                 }
                             } else {
+                                let mut weight = hirsel_engine::NativeMetadataWeight::default();
+                                weight.path(&product.definition);
+                                let mut registry = self
+                                    .tasks
+                                    .registry
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
+                                registry.charged = registry
+                                    .charged
+                                    .checked_add(weight.bytes())
+                                    .filter(|total| *total <= self.tasks.allowance.bytes())
+                                    .ok_or("native source binding exceeds retained allowance")?;
+                                drop(registry);
                                 self.entry.source.set((selected, product.clone())).map_err(
                                     |_| "front Lower completion raced within one task".to_owned(),
                                 )?;
@@ -841,5 +858,83 @@ impl DiscoveryTask {
             Ok(Some(product))
         })();
         result.map_err(|e: String| self.tasks.failure(&e))
+    }
+}
+
+#[cfg(test)]
+mod retained_tests {
+    use super::*;
+    use hirsel_engine::DefinitionQueries;
+
+    #[test]
+    fn registry_metadata_refuses_one_less_and_releases_its_exact_partition() {
+        hirsel_engine::with_compiler_stack(|| {
+            let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::MemStore::default());
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            )
+            .with_result_store(store.clone());
+            let file = engine
+                .sources
+                .add("registry-bounds.hir", "pub fn main()->u64{1u64}".into())
+                .unwrap();
+            engine
+                .parse_file(file, &hirsel_engine::default_context())
+                .unwrap();
+            let mut discovery =
+                hirsel_engine::NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+            let declarations = super::super::declarations::NativeDeclarations::collect(
+                &mut engine,
+                &mut discovery,
+                &[],
+            )
+            .unwrap();
+            let paths = declarations
+                .context
+                .sources
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            let context = engine.native_original_context(&paths).unwrap();
+            let source = NativeInstanceInputs::from_products(
+                declarations,
+                context.reader([], store.clone()).unwrap(),
+            )
+            .unwrap();
+            let budget = ProcessBudget::new(16 << 20);
+            let make = |bytes| {
+                InstanceTasks::new(
+                    source.clone(),
+                    store.clone(),
+                    crate::native::Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu()),
+                    ContentHash::of_bytes(b"registry bounds"),
+                    MemoryWeight {
+                        scratch: 16 << 20,
+                        retained: 1 << 20,
+                        stack: 0,
+                    },
+                    budget.reserve(bytes).unwrap(),
+                )
+            };
+            let tasks = make(16 << 20).unwrap();
+            let copied = source.retained_metadata_bytes();
+            let required = tasks.registry.lock().unwrap().charged;
+            assert!(required > size_of::<InstanceTasks>() as u64);
+            drop(tasks);
+            assert_eq!(budget.reserved(), copied);
+            let refusal = make(required - 1)
+                .err()
+                .expect("one less cannot retain the registered roots");
+            assert_eq!(refusal, "native discovery metadata allowance exhausted");
+            assert_eq!(budget.reserved(), copied);
+            let exact = make(required).unwrap();
+            assert_eq!(exact.allowance.bytes(), required);
+            assert_eq!(exact.registry.lock().unwrap().charged, required);
+            assert_eq!(budget.reserved(), copied + required);
+            drop(source);
+            drop(exact);
+            assert_eq!(budget.reserved(), 0);
+        });
     }
 }

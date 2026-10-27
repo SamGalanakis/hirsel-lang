@@ -12,6 +12,13 @@ pub struct ReadySourceFacts {
     unique: Vec<u32>,
 }
 impl ReadySourceFacts {
+    pub(super) fn retained_metadata_bytes(&self) -> u64 {
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.path(self.origin.definition());
+        weight.add(self.origin.retained_encoding_bytes());
+        weight.flat_vec(&self.unique);
+        weight.bytes()
+    }
     pub fn for_instance(instances: &Instances, id: InstanceId) -> Self {
         let proofs = hirsel_rc::insert::Proofs::for_instance(instances, id);
         Self {

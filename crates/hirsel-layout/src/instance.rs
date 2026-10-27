@@ -163,6 +163,11 @@ impl InstanceKey {
     pub fn encoding(&self) -> &[u8] {
         &self.encoding
     }
+    /// Owned encoding buffer retained by this key, excluding its inline fields
+    /// and the definition path. The caller accounts for those separately.
+    pub fn retained_encoding_bytes(&self) -> usize {
+        self.encoding.capacity()
+    }
     pub fn digest(&self) -> ContentHash {
         self.digest
     }
