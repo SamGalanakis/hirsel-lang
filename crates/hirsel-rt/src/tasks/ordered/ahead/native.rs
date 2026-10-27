@@ -557,10 +557,10 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
             // suspensions read the same pointer through pool::idle_of.
             crate::pool::cpu_scoped::probe::resume(ctx);
             loop {
-                #[cfg(feature = "tsan")]
+                #[cfg(all(feature = "tsan", target_arch = "x86_64", target_os = "linux"))]
                 crate::tsan_callbacks::bind(&raw mut (*native).physical.idle_sp);
                 crate::fiber::switch(&raw mut (*native).physical.idle_sp, sp);
-                #[cfg(feature = "tsan")]
+                #[cfg(all(feature = "tsan", target_arch = "x86_64", target_os = "linux"))]
                 crate::tsan_callbacks::clear();
                 // A scalar private or CPU quantum owns no shared state. Keep the same
                 // 1024-point checkpoint and every stop/save/fuel/barrier test,
