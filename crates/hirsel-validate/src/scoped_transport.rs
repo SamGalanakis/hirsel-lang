@@ -529,8 +529,18 @@ pub(super) fn check(
                         let data_observer = matches!(callee, Callee::Definition { path, .. }
                             if ["list.len", "array.len", "bytes.len", "string.byte_len"].iter().any(|name| path.is_core(name)))
                             && a.parameter.0 == 0
-                            && a.value.usage == hirsel_types::UseKind::Borrow;
+                            && matches!(
+                                a.value.usage,
+                                hirsel_types::UseKind::Borrow | hirsel_types::UseKind::Copy
+                            );
+                        let data_helper = matches!(
+                            a.value.usage,
+                            hirsel_types::UseKind::Borrow | hirsel_types::UseKind::Copy
+                        ) && matches!(callee, Callee::Definition { path, .. }
+                                if signatures.get(DefId::intern(path)).is_some_and(|s|
+                                    s.metadata.inferred_unique.nonretaining.contains(&a.parameter)));
                         let allowed = data_observer
+                            || data_helper
                             || function
                                 .as_ref()
                                 .and_then(|f| f.parameters.get(a.parameter.0 as usize))
@@ -544,7 +554,7 @@ pub(super) fn check(
                         if !allowed {
                             error(&mut errors, None, "scoped may-retain source call");
                         }
-                        if allowed && !data_observer {
+                        if allowed && !data_observer && !data_helper {
                             let expected =
                                 function.as_ref().unwrap().parameters[a.parameter.0 as usize].ty;
                             let actual = body.places[a.value.place.0 as usize].ty;

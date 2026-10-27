@@ -29,10 +29,16 @@ entering the caller's failure cleanup.
 `MEM-4-sealed-aggregate-inline-run.hir` qualifies a capture-free
 `Region[Wrap[Root]]` whose inline root owns an Arena `List[Item]`, an Arena
 `box Item` and copied heap list children. `Item` has both empty and dataful
-variants. Its callback observes scalar fields and list length inline; forwarding
-borrowed sealed data to ordinary helpers still needs a nonretention contract.
-The original `MEM-4-sealed-aggregate-roots-run.hir` remains refused at that
-forwarding boundary, so tuple and distinct roots are not yet qualified.
+variants. Its callback observes scalar fields and list length inline.
+The unchanged `MEM-4-sealed-aggregate-roots-run.hir` also qualifies
+`Region[Root]`, `Region[(Root, u64)]`, `Region[Wrap[Root]]` and a distinct
+`Region[Whole]` root on all four engines and record/replay. Its callbacks forward
+borrowed root fields through ordinary `score`, `size` and `boxed` helpers.
+Private module query summaries infer borrowed-data nonretention; V and C prove
+those claims from their own body flow. C also discharges the linked callee
+assumptions from the empty proved set, including in cached native queries.
+Unproved recursive forwarding, returned input data and owning closure captures
+supply no nonretention contract.
 `MEM-4-sealed-task-unique-list-run.hir` also qualifies moving a unique heap
 list's Region into a task, reading it there and awaiting completion.
 Original source declarations and ordered child receipts remain mandatory.

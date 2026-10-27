@@ -13,6 +13,18 @@ pub(super) fn valid(t: &TypeInterner, s: &Signature, signatures: &Reader<'_>) ->
         };
         if s.metadata.visibility != hirsel_syntax::Visibility::Private
             || f.foreign.is_some()
+            || !s
+                .metadata
+                .inferred_unique
+                .nonretaining
+                .windows(2)
+                .all(|p| p[0] < p[1])
+            || s.metadata.inferred_unique.nonretaining.iter().any(|p| {
+                f.parameters.get(p.0 as usize).is_none_or(|p| {
+                    p.passing != PassingMode::Borrow
+                        || matches!(&t.row(p.ty).kind, TypeKind::Function(_))
+                })
+            })
             || s.metadata
                 .inferred_unique
                 .preserves_unique

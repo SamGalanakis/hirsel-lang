@@ -49,6 +49,7 @@ fn tir_bytes(definition: &Definition, mut weight: Weight) -> u64 {
     } = definition;
     weight.flat_vec(&inferred_unique.preserves_unique);
     weight.flat_vec(&inferred_unique.results);
+    weight.flat_vec(&inferred_unique.nonretaining);
     weight.flat_vec(caller_bodies);
     weight.vec(protocol_associations, |w, r| {
         w.def_path(&r.association.source)
@@ -496,6 +497,7 @@ impl Weight {
         } = metadata;
         self.flat_vec(&inferred_unique.preserves_unique);
         self.flat_vec(&inferred_unique.results);
+        self.flat_vec(&inferred_unique.nonretaining);
         for binder in implementations {
             self.def_path(binder.family.path());
         }

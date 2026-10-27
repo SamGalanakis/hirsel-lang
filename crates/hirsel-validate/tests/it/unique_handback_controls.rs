@@ -1670,6 +1670,7 @@ fn a_callback_tuple_of_unique_parts_is_a_unique_result() {
 
 fn inferred_promise(f: &mut Fixture) {
     let summary = hirsel_types::UniqueSummary {
+        nonretaining: Vec::new(),
         preserves_unique: vec![ParamId(0)],
         results: vec![],
     };
@@ -1697,6 +1698,7 @@ fn inferred_result_root_cannot_forge_an_ordinary_call_result() {
     let mut f = Fixture::result_call(TypeKind::Primitive(Primitive::String), true);
     owner_signature(&mut f, PassingMode::Take);
     let summary = hirsel_types::UniqueSummary {
+        nonretaining: Vec::new(),
         preserves_unique: vec![],
         results: vec![hirsel_types::UniqueResultRow::Root],
     };

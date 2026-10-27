@@ -173,6 +173,63 @@ fn forwarding_data_needs_the_actual_body_contract() {
         hirsel_lir::validate::check_scoped_calls(&[caller.clone(), body.clone()], &table).is_ok()
     );
     assert!(hirsel_lir::validate::check_scoped_calls(&[caller.clone()], &table).is_err());
+    // A declaration cycle cannot establish its own borrowed-data guarantee.
+    let mut recursive = caller.clone();
+    recursive.tables.symbols[symbol.index()].definition = recursive.header.definition.clone();
+    recursive.tables.symbols[symbol.index()].instance = Some(recursive.header.instance);
+    assert!(hirsel_lir::validate::check_scoped_transport(&recursive, &inputs).is_empty());
+    let error = hirsel_lir::validate::qualify_scoped_transport(&[recursive], &inputs).unwrap_err();
+    assert!(
+        error.contains("unproved cyclic data nonretention"),
+        "{error}"
+    );
+    let mut left = caller.clone();
+    let mut right = caller.clone();
+    right.header.definition = path("mutually_recursive_reader");
+    right.header.instance = hash("mutually_recursive_reader");
+    left.tables.symbols[symbol.index()].definition = right.header.definition.clone();
+    left.tables.symbols[symbol.index()].instance = Some(right.header.instance);
+    right.tables.symbols[symbol.index()].definition = left.header.definition.clone();
+    right.tables.symbols[symbol.index()].instance = Some(left.header.instance);
+    assert!(hirsel_lir::validate::check_scoped_transport(&left, &inputs).is_empty());
+    assert!(hirsel_lir::validate::check_scoped_transport(&right, &inputs).is_empty());
+    let error =
+        hirsel_lir::validate::qualify_scoped_transport(&[left, right], &inputs).unwrap_err();
+    assert!(
+        error.contains("unproved cyclic data nonretention"),
+        "{error}"
+    );
+    // A valid forwarding body cannot hide a retaining call in its leaf.
+    let mut hidden_table = table.clone();
+    let retaining_abi = hirsel_lir::FnAbiId(hidden_table.fn_abis.len() as u32);
+    let mut retaining = hidden_table.fn_abis[abi.0 as usize].clone();
+    retaining.nonretaining.clear();
+    retaining.scoped_contract = hirsel_lir::abi::scoped_contract_digest(&[], &[]);
+    hidden_table.fn_abis.push(retaining);
+    let mut hidden = caller.clone();
+    hidden.header.definition = body.header.definition.clone();
+    hidden.header.instance = body.header.instance;
+    hidden.tables.calls[0].abi = retaining_abi;
+    let hidden_inputs = hirsel_lir::validate::Inputs {
+        layouts: &hidden_table,
+        memo: Default::default(),
+        ..inputs
+    };
+    let errors = hirsel_lir::validate::check_scoped_transport(&hidden, &hidden_inputs);
+    assert!(
+        errors.iter().any(|v| matches!(
+            v.kind,
+            K::ScopedRetention {
+                operation: "may-retain call argument",
+                ..
+            }
+        )),
+        "{errors:?}"
+    );
+    let error =
+        hirsel_lir::validate::qualify_scoped_transport(&[caller.clone(), hidden], &hidden_inputs)
+            .unwrap_err();
+    assert!(error.contains("may-retain call argument"), "{error}");
     let mut stripped = table.clone();
     let ordinary = hirsel_lir::FnAbiId(stripped.fn_abis.len() as u32);
     let mut header = stripped.fn_abis[abi.0 as usize].clone();

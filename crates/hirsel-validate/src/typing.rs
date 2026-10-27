@@ -768,7 +768,7 @@ impl<'a> Checker<'a> {
             // Generic bodies retain declaration-scope parameters; import without
             // substitution here. Concrete calls substitute in the caller store.
         }
-        let expected: Vec<_> = f
+        let mut expected: Vec<_> = f
             .parameters
             .iter()
             .enumerate()
@@ -784,6 +784,19 @@ impl<'a> Checker<'a> {
                 fields: Vec::new(),
             })
             .collect();
+        expected.extend(
+            signature
+                .metadata
+                .inferred_unique
+                .nonretaining
+                .iter()
+                .map(|p| ScopedParameter {
+                    parameter: p.0,
+                    fields: Vec::new(),
+                }),
+        );
+        expected.sort();
+        expected.dedup();
         if !scoped_parameters_valid(self.t, f, &self.body.scoped_parameters, &expected) {
             self.error(ViolationKind::TypeMismatch {
                 entity: "scoped parameter contract",

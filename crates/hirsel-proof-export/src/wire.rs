@@ -1134,7 +1134,7 @@ snapshot_enum!(UniqueResultRow {
     Tuple(field),
     Payload { variant, field }
 } in Cx);
-snapshot_struct!(UniqueSummary { preserves_unique, results } in Cx);
+snapshot_struct!(UniqueSummary { preserves_unique, results, nonretaining } in Cx);
 /// `types` is not written: it is the definition's closure, recomputed on read.
 impl Snapshot<Cx> for Definition {
     fn write(&self, w: &mut Writer<Cx>) {
@@ -1278,6 +1278,7 @@ fn definition_header_summary_round_trips_in_written_field_order() {
     for inferred_unique in [
         UniqueSummary::default(),
         UniqueSummary {
+            nonretaining: vec![hirsel_types::ParamId(0)],
             preserves_unique: vec![hirsel_types::ParamId(2)],
             results: vec![
                 UniqueResultRow::Root,

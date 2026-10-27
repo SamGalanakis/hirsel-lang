@@ -638,6 +638,9 @@ fn validate_input(
             }),
         }
     }
+    if errors.is_empty() && !definition.inferred_unique.nonretaining.is_empty() {
+        errors.extend(scoped_transport::check(definition, t, signatures));
+    }
     Validation { violations: errors }
 }
 

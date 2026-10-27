@@ -495,3 +495,91 @@ fn conservative_headers_and_settled_proofs_have_distinct_verified_cache_inputs()
         assert_eq!(restored.recompute_count(&value, QueryKind::Signature), 0);
     });
 }
+
+#[test]
+fn nonretention_133_is_transitive_and_refuses_return_capture_and_recursive_assumptions() {
+    with_compiler_stack(|| {
+        let store = Arc::new(MemStore::default());
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone());
+        let context = default_context();
+        let source = r#"
+type Bits { value: u64 }
+fn leaf_bits(x: Bits) -> u64 { x.value }
+fn relay_bits(x: Bits) -> u64 { leaf_bits(x) }
+fn leaf(xs: Bytes) -> u8 { xs[0] }
+fn relay(xs: Bytes) -> u8 { leaf(xs) }
+fn returned(xs: Bytes) -> Bytes { copy xs }
+fn retained(xs: Bytes) -> u8 { let saved = returned(xs); saved[0] }
+fn captured(xs: Bytes) -> u8 { let f = fn() -> u8 { xs[0] }; f() }
+fn recursive(xs: Bytes) -> u8 { recursive(xs) }
+fn left(xs: Bytes) -> u8 { right(xs) }
+fn right(xs: Bytes) -> u8 { left(xs) }
+pub fn main() -> u8 { 0u8 }
+"#;
+        let file = engine
+            .sources
+            .add("nonretention.hir", source.into())
+            .unwrap();
+        engine.parse_file(file, &context).unwrap();
+        let budget = ProcessBudget::new(512 << 20);
+        let reservation = engine
+            .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+            .unwrap();
+        for (name, expected) in [
+            ("leaf_bits", true),
+            ("relay_bits", true),
+            ("leaf", true),
+            ("relay", true),
+            ("returned", false),
+            ("retained", false),
+            ("captured", false),
+            ("recursive", false),
+            ("left", false),
+            ("right", false),
+        ] {
+            let mut path = entry_path(&context);
+            path.0.name = name.into();
+            let signature = hirsel_types::SignatureProvider::signature(
+                &mut engine,
+                hirsel_syntax::DefId::intern(&path),
+            )
+            .unwrap();
+            assert_eq!(
+                signature.metadata.inferred_unique.nonretaining,
+                if expected {
+                    vec![hirsel_types::ParamId(0)]
+                } else {
+                    vec![]
+                },
+                "{name}"
+            );
+            assert!(engine.memo_reads(&path, QueryKind::Signature).unwrap().iter().any(|(key, _)| matches!(key, memo::ReadKey::PrivateSummary(id) if id.path() == &path)));
+        }
+        drop(reservation);
+        let mut relay = entry_path(&context);
+        relay.0.name = "relay_bits".into();
+        // Plain nominal arguments are copied into a declared Borrow entry.
+        engine.lower_to_tir(&relay).unwrap();
+        let mut restored =
+            QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
+        let file = restored
+            .sources
+            .add("nonretention.hir", source.into())
+            .unwrap();
+        restored.parse_file(file, &context).unwrap();
+        let reservation = restored
+            .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+            .unwrap();
+        let signature = restored.item_signature(&relay).unwrap().value;
+        assert_eq!(
+            signature.metadata.inferred_unique.nonretaining,
+            vec![hirsel_types::ParamId(0)]
+        );
+        assert_eq!(
+            restored.recompute_count(&relay, QueryKind::PrivateInference),
+            0
+        );
+        drop(reservation);
+    });
+}

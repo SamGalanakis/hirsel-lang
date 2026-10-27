@@ -361,18 +361,22 @@ fn nested_header_uniqueness_stays_exact() {
 fn unpublished_private_uniqueness_evidence_is_not_verifier_authority() {
     for summary in [
         UniqueSummary {
+            nonretaining: Vec::new(),
             preserves_unique: vec![ParamId(0)],
             results: vec![],
         },
         UniqueSummary {
+            nonretaining: Vec::new(),
             preserves_unique: vec![],
             results: vec![UniqueResultRow::Root],
         },
         UniqueSummary {
+            nonretaining: Vec::new(),
             preserves_unique: vec![],
             results: vec![UniqueResultRow::Tuple(0)],
         },
         UniqueSummary {
+            nonretaining: Vec::new(),
             preserves_unique: vec![],
             results: vec![UniqueResultRow::Payload {
                 variant: 0,

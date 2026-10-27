@@ -2,6 +2,8 @@
 use super::*;
 use hirsel_types::{SignatureRef, UniqueInference, UniqueSummary};
 use std::collections::BTreeMap;
+#[path = "private_unique/nonretention.rs"]
+mod nonretention;
 
 struct Assumed<'a> {
     provider: &'a mut dyn SignatureProvider,
@@ -49,6 +51,7 @@ pub(super) fn infer(
             continue;
         };
         header.metadata.inferred_unique = UniqueSummary {
+            nonretaining: Vec::new(),
             preserves_unique: f
                 .parameters
                 .iter()
@@ -154,6 +157,7 @@ pub(super) fn infer(
             }
         }
     }
+    nonretention::infer(t, bodies, &mut headers, provider)?;
     Ok(headers
         .into_iter()
         .map(|(id, header)| {

@@ -384,6 +384,22 @@ impl LoweringPhase for LowerAdapter {
             &comptime.materialized,
         )?;
         value.inferred_unique = signature.metadata.inferred_unique.clone();
+        let entry = &mut value.bodies[value.entry.0 as usize];
+        entry
+            .scoped_parameters
+            .extend(
+                signature
+                    .metadata
+                    .inferred_unique
+                    .nonretaining
+                    .iter()
+                    .map(|p| hirsel_tir::ScopedParameter {
+                        parameter: p.0,
+                        fields: Vec::new(),
+                    }),
+            );
+        entry.scoped_parameters.sort();
+        entry.scoped_parameters.dedup();
         Ok(QueryOutput {
             value,
             diagnostics: vec![],

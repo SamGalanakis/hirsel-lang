@@ -86,7 +86,7 @@ fn encode_signature(
         hirsel_syntax::Visibility::Public => "public",
         hirsel_syntax::Visibility::PublicOpaque => "opaque",
     });
-    if !inferred_unique.is_empty() {
+    if !inferred_unique.preserves_unique.is_empty() || !inferred_unique.results.is_empty() {
         e.tag("private-unique-v1");
         e.number(inferred_unique.preserves_unique.len() as u64);
         for parameter in &inferred_unique.preserves_unique {
@@ -106,6 +106,13 @@ fn encode_signature(
                     e.number(*field as u64);
                 }
             }
+        }
+    }
+    if !inferred_unique.nonretaining.is_empty() {
+        e.tag("private-nonretaining-v1");
+        e.number(inferred_unique.nonretaining.len() as u64);
+        for parameter in &inferred_unique.nonretaining {
+            e.number(parameter.0 as u64);
         }
     }
     e.boolean(*alias);

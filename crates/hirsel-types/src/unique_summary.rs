@@ -1,4 +1,4 @@
-//! Body-derived evidence at same-module direct calls (MODE-2). These facts
+//! Body-derived uniqueness and nonretention at same-module direct calls. These facts
 //! never participate in a callable type or variance.
 use crate::ParamId;
 
@@ -17,10 +17,14 @@ pub enum UniqueResultRow {
 pub struct UniqueSummary {
     pub preserves_unique: Vec<ParamId>,
     pub results: Vec<UniqueResultRow>,
+    /// Borrowed data parameters whose content never escapes the invocation.
+    /// Private module inference proposes these; V and C check the bodies.
+    #[serde(default)]
+    pub nonretaining: Vec<ParamId>,
 }
 impl UniqueSummary {
     pub fn is_empty(&self) -> bool {
-        self.preserves_unique.is_empty() && self.results.is_empty()
+        self.preserves_unique.is_empty() && self.results.is_empty() && self.nonretaining.is_empty()
     }
 }
 

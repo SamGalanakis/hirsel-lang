@@ -8,7 +8,10 @@ use crate::{
 };
 use hirsel_codec::snapshot_struct;
 use hirsel_syntax::{ContentHash, DefPath};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct LinkageRecord {
@@ -19,6 +22,7 @@ pub(super) struct LinkageRecord {
     abi: ContentHash,
     scoped: ContentHash,
     entries: Vec<Entry>,
+    data: bool,
 }
 snapshot_struct!(LinkageRecord {
     definition,
@@ -27,7 +31,8 @@ snapshot_struct!(LinkageRecord {
     stage,
     abi,
     scoped,
-    entries
+    entries,
+    data
 });
 #[derive(Clone, Debug)]
 struct Target {
@@ -43,6 +48,7 @@ struct Entry {
     target: Option<Target>,
     direct: bool,
     arena: bool,
+    data: bool,
     abi: ContentHash,
     scoped: ContentHash,
 }
@@ -50,6 +56,7 @@ snapshot_struct!(Entry {
     target,
     direct,
     arena,
+    data,
     abi,
     scoped
 });
@@ -94,6 +101,12 @@ impl LinkageRecord {
             let (symbol, direct) = match call.callee {
                 Callee::Direct(symbol) => (Some(symbol), true),
                 Callee::Bound { code, .. } => (Some(code), false),
+                Callee::Indirect(_)
+                    if abi.result_arena.is_some()
+                        || super::scoped_transport::has_data_paths(abi, table) =>
+                {
+                    (None, false)
+                }
                 _ if abi.result_arena.is_some() => (None, false),
                 _ => continue,
             };
@@ -105,6 +118,7 @@ impl LinkageRecord {
                 target: selected,
                 direct,
                 arena: abi.result_arena.is_some(),
+                data: super::scoped_transport::has_data_paths(abi, table),
                 abi: keys.fn_abi(abi),
                 scoped: scoped(abi),
             });
@@ -120,10 +134,34 @@ impl LinkageRecord {
                 target: Some(target(unit.tables.symbols.get(code.symbol.index())?)),
                 direct: false,
                 arena: false,
+                data: super::scoped_transport::has_data_paths(abi, table),
                 abi: keys.fn_abi(abi),
                 scoped: scoped(abi),
             });
         }
+        let data_capture = own.nonretaining_captures.iter().any(|p| {
+            let layout = unit
+                .captures
+                .get(p.parameter as usize)
+                .map(|v| unit.types[unit.values[v.index()].ty.index()].layout)
+                .and_then(|layout| {
+                    p.fields.iter().try_fold(layout, |layout, field| {
+                        table
+                            .layouts
+                            .get(layout.0 as usize)?
+                            .fields
+                            .iter()
+                            .find(|f| f.ordinal == *field)
+                            .map(|f| f.layout)
+                    })
+                });
+            layout.is_some_and(|layout| {
+                !matches!(
+                    table.layouts[layout.0 as usize].kind,
+                    crate::layout_types::LayoutKind::Callable { .. }
+                )
+            })
+        });
         Some(Self {
             definition: unit.header.definition.clone(),
             instance: unit.header.instance,
@@ -132,6 +170,7 @@ impl LinkageRecord {
             abi: keys.fn_abi(own),
             scoped: scoped(own),
             entries,
+            data: super::scoped_transport::has_data_paths(own, table) || data_capture,
         })
     }
     pub(super) fn checked(&self) -> CheckedLinkage {
@@ -195,6 +234,9 @@ pub fn check_arena_scoped_links(units: &[CheckedLinkage]) -> Result<(), String> 
                     return Err("call forges its result arena".into());
                 }
             }
+            if entry.data && entry.target.is_some() && target.is_none() {
+                return Err("nonretaining data callee body absent".into());
+            }
             if let Some(target) = target
                 && target.scoped != entry.scoped
             {
@@ -202,7 +244,70 @@ pub fn check_arena_scoped_links(units: &[CheckedLinkage]) -> Result<(), String> 
             }
         }
     }
+    check_data(&units.iter().map(|u| &*u.record).collect::<Vec<_>>())
+}
+
+/// Opaque C products retain the same dependency equations as full-body linking.
+/// Local C proves each root cannot reach a sink assuming its callees. Start
+/// with no proved bodies: declarations on a cycle cannot prove each other.
+fn check_data(units: &[&LinkageRecord]) -> Result<(), String> {
+    let targets: BTreeMap<_, _> = units
+        .iter()
+        .enumerate()
+        .map(|(i, u)| ((&u.definition, u.instance), i))
+        .collect();
+    let mut dependencies = BTreeMap::new();
+    for (i, unit) in units.iter().enumerate().filter(|(_, u)| u.data) {
+        let mut required = BTreeSet::new();
+        for entry in &unit.entries {
+            if entry.data && entry.target.is_none() {
+                return Err("indirect data nonretention has no checked body".into());
+            }
+            let target = entry.target.as_ref().and_then(|symbol| {
+                symbol
+                    .instance
+                    .and_then(|instance| targets.get(&(&symbol.definition, instance)))
+            });
+            if let Some(&target) = target {
+                if units[target].data {
+                    required.insert(target);
+                }
+            } else if entry.data {
+                return Err("nonretaining data callee body absent".into());
+            }
+        }
+        dependencies.insert(i, required);
+    }
+    let mut proved = BTreeSet::new();
+    loop {
+        let before = proved.len();
+        for (&body, callees) in &dependencies {
+            if callees.is_subset(&proved) {
+                proved.insert(body);
+            }
+        }
+        if proved.len() == before {
+            break;
+        }
+    }
+    if let Some((&body, _)) = dependencies.iter().find(|(body, _)| !proved.contains(body)) {
+        return Err(format!(
+            "{} has unproved cyclic data nonretention",
+            units[body].definition.0.name
+        ));
+    }
     Ok(())
+}
+
+pub(super) fn check_data_calls<S: Stage>(
+    units: &[crate::ir::LirUnit<S>],
+    table: &LayoutTable,
+) -> Result<(), String> {
+    let records = units
+        .iter()
+        .map(|u| LinkageRecord::observe(u, table).ok_or("nonretaining linkage unavailable"))
+        .collect::<Result<Vec<_>, _>>()?;
+    check_data(&records.iter().collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -295,6 +400,58 @@ mod tests {
         let new = check_arena_scoped_links(&observations).is_ok();
         assert_eq!(old, expected, "original {label}");
         assert_eq!(new, old, "observed {label}");
+    }
+    #[test]
+    fn compact_data_dependencies_refuse_missing_cyclic_and_indirect_proofs() {
+        // The local C sink proof is separate. These raw observations exercise
+        // the compact module equations and their durable field encoding.
+        let (units, table) = pair(None);
+        let mut records = units
+            .iter()
+            .map(|u| LinkageRecord::observe(u, &table).unwrap())
+            .collect::<Vec<_>>();
+        for record in &mut records {
+            record.data = true;
+        }
+        records[0].entries[0].data = true;
+        let check = |records: &[LinkageRecord]| {
+            check_arena_scoped_links(
+                &records
+                    .iter()
+                    .map(LinkageRecord::checked)
+                    .collect::<Vec<_>>(),
+            )
+        };
+        check(&records).unwrap();
+        assert!(check(&records[..1]).unwrap_err().contains("body absent"));
+        let mut back = records[0].entries[0].clone();
+        back.target = Some(Target {
+            definition: records[0].definition.clone(),
+            instance: Some(records[0].instance),
+        });
+        records[1].entries.push(back);
+        assert!(
+            check(&records)
+                .unwrap_err()
+                .contains("unproved cyclic data nonretention")
+        );
+        for record in &mut records {
+            let encoded = hirsel_codec::to_text(record);
+            *record = hirsel_codec::from_text(&encoded).unwrap();
+        }
+        assert!(
+            check(&records)
+                .unwrap_err()
+                .contains("unproved cyclic data nonretention")
+        );
+        records[1].entries[0].target = None;
+        assert!(
+            check(&records)
+                .unwrap_err()
+                .contains("indirect data nonretention")
+        );
+        records[1].entries.clear();
+        check(&records).unwrap();
     }
     #[test]
     fn observations_preserve_arena_and_heap_scoped_link_outcomes() {

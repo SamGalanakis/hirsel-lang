@@ -3,8 +3,8 @@ use super::*;
 
 #[test]
 fn sealed_regions_33_combined_format_refuses_each_previous_identity() {
-    assert_eq!(TIR_VERSION, 15);
-    assert_eq!(FORMAT, "hirsel.tir.export.v15");
+    assert_eq!(TIR_VERSION, 16);
+    assert_eq!(FORMAT, "hirsel.tir.export.v16");
     let environment = Environment {
         interface_version: 1,
         compiler_version: "combined-depth-grant-format-control".into(),
@@ -31,7 +31,7 @@ fn sealed_regions_33_combined_format_refuses_each_previous_identity() {
     assert_eq!(export(&accepted.to_input()), text);
     let header = format!("(Header \"{FORMAT}\" {TIR_VERSION}\n");
     assert_eq!(text.matches(&header).count(), 1);
-    for previous in [11, 12, 13, 14] {
+    for previous in [11, 12, 13, 14, 15] {
         for (format, version, at) in [
             (
                 format!("hirsel.tir.export.v{previous}"),
@@ -133,6 +133,7 @@ fn private_uniqueness_rows_round_trip_without_entering_callable_types() {
     let types = TypeInterner::new(None);
     let locator: Locator = Rc::new(|_| Location::unknown());
     let summary = UniqueSummary {
+        nonretaining: vec![ParamId(1)],
         preserves_unique: vec![ParamId(0), ParamId(2)],
         results: vec![
             UniqueResultRow::Root,

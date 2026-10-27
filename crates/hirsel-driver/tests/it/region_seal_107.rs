@@ -36,6 +36,11 @@ fn sealed_aggregate_inline_121_runs_on_four_engines_and_replays() {
     run_sealed_program("MEM-4-sealed-aggregate-inline-run.hir");
 }
 
+#[test]
+fn sealed_aggregate_roots_133_runs_on_four_engines_and_replays() {
+    run_sealed_program("MEM-4-sealed-aggregate-roots-run.hir");
+}
+
 fn run_sealed_program(name: &str) {
     with_compiler_stack(|| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

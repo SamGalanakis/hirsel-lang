@@ -725,20 +725,23 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
 
 /// Link every contract claim to the actual physical definition, including
 /// recursive groups. Callers must also run per-unit C on every member.
-pub fn check_calls<S>(units: &[LirUnit<S>], layouts: &crate::LayoutTable) -> Result<(), String> {
+pub fn check_calls<S: Stage>(
+    units: &[LirUnit<S>],
+    layouts: &crate::LayoutTable,
+) -> Result<(), String> {
     let identities = entry_identities(layouts);
     check_links(units, layouts, Some(&identities))
 }
 /// Link consistency for ordinary heap code. Missing bodies supply no scoped
 /// proof, but retain existing foreign/bodyless acceptance. Qualification uses
 /// `check_calls` and requires each contracted body.
-pub fn check_heap_links<S>(
+pub fn check_heap_links<S: Stage>(
     units: &[LirUnit<S>],
     layouts: &crate::LayoutTable,
 ) -> Result<(), String> {
     check_links(units, layouts, None)
 }
-fn check_links<S>(
+fn check_links<S: Stage>(
     units: &[LirUnit<S>],
     layouts: &crate::LayoutTable,
     identities: Option<&[hirsel_syntax::ContentHash]>,
@@ -777,7 +780,7 @@ fn check_links<S>(
                 .instance
                 .and_then(|i| targets.get(&(&symbol.definition, i)));
             let Some(target) = target else {
-                if !require_bodies
+                if !require_bodies && !has_data_paths(abi, layouts)
                     || abi.nonretaining.is_empty()
                         && abi.nonretaining_captures.is_empty()
                         && abi.scoped_entries.is_empty()
@@ -804,7 +807,30 @@ fn check_links<S>(
             }
         }
     }
+    super::linkage::check_data_calls(units, layouts)?;
     Ok(())
+}
+
+pub(super) fn has_data_paths(abi: &crate::abi_types::FnAbi, table: &crate::LayoutTable) -> bool {
+    abi.nonretaining.iter().any(|p| {
+        let layout = abi.parameters.get(p.parameter as usize).and_then(|a| {
+            p.fields.iter().try_fold(a.layout, |layout, field| {
+                table
+                    .layouts
+                    .get(layout.0 as usize)?
+                    .fields
+                    .iter()
+                    .find(|f| f.ordinal == *field)
+                    .map(|f| f.layout)
+            })
+        });
+        layout.is_some_and(|layout| {
+            !matches!(
+                table.layouts[layout.0 as usize].kind,
+                crate::layout_types::LayoutKind::Callable { .. }
+            )
+        })
+    })
 }
 
 /// Check a complete physical module for future scoped-proof consumers.

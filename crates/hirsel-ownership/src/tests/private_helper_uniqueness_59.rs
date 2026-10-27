@@ -212,10 +212,12 @@ fn private_helper_uniqueness_59_forged_headers_are_independently_reproved() {
     with_compiler_stack(|| {
         use hirsel_types::{ParamId, UniqueSummary};
         let preservation = UniqueSummary {
+            nonretaining: Vec::new(),
             preserves_unique: vec![ParamId(0)],
             results: vec![],
         };
         let root = UniqueSummary {
+            nonretaining: Vec::new(),
             preserves_unique: vec![],
             results: vec![UniqueResultRow::Root],
         };
