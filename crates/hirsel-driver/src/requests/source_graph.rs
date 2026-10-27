@@ -175,6 +175,9 @@ struct SourceProducts {
 
 impl GraphProducts for SourceProducts {
     fn accepts(&self, operation: &CompileOperation) -> bool {
+        if self.declaration_export {
+            return matches!(operation, CompileOperation::DataAbi) && self.native_sources.is_some();
+        }
         match operation {
             CompileOperation::Check { lowering } => *lowering == self.lowering,
             CompileOperation::Expand => self.expansion.is_some(),

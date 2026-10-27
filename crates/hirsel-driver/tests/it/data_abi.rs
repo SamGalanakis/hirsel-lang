@@ -323,3 +323,32 @@ fn declaration_export_refuses_source_and_manifest_errors_without_link_inputs() {
         assert!(!fixture.root.join("geo/lib.o").exists());
     });
 }
+
+#[test]
+fn declaration_export_graph_cannot_supply_a_check_without_foreign_link_inputs() {
+    with_compiler_stack(|| {
+        use hirsel_driver::requests::{
+            CompileOperation, CompileRequest, CompileResult, CompilerRequests,
+        };
+        use hirsel_engine::requests::RequestEngine;
+        let fixture = fixture("export-graph", LIBRARY);
+        let compiler = COMPILER;
+        let mut selector = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+        let exported = selector
+            .execute(&fixture.manifest, CompileOperation::DataAbi)
+            .unwrap();
+        assert!(matches!(&exported.result, CompileResult::NativeSources(_)));
+        assert!(!fixture.root.join("geo/lib.o").exists());
+        let checked = selector.select(&CompileRequest {
+            path: fixture.manifest.clone(),
+            inputs: exported.inputs.clone(),
+            operation: CompileOperation::Check {
+                lowering: LoweringPolicy::Reachable,
+            },
+        });
+        assert!(
+            checked.is_err(),
+            "declaration-only discovery authorized a check with missing link inputs"
+        );
+    });
+}
