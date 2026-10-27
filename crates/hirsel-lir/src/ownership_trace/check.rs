@@ -62,6 +62,9 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
     recipe: Option<&Recipe>,
 ) -> Result<CheckedPlan<'a>, Error> {
     let input = check(before, input)?;
+    if input.plan.selection != output.selection {
+        return Err(Error::ChangedSelection);
+    }
     if before.header.definition != after.header.definition
         || before.header.target != after.header.target
         || before.header.abi != after.header.abi

@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 mod calls;
 mod edges;
 mod runtime_calls;
+mod selection;
 use runtime_calls::{resource_free_handle, runtime_call};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
@@ -56,7 +57,7 @@ pub struct LeafPlan {
 }
 impl LeafPlan {
     pub fn prepare(unit: &ValidatedUnit<Ready>, layouts: &LayoutTable) -> Result<Self, String> {
-        Self::from_unit(unit.unit(), layouts, false, true)
+        Self::from_unit(unit.unit(), layouts, false, true, Selection::Owned)
     }
 
     /// Initial observations precede placement, RC insertion and cleanup. The
@@ -68,7 +69,7 @@ impl LeafPlan {
         unit: &ValidatedUnit<crate::stage::Value>,
         layouts: &LayoutTable,
     ) -> Result<Plan, String> {
-        Self::from_unit(unit.unit(), layouts, true, false).map(|plan| plan.plan)
+        Self::from_unit(unit.unit(), layouts, true, false, Selection::Owned).map(|plan| plan.plan)
     }
 
     /// Build an original program plan including incoming callable custody.
@@ -78,7 +79,18 @@ impl LeafPlan {
         unit: &ValidatedUnit<crate::stage::Value>,
         layouts: &LayoutTable,
     ) -> Result<Plan, String> {
-        Self::from_unit(unit.unit(), layouts, true, true).map(|plan| plan.plan)
+        Self::from_unit(unit.unit(), layouts, true, true, Selection::Owned).map(|plan| plan.plan)
+    }
+
+    /// Source resource diagnostics do not create Resource identities for
+    /// ordinary reference-counted data. Generic native Owned clients retain
+    /// their original selection and must request it independently at emission.
+    pub fn prepare_resources_value_for_program(
+        unit: &ValidatedUnit<crate::stage::Value>,
+        layouts: &LayoutTable,
+    ) -> Result<Plan, String> {
+        Self::from_unit(unit.unit(), layouts, true, true, Selection::Resources)
+            .map(|plan| plan.plan)
     }
 
     fn from_unit<S: crate::stage::Stage>(
@@ -86,9 +98,14 @@ impl LeafPlan {
         layouts: &LayoutTable,
         source_only: bool,
         program: bool,
+        selection: Selection,
     ) -> Result<Self, String> {
         let owned = |v: ValueId| {
             unit.values[v.index()].holding == Holding::Owned
+                && selection.tracks_layout(
+                    layouts,
+                    unit.types[unit.values[v.index()].ty.index()].layout,
+                )
                 && !resource_free_handle(
                     layouts,
                     unit.types[unit.values[v.index()].ty.index()].layout,
@@ -221,7 +238,8 @@ impl LeafPlan {
                         Location::Value(value),
                         layout(value),
                     )?;
-                } else if !resource_free_handle(layouts, layout(value))
+                } else if selection.tracks_layout(layouts, layout(value))
+                    && !resource_free_handle(layouts, layout(value))
                     && layouts
                         .fn_abis
                         .get(unit.header.abi.0 as usize)
@@ -416,7 +434,10 @@ impl LeafPlan {
                         )?;
                     }
                     Inst::Drop { address, .. }
-                        if resource_free_handle(
+                        if !selection.tracks_layout(
+                            layouts,
+                            unit.types[unit.addresses[address.index()].ty.index()].layout,
+                        ) || resource_free_handle(
                             layouts,
                             unit.types[unit.addresses[address.index()].ty.index()].layout,
                         ) || plain(
@@ -491,6 +512,7 @@ impl LeafPlan {
                     | Inst::BindFields { .. }
                     | Inst::EndOrigin { .. } => (),
                     Inst::Const { .. }
+                    | Inst::ReadStatic { .. }
                     | Inst::FunctionRef { .. }
                     | Inst::Unary { .. }
                     | Inst::Binary { .. }
@@ -528,7 +550,7 @@ impl LeafPlan {
                 Terminator::Call { call, normal, .. } => {
                     let call = &unit.tables.calls[call.index()];
                     if matches!(call.callee, Callee::Operation(_)) {
-                        runtime_call(unit, layouts, call, None, None)?;
+                        runtime_call(unit, layouts, selection, call, None, None)?;
                         if let Some(value) = runtime_calls::spawn_parameter(unit, call) {
                             push(
                                 Point::CallEntered(b),
@@ -687,7 +709,7 @@ impl LeafPlan {
                 )?;
             }
         }
-        let plan = Plan::new(unit, observations);
+        let plan = Plan::selected(unit, selection, observations);
         check(unit, &plan).map_err(|error| error.to_string())?;
         let commits = if source_only {
             Vec::new()
@@ -720,7 +742,7 @@ impl LeafPlan {
     ) -> Result<Self, String> {
         let body = unit.unit();
         let checked = check(body, plan).map_err(|error| error.to_string())?;
-        let expected = Self::prepare(unit, layouts)?;
+        let expected = Self::from_unit(body, layouts, false, true, plan.selection)?;
         let mut covered = std::collections::BTreeSet::new();
         let mut markers = BTreeMap::new();
         let mut commits = vec![];
@@ -1394,6 +1416,7 @@ fn leaf(table: &LayoutTable, id: LayoutId) -> bool {
 pub enum Request<'a> {
     Leaf,
     Relocated(&'a BTreeMap<ContentHash, Plan>),
+    Resources(&'a BTreeMap<ContentHash, Plan>),
 }
 impl Request<'_> {
     /// One complete closed set, keyed by current unit digests. Supplying a
@@ -1405,8 +1428,12 @@ impl Request<'_> {
     ) -> Result<BTreeMap<ContentHash, LeafPlan>, String> {
         local_calls(units)?;
         let codes = calls::closed_runtime(units)?;
-        let empty = runtime_calls::empty_callables(units, layouts, &codes);
-        if let Self::Relocated(plans) = self
+        let selection = match self {
+            Self::Resources(_) => Selection::Resources,
+            _ => Selection::Owned,
+        };
+        let empty = runtime_calls::empty_callables(units, layouts, selection, &codes);
+        if let Self::Relocated(plans) | Self::Resources(plans) = self
             && plans.len() != units.len()
         {
             return Err("ownership emission requires exactly one plan per unit".into());
@@ -1416,7 +1443,7 @@ impl Request<'_> {
             let body = unit.unit();
             let mut plan = match self {
                 Self::Leaf => LeafPlan::prepare(unit, layouts)?,
-                Self::Relocated(plans) => LeafPlan::from_relocated(
+                Self::Relocated(plans) | Self::Resources(plans) => LeafPlan::from_relocated(
                     unit,
                     layouts,
                     plans
@@ -1424,11 +1451,15 @@ impl Request<'_> {
                         .ok_or("ownership emission is missing a transported plan")?,
                 )?,
             };
+            if plan.plan.selection != selection {
+                return Err("ownership emission selection differs from request".into());
+            }
             for call in &body.tables.calls {
                 if matches!(call.callee, Callee::Operation(_)) {
                     runtime_call(
                         body,
                         layouts,
+                        selection,
                         call,
                         Some(&codes[index]),
                         Some(&empty[index]),
@@ -1473,13 +1504,13 @@ impl Request<'_> {
     pub fn fingerprint(self) -> Option<ContentHash> {
         match self {
             Self::Leaf => None,
-            Self::Relocated(plans) => {
+            Self::Relocated(plans) | Self::Resources(plans) => {
                 let identities: Vec<_> = plans
                     .iter()
                     .map(|(unit, plan)| {
                         (
                             *unit,
-                            hirsel_codec::digest("hirsel.ownership-plan.v4", "Plan", plan),
+                            hirsel_codec::digest("hirsel.ownership-plan.v5", "Plan", plan),
                         )
                     })
                     .collect();

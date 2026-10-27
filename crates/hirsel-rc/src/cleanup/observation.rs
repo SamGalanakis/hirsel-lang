@@ -133,7 +133,7 @@ impl Reporter for Observations {
     fn versions(&mut self, ed: &Editor<Ready>, before: bool) -> Result<(), PassError> {
         let unit = snapshot(ed);
         if before {
-            let plan = Plan::new(&unit, self.plan.observations.clone());
+            let plan = Plan::selected(&unit, self.plan.selection, self.plan.observations.clone());
             trace::check(&unit, &plan).map_err(refused)?;
             self.versions = Some((unit, plan));
         } else {
@@ -282,7 +282,7 @@ impl Reporter for Observations {
     }
     fn finish(self, ed: Editor<Ready>) -> Result<(LirUnit<Ready>, Plan), PassError> {
         let before = snapshot(&ed);
-        let plan = Plan::new(&before, self.plan.observations);
+        let plan = Plan::selected(&before, self.plan.selection, self.plan.observations);
         let origins: Vec<Vec<Option<u32>>> = ed
             .code
             .iter()

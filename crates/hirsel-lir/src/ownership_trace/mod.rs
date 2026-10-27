@@ -31,7 +31,7 @@ mod finalizer;
 pub mod native;
 mod staged;
 
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -183,25 +183,44 @@ pub struct Observation {
 }
 snapshot_struct!(Observation { point, marker });
 
+/// Immutable diagnostic selection. Generic native clients retain Owned;
+/// source resource tracing selects Resources before the first compiler pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Selection {
+    Owned,
+    Resources,
+}
+snapshot_enum!(Selection { Owned, Resources });
+
 /// Raw, separately encoded diagnostic input. Decoding grants no authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plan {
     pub version: u32,
     pub unit: ContentHash,
+    pub selection: Selection,
     pub observations: Vec<Observation>,
 }
 snapshot_struct!(Plan {
     version,
     unit,
+    selection,
     observations
 });
 
 impl Plan {
     /// Called only by an explicitly enabled trace producer.
     pub fn new<S: Stage>(unit: &LirUnit<S>, observations: Vec<Observation>) -> Self {
+        Self::selected(unit, Selection::Owned, observations)
+    }
+    pub fn selected<S: Stage>(
+        unit: &LirUnit<S>,
+        selection: Selection,
+        observations: Vec<Observation>,
+    ) -> Self {
         Self {
             version: VERSION,
             unit: unit.digest(),
+            selection,
             observations,
         }
     }
@@ -323,6 +342,7 @@ pub enum Error {
     MissingRecipe,
     StaleRecipe,
     ChangedUnit,
+    ChangedSelection,
     DuplicateMarker(MarkerId),
     DuplicateObservation(MarkerId),
     DuplicateRelocation(MarkerId),

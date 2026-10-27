@@ -63,6 +63,7 @@ pub(super) fn spawn_parameter<S>(unit: &LirUnit<S>, call: &CallSite) -> Option<V
 pub(super) fn runtime_call<S>(
     unit: &LirUnit<S>,
     layouts: &LayoutTable,
+    selection: Selection,
     call: &CallSite,
     codes: Option<&[calls::Code]>,
     empty: Option<&[bool]>,
@@ -70,6 +71,7 @@ pub(super) fn runtime_call<S>(
     let carried = |value: ValueId| {
         let info = &unit.values[value.index()];
         info.holding == Holding::Owned
+            && selection.tracks_layout(layouts, unit.types[info.ty.index()].layout)
             && !resource_free_handle(layouts, unit.types[info.ty.index()].layout)
     };
     if call.pretransfer_failure.is_some() || call.result.is_some_and(carried) {
@@ -112,7 +114,8 @@ pub(super) fn runtime_call<S>(
             }
             ArgumentValue::Value(value) => {
                 let layout = unit.types[unit.values[value.index()].ty.index()].layout;
-                let inert = plain(layouts, layout, 0)
+                let inert = !selection.tracks_layout(layouts, layout)
+                    || plain(layouts, layout, 0)
                     || resource_free_handle(layouts, layout)
                     || layouts.layout(layout).is_some_and(|record| {
                         matches!(record.kind, LayoutKind::HostCapability { .. })
@@ -125,7 +128,10 @@ pub(super) fn runtime_call<S>(
                 }
             }
             ArgumentValue::Address { address, .. }
-                if !resource_free_handle(
+                if selection.tracks_layout(
+                    layouts,
+                    unit.types[unit.addresses[address.index()].ty.index()].layout,
+                ) && !resource_free_handle(
                     layouts,
                     unit.types[unit.addresses[address.index()].ty.index()].layout,
                 ) && !plain(
@@ -237,6 +243,7 @@ mod tests {
 pub(super) fn empty_callables(
     units: &[&ValidatedUnit<Ready>],
     layouts: &LayoutTable,
+    selection: Selection,
     codes: &[Vec<calls::Code>],
 ) -> Vec<Vec<bool>> {
     let symbols = units
@@ -251,6 +258,7 @@ pub(super) fn empty_callables(
         target: &calls::Target,
         units: &[&ValidatedUnit<Ready>],
         layouts: &LayoutTable,
+        selection: Selection,
         codes: &[Vec<calls::Code>],
         symbols: &BTreeMap<(&hirsel_syntax::DefPath, ContentHash), usize>,
         active: &mut BTreeSet<usize>,
@@ -290,15 +298,16 @@ pub(super) fn empty_callables(
             if layout != field.layout {
                 return false;
             }
-            plain(layouts, layout, 0)
+            !selection.tracks_layout(layouts, layout)
+                || plain(layouts, layout, 0)
                 || resource_free_handle(layouts, layout)
                 || (body.types[body.values[value.index()].ty.index()].repr == ValueRepr::Callable
                     && codes[index][value.index()]
                         .targets()
                         .is_some_and(|targets| {
-                            targets
-                                .iter()
-                                .all(|target| empty(target, units, layouts, codes, symbols, active))
+                            targets.iter().all(|target| {
+                                empty(target, units, layouts, selection, codes, symbols, active)
+                            })
                         }))
         });
         active.remove(&index);
@@ -315,6 +324,7 @@ pub(super) fn empty_callables(
                                 target,
                                 units,
                                 layouts,
+                                selection,
                                 codes,
                                 &symbols,
                                 &mut BTreeSet::new(),

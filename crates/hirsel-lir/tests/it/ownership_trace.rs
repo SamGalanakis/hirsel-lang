@@ -4503,3 +4503,76 @@ fn ownership_mutable_actual_formal_relation_survives_recipes_and_rejects_forgery
         }
     );
 }
+
+#[test]
+fn ownership_resource_selection_is_immutable_and_reproved_by_native_requests() {
+    use hirsel_lir::stage::Value;
+    for layout in [l::BLK, l::RES] {
+        let mut t = Lir::<Value>::new(&[(Passing::Take, layout)], Some(layout));
+        let value = t.owned(layout);
+        t.param(value);
+        t.builder.ret(ENTRY, Some(value));
+        let (unit, table, _) = t.finish();
+        let unit = checked_native_fixture(unit, &table);
+        let owned = native::LeafPlan::prepare_value_for_program(&unit, &table).unwrap();
+        assert_eq!(owned.selection, Selection::Owned);
+        assert_eq!(owned.observations.len(), 2);
+        let plan = native::LeafPlan::prepare_resources_value_for_program(&unit, &table).unwrap();
+        assert_eq!(plan.selection, Selection::Resources);
+        assert_eq!(
+            plan.observations.len(),
+            if layout == l::RES { 2 } else { 0 }
+        );
+        let mut changed = plan.clone();
+        changed.selection = Selection::Owned;
+        assert_eq!(
+            check_transform(
+                unit.unit(),
+                &plan,
+                unit.unit(),
+                &changed,
+                Some(&recipe(&plan, &changed))
+            )
+            .unwrap_err(),
+            Error::ChangedSelection
+        );
+        let decoded: Plan = hirsel_codec::from_text(&hirsel_codec::to_text(&plan)).unwrap();
+        assert_eq!(plan, decoded);
+        let index = hirsel_lir::LayoutIndex::new(&table);
+        let placement = hirsel_rc::placement::Options::default();
+        let proofs = hirsel_rc::insert::Proofs::default();
+        let reuse = hirsel_rc::reuse::Options::default();
+        let finalizers = Default::default();
+        let output = hirsel_rc::observed::lower(
+            unit.into_raw(),
+            &plan,
+            &index,
+            &hirsel_rc::observed::Options {
+                placement: &placement,
+                proofs: &proofs,
+                elide: true,
+                reuse: &reuse,
+                finalizers: &finalizers,
+            },
+        )
+        .unwrap();
+        assert_eq!(output.recipes.len(), 10);
+        assert_eq!(output.plan.selection, Selection::Resources);
+        let ready = checked_native_fixture(output.unit, &table);
+        let plans =
+            std::collections::BTreeMap::from([(ready.unit().digest(), output.plan.clone())]);
+        native::Request::Resources(&plans)
+            .prepare(&[&ready], &table)
+            .unwrap();
+        assert!(
+            native::Request::Relocated(&plans)
+                .prepare(&[&ready], &table)
+                .is_err()
+        );
+        if layout == l::RES {
+            let mut missing = output.plan;
+            missing.observations.clear();
+            assert!(native::LeafPlan::from_relocated(&ready, &table, &missing).is_err());
+        }
+    }
+}
