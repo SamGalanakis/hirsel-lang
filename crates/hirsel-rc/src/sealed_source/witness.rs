@@ -268,6 +268,66 @@ impl SourceDeclarations {
 }
 
 impl OperationDeclarations for SourceDeclarations {
+    fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
+        self.registry.pretransfer_adapters()
+    }
+    fn requires_structural_reference(&self) -> bool {
+        self.registry.requires_structural_reference()
+    }
+    fn structural_access(
+        &self,
+        root: &NativeType,
+        layouts: &hirsel_lir::LayoutTable,
+        target: &hirsel_lir::TargetSpec,
+    ) -> Result<hirsel_lir::structural_access::AccessPlan, hirsel_lir::layout::LayoutError> {
+        self.registry.structural_access(root, layouts, target)
+    }
+    fn requires_invocation_reference(&self) -> bool {
+        self.registry.requires_invocation_reference()
+    }
+    fn invocations(
+        &self,
+        definition: &DefPath,
+    ) -> Option<&[hirsel_lir::invocations::ReferenceInvocation]> {
+        self.registry.invocations(definition)
+    }
+    fn invocation_body(&self, definition: &DefPath, instance: ContentHash) -> Option<u32> {
+        self.registry.invocation_body(definition, instance)
+    }
+    fn seal_descriptor(
+        &self,
+        root: &NativeType,
+        layouts: &hirsel_lir::LayoutTable,
+        target: &hirsel_lir::TargetSpec,
+    ) -> Result<hirsel_lir::sealed::SealDescriptor, hirsel_lir::layout::LayoutError> {
+        self.registry.seal_descriptor(root, layouts, target)
+    }
+
+    fn seal_descriptor_for_source(
+        &self,
+        definition: &DefPath,
+        instance: ContentHash,
+        root: &NativeType,
+        layouts: &hirsel_lir::LayoutTable,
+        target: &hirsel_lir::TargetSpec,
+    ) -> Result<hirsel_lir::sealed::SealDescriptor, hirsel_lir::layout::LayoutError> {
+        let selected = self
+            .sources
+            .get(&(definition.clone(), instance))
+            .is_some_and(|source| {
+                source.payloads.iter().any(|payload| {
+                    &payload.root_type == root
+                        || payload.recipe.inputs.iter().any(|input| &input.ty == root)
+                }) || source.events.iter().any(|event| &event.root_type == root)
+            });
+        if !selected {
+            return Err(hirsel_lir::layout::LayoutError::Invalid(
+                "missing original source storage type".into(),
+            ));
+        }
+        self.registry.seal_descriptor(root, layouts, target)
+    }
+
     fn pretransfer_abi(
         &self,
         reference: &hirsel_lir::pretransfer::AdapterReference,
