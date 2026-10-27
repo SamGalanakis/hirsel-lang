@@ -197,3 +197,66 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         );
     }
 }
+#[test]
+fn batch_backing_cap_stops_mapper_and_replays_the_stop() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    fs::write(
+        root.join("main.hir"),
+        r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let _ = core@1/cpu.map_scoped(tasks, 1u32,
+    fn() -> List[u64] uses {} { [1] },
+    fn(take job: u64) -> u64 uses {} {
+      let mut storage: List[u64] = []
+      list.reserve(mut storage, 2000000)
+      job + list.len(storage)
+    })
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let manifest = root.join("hirsel.json");
+    fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_heap_cap","version":"1"},
+        "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+    let grants = root.join("grants.json");
+    fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
+        "max_workers":1,"max_domains":1,"max_physical_bytes":268435456u64,"max_batch_bytes":1048576}}}).to_string()).unwrap();
+    let executable = root.join("batch");
+    checked(
+        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["build", "--backend", "llvm"])
+            .arg(&manifest)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap(),
+    );
+    let tape = root.join("tape");
+    for args in [
+        vec![
+            "--hirsel-grants",
+            grants.to_str().unwrap(),
+            "--hirsel-record",
+            tape.to_str().unwrap(),
+        ],
+        vec!["--hirsel-replay", tape.to_str().unwrap()],
+    ] {
+        let observation = root.join("observation");
+        let result = Command::new(&executable)
+            .args(args)
+            .env("HIRSEL_RT_OBSERVATION", &observation)
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(hirsel_run_schema::exit::BUDGET_EXCEEDED),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let report = fs::read_to_string(&observation).unwrap();
+        assert!(report.contains("budget_exceeded memory"), "{report}");
+    }
+}
