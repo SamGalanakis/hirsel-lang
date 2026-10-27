@@ -1,6 +1,6 @@
 {
   "counter": "instructions:u",
   "jobs": 1,
-  "instructions": 258378687147,
-  "reason": "Initial fresh std budget measured on 627b6bbc with release compiler and reuse disabled."
+  "instructions": 200063829637,
+  "reason": "Fresh std check with selective sibling archives and request-owned verifier transport at b7abf318."
 }
