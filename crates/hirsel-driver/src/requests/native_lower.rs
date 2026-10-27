@@ -50,10 +50,58 @@ mod tests {
         *,
     };
     use hirsel_intern::jobs::Jobs;
+
+    #[derive(Default)]
+    struct EvictableVerifier {
+        contents: MemStore,
+        rows: std::sync::Mutex<BTreeMap<hirsel_syntax::ContentHash, Reference>>,
+        missing: std::sync::Mutex<Option<Reference>>,
+    }
+    impl store::Contents for EvictableVerifier {
+        fn get_content(&self, reference: Reference) -> Option<store::Bytes> {
+            if *self.missing.lock().unwrap() == Some(reference) {
+                return None;
+            }
+            self.contents.get_content(reference)
+        }
+        fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+            self.contents.put_content(domain, bytes)
+        }
+    }
+    impl hirsel_validate::VerifierRows for EvictableVerifier {
+        fn row(&self, key: hirsel_syntax::ContentHash) -> Option<Reference> {
+            self.rows.lock().unwrap().get(&key).copied()
+        }
+        fn set_row(&self, key: hirsel_syntax::ContentHash, reference: Reference) {
+            self.rows.lock().unwrap().insert(key, reference);
+        }
+    }
+    struct SelectedStore {
+        products: MemStore,
+        verifier: Arc<hirsel_validate::VerifierCache>,
+    }
+    impl ResultStore for SelectedStore {
+        fn get(&self, key: &store::EntryKey) -> Option<store::Bytes> {
+            self.products.get(key)
+        }
+        fn put(&self, key: &store::EntryKey, bytes: &[u8]) {
+            self.products.put(key, bytes);
+        }
+        fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+            Some(self.verifier.clone())
+        }
+        fn name(&self) -> &'static str {
+            "selected-native-source-test"
+        }
+    }
     #[test]
     fn native_lower_bridge_requires_the_exact_settled_product_without_running_a_controller() {
         with_compiler_stack(|| {
-            let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+            let verifier = Arc::new(EvictableVerifier::default());
+            let store: Arc<dyn ResultStore> = Arc::new(SelectedStore {
+                products: MemStore::default(),
+                verifier: Arc::new(hirsel_validate::VerifierCache::hosted(verifier.clone())),
+            });
             let mut engine = QueryEngine::new(default_environment(), crate::compiler_adapters())
                 .with_result_store(store.clone());
             let file = engine
@@ -167,7 +215,36 @@ mod tests {
             let mut crossed = selected;
             crossed.record = failure;
             assert!(bridge.products.lower_product(&main, crossed).is_err());
-            let reader = bridge.context.reader([product], store).unwrap();
+            let issued = product.verified.clone().expect("actual completed source V");
+            let reader = bridge
+                .context
+                .reader([product.clone()], store.clone())
+                .unwrap();
+            assert!(reader.read(&main).is_some());
+            *verifier.missing.lock().unwrap() = Some(issued.reference());
+            // The host evicts only V's replay bytes; the admitted ordinary
+            // Lower descriptor still names the exact original source payload.
+            let restored = reader
+                .read(&main)
+                .expect("ordinary original survives V eviction");
+            assert_eq!(restored.output(), Some(&issued));
+            assert!(!restored.verification_ran());
+            let mut changed = restored.definition().clone();
+            Arc::make_mut(&mut changed).entry = hirsel_tir::BodyId(u32::MAX);
+            let records = NativeRecords::new(
+                reader.record_context().record_types().clone(),
+                store.clone(),
+            );
+            let bytes = records
+                .encode(reader.record_context().as_ref(), &changed)
+                .unwrap();
+            let mut crossed_body = product;
+            crossed_body.body = store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap();
+            let crossed_reader = bridge.context.reader([crossed_body], store).unwrap();
+            assert!(
+                crossed_reader.read(&main).is_none(),
+                "a V output cannot rebind to changed original bytes"
+            );
             assert!(reader.input(&main).is_some());
             assert!(reader.input(&other).is_none());
             assert!(Arc::ptr_eq(reader.signatures(), &lower.signatures()));

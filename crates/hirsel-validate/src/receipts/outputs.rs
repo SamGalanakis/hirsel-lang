@@ -371,10 +371,24 @@ mod tests {
                 b"",
             )
             .unwrap();
+        assert!(output.matches_definition(
+            &definition,
+            session(),
+            |_| Some((path("main"), 0)),
+            policy,
+            &f.signatures,
+        ));
         let signature = f.signatures.get_mut(definition.path).unwrap();
         let producer = signature.fingerprint;
         signature.metadata.visibility = hirsel_syntax::Visibility::Public;
         assert_eq!(signature.fingerprint, producer);
+        assert!(!output.matches_definition(
+            &definition,
+            session(),
+            |_| Some((path("main"), 0)),
+            policy,
+            &f.signatures,
+        ));
         assert!(
             cache
                 .definition_output(policy, definition.path, &session(), policy, &f.signatures)
@@ -572,6 +586,26 @@ impl VerifiedDefinitionOutput {
             source: self.observation_identity(),
             facts: self.invocations.clone(),
         }
+    }
+    /// Rebind an already issued V output to an independently supplied original
+    /// after its replay bytes were evicted. Exact canonical artifact identity,
+    /// current private observations and policy are all checked here. Content
+    /// alone cannot create this opaque output or replace its authority.
+    pub fn matches_definition(
+        &self,
+        definition: &hirsel_tir::DefinitionRef,
+        types: Arc<TypeInterner>,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+    ) -> bool {
+        self.owner == definition.path
+            && self.policy == policy
+            && self
+                .reads
+                .iter()
+                .all(|read| crate::input::read_holds_for_types(&types, read, signatures))
+            && Artifact::new(definition, types, owner).identity == Some(self.artifact)
     }
     /// Query metadata remains producer data; the query owner checks it.
     pub fn metadata(&self) -> &[u8] {
@@ -831,8 +865,14 @@ impl VerifierCache {
         if overlay.is_some() {
             return None;
         }
-        let exact = Artifact::new(&definition, types, |a| owners.get(&a).cloned());
-        (definition.path == output.owner && exact.identity == Some(output.artifact))
+        output
+            .matches_definition(
+                &definition,
+                types,
+                |anchor| owners.get(&anchor).cloned(),
+                policy,
+                signatures,
+            )
             .then_some(definition)
     }
 }

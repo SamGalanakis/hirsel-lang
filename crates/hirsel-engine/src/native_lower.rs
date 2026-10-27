@@ -66,6 +66,16 @@ impl NativeOriginalContext {
                     "settled Lower differs from its source snapshot",
                 ));
             }
+            // The request's ordinary transport outlives best-effort verifier
+            // storage. Keep its descriptor even when a V output is available.
+            ordinary.insert(
+                path.clone(),
+                OrdinarySource {
+                    reference: product.body,
+                    implementation_revision: product.implementation_revision,
+                    signature: product.signature,
+                },
+            );
             if self.reuse
                 && self.cache.is_some()
                 && let Some(output) = product.verified
@@ -74,15 +84,6 @@ impl NativeOriginalContext {
                     path,
                     Selected {
                         output,
-                        implementation_revision: product.implementation_revision,
-                        signature: product.signature,
-                    },
-                );
-            } else {
-                ordinary.insert(
-                    path,
-                    OrdinarySource {
-                        reference: product.body,
                         implementation_revision: product.implementation_revision,
                         signature: product.signature,
                     },
@@ -376,11 +377,12 @@ impl NativeOriginalReader {
         ))
     }
     pub fn has_ordinary(&self) -> bool {
-        !self.ordinary.is_empty()
+        self.ordinary
+            .keys()
+            .any(|path| !self.verified.contains(path))
     }
     pub fn read(&self, path: &DefPath) -> Option<NativeOriginalBody> {
-        if self.verified.contains(path) {
-            let body = self.verified.read(path)?;
+        if let Some(body) = self.verified.read(path) {
             return Some(NativeOriginalBody {
                 _owner: self.owner.clone(),
                 definition: body.definition,
@@ -406,7 +408,21 @@ impl NativeOriginalReader {
         {
             return None;
         }
-        let verification_ran = if self.verify == Verify::On {
+        let output = if let Some((output, _, _)) = self.verified.input(path) {
+            if !output.matches_definition(
+                &definition,
+                self.verified.anchors.record_types().clone(),
+                |anchor| self.verified.anchors.record_owner(anchor),
+                self.verified.policy,
+                self.verified.signatures.validation(&path.0.package),
+            ) {
+                return None;
+            }
+            Some(output.clone())
+        } else {
+            None
+        };
+        let verification_ran = if output.is_none() && self.verify == Verify::On {
             let _time = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
             let (report, ran, _, _) = hirsel_validate::validate_definition(
                 &definition,
@@ -431,7 +447,7 @@ impl NativeOriginalReader {
         Some(NativeOriginalBody {
             _owner: self.owner.clone(),
             definition,
-            output: None,
+            output,
             implementation_revision: source.implementation_revision,
             verification_ran,
         })
