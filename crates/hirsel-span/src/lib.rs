@@ -242,7 +242,8 @@ impl SourceFile {
 /// map at no cost.
 #[derive(Clone, Default)]
 pub struct SourceMap {
-    files: std::sync::Arc<Vec<SourceFile>>,
+    files: std::sync::Arc<Vec<std::sync::Arc<SourceFile>>>,
+    owned_files: usize,
     /// Each placed anchor's file and base offset in it.
     anchors: std::sync::Arc<BTreeMap<Anchor, (FileId, u32)>>,
     owner: Option<RetainedSourceOwner>,
@@ -281,10 +282,11 @@ impl SourceMap {
             .saturating_add(
                 self.files
                     .capacity()
-                    .saturating_mul(size_of::<SourceFile>()),
+                    .saturating_mul(size_of::<std::sync::Arc<SourceFile>>()),
             );
         for file in &*self.files {
             bytes = bytes
+                .saturating_add(arc(&**file))
                 .saturating_add(file.path.capacity())
                 .saturating_add(file.logical_path.capacity())
                 .saturating_add(arc(&*file.text))
@@ -305,20 +307,20 @@ impl SourceMap {
         });
         bytes.saturating_add((self.anchors.len() / 5 + 1).saturating_mul(node)) as u64
     }
-    /// Bound copied file-table storage before decorating a cloned snapshot, or
-    /// measure an already decorated snapshot. Includes one latest/next owner
-    /// envelope even when this map is undecorated. Text, line indices and
-    /// anchors stay shared. Excludes this inline value and supplied owner data.
+    /// Bound the copied file table and newly admitted file rows before adding
+    /// an owner. Previously owned file rows, paths, text and line indexes stay
+    /// shared across generated-source snapshots.
     pub fn retained_snapshot_metadata_bytes(&self) -> u64 {
         let mut bytes = (2 * size_of::<usize>())
-            .saturating_add(size_of::<Vec<SourceFile>>())
+            .saturating_add(size_of::<Vec<std::sync::Arc<SourceFile>>>())
             .saturating_add(
                 self.files
                     .capacity()
-                    .saturating_mul(size_of::<SourceFile>()),
+                    .saturating_mul(size_of::<std::sync::Arc<SourceFile>>()),
             );
-        for file in self.files.iter() {
+        for file in self.files.iter().skip(self.owned_files) {
             bytes = bytes
+                .saturating_add(2 * size_of::<usize>() + size_of::<SourceFile>())
                 .saturating_add(file.path.capacity())
                 .saturating_add(file.logical_path.capacity());
         }
@@ -331,16 +333,21 @@ impl SourceMap {
             .saturating_add(size_of::<(Option<Owner>, Owner)>());
         bytes as u64
     }
-    /// Retain an admitted source owner through every clone of this map or its
-    /// files. The owner changes no text, anchors, locations or debug encoding.
+    /// Retain an admission for newly added source files through map and file
+    /// clones. Existing files keep their earlier owners. Text, anchors,
+    /// locations and debug encoding are unchanged.
     /// Attach it to the external snapshot, leaving the producer's own map
     /// undecorated so the owner cannot retain itself through its sources.
     pub fn retain_owner(mut self, owner: std::sync::Arc<dyn Send + Sync>) -> Self {
         let previous = self.owner.take().map(|owner| owner.0);
         let owner = RetainedSourceOwner(std::sync::Arc::new((previous, owner)));
-        for file in std::sync::Arc::make_mut(&mut self.files) {
-            file.owner = Some(owner.clone());
+        for file in std::sync::Arc::make_mut(&mut self.files)
+            .iter_mut()
+            .skip(self.owned_files)
+        {
+            std::sync::Arc::make_mut(file).owner = Some(owner.clone());
         }
+        self.owned_files = self.files.len();
         self.owner = Some(owner);
         self
     }
@@ -349,8 +356,9 @@ impl SourceMap {
     /// source backing this view retains, including shared text and line indexes.
     pub fn replace_owner(mut self, owner: std::sync::Arc<dyn Send + Sync>) -> Self {
         for file in std::sync::Arc::make_mut(&mut self.files) {
-            file.owner = Some(RetainedSourceOwner(owner.clone()));
+            std::sync::Arc::make_mut(file).owner = Some(RetainedSourceOwner(owner.clone()));
         }
+        self.owned_files = self.files.len();
         self.owner = Some(RetainedSourceOwner(owner));
         self
     }
@@ -359,9 +367,11 @@ impl SourceMap {
     /// by this immutable map. A shared clone is charged by its one owner.
     pub fn input_bytes(&self) -> Option<u64> {
         let mut n = (std::mem::size_of::<Self>()
-            + self.files.capacity() * std::mem::size_of::<SourceFile>()) as u64;
+            + self.files.capacity() * std::mem::size_of::<std::sync::Arc<SourceFile>>())
+            as u64;
         for file in self.files.iter() {
             n = n
+                .checked_add((size_of::<SourceFile>() + 2 * size_of::<usize>()) as u64)?
                 .checked_add(file.text.len() as u64)?
                 .checked_add((file.line_starts.len() * std::mem::size_of::<u32>()) as u64)?
                 .checked_add(file.path.capacity() as u64)?
@@ -402,7 +412,7 @@ impl SourceMap {
                 line_starts.push((i + 1) as u32);
             }
         }
-        std::sync::Arc::make_mut(&mut self.files).push(SourceFile {
+        std::sync::Arc::make_mut(&mut self.files).push(std::sync::Arc::new(SourceFile {
             path: path.as_ref().to_owned(),
             logical_path: logical_path.as_ref().to_owned(),
             anchor,
@@ -410,7 +420,7 @@ impl SourceMap {
             line_starts: line_starts.into(),
             ordinal: id.0,
             owner: self.owner.clone(),
-        });
+        }));
         Some(id)
     }
     /// A new snapshot of `file`'s source with `text`: the same path, logical
@@ -420,11 +430,12 @@ impl SourceMap {
         let old = self.file(file)?;
         let (path, logical, ordinal) = (old.path.clone(), old.logical_path.clone(), old.ordinal);
         let id = self.add_logical(path, logical, text)?;
-        std::sync::Arc::make_mut(&mut self.files)[id.0 as usize].ordinal = ordinal;
+        std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut self.files)[id.0 as usize])
+            .ordinal = ordinal;
         Some(id)
     }
     pub fn file(&self, id: FileId) -> Option<&SourceFile> {
-        self.files.get(id.0 as usize)
+        self.files.get(id.0 as usize).map(AsRef::as_ref)
     }
     /// The anchor of `f` itself, with base 0. A file the map does not hold has
     /// no anchor.
@@ -581,11 +592,11 @@ mod retained_source_owner_tests {
         }
     }
     #[test]
-    fn owned_snapshot_metadata_counts_copied_paths_without_shared_text() {
+    fn owned_snapshot_metadata_shares_file_rows_and_paths_without_copying_text() {
         let mut original = SourceMap::default();
         original.add("main.hir", "x".repeat(64 << 10)).unwrap();
         let mut decorated = original.clone().retain_owner(Arc::new(()));
-        let file = &mut Arc::get_mut(&mut decorated.files).unwrap()[0];
+        let file = Arc::get_mut(&mut Arc::get_mut(&mut decorated.files).unwrap()[0]).unwrap();
         file.path.reserve(4096);
         file.logical_path.reserve(2048);
         assert!(Arc::ptr_eq(&file.text, &original.files[0].text));
@@ -595,7 +606,15 @@ mod retained_source_owner_tests {
         ));
         assert!(Arc::ptr_eq(&decorated.anchors, &original.anchors));
         let bytes = decorated.retained_snapshot_metadata_bytes();
-        assert!(bytes >= 6144, "copied path capacities must remain charged");
+        assert!(
+            decorated.retained_payload_bytes() >= 6144,
+            "the original owner covers path capacity"
+        );
+        let next = decorated.clone().retain_owner(Arc::new(()));
+        assert!(
+            Arc::ptr_eq(&next.files[0], &decorated.files[0]),
+            "decorating an owned row must not copy its paths"
+        );
         assert!(
             bytes < 64 << 10,
             "shared source text must not be charged again"
@@ -623,6 +642,42 @@ mod retained_source_owner_tests {
         drop(extracted);
         assert_eq!(dropped.load(Ordering::SeqCst), 1);
     }
+    #[test]
+    fn extending_a_snapshot_shares_owned_rows_and_keeps_each_files_admission() {
+        let first = Arc::new(AtomicUsize::new(0));
+        let second = Arc::new(AtomicUsize::new(0));
+        let mut sources = SourceMap::default();
+        for n in 0..64 {
+            sources
+                .add(format!("{}-{n}.hir", "x".repeat(4096)), "old".into())
+                .unwrap();
+        }
+        let mut sources = sources.retain_owner(Arc::new(Owner(first.clone())));
+        let before = sources.clone();
+        let copied = sources.retained_snapshot_metadata_bytes();
+        assert!(
+            copied < 2048,
+            "another owner copies handles, not 256 KiB of paths"
+        );
+        let new = sources.add("new.hir", "new".into()).unwrap();
+        let bound = sources.retained_snapshot_metadata_bytes();
+        let sources = sources.retain_owner(Arc::new(Owner(second.clone())));
+        assert!(bound >= sources.retained_snapshot_metadata_bytes());
+        assert!(Arc::ptr_eq(&before.files[0], &sources.files[0]));
+        let old_file = sources.file(FileId(0)).unwrap().clone();
+        let new_file = sources.file(new).unwrap().clone();
+        drop(sources);
+        drop(before);
+        assert_eq!(second.load(Ordering::SeqCst), 0);
+        assert_eq!(old_file.text(), "old");
+        assert_eq!(new_file.text(), "new");
+        drop(new_file);
+        assert_eq!(second.load(Ordering::SeqCst), 1);
+        assert_eq!(first.load(Ordering::SeqCst), 0);
+        drop(old_file);
+        assert_eq!(first.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn empty_and_extended_maps_retain_all_admitted_owners() {
         let first = Arc::new(AtomicUsize::new(0));
