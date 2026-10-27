@@ -48,7 +48,7 @@ impl CheckedReceipt {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         let mut stage = |bytes: u64, what: &str| {
             pool.split(bytes).ok_or_else(|| {
                 ToolError::Runtime(format!("checked product {what} exceeds its admission"))
@@ -196,15 +196,20 @@ impl GraphProducts for SourceProducts {
     ) -> Result<(Vec<QueryId>, CompilerReadiness), ToolError> {
         let roots = match operation {
             CompileOperation::NativeOwnership(_) => {
-                vec![self.ownership.as_ref().ok_or_else(uninstalled)?.query()]
+                vec![
+                    self.ownership
+                        .as_ref()
+                        .ok_or_else(|| uninstalled())?
+                        .query(),
+                ]
             }
             CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
-                vec![self.native.as_ref().ok_or_else(uninstalled)?.query()]
+                vec![self.native.as_ref().ok_or_else(|| uninstalled())?.query()]
             }
             CompileOperation::SafeCheck
             | CompileOperation::Artifacts { native: false }
             | CompileOperation::ExportTir => {
-                vec![self.safe.as_ref().ok_or_else(uninstalled)?.query()]
+                vec![self.safe.as_ref().ok_or_else(|| uninstalled())?.query()]
             }
             CompileOperation::Check { lowering }
             | CompileOperation::CheckedProducts { lowering, .. }
@@ -248,14 +253,14 @@ impl GraphProducts for SourceProducts {
                 .as_ref()
                 .or(self.launch_entry.as_ref())
                 .cloned()
-                .ok_or_else(uninstalled)?,
+                .ok_or_else(|| uninstalled())?,
             CompileOperation::NativeBuild(request) | CompileOperation::NativeRun(request) => {
                 request
                     .definition
                     .as_ref()
                     .or(self.launch_entry.as_ref())
                     .cloned()
-                    .ok_or_else(uninstalled)?
+                    .ok_or_else(|| uninstalled())?
             }
             CompileOperation::Tir { definition } => definition
                 .as_ref()
@@ -289,7 +294,7 @@ impl GraphProducts for SourceProducts {
                             CompileResult::Ownership(
                                 ownership
                                     .as_ref()
-                                    .ok_or_else(uninstalled)?
+                                    .ok_or_else(|| uninstalled())?
                                     .materialize(*product)?,
                             )
                         }
@@ -305,7 +310,7 @@ impl GraphProducts for SourceProducts {
                             {
                                 match native
                                     .as_ref()
-                                    .ok_or_else(uninstalled)?
+                                    .ok_or_else(|| uninstalled())?
                                     .readiness
                                     .objects(*product)
                                 {
@@ -315,7 +320,7 @@ impl GraphProducts for SourceProducts {
                             } else {
                                 match native
                                     .as_ref()
-                                    .ok_or_else(uninstalled)?
+                                    .ok_or_else(|| uninstalled())?
                                     .readiness
                                     .materialize(*product)
                                 {
@@ -331,8 +336,10 @@ impl GraphProducts for SourceProducts {
                             if selected.is_none_or(|selected| selected.address != product.address) {
                                 return Err(uninstalled());
                             }
-                            let (checked, reach) =
-                                safe.as_ref().ok_or_else(uninstalled)?.outcome(*product)?;
+                            let (checked, reach) = safe
+                                .as_ref()
+                                .ok_or_else(|| uninstalled())?
+                                .outcome(*product)?;
                             CompileResult::SafeCheck { checked, reach }
                         }
                         CompileOperation::Artifacts { native: false }
@@ -343,13 +350,15 @@ impl GraphProducts for SourceProducts {
                             if selected.is_none_or(|selected| selected.address != product.address) {
                                 return Err(uninstalled());
                             }
-                            let (checked, run) =
-                                safe.as_ref().ok_or_else(uninstalled)?.settled(*product)?;
+                            let (checked, run) = safe
+                                .as_ref()
+                                .ok_or_else(|| uninstalled())?
+                                .settled(*product)?;
                             // A rejected or incomplete check never demanded Run;
                             // completed_artifacts then publishes diagnostics only.
                             let tir = match run {
                                 Some(run) => {
-                                    let export = export.as_ref().ok_or_else(uninstalled)?;
+                                    let export = export.as_ref().ok_or_else(|| uninstalled())?;
                                     export
                                         .capture
                                         .input(run)
@@ -427,7 +436,7 @@ impl GraphProducts for SourceProducts {
                             let completed = check.outcome(*product).ok_or_else(|| {
                                 ToolError::Runtime("selected check product is unavailable".into())
                             })?;
-                            let receipt = receipt.as_ref().ok_or_else(uninstalled)?;
+                            let receipt = receipt.as_ref().ok_or_else(|| uninstalled())?;
                             // The digest commits to the full text either way.
                             let products = if *canonical {
                                 receipt.products(&check, *product, &entry)?
@@ -552,8 +561,14 @@ impl SourceProducts {
         })
     }
 }
+#[track_caller]
 fn uninstalled() -> ToolError {
-    ToolError::Runtime("selected compiler operation has no installed producer".into())
+    let site = std::panic::Location::caller();
+    ToolError::Runtime(format!(
+        "selected compiler operation has no installed producer at {}:{}",
+        site.file(),
+        site.line()
+    ))
 }
 
 /// Nested Lower/Evaluate continuations admitted under the active frames.
@@ -596,17 +611,17 @@ impl Plan {
             .ok()
             .and_then(|bytes| bytes.checked_add(footprint.source_headers))
             .and_then(|bytes| bytes.checked_add(inspection_bytes))
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         let metadata = MemoryWeight::default();
         let lower_inventory =
-            FrontLowerQueries::input_bytes(definitions).ok_or_else(uninstalled)?;
+            FrontLowerQueries::input_bytes(definitions).ok_or_else(|| uninstalled())?;
         let growth_inventory =
-            FrontGrowthQueries::input_bytes(definitions, metadata).ok_or_else(uninstalled)?;
-        let check_inventory =
-            FrontCheckQueries::input_bytes(definitions, files, metadata).ok_or_else(uninstalled)?;
+            FrontGrowthQueries::input_bytes(definitions, metadata).ok_or_else(|| uninstalled())?;
+        let check_inventory = FrontCheckQueries::input_bytes(definitions, files, metadata)
+            .ok_or_else(|| uninstalled())?;
         let run_inventory = if needs_run { run_input_bytes } else { 0 };
         let native_inventory = if needs_native {
-            super::native_selection::Footprint::minimum(definitions).ok_or_else(uninstalled)?
+            super::native_selection::Footprint::minimum(definitions).ok_or_else(|| uninstalled())?
         } else {
             0
         };
@@ -616,7 +631,7 @@ impl Plan {
                     footprint.with_catalogue_bytes(definitions, native_catalogue_bytes)
                 })
                 .and_then(|footprint| footprint.bytes())
-                .ok_or_else(uninstalled)?
+                .ok_or_else(|| uninstalled())?
         } else {
             0
         };
@@ -632,7 +647,7 @@ impl Plan {
         ]
         .into_iter()
         .try_fold(0u64, u64::checked_add)
-        .ok_or_else(uninstalled)?;
+        .ok_or_else(|| uninstalled())?;
         let slack = limits.snapshot_bytes.checked_sub(fixed).ok_or_else(|| {
             ToolError::Runtime(
                 "compiler immutable input inventory exceeds snapshot admission".into(),
@@ -647,7 +662,7 @@ impl Plan {
         };
         let source = source
             .checked_add(source_index_bytes)
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         let slack = slack - source_index_bytes;
         let native_slack = if needs_native {
             slack / 2
@@ -660,7 +675,7 @@ impl Plan {
         let native = if needs_native {
             Some(
                 super::native_selection::Footprint::new(definitions, native_slack, needs_proofs)
-                    .ok_or_else(uninstalled)?,
+                    .ok_or_else(|| uninstalled())?,
             )
         } else {
             None
@@ -671,7 +686,7 @@ impl Plan {
                     .and_then(|footprint| {
                         footprint.with_catalogue_bytes(definitions, native_catalogue_bytes)
                     })
-                    .ok_or_else(uninstalled)?,
+                    .ok_or_else(|| uninstalled())?,
             )
         } else {
             None
@@ -728,19 +743,19 @@ impl Plan {
         let check = check_inventory + check_slack;
         let run = ownership
             .as_ref()
-            .map(|ownership| ownership.bytes().ok_or_else(uninstalled))
+            .map(|ownership| ownership.bytes().ok_or_else(|| uninstalled()))
             .transpose()?
             .unwrap_or(0)
             + run_inventory
             + run_slack
             + native
                 .as_ref()
-                .map(|native| native.bytes().ok_or_else(uninstalled))
+                .map(|native| native.bytes().ok_or_else(|| uninstalled()))
                 .transpose()?
                 .unwrap_or(0);
         let stacks = (config.jobs.get() as u64)
             .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         // Each definition can name P, Lower, Evaluate and, when selected,
         // Run, and native selection adds its Run and definition rows. Growth/
         // Check, the selected SafeCheck root and the native bootstrap and
@@ -756,13 +771,13 @@ impl Plan {
             .len()
             .checked_mul(per_definition)
             .and_then(|entries| entries.checked_add(roots))
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         let default_capacity =
             AdmittedRuntime::default_query_capacity(config.jobs, limits.runtime_bytes)
-                .ok_or_else(uninstalled)?;
+                .ok_or_else(|| uninstalled())?;
         let query_capacity = inventory.max(default_capacity);
         let bookkeeping =
-            AdmittedRuntime::query_capacity_bytes(query_capacity).ok_or_else(uninstalled)?;
+            AdmittedRuntime::query_capacity_bytes(query_capacity).ok_or_else(|| uninstalled())?;
         let working = limits
             .runtime_bytes
             .checked_sub(stacks)
@@ -793,8 +808,8 @@ impl Plan {
         let body_bound = suspended / (2 * (BODY_CONTINUATIONS + native_frames));
         // Only demanded Lower outputs consume producer retention. Potential
         // addresses carry compact input slots, not maximum future/body grants.
-        let output_metadata =
-            FrontLowerQueries::output_bytes(MemoryWeight::default()).ok_or_else(uninstalled)?;
+        let output_metadata = FrontLowerQueries::output_bytes(MemoryWeight::default())
+            .ok_or_else(|| uninstalled())?;
         let retained = lower_slack
             .checked_sub(output_metadata)
             .map(|bytes| (bytes / 2).min(body_bound))
@@ -903,7 +918,7 @@ pub(super) fn install(
         .runtime_bytes
         .checked_add(limits.snapshot_bytes)
         .and_then(|bytes| bytes.checked_add(limits.transport_bytes))
-        .ok_or_else(uninstalled)?;
+        .ok_or_else(|| uninstalled())?;
     let store = match RequestStore::with_scratch(
         config.store.clone(),
         loading.take_transport(),
@@ -1018,7 +1033,7 @@ pub(super) fn install(
                        native_catalogue_bytes| {
         let inspection_bytes =
             GraphMeter::input_bytes(definitions, program.engine.memo_snapshot().len())
-                .ok_or_else(uninstalled)?;
+                .ok_or_else(|| uninstalled())?;
         let source_index_bytes = program.engine.source_index_bytes().unwrap_or(0);
         Plan::new(
             limits,
@@ -1071,11 +1086,11 @@ pub(super) fn install(
         None
     } else {
         let metadata = FrontInstanceBootstrap::input_bytes(&definitions, &generators)
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         let (runtime, snapshot) = loading.lend();
         let lent = (runtime.bytes(), snapshot.bytes());
         let snapshot = MemoryReservationPool::new(snapshot).map_err(|_| uninstalled())?;
-        let split = |bytes| snapshot.take(bytes).ok_or_else(uninstalled);
+        let split = |bytes| snapshot.take(bytes).ok_or_else(|| uninstalled());
         let front = split(plan.snapshots.front)?;
         let lower = split(plan.snapshots.lower)?;
         let rest = lent
@@ -1083,10 +1098,10 @@ pub(super) fn install(
             .checked_sub(plan.snapshots.front)
             .and_then(|bytes| bytes.checked_sub(plan.snapshots.lower))
             .and_then(|bytes| bytes.checked_sub(MemoryReservationPool::metadata_bytes()))
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         let metadata = metadata.max(rest / 8);
         let reserved = split(metadata)?;
-        let rest = rest.checked_sub(metadata).ok_or_else(uninstalled)?;
+        let rest = rest.checked_sub(metadata).ok_or_else(|| uninstalled())?;
         let discovery = split(rest / 7)?;
         let text = split((rest - rest / 7) / 2)?;
         let syntax = split(rest - rest / 7 - (rest - rest / 7) / 2)?;
@@ -1160,8 +1175,16 @@ pub(super) fn install(
             );
         }
     }
-    if selected_definitions(&mut program.engine) != definitions {
-        return Err(loading.failed(uninstalled()));
+    let current_definitions = selected_definitions(&mut program.engine);
+    if current_definitions != definitions {
+        let mismatch = definitions
+            .iter()
+            .zip(&current_definitions)
+            .find(|(a, b)| a != b);
+        return Err(loading.failed(ToolError::Runtime(format!(
+            "compiler source inventory changed after bootstrap: prepared {}, current {}, first mismatch {mismatch:?}",
+            definitions.len(), current_definitions.len()
+        ))));
     }
     plan = plan_within(
         final_limits,
@@ -1188,7 +1211,7 @@ pub(super) fn install(
     let mut source = source;
     let source_index_allowance = source
         .split(plan.source_index_bytes)
-        .ok_or_else(uninstalled)?;
+        .ok_or_else(|| uninstalled())?;
     let source = Arc::new(source);
     let query_error = |error| ToolError::Query {
         error,
@@ -1245,13 +1268,13 @@ pub(super) fn install(
             .engine
             .front_checked_signatures_bytes(&front)
             .map_err(&query_error)?;
-        let headers = check.split(headers).ok_or_else(uninstalled)?;
+        let headers = check.split(headers).ok_or_else(|| uninstalled())?;
         let headers = program
             .engine
             .front_checked_signatures(front.clone(), headers)
             .map_err(&query_error)?;
         // The receipt has no Run, so its stages draw from Run's partition.
-        let allowance = run.split(run.bytes()).ok_or_else(uninstalled)?;
+        let allowance = run.split(run.bytes()).ok_or_else(|| uninstalled())?;
         Some(Arc::new(CheckedReceipt {
             headers,
             allowance: Mutex::new(Some(allowance)),
@@ -1300,7 +1323,7 @@ pub(super) fn install(
     ) {
         Some(
             run.split(super::safe_check::BYTES)
-                .ok_or_else(uninstalled)?,
+                .ok_or_else(|| uninstalled())?,
         )
     } else {
         None
@@ -1313,9 +1336,9 @@ pub(super) fn install(
             .engine
             .front_checked_signatures_bytes(&front)
             .map_err(&query_error)?;
-        let headers = run.split(headers).ok_or_else(uninstalled)?;
-        let export = run.split(run.bytes() / 4).ok_or_else(uninstalled)?;
-        let output = run.split(run.bytes() / 4).ok_or_else(uninstalled)?;
+        let headers = run.split(headers).ok_or_else(|| uninstalled())?;
+        let export = run.split(run.bytes() / 4).ok_or_else(|| uninstalled())?;
+        let output = run.split(run.bytes() / 4).ok_or_else(|| uninstalled())?;
         Some((headers, export, output))
     } else {
         None
@@ -1324,16 +1347,16 @@ pub(super) fn install(
         .native
         .as_ref()
         .map(|native| {
-            run.split(native.bytes().ok_or_else(uninstalled)?)
-                .ok_or_else(uninstalled)
+            run.split(native.bytes().ok_or_else(|| uninstalled())?)
+                .ok_or_else(|| uninstalled())
         })
         .transpose()?;
     let mut ownership_allowance = plan
         .ownership
         .as_ref()
         .map(|ownership| {
-            run.split(ownership.bytes().ok_or_else(uninstalled)?)
-                .ok_or_else(uninstalled)
+            run.split(ownership.bytes().ok_or_else(|| uninstalled())?)
+                .ok_or_else(|| uninstalled())
         })
         .transpose()?;
     let mut run = if needs_run {
@@ -1344,7 +1367,7 @@ pub(super) fn install(
                     check.clone(),
                     front.clone(),
                     lower.clone(),
-                    run_inputs.take().ok_or_else(uninstalled)?,
+                    run_inputs.take().ok_or_else(|| uninstalled())?,
                     plan.run,
                     run,
                     errors,
@@ -1368,7 +1391,7 @@ pub(super) fn install(
             .engine
             .front_proof_export(
                 &entry,
-                run.take().ok_or_else(uninstalled)?,
+                run.take().ok_or_else(|| uninstalled())?,
                 headers,
                 allowance,
             )
@@ -1406,7 +1429,7 @@ pub(super) fn install(
             .as_ref()
             .or(launch_entry.as_ref())
             .cloned()
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         Some(
             super::native_selection::NativeSelection::new(
                 &mut program,
@@ -1415,7 +1438,7 @@ pub(super) fn install(
                     entry,
                     front: front.clone(),
                     lower: lower.clone(),
-                    run: run.take().ok_or_else(uninstalled)?,
+                    run: run.take().ok_or_else(|| uninstalled())?,
                     store: store.clone(),
                     registrations: bootstrap
                         .as_ref()
@@ -1429,7 +1452,7 @@ pub(super) fn install(
                     ToolError::Runtime("native request requires its selected toolchain".into())
                 })?,
                 footprint,
-                &mut native_allowance.ok_or_else(uninstalled)?,
+                &mut native_allowance.ok_or_else(|| uninstalled())?,
                 plan.body,
                 plan.native_root,
                 errors,
@@ -1446,23 +1469,23 @@ pub(super) fn install(
             .as_ref()
             .or(launch_entry.as_ref())
             .cloned()
-            .ok_or_else(uninstalled)?;
+            .ok_or_else(|| uninstalled())?;
         Some(
             super::ownership_selection::OwnershipSelection::new(
                 &mut program,
                 super::ownership_admission::SourceInputs {
                     definitions: definitions.clone(),
-                    catalogue: native_catalogue.take().ok_or_else(uninstalled)?,
+                    catalogue: native_catalogue.take().ok_or_else(|| uninstalled())?,
                     entry,
                     front: front.clone(),
                     lower: lower.clone(),
-                    run: run.take().ok_or_else(uninstalled)?,
+                    run: run.take().ok_or_else(|| uninstalled())?,
                     store: store.clone(),
                 },
                 selected,
                 config.verify_store,
-                plan.ownership.as_ref().ok_or_else(uninstalled)?,
-                &mut ownership_allowance.take().ok_or_else(uninstalled)?,
+                plan.ownership.as_ref().ok_or_else(|| uninstalled())?,
+                &mut ownership_allowance.take().ok_or_else(|| uninstalled())?,
                 plan.body,
                 errors,
             )
@@ -1635,7 +1658,7 @@ fn lower_reads(definitions: &[DefPath]) -> Result<usize, ToolError> {
     Ok(definitions
         .len()
         .checked_mul(3)
-        .ok_or_else(uninstalled)?
+        .ok_or_else(|| uninstalled())?
         .min(4096))
 }
 fn instance_bootstrap_error(
