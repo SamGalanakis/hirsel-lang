@@ -91,7 +91,7 @@ fn uniqueness_loss_diagnostics_17_multifile_utf8_copied_key_and_handback() {
         "lost its deep uniqueness",
     );
     check(
-        "// é helper\nfn edit(mut m: Map[u64,u64]) {}\npub fn probe() {\n let mut m: unique Map[u64,u64] = map.empty()\n edit(mut m)\n let _ = map.remove(mut m,0)\n}\n",
+        "// é helper\npub fn edit(mut m: Map[u64,u64]) {}\npub fn probe() {\n let mut m: unique Map[u64,u64] = map.empty()\n edit(mut m)\n let _ = map.remove(mut m,0)\n}\n",
         "map.remove(mut m,0)",
         &["edit(mut m)"],
         "lost its deep uniqueness",
