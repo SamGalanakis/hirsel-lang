@@ -463,7 +463,7 @@ impl RootProducts {
                         unit.sites.as_slice(),
                     )
                 }),
-                Clone::clone,
+                hirsel_syntax::DefId::intern,
             ),
             anchors: self.source.source_anchors().clone(),
         })

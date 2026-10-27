@@ -205,7 +205,7 @@ impl TirProvider for ExecutionProvider<'_> {
 #[derive(Clone, Debug, Default)]
 pub struct NativeObservation {
     pub failure_rules: Vec<String>,
-    pub sites: std::collections::BTreeMap<u64, (DefPath, hirsel_lir::ir::SiteRange)>,
+    pub sites: std::collections::BTreeMap<u64, (hirsel_syntax::DefId, hirsel_lir::ir::SiteRange)>,
     pub anchors: std::collections::BTreeMap<DefPath, Vec<hirsel_span::Anchor>>,
 }
 /// Executable readiness includes a materialized executable and frozen launch

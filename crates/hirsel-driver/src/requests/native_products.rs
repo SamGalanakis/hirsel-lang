@@ -176,7 +176,7 @@ impl NativeBuildReadiness {
         copied.foreign_use(&source.run.foreign);
         copied.vec(&observation.failure_rules, |w, rule| w.add(rule.capacity()));
         copied.vec(&report, |w, line| w.add(line.capacity()));
-        copied.map(&observation.sites, |w, _, (path, _)| w.path(path));
+        copied.tree::<u64, (DefId, hirsel_lir::ir::SiteRange)>(observation.sites.len());
         copied.map(&observation.anchors, |w, path, anchors| {
             w.path(path);
             w.flat_vec(anchors);

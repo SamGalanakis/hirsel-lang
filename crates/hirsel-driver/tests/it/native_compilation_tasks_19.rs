@@ -758,7 +758,14 @@ fn run_program_case(
                 assert!(program.units.is_empty());
                 if let Some(metadata) = &observation {
                     assert_eq!(metadata.failure_rules, native::failure_rules(program));
-                    assert_eq!(metadata.sites, native::site_codes(program));
+                    let sites = metadata
+                        .sites
+                        .iter()
+                        .map(|(code, (definition, range))| {
+                            (*code, (definition.path().clone(), *range))
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    assert_eq!(sites, native::site_codes(program));
                 }
                 let observed =
                     native::observe(&run, program, &source.sites()).map_err(|e| e.to_string())?;

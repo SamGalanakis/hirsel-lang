@@ -258,7 +258,7 @@ mod tests {
             sites: [(
                 0xa5,
                 (
-                    path.clone(),
+                    hirsel_syntax::DefId::intern(&path),
                     hirsel_lir::ir::SiteRange {
                         source: 0,
                         start: 1,

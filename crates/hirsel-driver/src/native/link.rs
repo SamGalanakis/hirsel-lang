@@ -3442,10 +3442,11 @@ pub fn observe_run(
     program: &ReadyProgram,
     sites: &Sites<'_>,
 ) -> Result<Observed, NativeError> {
+    let codes = site_codes(program);
     observe_run_tables(
         launched,
         &failure_rules(program),
-        &site_codes(program),
+        |code| codes.get(&code).map(|(path, range)| (path, *range)),
         sites,
     )
 }
@@ -3466,13 +3467,23 @@ pub fn observe_request(
             .map(|(path, anchors)| (path, anchors.clone()))
             .collect(),
     );
-    observe_run_tables(launched, &metadata.failure_rules, &metadata.sites, &sites)
+    observe_run_tables(
+        launched,
+        &metadata.failure_rules,
+        |code| {
+            metadata
+                .sites
+                .get(&code)
+                .map(|(id, range)| (id.path(), *range))
+        },
+        &sites,
+    )
 }
 
-fn observe_run_tables(
+fn observe_run_tables<'a>(
     launched: &Launched,
     rules: &[String],
-    codes: &BTreeMap<u64, (DefPath, hirsel_lir::ir::SiteRange)>,
+    codes: impl Fn(u64) -> Option<(&'a DefPath, hirsel_lir::ir::SiteRange)>,
     sites: &Sites<'_>,
 ) -> Result<Observed, NativeError> {
     let bad = |what: String| {
@@ -3623,17 +3634,17 @@ fn observe_run_tables(
                     .ok_or_else(|| bad(format!("an unknown failure rule code in `{line}`")))?;
                 let (definition, range) = u64::from_str_radix(site, 16)
                     .ok()
-                    .and_then(|code| codes.get(&code))
+                    .and_then(&codes)
                     .ok_or_else(|| bad(format!("an unknown failure site code in `{line}`")))?;
-                let mut failure = sites.failure(&rule, definition, *range)?;
+                let mut failure = sites.failure(&rule, definition, range)?;
                 if operation != site && *operation != "0000000000000000" {
                     let (definition, range) = u64::from_str_radix(operation, 16)
                         .ok()
-                        .and_then(|code| codes.get(&code))
+                        .and_then(&codes)
                         .ok_or_else(|| {
                             bad(format!("an unknown operation site code in `{line}`"))
                         })?;
-                    let operation = sites.failure(&rule, definition, *range)?;
+                    let operation = sites.failure(&rule, definition, range)?;
                     failure.operation = Some(hirsel_interp::observation::SourceSite {
                         definition: operation.definition,
                         file: operation.file,

@@ -303,10 +303,10 @@ pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)>
     )
 }
 
-pub(crate) fn site_codes_from<'a>(
+pub(crate) fn site_codes_from<'a, T>(
     summaries: impl IntoIterator<Item = (&'a DefPath, &'a hirsel_syntax::ContentHash, &'a [SiteRange])>,
-    owner: impl Fn(&DefPath) -> DefPath,
-) -> BTreeMap<u64, (DefPath, SiteRange)> {
+    owner: impl Fn(&DefPath) -> T,
+) -> BTreeMap<u64, (T, SiteRange)> {
     let mut codes = BTreeMap::new();
     for (definition, revision, sites) in summaries {
         for &site in sites {
