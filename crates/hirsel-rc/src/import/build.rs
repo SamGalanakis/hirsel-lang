@@ -439,14 +439,18 @@ impl Importer<'_> {
         })
     }
 
-    pub(super) fn anchor_here(&mut self) -> SourceAnchorId {
+    pub(super) fn source_anchor_here(&self) -> SourceAnchor {
         let (block, statement) = self.statement;
-        let a = SourceAnchor {
+        SourceAnchor {
             body: self.body_id,
             block,
             statement,
             site: self.site(self.span),
-        };
+        }
+    }
+
+    pub(super) fn anchor_here(&mut self) -> SourceAnchorId {
+        let a = self.source_anchor_here();
         if let Some(&id) = self.out.source_anchor_index.get(&a) {
             return id;
         }

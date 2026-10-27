@@ -1212,7 +1212,8 @@ impl Importer<'_> {
     ) -> R<ValueId> {
         // An empty sequence holds no element: it is the static empty
         // sequence of its layout, which the first reserve or growth replaces
-        // (`hirsel_rt_v2_seq_grow`), and allocates nothing.
+        // (`hirsel_rt_v2_seq_grow`), and allocates nothing. A source-required
+        // payload receipt keeps its checked construction correspondence.
         if constructor == ConstructorKind::Sequence
             && values.is_empty()
             && matches!(
@@ -1233,6 +1234,7 @@ impl Importer<'_> {
                 self.layouts.record(self.layout_of(ty)).kind,
                 LayoutKind::Block { payload } if payload == layout
             )
+            && !self.needs_construction_receipt()
         {
             let instance = self.static_layout_key(layout).0;
             let symbol = self.symbol(SymbolKind::Constant, &empty_sequence(), Some(instance));

@@ -3,35 +3,41 @@ use hirsel_lir::ir::{ConstructId, PayloadBindingId, ReceiptInput, SealDescriptor
 use hirsel_lir::sealed_payload::*;
 
 impl Importer<'_> {
+    fn construction_receipt_source(&self, anchor: &SourceAnchor) -> Option<&SourcePayload> {
+        self.instances
+            .payload_sources(self.id)
+            .iter()
+            .find(|source| {
+                &source.recipe.source == anchor
+                    && matches!(
+                        source.recipe.operation,
+                        PayloadOperation::Allocate {
+                            destination: PayloadDestination::Heap
+                        }
+                    )
+                    && matches!(
+                        source.root_type,
+                        hirsel_lir::operation::NativeType::Builtin(
+                            hirsel_lir::operation::BuiltinType::List,
+                            _
+                        )
+                    )
+            })
+    }
+
+    pub(super) fn needs_construction_receipt(&self) -> bool {
+        !self.instances.payload_sources(self.id).is_empty()
+            && self
+                .construction_receipt_source(&self.source_anchor_here())
+                .is_some()
+    }
+
     pub(super) fn construct_receipt(&mut self, value: ValueId, construct: ConstructId) -> R<()> {
         let site = &self.out.tables.constructs[construct.index()];
         let anchor = &self.out.tables.source_anchors[site.anchor.index()];
-        let Some(source) = self
-            .instances
-            .payload_sources(self.id)
-            .iter()
-            .find(|source| &source.recipe.source == anchor)
-            .cloned()
-        else {
+        let Some(source) = self.construction_receipt_source(anchor).cloned() else {
             return Ok(());
         };
-        if !matches!(
-            source.recipe.operation,
-            PayloadOperation::Allocate {
-                destination: PayloadDestination::Heap
-            }
-        ) {
-            return Ok(());
-        }
-        // The public heap path currently transports List roots. Other original
-        // constructors still enter the source inventory, but do not acquire an
-        // unused metadata holder. A demanded unsupported root fails at its call.
-        if !matches!(
-            source.root_type,
-            hirsel_lir::operation::NativeType::Builtin(hirsel_lir::operation::BuiltinType::List, _)
-        ) {
-            return Ok(());
-        }
         let descriptor = self
             .layouts
             .seal_descriptor(&self.program.operation_registry(), &source.root_type)
