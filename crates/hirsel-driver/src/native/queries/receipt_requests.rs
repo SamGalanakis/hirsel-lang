@@ -134,6 +134,37 @@ pub(super) fn reconstruct(
     Ok((graph, sources))
 }
 
+pub(super) fn lexical(
+    source: &mut impl NativeSourceProvider,
+    target: &TargetSpec,
+    selected: &hirsel_rc::sealed_source::contract::registry::Request,
+) -> Result<hirsel_layout::instance::InstanceKey, String> {
+    let entry = selected.declaration().entry();
+    if matches!(
+        entry.kind(),
+        hirsel_rc::sealed_source::SourceEntryKind::Definition { .. }
+    ) {
+        return Ok(selected.ordinary_key().clone());
+    }
+    let (original, _) = source.original_source(&entry.reference().definition)?;
+    let declarations = source.declarations();
+    let owners = hirsel_rc::library::owners(
+        &declarations.program.types,
+        &declarations.program.signatures,
+    )
+    .over(&declarations.program.owners);
+    let mut layouts = hirsel_layout::layout::LayoutBuilder::new(target, &owners);
+    layouts.prepare_native_controls();
+    hirsel_rc::instance::receipt_closure_binding(
+        &declarations.program.types,
+        &original,
+        entry,
+        &mut layouts,
+    )
+    .map(|(key, _)| key)
+    .map_err(|error| format!("current receipt closure lexical identity: {error:?}"))
+}
+
 pub(super) fn descriptor(
     source: &ReceiptSource,
     ordinary: &dyn OperationDeclarations,

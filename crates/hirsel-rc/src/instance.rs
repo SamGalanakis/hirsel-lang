@@ -588,91 +588,16 @@ impl Instances {
         if &source_base != request.ordinary_key() {
             return Ok(false);
         }
-        let input = crate::sealed_source::SourceInput::capture(
-            entry.source_identity(),
-            entry.implementation_revision(),
-            definition.clone(),
-        );
-        let checked = input
-            .closure_entry(
-                &source_base,
-                &self.types,
-                BodyId(producer.body),
-                hirsel_tir::BlockId(producer.block),
-                producer.statement,
-                Ok,
-            )
-            .map_err(|e| {
-                InstanceError::Malformed(format!("receipt closure original entry: {e:?}"))
-            })?;
-        if &checked != entry {
-            return Ok(false);
-        }
-        let parent_body = &definition.bodies[producer.body as usize];
-        let hirsel_tir::InstructionKind::Assign { destination, .. } =
-            parent_body.blocks[producer.block as usize].instructions[producer.statement as usize]
-                .kind
-        else {
-            return Ok(false);
-        };
-        let callable = parent_body.places[destination.0 as usize].ty;
-        let Some(convention) = convention(&self.types, callable) else {
-            return Ok(false);
-        };
-        let body = &definition.bodies[lexical.body() as usize];
-        let taken = taken_capture_locals(body);
-        let scoped = source_scoped_captures(&definition, self.view(id).body);
-        let mut shape = Vec::new();
-        let mut movable = Vec::new();
-        let mut scoped_paths = Vec::new();
-        for capture in checked.captures() {
-            let ty = body.locals[capture.local as usize].ty;
-            if generic_function(&self.types, ty) {
-                return Err(InstanceError::Malformed(
-                    "receipt closure needs complete generic capture expansion".into(),
-                ));
-            }
-            let layout = layouts
-                .layout(&self.types, ty)
-                .map_err(|e| InstanceError::Layout(path.clone(), e))?;
-            let usage = capture_use(capture.usage);
-            shape.push((layout, capture_passing(usage)));
-            if taken.contains(&capture.ordinal)
-                && usage == CaptureUse::Take
-                && layouts.record(layout).copy != hirsel_lir::layout_types::CopyRecipe::Bits
-            {
-                movable.push(capture.ordinal);
-            }
-            if scoped.contains(&capture.ordinal) {
-                scoped_paths.push(hirsel_lir::abi_types::ParameterPath {
-                    parameter: capture.ordinal,
-                    fields: Vec::new(),
-                });
-            }
-        }
-        let environment = layouts
-            .environment_data(path, lexical.body(), &shape, &movable)
-            .map_err(|e| InstanceError::Layout(path.clone(), e))?;
-        let layout = hirsel_lir::LayoutKeys::rooted(layouts.table(), environment).0;
+        let (expected, environment) =
+            receipt_closure_binding(&self.types, &definition, entry, layouts)?;
         let Some(actual_environment) = self.environments[id.index()] else {
             return Ok(false);
         };
-        if hirsel_lir::LayoutKeys::rooted(layouts.table(), actual_environment).0 != layout {
+        if hirsel_lir::LayoutKeys::rooted(layouts.table(), actual_environment).0
+            != hirsel_lir::LayoutKeys::rooted(layouts.table(), environment).0
+        {
             return Ok(false);
         }
-        let scoped = hirsel_lir::abi::scoped_contract_digest(&[], &scoped_paths);
-        let environment = ContentHash::of_parts(
-            "hirsel.scoped-environment-instance.v1",
-            [layout.0.as_slice(), scoped.0.as_slice()],
-        );
-        let expected = key_of(
-            &self.types,
-            path,
-            self.view(id).body,
-            actuals,
-            Some(&convention),
-            Some(environment),
-        )?;
         Ok(&expected == lexical)
     }
 
@@ -1111,7 +1036,112 @@ pub fn instantiate_function(
     Ok(types.intern(row))
 }
 
-/// The declared conventions of a `Function` row.
+/// Reconstruct the native lexical closure key from current original source.
+/// No native candidate, source recipe or cached Value supplies its environment.
+pub fn receipt_closure_binding(
+    types: &TypeInterner,
+    definition: &DefinitionRef,
+    entry: &crate::sealed_source::SourceCallableEntry,
+    layouts: &mut LayoutBuilder<'_>,
+) -> Result<(InstanceKey, LayoutId), InstanceError> {
+    let crate::sealed_source::SourceEntryKind::Closure { producer, .. } = entry.kind() else {
+        return Err(InstanceError::Malformed(
+            "receipt entry is not a closure".into(),
+        ));
+    };
+    let path = definition.path.path();
+    let body_id = BodyId(entry.reference().body);
+    let source_base = key_of(types, path, body_id, &Actuals::none(), None, None)?;
+    if source_base.digest() != entry.reference().instance {
+        return Err(InstanceError::Malformed(
+            "receipt closure source key differs".into(),
+        ));
+    }
+    let input = crate::sealed_source::SourceInput::capture(
+        entry.source_identity(),
+        entry.implementation_revision(),
+        definition.clone(),
+    );
+    let checked = input
+        .closure_entry(
+            &source_base,
+            types,
+            BodyId(producer.body),
+            hirsel_tir::BlockId(producer.block),
+            producer.statement,
+            Ok,
+        )
+        .map_err(|e| InstanceError::Malformed(format!("receipt closure original entry: {e:?}")))?;
+    if &checked != entry {
+        return Err(InstanceError::Malformed(
+            "receipt closure original entry differs".into(),
+        ));
+    }
+    let parent_body = &definition.bodies[producer.body as usize];
+    let hirsel_tir::InstructionKind::Assign { destination, .. } =
+        parent_body.blocks[producer.block as usize].instructions[producer.statement as usize].kind
+    else {
+        return Err(InstanceError::Malformed(
+            "receipt closure original entry differs".into(),
+        ));
+    };
+    let callable = parent_body.places[destination.0 as usize].ty;
+    let Some(convention) = convention(types, callable) else {
+        return Err(InstanceError::Malformed(
+            "receipt closure original entry differs".into(),
+        ));
+    };
+    let body = &definition.bodies[body_id.0 as usize];
+    let taken = taken_capture_locals(body);
+    let scoped = source_scoped_captures(&definition, body_id);
+    let mut shape = Vec::new();
+    let mut movable = Vec::new();
+    let mut scoped_paths = Vec::new();
+    for capture in checked.captures() {
+        let ty = body.locals[capture.local as usize].ty;
+        if generic_function(types, ty) {
+            return Err(InstanceError::Malformed(
+                "receipt closure needs complete generic capture expansion".into(),
+            ));
+        }
+        let layout = layouts
+            .layout(types, ty)
+            .map_err(|e| InstanceError::Layout(path.clone(), e))?;
+        let usage = capture_use(capture.usage);
+        shape.push((layout, capture_passing(usage)));
+        if taken.contains(&capture.ordinal)
+            && usage == CaptureUse::Take
+            && layouts.record(layout).copy != hirsel_lir::layout_types::CopyRecipe::Bits
+        {
+            movable.push(capture.ordinal);
+        }
+        if scoped.contains(&capture.ordinal) {
+            scoped_paths.push(hirsel_lir::abi_types::ParameterPath {
+                parameter: capture.ordinal,
+                fields: Vec::new(),
+            });
+        }
+    }
+    let environment = layouts
+        .environment_data(path, body_id.0, &shape, &movable)
+        .map_err(|e| InstanceError::Layout(path.clone(), e))?;
+    let layout = hirsel_lir::LayoutKeys::rooted(layouts.table(), environment).0;
+    let scoped = hirsel_lir::abi::scoped_contract_digest(&[], &scoped_paths);
+    let environment_digest = ContentHash::of_parts(
+        "hirsel.scoped-environment-instance.v1",
+        [layout.0.as_slice(), scoped.0.as_slice()],
+    );
+    let expected = key_of(
+        types,
+        path,
+        body_id,
+        &Actuals::none(),
+        Some(&convention),
+        Some(environment_digest),
+    )?;
+    Ok((expected, environment))
+}
+
 pub fn convention(types: &TypeInterner, callable: TypeId) -> Option<CallableConvention> {
     let row = types.get(callable)?;
     let TypeKind::Function(f) = &row.kind else {

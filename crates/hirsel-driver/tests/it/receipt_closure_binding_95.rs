@@ -71,7 +71,9 @@ pub fn inspect(take root: List[u64]) -> u64 {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        let reader = engine.native_original_reader(&paths, store).unwrap();
+        let reader = engine
+            .native_original_reader(&paths, store.clone())
+            .unwrap();
         let front = Front::new(&reader);
         let mut inspect = entry_path(&default_context());
         inspect.0.name = "inspect".into();

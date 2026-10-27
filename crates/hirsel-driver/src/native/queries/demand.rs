@@ -742,7 +742,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v15",
+            "hirsel.native.demand-import-action.v16",
             [bytes.as_slice()],
         )))
     }
@@ -859,12 +859,23 @@ impl DemandInstances {
                 graph,
                 |selected| selected == &key.instance,
             )?);
-            let selected = graph
-                .requests
-                .iter()
-                .find(|r| r.ordinary_key() == &lexical)
-                .ok_or("native request is absent from current original receipt graph")?;
-            if selected.aware_key().unwrap_or(selected.ordinary_key()) != &key.instance {
+            let mut matching = Vec::new();
+            for selected in &graph.requests {
+                if selected.ordinary_key().definition() == lexical.definition()
+                    && selected.ordinary_key().body() == lexical.body()
+                    && super::receipt_requests::lexical(inputs, &self.target, selected)? == lexical
+                {
+                    matching.push(selected);
+                }
+            }
+            let [selected] = matching.as_slice() else {
+                return Err(
+                    "native request is absent or ambiguous in current original receipt graph"
+                        .into(),
+                );
+            };
+            let selected = *selected;
+            if selected.aware_key().unwrap_or(&lexical) != &key.instance {
                 return Err("native receipt request changed with current original source".into());
             }
             Some(selected)
@@ -1022,25 +1033,30 @@ impl DemandInstances {
         };
         if let Some((graph, _)) = &receipt_graph {
             for selected in &graph.requests {
-                if let Some(other) = instances.get(selected.ordinary_key()) {
-                    instances
-                        .bind_receipt_request(other, selected, &mut layouts)
-                        .map_err(|e| format!("native discovered receipt request: {e:?}"))?;
-                } else if selected.aware_key().is_some()
-                    && instances.ids().any(|other| {
+                let candidates = instances
+                    .ids()
+                    .filter(|&other| {
                         let key = instances.lexical_key(other);
                         key.definition() == selected.ordinary_key().definition()
                             && key.body() == selected.ordinary_key().body()
-                            && matches!(
-                                instances.roles[other.index()],
-                                hirsel_rc::instance::InstanceRole::Closure { .. }
-                            )
                     })
-                {
-                    return Err(
-                        "receipt closure requires independently bound lexical environment custody"
-                            .into(),
-                    );
+                    .collect::<Vec<_>>();
+                let mut matched = false;
+                for other in &candidates {
+                    if instances
+                        .receipt_lexical_matches(*other, selected, &mut layouts)
+                        .map_err(|error| format!("native receipt lexical matching: {error:?}"))?
+                    {
+                        instances
+                            .bind_receipt_request(*other, selected, &mut layouts)
+                            .map_err(|error| {
+                                format!("native discovered receipt request: {error:?}")
+                            })?;
+                        matched = true;
+                    }
+                }
+                if !matched && !candidates.is_empty() && selected.aware_key().is_some() {
+                    return Err("receipt closure differs from its independently reconstructed lexical environment".into());
                 }
             }
         }
@@ -1332,3 +1348,6 @@ impl DemandInstances {
         self.discovered(key, product, adapters)
     }
 }
+
+#[cfg(test)]
+mod receipt_closure_tests;
