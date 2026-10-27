@@ -1727,7 +1727,10 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
         let opcode = instruction.opcode();
         assert_eq!(
             StageKind::Ready.admits(opcode),
-            matches!(opcode, Opcode::SealArena | Opcode::BorrowSealedRoot)
+            matches!(
+                opcode,
+                Opcode::SealArena | Opcode::BorrowSealedRoot | Opcode::PayloadReceipt
+            )
         );
         seen.push(opcode);
     }

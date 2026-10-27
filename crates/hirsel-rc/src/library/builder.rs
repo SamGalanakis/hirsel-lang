@@ -163,6 +163,7 @@ pub fn repr_of(kind: &LayoutKind) -> ValueRepr {
         | LayoutKind::SealedRegion { .. } => ValueRepr::Handle,
         LayoutKind::Path => ValueRepr::Scalar(ScalarKind::U64),
         LayoutKind::Arena => ValueRepr::Arena,
+        LayoutKind::PayloadReceipt { .. } => ValueRepr::PayloadReceipt,
         _ => ValueRepr::Aggregate,
     }
 }
@@ -413,6 +414,65 @@ impl<'c, 'a> Body<'c, 'a> {
                 body.held.push((slot, address));
             }
         }
+        if let Some(contract) = &abi.receipts {
+            if contract.result.is_some()
+                || !contract.captures.is_empty()
+                || !contract.inventory.is_empty()
+            {
+                return body
+                    .cx
+                    .unsupported("library receipt results, captures or inventory");
+            }
+            let TypeKind::Function(function) = &body.cx.types.row(body.cx.callable).kind else {
+                return Err(PassError::Malformed("library callable parameters".into()));
+            };
+            let mut bindings = Vec::new();
+            let mut addresses = Vec::new();
+            for parameter in &contract.parameters {
+                let original = function
+                    .parameters
+                    .get(parameter.source as usize)
+                    .ok_or_else(|| PassError::Malformed("library receipt parameter".into()))?;
+                let native = hirsel_layout::operation::collect_arguments(
+                    body.cx.types,
+                    &[GenericArgument::Type(original.ty)],
+                )
+                .map_err(|e| PassError::Layout(body.cx.path.clone(), e))?;
+                let [OperationArgument::Type(root)] = native.as_slice() else {
+                    return Err(PassError::Malformed("library receipt root type".into()));
+                };
+                let layout = body.cx.layouts.payload_receipt(root);
+                let ty = body.ty(layout);
+                let slot = body.slot(layout, SlotKind::ReceiptParameter(parameter.source));
+                let version = body.ed.value(ty, Holding::Plain);
+                body.versions[slot.index()] = Some(version);
+                let address = body.unprepared(AddressBase::Slot(slot), &[], layout);
+                addresses.push(address);
+                if parameter.mode == hirsel_lir::sealed_payload_source::ReceiptMode::Take {
+                    body.held.push((slot, address));
+                }
+                bindings.push(hirsel_lir::ir::ReceiptEntrySlot {
+                    source: parameter.source,
+                    slot,
+                    version,
+                });
+            }
+            body.ed.unit.tables.receipt_entry = Some(hirsel_lir::ir::ReceiptEntry {
+                contract: contract
+                    .content()
+                    .map_err(|e| PassError::Malformed(e.into()))?,
+                parameters: bindings,
+                captures: Vec::new(),
+                result: None,
+                environment: None,
+            });
+            // All companions are entered before any address can fail.
+            body.entry_held = body.held.clone();
+            for address in addresses {
+                let failure = body.failure(None);
+                body.push(Inst::Address { address, failure });
+            }
+        }
         // Every parameter is in its slot from entry, so each preparation's
         // failure drops every owned one.
         body.entry_held = body.held.clone();
@@ -457,7 +517,7 @@ impl<'c, 'a> Body<'c, 'a> {
     pub fn owns(&self, layout: LayoutId) -> bool {
         let record = self.record(layout);
         match repr_of(&record.kind) {
-            ValueRepr::Block => true,
+            ValueRepr::Block | ValueRepr::PayloadReceipt => true,
             ValueRepr::Aggregate | ValueRepr::Callable | ValueRepr::Handle => {
                 !(record.drop.is_empty() && record.finalizer.is_none())
             }

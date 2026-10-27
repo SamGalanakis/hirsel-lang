@@ -15,8 +15,19 @@ struct ReadDeclarations {
     definition: DefPath,
     instance: ContentHash,
     expected: Vec<SourceEvent>,
+    receipt: Option<hirsel_lir::sealed_payload_source::ReceiptSource>,
 }
 impl OperationDeclarations for ReadDeclarations {
+    fn receipt_source(
+        &self,
+        definition: &DefPath,
+        instance: ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::ReceiptSource> {
+        self.receipt
+            .as_ref()
+            .filter(|s| &s.original.definition == definition && s.instance == instance)
+            .cloned()
+    }
     fn derive(
         &self,
         operation: &hirsel_core_contract::OperationId,
@@ -95,6 +106,7 @@ fn check_read_body(
     let table = layouts.finish();
     hirsel_rc::import::prune_pretransfer(std::slice::from_mut(&mut unit), &table, &[]);
     let declarations = ReadDeclarations {
+        receipt: None,
         registry,
         definition: path,
         instance: instances.view(id).key.digest(),
@@ -197,6 +209,7 @@ fn check_seal_body(source: &str, root_kind: TypeKind, root_type: NativeType) {
     .unwrap();
     let mut table = layouts.finish();
     let declarations = ReadDeclarations {
+        receipt: None,
         registry,
         definition: path,
         instance: instances.view(id).key.digest(),
@@ -367,4 +380,86 @@ fn sealed_data_callback_sum_is_independently_proved_by_v_and_c() {
     let ready = hirsel_rc::ready::ready(counted, &table, &Default::default()).unwrap();
     hirsel_lir::validate::qualify_scoped_transport(&[ready], &inputs)
         .expect("Ready C proves callback body");
+}
+
+#[test]
+fn sealed_heap_body_95_keeps_take_receipts_until_the_seal_transaction_finishes() {
+    let program = compile(
+        "pub fn read(mut r: Region[List[u64]]) -> u64 {region.with(mut r, fn(root: List[u64])->u64 {list.len(root)})}",
+    );
+    let scalar = program.types.intern(Type::with_kind(TypeKind::Primitive(
+        hirsel_types::Primitive::U64,
+    )));
+    let root = program.types.intern(Type::with_kind(TypeKind::Builtin {
+        kind: hirsel_types::BuiltinType::List,
+        arguments: vec![GenericArgument::Type(scalar)].into(),
+    }));
+    let path = DefPath::core("arena.seal");
+    assert!(hirsel_rc::library::body_index(&path).is_none());
+    let target = target();
+    let registry = program.operation_registry();
+    let mut layouts = LayoutBuilder::new(&target, &registry.owners);
+    let mut instances = Instances::new(program.types.clone(), program.memo.clone());
+    let request = Request::operation(
+        &program,
+        usize::MAX,
+        &path,
+        vec![GenericArgument::Type(root)],
+    )
+    .unwrap();
+    let id = hirsel_rc::library::instantiate(&mut layouts, &mut instances, request).unwrap();
+    let source =
+        hirsel_rc::library::sealed_region::receipt_source(&program, root, &instances.view(id).key)
+            .unwrap();
+    let profile = source.profiles[0].profile.clone();
+    instances.abis[id.index()] = layouts
+        .receipt_fn_abi(instances.abis[id.index()], &source.contract)
+        .unwrap();
+    let instance = instances.view(id).key.digest();
+    let declarations = ReadDeclarations {
+        registry: registry.clone(),
+        definition: path,
+        instance,
+        receipt: Some(source),
+        expected: vec![SourceEvent {
+            anchor: hirsel_lir::ir::SourceAnchor {
+                body: 0,
+                block: 0,
+                statement: 0,
+                site: hirsel_lir::ir::SiteRange {
+                    source: 0,
+                    start: 0,
+                    end: 0,
+                },
+            },
+            kind: SourceEventKind::Seal,
+            root_type: profile.root.ty,
+        }],
+    };
+    let unit = (hirsel_rc::library::sealed_region::SEAL.build)(&mut Cx::new(
+        &program,
+        &mut layouts,
+        &mut instances,
+        id,
+    ))
+    .unwrap();
+    let table = layouts.finish();
+    let manifest = manifest(&program);
+    let inputs = hirsel_lir::validate::Inputs {
+        target: &target,
+        layouts: &table,
+        operations: &declarations,
+        manifest: &manifest,
+        discharge: None,
+        memo: Default::default(),
+    };
+    hirsel_lir::validate::validate(unit.clone(), &inputs)
+        .unwrap_or_else(|e| panic!("Value C: {:?}", e.violations));
+    let placed = hirsel_rc::placement::place(unit, &table, &Default::default()).unwrap();
+    let counted = hirsel_rc::insert::insert(placed, &table, &Default::default()).unwrap();
+    hirsel_lir::validate::validate(counted.clone(), &inputs)
+        .unwrap_or_else(|e| panic!("Rc C: {:?}", e.violations));
+    let ready = hirsel_rc::ready::ready(counted, &table, &Default::default()).unwrap();
+    hirsel_lir::validate::validate_ready(ready, &inputs)
+        .unwrap_or_else(|e| panic!("Ready C: {:?}", e.violations));
 }

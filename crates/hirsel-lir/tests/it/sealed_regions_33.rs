@@ -43,8 +43,19 @@ struct Declarations {
     registry: hirsel_layout::operation::OperationRegistry,
     expected: Option<Vec<SourceEvent>>,
     payloads: Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>>,
+    receipt: Option<hirsel_lir::sealed_payload_source::ReceiptSource>,
 }
 impl OperationDeclarations for Declarations {
+    fn receipt_source(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+        instance: hirsel_syntax::ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::ReceiptSource> {
+        self.receipt
+            .as_ref()
+            .filter(|s| &s.original.definition == definition && s.instance == instance)
+            .cloned()
+    }
     fn derive(
         &self,
         operation: &OperationId,
@@ -96,6 +107,14 @@ fn transition_fixture() -> (support::Lir<TestStage>, Declarations, ValueId, Valu
 fn transition_fixture_with_root(
     heap: bool,
 ) -> (support::Lir<TestStage>, Declarations, ValueId, ValueId) {
+    transition_receipt_fixture(heap, false)
+}
+
+fn transition_receipt_fixture(
+    heap: bool,
+    receipt: bool,
+) -> (support::Lir<TestStage>, Declarations, ValueId, ValueId) {
+    use hirsel_lir::sealed_payload_source::*;
     let types = support::session();
     let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
     let word = if heap {
@@ -115,6 +134,12 @@ fn transition_fixture_with_root(
     let mut builder = LayoutBuilder::new(&target, &owners);
     let root_layout = builder.layout(&types, word).unwrap();
     let owner_layout = builder.layout(&types, region).unwrap();
+    let meta = builder.payload_receipt(&NativeType::Builtin(
+        hirsel_lir::operation::BuiltinType::List,
+        vec![OperationArgument::Type(NativeType::Primitive(
+            hirsel_lir::operation::Primitive::U64,
+        ))],
+    ));
     let extra = builder.finish();
     let mut t = support::Lir::<TestStage>::new(&[], None);
     let offset = t.table.layouts.len() as u32;
@@ -124,6 +149,7 @@ fn transition_fixture_with_root(
     }
     let root_layout = LayoutId(root_layout.0 + offset);
     let owner_layout = LayoutId(owner_layout.0 + offset);
+    let meta = LayoutId(meta.0 + offset);
     let abi = t.abi(
         &[
             (Passing::Take, support::l::ARENA),
@@ -152,13 +178,82 @@ fn transition_fixture_with_root(
         unreachable!()
     };
     let native = native.clone();
+    let mut receipt_source = None;
+    let mut metadata = None;
+    if receipt {
+        let profile = ClosedStorageProfile {
+            schema: ClosedStorageProfile::SCHEMA,
+            root: ClosedStorageType {
+                ty: native.clone(),
+                source_type: support::hash("original List[u64]"),
+            },
+            functions: vec![],
+        };
+        let contract = ReceiptContract::new(
+            vec![ReceiptParameter {
+                source: 1,
+                ty: ReceiptType {
+                    source_type: profile.root.source_type,
+                    profile: profile.content().unwrap(),
+                },
+                mode: ReceiptMode::Take,
+            }],
+            None,
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let slot = t.slot(meta, SlotKind::ReceiptParameter(1), support::ROOT);
+        t.builder.unit.slots[slot.index()].ty = t.ty(ValueRepr::PayloadReceipt, meta);
+        let version = t.value_as(ValueRepr::PayloadReceipt, meta, Holding::Plain);
+        t.builder.unit.tables.receipt_entry = Some(ReceiptEntry {
+            contract: contract.content().unwrap(),
+            parameters: vec![ReceiptEntrySlot {
+                source: 1,
+                slot,
+                version,
+            }],
+            captures: vec![],
+            result: None,
+            environment: None,
+        });
+        let abi = &mut t.table.fn_abis[abi.0 as usize];
+        abi.key.receipt_contract = Some(contract.content().unwrap());
+        abi.receipts = Some(contract.clone());
+        receipt_source = Some(ReceiptSource {
+            original: hirsel_lir::invocations::ReferenceBody {
+                definition: t.builder.unit.header.definition.clone(),
+                instance: support::hash("original seal"),
+                body: 0,
+            },
+            instance: t.builder.unit.header.instance,
+            source: support::hash("current original seal"),
+            implementation_revision: t.builder.unit.header.implementation_revision,
+            contract,
+            profiles: vec![ReceiptProfile {
+                port: ReceiptPort::Parameter(1),
+                profile,
+            }],
+        });
+        let address = t.at(
+            support::ENTRY,
+            slot,
+            &[],
+            &[support::Undo::Release(root), support::Undo::Drop(slot)],
+        );
+        metadata = Some((slot, version, address));
+    }
     let descriptor = t
         .operations
         .seal_descriptor(&native, &t.table, &target)
         .unwrap();
     t.builder.unit.tables.seal_descriptors.push(descriptor);
     let failure = if heap {
-        let cleanup = t.releasing(&[root]);
+        let cleanup = if let Some((slot, _, _)) = metadata {
+            t.cleanup(&[support::Undo::Release(root), support::Undo::Drop(slot)])
+        } else {
+            t.releasing(&[root])
+        };
         t.failure(cleanup)
     } else {
         t.fails()
@@ -167,7 +262,11 @@ fn transition_fixture_with_root(
     // same grant. Consumption must follow that origin, including on CFG edges.
     let slot = t.slot(support::l::ARENA, SlotKind::Parameter(0), support::ROOT);
     let abort = if heap {
-        vec![support::Undo::Release(root)]
+        let mut undo = vec![support::Undo::Release(root)];
+        if let Some((slot, _, _)) = metadata {
+            undo.push(support::Undo::Drop(slot));
+        }
+        undo
     } else {
         vec![]
     };
@@ -199,9 +298,14 @@ fn transition_fixture_with_root(
             origin: SourceAnchorId(0),
         },
     );
+    if let Some((_, version, address)) = metadata {
+        let value = t.read(support::ENTRY, address, version, ReadMode::Take, None);
+        t.release(support::ENTRY, value, &[owner]);
+    }
     t.builder.ret(support::ENTRY, Some(owner));
     let declarations = Declarations {
         registry: t.operations.clone(),
+        receipt: receipt_source,
         payloads: None,
         expected: Some(vec![SourceEvent {
             anchor: t.builder.unit.tables.source_anchors[0].clone(),
@@ -280,7 +384,7 @@ fn ready_sealed_bits_33_refuses_heap_roots_before_emission() {
             &manifest,
             &declarations,
         ),
-        "original pointer-free root",
+        "live paired Take receipt snapshot",
     );
 }
 
@@ -322,6 +426,7 @@ fn source_correspondence_survives_candidate_event_deletion() {
     missing.builder.ret(support::ENTRY, None);
     let (unit, table, manifest) = missing.finish();
     let empty = Declarations {
+        receipt: None,
         registry: d.registry.clone(),
         payloads: None,
         expected: Some(vec![]),
@@ -980,6 +1085,7 @@ fn root_view_fixture(
     t.builder.ret(support::ENTRY, None);
     let d = Declarations {
         registry: t.operations.clone(),
+        receipt: None,
         payloads: None,
         expected: Some(vec![SourceEvent {
             anchor: t.builder.unit.tables.source_anchors[0].clone(),
@@ -1358,4 +1464,56 @@ fn sealed_native_cache_33_replays_independent_source_and_descriptor_reads() {
     );
     assert_eq!(output.stage(), StageKind::Ready);
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn ready_heap_seal_95_requires_a_live_same_snapshot_take_companion() {
+    let (t, declarations, _, _) = transition_receipt_fixture(true, true);
+    let (mut unit, table, manifest) = t.finish();
+    let meta = unit.types[unit.slots[unit.tables.receipt_entry.as_ref().unwrap().parameters[0]
+        .slot
+        .index()]
+    .ty
+    .index()]
+    .layout;
+    // The generic test builder predates private metadata representations.
+    for ty in &mut unit.types {
+        if ty.layout == meta {
+            ty.repr = ValueRepr::PayloadReceipt;
+        }
+    }
+    let unit = hirsel_rc::ready::ready(unit, &table, &Default::default()).unwrap();
+    assert_eq!(
+        checked_raw(unit.clone(), &table, &manifest, &declarations),
+        []
+    );
+    let binding = &unit.tables.receipt_entry.as_ref().unwrap().parameters[0];
+    let take = unit
+        .instructions
+        .iter()
+        .position(|i| {
+            matches!(i,
+        Inst::Read { reaching, mode: ReadMode::Take, .. } if *reaching == binding.version)
+        })
+        .unwrap();
+    let seal = unit
+        .instructions
+        .iter()
+        .position(|i| matches!(i, Inst::SealArena { .. }))
+        .unwrap();
+    let mut emptied = unit.clone();
+    // A valid historical entry version must not authorize a seal after that
+    // carrier has moved out of its physical slot.
+    let instruction = emptied.instructions.remove(take);
+    emptied.instructions.insert(seal, instruction);
+    sealed_rejection(
+        &checked_raw(emptied, &table, &manifest, &declarations),
+        "live paired Take receipt snapshot",
+    );
+    let mut wrong_source = declarations;
+    wrong_source.receipt.as_mut().unwrap().profiles[0]
+        .profile
+        .root
+        .ty = NativeType::Primitive(hirsel_lir::operation::Primitive::U64);
+    assert!(!checked_raw(unit, &table, &manifest, &wrong_source).is_empty());
 }

@@ -85,7 +85,7 @@ fn producer_roundtrips_and_walks_every_local_reference() {
     );
     assert_eq!(Inst::defs(&inst), vec![ValueId(9)]);
     assert!(crate::stage::StageKind::Value.admits(inst.opcode()));
-    assert!(!crate::stage::StageKind::Ready.admits(inst.opcode()));
+    assert!(crate::stage::StageKind::Ready.admits(inst.opcode()));
 }
 #[test]
 fn original_binding_ordinal_and_input_order_cannot_be_substituted() {

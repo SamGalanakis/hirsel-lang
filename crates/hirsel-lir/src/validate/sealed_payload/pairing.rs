@@ -118,6 +118,19 @@ impl<'a, S> Pairing<'a, S> {
         None
     }
 
+    /// A heap seal borrows the companion still held in its original Take entry
+    /// slot. Resolve only whole-value aliases, matching the physical carrier.
+    pub(in crate::validate) fn seal_entry(&self, root: ValueId) -> Option<&'a ReceiptEntrySlot> {
+        let original = self.canonical(root)?;
+        self.unit
+            .tables
+            .receipt_entry
+            .as_ref()?
+            .parameters
+            .iter()
+            .find(|binding| self.unit.parameters.get(binding.source as usize) == Some(&original))
+    }
+
     fn argument(&self, edge: EdgeId, ordinal: usize) -> ValueId {
         self.unit.tables.edges[edge.index()]
             .arguments

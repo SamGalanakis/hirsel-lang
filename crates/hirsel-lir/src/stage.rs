@@ -60,7 +60,7 @@ impl StageKind {
     pub const fn admits(self, op: Opcode) -> bool {
         let rank = self as u8;
         match op {
-            Opcode::PayloadReceipt => rank < StageKind::Ready as u8,
+            Opcode::PayloadReceipt => true,
             Opcode::Drop | Opcode::Unavailable => rank < StageKind::Ready as u8,
             Opcode::RegionEnter
             | Opcode::RegionReserve
@@ -76,8 +76,8 @@ impl StageKind {
             Opcode::Reset | Opcode::Reuse | Opcode::Dispose | Opcode::TokenNone => {
                 rank >= StageKind::Reuse as u8
             }
-            // Existing source/grant/loan checks remain mandatory. Ready's
-            // sealed checker admits only the linked pointer-free root subset.
+            // Source/grant/loan checks remain mandatory. Heap seals also
+            // require a live companion describing the exact taken snapshot.
             Opcode::SealArena | Opcode::BorrowSealedRoot => true,
             Opcode::ArenaInventory => rank < StageKind::Ready as u8,
             Opcode::CopyValue => rank <= StageKind::Placed as u8,

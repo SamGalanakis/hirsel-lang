@@ -199,6 +199,13 @@ fn check(
     };
     let ordinary = validate::check(unit, &inputs);
     assert_eq!(ordinary, validate::check_scoped_transport(unit, &inputs));
+    let ready = unit.clone().into_stage::<hirsel_lir::stage::Ready>();
+    let ready_errors = validate::check(&ready, &inputs);
+    assert_eq!(
+        ordinary.is_empty(),
+        ready_errors.is_empty(),
+        "Ready custody: {ready_errors:?}"
+    );
     ordinary
 }
 

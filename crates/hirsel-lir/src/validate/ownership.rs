@@ -2413,8 +2413,35 @@ impl<S: Stage> Walker<'_, '_, S> {
                 result,
                 grant,
                 root,
+                shape,
                 ..
             } => {
+                if self.cx.stage == crate::stage::StageKind::Ready
+                    && unit.tables.seal_descriptors[shape.index()]
+                        .bits_root(self.cx.layouts.0)
+                        .is_err()
+                {
+                    let pairs = self
+                        .receipt_pairs
+                        .get_or_init(|| super::sealed_payload::pairing::Pairing::new(unit));
+                    let binding = pairs.seal_entry(root);
+                    let valid = binding.is_some_and(|binding| {
+                        let slot = &st.slots[binding.slot.index()];
+                        receipt_passing(self.cx, binding.slot) == Some(Passing::Take)
+                            && content(slot) == Tri::Yes
+                            && slot.taken.values().all(|v| *v == Tri::No)
+                            && slot.finalize.is_empty()
+                            && matches!(slot.versions, Versions::One(metadata) if pairs.paired(root, metadata))
+                    });
+                    if !valid {
+                        self.err(
+                            site,
+                            K::Sealed(
+                                "heap seal requires its live paired Take receipt snapshot".into(),
+                            ),
+                        );
+                    }
+                }
                 self.borrow(site, st, cr, grant);
                 self.consume(site, st, cr, root);
                 self.create(site, st, cr, result);
