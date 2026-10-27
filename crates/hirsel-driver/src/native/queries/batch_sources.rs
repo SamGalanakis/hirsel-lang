@@ -60,9 +60,10 @@ mod tests {
     fn heap_witness_imports_each_original_and_library_body() {
         hirsel_engine::with_compiler_stack(|| {
             let source = include_str!("../../../../../conformance/MEM/MEM-4-sealed-heap-run.hir");
-            let mut loaded =
-                crate::load_program_source(std::path::Path::new("sealed-heap.hir"), Some(source))
-                    .unwrap();
+            let scratch = tempfile::tempdir().unwrap();
+            let path = scratch.path().join("sealed-heap.hir");
+            std::fs::write(&path, source).unwrap();
+            let mut loaded = crate::load_program(&path).unwrap();
             loaded.check_for_execution().unwrap();
             let input = loaded.engine.export_native_input().unwrap();
             let validated = loaded.engine.import_native_input(input).unwrap();
@@ -114,6 +115,16 @@ mod tests {
             }
             assert!(index > 3, "original and library bodies executed");
             assert!(failures.is_empty(), "{}", failures.join("\n"));
+            let ready =
+                crate::native::build(&validated, &crate::native::Options::new(target)).unwrap();
+            let run = crate::native::run_heap(
+                &ready,
+                &loaded.entry,
+                &crate::native::Sites::new(validated.snapshot()),
+            )
+            .unwrap();
+            assert_eq!(run.observation.exit_code, Some(0));
+            assert!(run.observation.failures.is_empty(), "{:?}", run.observation);
         });
     }
 }

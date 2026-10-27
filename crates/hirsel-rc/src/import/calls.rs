@@ -621,8 +621,15 @@ impl Importer<'_> {
             });
         }
         let mut receipts = if let Some(contract) = &fn_abi.receipts {
-            if !contract.captures.is_empty() || !contract.inventory.is_empty() {
-                return unsupported("receipt calls with captures or inventory");
+            if !contract.captures.is_empty()
+                || contract.inventory.iter().any(|grant| {
+                    !matches!(
+                        grant,
+                        hirsel_lir::sealed_payload_source::ReceiptGrant::Parameter(_)
+                    )
+                })
+            {
+                return unsupported("receipt calls with captures or non-parameter inventory");
             }
             let mut carriers = Vec::new();
             for parameter in &contract.parameters {

@@ -757,32 +757,7 @@ impl Instances {
             .with_scoped_contract(abi, parameters, capture_paths)
             .map_err(|e| InstanceError::Layout(view.key.definition().clone(), e))?;
         let abi = if role.is_library() && view.key.definition().is_core("region.with") {
-            let TypeKind::Function(function) = &self.types.row(callable).kind else {
-                return Err(InstanceError::Malformed("region.with callable".into()));
-            };
-            let callback = function.parameters[1].ty;
-            let nested = layouts
-                .fn_abi(&self.types, callback, CallableShape::Closure)
-                .map_err(|e| InstanceError::Layout(view.key.definition().clone(), e))?;
-            let nested = layouts
-                .with_scoped_contract(
-                    nested,
-                    vec![hirsel_lir::abi_types::ParameterPath {
-                        parameter: 0,
-                        fields: Vec::new(),
-                    }],
-                    Vec::new(),
-                )
-                .map_err(|e| InstanceError::Layout(view.key.definition().clone(), e))?;
-            layouts
-                .with_scoped_entry(
-                    abi,
-                    hirsel_lir::abi_types::ParameterPath {
-                        parameter: 1,
-                        fields: Vec::new(),
-                    },
-                    nested,
-                )
+            crate::library::sealed_region::scoped_abi(layouts, &self.types, callable, abi)
                 .map_err(|e| InstanceError::Layout(view.key.definition().clone(), e))?
         } else {
             abi

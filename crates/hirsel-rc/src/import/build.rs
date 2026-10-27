@@ -165,6 +165,17 @@ impl Importer<'_> {
             .layouts
             .fn_abi(self.types, request.callable, request.shape)
             .map_err(|e| PassError::Layout(request.path.clone(), e))?;
+        let abi = if request.path.is_core("region.with") {
+            crate::library::sealed_region::scoped_abi(
+                self.layouts,
+                self.types,
+                request.callable,
+                abi,
+            )
+            .map_err(|e| PassError::Layout(request.path.clone(), e))?
+        } else {
+            abi
+        };
         let abi = self
             .layouts
             .with_caller_site(abi)

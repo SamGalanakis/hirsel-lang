@@ -16,6 +16,44 @@ pub static WITH: LibraryBody = LibraryBody {
     build: with,
 };
 
+/// Both the source call and the registered body require the callback's
+/// independently checked nonretention contract for its lent root.
+pub(crate) fn scoped_abi(
+    layouts: &mut dyn super::builder::Layouts,
+    types: &hirsel_types::TypeInterner,
+    callable: hirsel_types::TypeId,
+    abi: hirsel_lir::abi_types::FnAbiId,
+) -> Result<hirsel_lir::abi_types::FnAbiId, hirsel_lir::layout::LayoutError> {
+    use hirsel_lir::abi_types::ParameterPath;
+    let hirsel_types::TypeKind::Function(function) = &types.row(callable).kind else {
+        return Err(hirsel_lir::layout::LayoutError::Invalid(
+            "region.with callable".into(),
+        ));
+    };
+    let callback = function
+        .parameters
+        .get(1)
+        .ok_or_else(|| hirsel_lir::layout::LayoutError::Invalid("region.with callback".into()))?
+        .ty;
+    let nested = layouts.fn_abi(types, callback, CallableShape::Closure)?;
+    let nested = layouts.with_scoped_contract(
+        nested,
+        vec![ParameterPath {
+            parameter: 0,
+            fields: vec![],
+        }],
+        vec![],
+    )?;
+    layouts.with_scoped_entry(
+        abi,
+        ParameterPath {
+            parameter: 1,
+            fields: vec![],
+        },
+        nested,
+    )
+}
+
 fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let root = cx.type_actual(0)?;
     let callback = super::tasks::parameter(cx.types, cx.callable, 1)?;

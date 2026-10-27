@@ -269,9 +269,16 @@ impl Importer<'_> {
         if let Some(source) = self.instances.receipt_source(self.id) {
             let source = source.clone();
             let contract = &source.contract;
-            if !contract.captures.is_empty() || !contract.inventory.is_empty() {
+            if !contract.captures.is_empty()
+                || contract.inventory.iter().any(|grant| {
+                    !matches!(
+                        grant,
+                        hirsel_lir::sealed_payload_source::ReceiptGrant::Parameter(_)
+                    )
+                })
+            {
                 return unsupported(
-                    "receipt entry requires data parameters and results without captures or inventory",
+                    "receipt entry requires data parameters and results without captures or non-parameter inventory",
                 );
             }
             let mut parameters = Vec::new();

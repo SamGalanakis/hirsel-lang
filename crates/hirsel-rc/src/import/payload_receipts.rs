@@ -23,6 +23,15 @@ impl Importer<'_> {
         ) {
             return Ok(());
         }
+        // The public heap path currently transports List roots. Other original
+        // constructors still enter the source inventory, but do not acquire an
+        // unused metadata holder. A demanded unsupported root fails at its call.
+        if !matches!(
+            source.root_type,
+            hirsel_lir::operation::NativeType::Builtin(hirsel_lir::operation::BuiltinType::List, _)
+        ) {
+            return Ok(());
+        }
         let descriptor = self
             .layouts
             .seal_descriptor(&self.program.operation_registry(), &source.root_type)
@@ -40,14 +49,11 @@ impl Importer<'_> {
         }
         let mut inputs = Vec::new();
         for (field, original) in fields.iter().zip(&source.recipe.inputs) {
-            let scalar = matches!(original.ty, hirsel_lir::operation::NativeType::Primitive(_));
-            let unit = matches!(&original.ty, hirsel_lir::operation::NativeType::Tuple(parts) if parts.is_empty())
-                && matches!(
-                    original.producer,
-                    PayloadProducer::Literal(PayloadLiteral::Unit)
-                );
-            if !scalar && !unit {
-                return unsupported("construction child needs paired original receipt custody");
+            if !matches!(original.ty, hirsel_lir::operation::NativeType::Primitive(hirsel_lir::operation::Primitive::U64)) {
+                return unsupported(format!(
+                    "construction child needs paired original receipt custody: {:?}, {:?}",
+                    original.ty, original.producer
+                ));
             }
             inputs.push(ReceiptInput {
                 original: field.value,

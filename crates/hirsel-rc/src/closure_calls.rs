@@ -355,6 +355,27 @@ fn rewrite_seeded_instance(
                 {
                     continue;
                 }
+                let receipts = match (&site.receipts, &actual.receipts) {
+                    (None, Some(contract))
+                        if contract.parameters.is_empty()
+                            && contract.result.is_none()
+                            && contract.captures.is_empty()
+                            && contract.inventory.iter().all(|grant| {
+                                matches!(
+                                    grant,
+                                    hirsel_lir::sealed_payload_source::ReceiptGrant::Parameter(_)
+                                )
+                            }) =>
+                    {
+                        Some(hirsel_lir::receipt_transport::ReceiptCall {
+                            contract: contract.content().expect("selected source contract"),
+                            arguments: vec![],
+                            result: None,
+                        })
+                    }
+                    _ if expected.receipts == actual.receipts => site.receipts.clone(),
+                    _ => continue,
+                };
                 // Iterator steps use a different physical callable layout;
                 // Bound currently describes only ordinary closure callables.
                 if !matches!(
@@ -376,6 +397,7 @@ fn rewrite_seeded_instance(
                     Callee::Direct(code)
                 };
                 u.tables.calls[call].abi = target.abi;
+                u.tables.calls[call].receipts = receipts;
                 if target.environment
                     && let Some(digest) = target.symbol.instance
                 {
