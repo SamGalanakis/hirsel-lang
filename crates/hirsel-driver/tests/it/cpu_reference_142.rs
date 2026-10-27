@@ -35,6 +35,7 @@ fn agree_in(
         let fixture = native::Fixture {
             cpu: cpu.clone(),
             tasks_free: free,
+            trace_roots: native,
             ..Default::default()
         };
         let run = run_observed_snapshot(
@@ -122,7 +123,12 @@ fn agree_in(
                 )
                 .unwrap();
                 assert_eq!(
-                    native::observe(&launched, &program, &sites).unwrap(),
+                    native::observe(&launched, &program, &sites).unwrap_or_else(|error| {
+                        panic!(
+                            "{backend:?} Free={free}: {error}; roots {}",
+                            std::fs::read_to_string(dir.join("roots")).unwrap_or_default()
+                        )
+                    }),
                     reference
                 );
             }

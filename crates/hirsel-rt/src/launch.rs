@@ -2744,13 +2744,11 @@ pub(crate) unsafe fn execute(
             unsafe { crate::pool::start(ctx, width, migrate) };
         }
     }
+    if production_free || (cpu_fixture.is_some() && unsafe { (*ctx).run_ref().free_mode }) {
+        unsafe { crate::pool::free::enable(ctx) };
+    }
     if production_free {
-        unsafe {
-            crate::pool::free::enable(ctx);
-        }
-        unsafe {
-            crate::tasks::free::host::native::enable(ctx);
-        }
+        unsafe { crate::tasks::free::host::native::enable(ctx) };
     }
     // After the workers start: a run with compute workers takes its fuel in chunks, and a
     // memory budget meters every worker's heap.
