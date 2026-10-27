@@ -75,6 +75,9 @@ impl<'a, S> Pairing<'a, S> {
         }
         for call in &unit.tables.calls {
             if let Some(receipts) = &call.receipts {
+                if let (Some(value), Some(receipt)) = (call.result, receipts.result) {
+                    origins[receipt.index()] = Origin::Receipt(value);
+                }
                 for argument in &receipts.arguments {
                     if let ReceiptArgument::Mut {
                         parameter, version, ..

@@ -719,8 +719,10 @@ impl<S: Stage> Checker<'_, '_, S> {
             if let Terminator::Call { call, normal, .. } = unit.terminators[b.index()] {
                 let site = Site::at(b, insts.len() as u32);
                 let call = &unit.tables.calls[call.index()];
-                if let (Some(result), Some(normal)) = (call.result, normal) {
-                    self.define(result, Def::Edge(normal), site);
+                if let Some(normal) = normal {
+                    for result in call.normal_results() {
+                        self.define(result, Def::Edge(normal), site);
+                    }
                 }
                 for version in mut_versions(self.cx, call) {
                     self.define(version, Def::Call(b), site);
@@ -3223,7 +3225,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                         }
                         _ => {}
                     }
-                    if normal.is_none() && call.result.is_some() {
+                    if normal.is_none() && call.normal_results().next().is_some() {
                         self.add(site, K::Type("diverging call result"));
                     }
                 }

@@ -822,3 +822,10 @@ on normal return and entered failure, and preserves the incoming snapshots on
 rejected admission. Mutable exits require complete paired payload and metadata
 slots. Call alias checks include exclusive receipt addresses and borrowed
 companions. Captures, result publication, tasks and inventory remain closed.
+
+C validator revision 33 binds result companions to complete original result
+profiles and defines them only on the normal call edge. A receipt output slot
+starts empty, receives one matching owned snapshot after cleanup, and publishes
+only immediately before its ordinary return. Failure cannot publish it.
+Mutable slot correspondence is a relational fact across every predecessor,
+including shared cleanup with different reaching versions.

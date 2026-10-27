@@ -55,6 +55,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                     | SlotKind::Temporary
                     | SlotKind::Displaced
                     | SlotKind::ReceiptParameter(_)
+                    | SlotKind::ReceiptResult
             )
         {
             reject(Site::UNIT, "private receipt slot is not local custody");
@@ -109,6 +110,11 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                     }
                 }
                 Inst::StorageLive { slot } | Inst::StorageDead { slot, .. }
+                    if unit.slots[slot.index()].kind == SlotKind::ReceiptResult =>
+                {
+                    reject(site, "receipt output storage belongs to the caller");
+                }
+                Inst::StorageLive { slot } | Inst::StorageDead { slot, .. }
                     if matches!(unit.slots[slot.index()].kind, SlotKind::ReceiptParameter(_))
                         && (matches!(inst, Inst::StorageLive { .. })
                             || borrowed_parameter(cx, slot)) =>
@@ -141,6 +147,21 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                 {
                     if !metadata_address(cx, address, false) {
                         reject(site, "private receipt write is not a whole local slot");
+                    }
+                    if output_address(unit, address)
+                        && (!matches!(inst, Inst::Store { .. })
+                            || !matches!(unit.terminators[block.index()], Terminator::Return(_))
+                            || row.instructions.get(&unit.instructions).unwrap_or(&[])
+                                [position + 1..]
+                                .iter()
+                                .any(|inst| {
+                                    !matches!(inst, Inst::StorageDead { .. } | Inst::EndLoan { .. })
+                                }))
+                    {
+                        reject(
+                            site,
+                            "receipt output may only publish after cleanup immediately before normal return",
+                        );
                     }
                 }
                 Inst::Release { value, .. } if metadata(value) => (),
@@ -210,11 +231,12 @@ fn metadata_address<S>(cx: &Cx<'_, S>, mut address: AddressId, read: bool) -> bo
                 return matches!(
                     cx.unit.slots[slot.index()].kind,
                     SlotKind::Local | SlotKind::Temporary | SlotKind::Displaced
-                ) || read
-                    && matches!(
-                        cx.unit.slots[slot.index()].kind,
-                        SlotKind::ReceiptParameter(_)
-                    )
+                ) || !read && cx.unit.slots[slot.index()].kind == SlotKind::ReceiptResult
+                    || read
+                        && matches!(
+                            cx.unit.slots[slot.index()].kind,
+                            SlotKind::ReceiptParameter(_)
+                        )
                     || matches!(
                         cx.unit.slots[slot.index()].kind,
                         SlotKind::ReceiptParameter(_)
@@ -244,4 +266,17 @@ fn receipt_mode<S>(
         .iter()
         .find(|p| p.source == source)
         .map(|p| p.mode)
+}
+
+fn output_address<S>(unit: &LirUnit<S>, mut address: AddressId) -> bool {
+    for _ in 0..=unit.addresses.len() {
+        match unit.addresses[address.index()].base {
+            AddressBase::Slot(slot) => {
+                return unit.slots[slot.index()].kind == SlotKind::ReceiptResult;
+            }
+            AddressBase::Address(parent) => address = parent,
+            AddressBase::Value(_) => return false,
+        }
+    }
+    false
 }

@@ -42,6 +42,20 @@ impl Importer<'_> {
                 anchor: (STATE_RELEASE, binding.slot.0),
             })
             .collect::<Vec<_>>();
+        releases.extend(
+            self.out
+                .slots
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| {
+                    matches!(slot.kind, SlotKind::Local | SlotKind::Temporary)
+                        && self.out.types[slot.ty.index()].repr == ValueRepr::PayloadReceipt
+                })
+                .map(|(index, _)| Action::Release {
+                    slot: SlotId(index as u32),
+                    anchor: (STATE_RELEASE, index as u32),
+                }),
+        );
         if let Some(plan) = self.plan {
             if let Some(h) = self.holes {
                 releases.push(Action::Release {
@@ -108,7 +122,7 @@ impl Importer<'_> {
                             })
                         })
                     }
-                    SlotKind::Capture(_) | SlotKind::ReturnSlot => false,
+                    SlotKind::Capture(_) | SlotKind::ReturnSlot | SlotKind::ReceiptResult => false,
                     _ => true,
                 };
                 let st = &self.state.slots[s.index()];

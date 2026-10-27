@@ -51,6 +51,20 @@ fn borrowed_request(forward: bool, take: bool) {
 }
 
 fn request(forward: bool, take: bool, mutable: bool) {
+    request_result(forward, take, mutable, false);
+}
+
+#[test]
+fn aware_source_request_returns_paired_owned_results_through_rc_and_disk_replay() {
+    request_result(true, true, false, true);
+}
+
+#[test]
+fn aware_source_request_publishes_a_taken_parameter_as_its_paired_return() {
+    request_result(false, true, false, true);
+}
+
+fn request_result(forward: bool, take: bool, mutable: bool, result: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -78,6 +92,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
                     take,
                     !forward,
                     mutable,
+                    result,
                 ),
             )
             .unwrap();
@@ -384,6 +399,7 @@ pub fn inspect(root:List[u64])->u64 {forward(root)+forward_again(root)}
                     take,
                     !forward,
                     mutable,
+                    result,
                 ),
             )
             .unwrap();
@@ -473,8 +489,34 @@ fn custody_source(text: &str, take: bool, borrow_leaf: bool) -> String {
     }
 }
 
-fn request_source(text: &str, take: bool, borrow_leaf: bool, mutable: bool) -> String {
+fn request_source(
+    text: &str,
+    take: bool,
+    borrow_leaf: bool,
+    mutable: bool,
+    result: bool,
+) -> String {
     let source = custody_source(text, take, borrow_leaf);
+    let source = if result {
+        let read = if text.contains("arena.seal") {
+            r#"fn read(root: List[u64]) -> u64 {
+              let mut r=arena.with(fn(a:Arena)->Region[List[u64]] {
+                let independent:List[u64] in heap=copy_to(heap,root)
+                arena.seal(take a,take independent)
+              })
+              region.with(mut r,fn(v:List[u64])->u64 {list.len(v)})
+            }"#
+        } else {
+            "fn read(root: List[u64]) -> u64 {list.len(root)}"
+        };
+        format!("{read}
+          fn forward(take root: List[u64]) -> List[u64] {{ take root }}
+          fn forward_again(take root: List[u64]) -> u64 {{ let next=forward(take root); read(next) }}
+          pub fn inspect(take root: List[u64]) -> u64 {{ forward_again(take root) }}
+        ")
+    } else {
+        source
+    };
     if mutable {
         source
             .replace("root: List[u64]", "mut root: List[u64]")

@@ -1759,7 +1759,9 @@ impl<S: Stage> Flow<'_, S> {
                 }
                 .into();
                 SlotState {
-                    live: if entered || slot.kind == SlotKind::ReturnSlot {
+                    live: if entered
+                        || matches!(slot.kind, SlotKind::ReturnSlot | SlotKind::ReceiptResult)
+                    {
                         Tri::Yes
                     } else {
                         Tri::No
@@ -1986,8 +1988,8 @@ impl<S: Stage> Flow<'_, S> {
                 if failure != PENDING_FAILURE {
                     outs.push(self.failure(failure, st.clone()));
                 }
-                if let Some(r) = unit.tables.calls[call.index()].result {
-                    self.create(&mut st, r);
+                for result in unit.tables.calls[call.index()].normal_results() {
+                    self.create(&mut st, result);
                 }
                 visit(insts.len(), pre.as_ref(), &st);
                 if let Some(normal) = normal {
@@ -2865,7 +2867,9 @@ pub(crate) fn synthesize_failure<S: Stage>(
         }
         match (facts.passing_of(id), slot.kind) {
             (Some(Passing::Mut | Passing::Borrow), _)
-            | (_, SlotKind::Capture(_) | SlotKind::ReturnSlot) => continue,
+            | (_, SlotKind::Capture(_) | SlotKind::ReturnSlot | SlotKind::ReceiptResult) => {
+                continue;
+            }
             _ => {}
         }
         if st.live != Tri::Yes && st.live != Tri::Maybe {

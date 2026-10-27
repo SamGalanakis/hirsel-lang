@@ -466,7 +466,9 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                 .copied()
                 .into();
                 SlotState {
-                    live: if entered || slot.kind == SlotKind::ReturnSlot {
+                    live: if entered
+                        || matches!(slot.kind, SlotKind::ReturnSlot | SlotKind::ReceiptResult)
+                    {
                         Tri::Yes
                     } else {
                         Tri::No
@@ -886,7 +888,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                     return outs;
                 };
                 let mut ncr = cr;
-                if let Some(result) = site_data.result {
+                for result in site_data.normal_results() {
                     self.create(site, &mut st, &mut ncr, result);
                 }
                 let (s, c) = self.leave(site, b, normal, st, ncr);
@@ -894,6 +896,29 @@ impl<S: Stage> Walker<'_, '_, S> {
                 return outs;
             }
             Terminator::Return(value) => {
+                if let Some(slot) = unit.tables.receipt_entry.as_ref().and_then(|e| e.result) {
+                    self.require(site, &st, slot, &[], false);
+                    let valid = match (value, st.slots[slot.index()].versions) {
+                        (Some(value), Versions::One(receipt)) => self
+                            .receipt_pairs
+                            .get_or_init(|| super::sealed_payload::pairing::Pairing::new(unit))
+                            .paired(value, receipt),
+                        (None, Versions::One(_)) => matches!(self.cx.layouts.get(
+                            unit.types[unit.slots[slot.index()].ty.index()].layout).map(|r| &r.kind),
+                            Some(crate::layout_types::LayoutKind::PayloadReceipt { root }) if *root == crate::operation::NativeType::Tuple(vec![])),
+                        _ => false,
+                    };
+                    if !valid {
+                        self.err(
+                            site,
+                            K::Sealed(
+                                "receipt output is not paired with the ordinary return snapshot"
+                                    .into(),
+                            ),
+                        );
+                    }
+                    st.slots[slot.index()].init = Tri::No;
+                }
                 if let Some(v) = value {
                     if !self.facts.regions[v.index()].is_empty() {
                         self.err(site, K::RegionEscape(v));
@@ -1347,6 +1372,14 @@ impl<S: Stage> Walker<'_, '_, S> {
     /// entered region remains, and every caller `mut` parameter is whole.
     fn exit(&mut self, site: Site, st: &State, cr: &Credits) {
         let unit = self.cx.unit;
+        if let Some(slot) = unit.tables.receipt_entry.as_ref().and_then(|e| e.result)
+            && st.slots[slot.index()].init.may()
+        {
+            self.err(
+                site,
+                K::Sealed("receipt output was published on failure".into()),
+            );
+        }
         for (&v, &n) in cr {
             if n > 0 {
                 self.err(site, K::Leak(v));

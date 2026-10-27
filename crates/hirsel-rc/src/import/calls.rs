@@ -58,13 +58,47 @@ impl Importer<'_> {
                     Some(_) => self.fill_return(v)?,
                     None => v,
                 };
+                let receipt = if self
+                    .out
+                    .tables
+                    .receipt_entry
+                    .as_ref()
+                    .and_then(|e| e.result)
+                    .is_some()
+                {
+                    let slot = self.receipt_slot(v).ok_or_else(|| {
+                        PassError::Unsupported(
+                            "receipt return has no paired metadata snapshot".into(),
+                        )
+                    })?;
+                    let metadata = self.whole(slot);
+                    let address = self.address(&metadata)?;
+                    Some(self.operand_at(UseKind::Take, &metadata, address, None)?)
+                } else {
+                    None
+                };
                 let actions = self.exit_actions(self.chain_actions(*cleanup)?);
                 self.failure = FailureContext {
                     cleanup: None,
                     before: Vec::new(),
-                    pending: if self.holds(v) { vec![v] } else { Vec::new() },
+                    pending: [Some(v).filter(|&v| self.holds(v)), receipt]
+                        .into_iter()
+                        .flatten()
+                        .collect(),
                 };
                 self.run_normal(&actions, &[])?;
+                if let Some(receipt) = receipt {
+                    let slot = self
+                        .out
+                        .tables
+                        .receipt_entry
+                        .as_ref()
+                        .and_then(|e| e.result)
+                        .unwrap();
+                    let metadata = self.whole(slot);
+                    let address = self.address(&metadata)?;
+                    self.store(&metadata, address, receipt)?;
+                }
                 let abi = self.own_abi();
                 let result = abi.result.is_some().then_some(v);
                 self.terminate(Terminator::Return(result));
@@ -586,12 +620,9 @@ impl Importer<'_> {
                 value,
             });
         }
-        let receipts = if let Some(contract) = &fn_abi.receipts {
-            if !contract.captures.is_empty()
-                || !contract.inventory.is_empty()
-                || contract.result.is_some()
-            {
-                return unsupported("receipt calls with captures, inventory or result custody");
+        let mut receipts = if let Some(contract) = &fn_abi.receipts {
+            if !contract.captures.is_empty() || !contract.inventory.is_empty() {
+                return unsupported("receipt calls with captures or inventory");
             }
             let mut carriers = Vec::new();
             for parameter in &contract.parameters {
@@ -619,30 +650,18 @@ impl Importer<'_> {
                         }
                     })
                     .ok_or_else(|| PassError::Malformed("receipt ordinary argument".into()))?;
-                let ordinal = self.incoming_receipt_parameter(value).ok_or_else(|| {
+                let slot = self.receipt_slot(value).ok_or_else(|| {
                     PassError::Unsupported(
-                        "receipt call argument has no incoming metadata snapshot".into(),
+                        "receipt call argument has no paired metadata snapshot".into(),
                     )
                 })?;
-                let binding = self
-                    .out
-                    .tables
-                    .receipt_entry
-                    .as_ref()
-                    .and_then(|entry| entry.parameters.iter().find(|p| p.source == ordinal))
-                    .cloned()
-                    .ok_or_else(|| {
-                        PassError::Unsupported(
-                            "receipt call argument has no incoming metadata snapshot".into(),
-                        )
-                    })?;
-                let metadata = self.whole(binding.slot);
+                let metadata = self.whole(slot);
                 let address = self.address(&metadata)?;
                 let carrier = match parameter.mode {
                     hirsel_lir::sealed_payload_source::ReceiptMode::Borrow => {
                         let loan = self.synthetic_loan(address);
                         let receipt = self.value(metadata.ty, Holding::Borrowed(loan));
-                        let reaching = self.reaching(binding.slot)?;
+                        let reaching = self.reaching(slot)?;
                         self.push(Inst::Read {
                             result: receipt,
                             address,
@@ -664,7 +683,7 @@ impl Importer<'_> {
                     }
                     hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot => {
                         let version = self.value(metadata.ty, Holding::Plain);
-                        writes.push((binding.slot, version));
+                        writes.push((slot, version));
                         hirsel_lir::receipt_transport::ReceiptArgument::Mut {
                             parameter: parameter.source,
                             address,
@@ -726,6 +745,35 @@ impl Importer<'_> {
             let ty = self.intern(r.layout);
             self.fresh(ty)
         });
+        let receipt_result = if fn_abi.receipts.as_ref().is_some_and(|c| c.result.is_some()) {
+            let symbol = match lir_callee {
+                Callee::Direct(id) | Callee::Bound { code: id, .. } => {
+                    &self.out.tables.symbols[id.index()]
+                }
+                _ => return unsupported("receipt result requires a selected source callee"),
+            };
+            let source = (0..self.instances.len())
+                .filter_map(|index| self.instances.receipt_source(InstanceId(index as u32)))
+                .find(|source| {
+                    source.original.definition == symbol.definition
+                        && Some(source.instance) == symbol.instance
+                })
+                .ok_or_else(|| {
+                    PassError::Unsupported("receipt call result lacks its original profile".into())
+                })?;
+            let profile = source
+                .profile(hirsel_lir::sealed_payload_source::ReceiptPort::Result)
+                .ok_or_else(|| {
+                    PassError::Malformed("receipt call result original profile".into())
+                })?;
+            let layout = self.layouts.payload_receipt(&profile.root.ty);
+            let ty = self.intern(layout);
+            let value = self.fresh(ty);
+            receipts.as_mut().unwrap().result = Some(value);
+            Some(value)
+        } else {
+            None
+        };
         let failure = self.fail(None)?;
         let anchor = self.anchor_here();
         let arguments = PoolRange::push(&mut self.out.pools.call_arguments, args);
@@ -789,6 +837,18 @@ impl Importer<'_> {
         if result.is_some() && self.holds(value) {
             self.failure.pending.push(value);
         }
+        if let Some(receipt) = receipt_result {
+            self.failure.pending.push(receipt);
+            let ty = self.value_type(receipt);
+            let slot = self.new_slot(ty, SlotKind::Local, ScopeId(0));
+            self.push(Inst::StorageLive { slot });
+            self.state.live(slot);
+            let metadata = self.whole(slot);
+            let address = self.address(&metadata)?;
+            self.store(&metadata, address, receipt)?;
+            self.receipt_values.insert(value, slot);
+        }
+
         if let Some(release) = release {
             // Leave the taken callee's cleanup only for this drop's failure.
             self.failure.before.drain(0..2);
@@ -818,7 +878,7 @@ impl Importer<'_> {
     /// Follow only whole-value SSA moves back to an incoming parameter.
     /// Copies, projections, new payloads and unproved joins need their own
     /// receipt producer. C recovers the final pairing independently.
-    fn incoming_receipt_parameter(&self, mut value: ValueId) -> Option<u32> {
+    fn receipt_slot(&self, mut value: ValueId) -> Option<SlotId> {
         let whole = |mut address: AddressId| {
             for _ in 0..=self.out.addresses.len() {
                 let row = &self.out.addresses[address.index()];
@@ -878,8 +938,20 @@ impl Importer<'_> {
             }
         }
         for _ in 0..=aliases.len() {
+            if let Some(&slot) = self.receipt_values.get(&value) {
+                return Some(slot);
+            }
             if let Some(ordinal) = self.out.parameters.iter().position(|v| *v == value) {
-                return self.own_abi().parameters.get(ordinal).map(|p| p.source);
+                let source = self.own_abi().parameters.get(ordinal)?.source;
+                return self
+                    .out
+                    .tables
+                    .receipt_entry
+                    .as_ref()?
+                    .parameters
+                    .iter()
+                    .find(|p| p.source == source)
+                    .map(|p| p.slot);
             }
             value = aliases[value.index()]?;
         }

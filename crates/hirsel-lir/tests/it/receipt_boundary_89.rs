@@ -1042,6 +1042,185 @@ fn mutable_exit_requires_the_replacement_payload_and_receipt_to_match() {
     }
 }
 
+fn result_fixture() -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
+    let (mut unit, mut table, manifest, mut declarations) = fixture_mode(true, true);
+    let root = unit.parameters[0];
+    let ordinary_ty = unit.values[root.index()].ty;
+    let layout = unit.types[ordinary_ty.index()].layout;
+    let binding = unit.tables.receipt_entry.as_ref().unwrap().parameters[0].clone();
+    let meta_ty = unit.slots[binding.slot.index()].ty;
+    let old = declarations.sources[0].contract.clone();
+    let contract = ReceiptContract::new(
+        old.parameters.clone(),
+        Some(ReceiptResult {
+            ty: old.parameters[0].ty.clone(),
+        }),
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let digest = contract.content().unwrap();
+    for source in &mut declarations.sources {
+        source.contract = contract.clone();
+        source.profiles.push(ReceiptProfile {
+            port: ReceiptPort::Result,
+            profile: source.profiles[0].profile.clone(),
+        });
+    }
+    let call = &unit.tables.calls[0];
+    let callee_abi = call.abi;
+    for abi in [unit.header.abi, callee_abi] {
+        let record = &mut table.fn_abis[abi.0 as usize];
+        record.key.receipt_contract = Some(digest);
+        record.receipts = Some(contract.clone());
+        record.result = Some(hirsel_lir::abi_types::AbiResult {
+            layout,
+            slots: vec![hirsel_lir::abi::slot(
+                &TargetSpec::x86_64_unknown_linux_gnu(),
+                ScalarKind::Pointer,
+            )],
+            register: Some(ScalarKind::Pointer),
+            borrowed_parameters: vec![],
+        });
+    }
+    let value = ValueId(unit.values.len() as u32);
+    unit.values.push(ValueInfo {
+        ty: ordinary_ty,
+        holding: Holding::Owned,
+    });
+    let receipt = ValueId(unit.values.len() as u32);
+    unit.values.push(ValueInfo {
+        ty: meta_ty,
+        holding: Holding::Owned,
+    });
+    unit.tables.calls[0].result = Some(value);
+    let receipts = unit.tables.calls[0].receipts.as_mut().unwrap();
+    receipts.contract = digest;
+    receipts.result = Some(receipt);
+    let slot = SlotId(unit.slots.len() as u32);
+    unit.slots.push(SlotInfo {
+        ty: meta_ty,
+        scope: ROOT,
+        kind: SlotKind::ReceiptResult,
+    });
+    let entry = unit.tables.receipt_entry.as_mut().unwrap();
+    entry.contract = digest;
+    entry.result = Some(slot);
+    let address = AddressId(unit.addresses.len() as u32);
+    unit.addresses.push(AddressInfo {
+        source_place: None,
+        unchecked: vec![],
+        base: AddressBase::Slot(slot),
+        projection: PoolRange::EMPTY,
+        ty: meta_ty,
+    });
+    let Terminator::Call {
+        normal: Some(normal),
+        ..
+    } = unit.terminators[ENTRY.index()]
+    else {
+        unreachable!()
+    };
+    let target = unit.tables.edges[normal.index()].target;
+    let mut code = unit.blocks[target.index()]
+        .instructions
+        .get(&unit.instructions)
+        .unwrap()
+        .to_vec();
+    let fault = BlockId(unit.blocks.len() as u32);
+    unit.blocks.push(Block {
+        kind: BlockKind::FailureCleanup,
+        parameters: PoolRange::EMPTY,
+        instructions: PoolRange::EMPTY,
+        anchor: SourceAnchorId(0),
+    });
+    unit.terminators.push(Terminator::InvariantFault {
+        reason: "whole result slot".into(),
+    });
+    let edge = EdgeId(unit.tables.edges.len() as u32);
+    unit.tables.edges.push(Edge {
+        target: fault,
+        arguments: PoolRange::EMPTY,
+    });
+    let failure = FailureId(unit.tables.failures.len() as u32);
+    unit.tables.failures.push(FailureEdge {
+        cleanup: edge,
+        rule: None,
+        anchor: SourceAnchorId(0),
+        dispose: PoolRange::EMPTY,
+    });
+    code.push(Inst::Address { address, failure });
+    let version = ValueId(unit.values.len() as u32);
+    unit.values.push(ValueInfo {
+        ty: meta_ty,
+        holding: Holding::Plain,
+    });
+    code.push(Inst::Store {
+        address,
+        value: receipt,
+        version,
+    });
+    unit.blocks[target.index()].instructions = PoolRange::push(&mut unit.instructions, code);
+    unit.terminators[target.index()] = Terminator::Return(Some(value));
+    (unit, table, manifest, declarations)
+}
+
+#[test]
+fn receipt_results_are_owned_only_on_normal_return_and_publish_a_paired_output() {
+    let (unit, table, manifest, declarations) = result_fixture();
+    let errors = check(&unit, &table, &manifest, &declarations);
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
+fn receipt_results_refuse_failure_reads_missing_output_and_crossed_return_snapshots() {
+    let (unit, table, manifest, declarations) = result_fixture();
+    let errors = check(&unit, &table, &manifest, &declarations);
+    assert!(errors.is_empty(), "{errors:#?}");
+    for mutation in 0..4 {
+        let mut unit = unit.clone();
+        let Terminator::Call {
+            normal, failure, ..
+        } = unit.terminators[ENTRY.index()]
+        else {
+            unreachable!()
+        };
+        let normal = unit.tables.edges[normal.unwrap().index()].target;
+        match mutation {
+            0 => {
+                unit.terminators[normal.index()] = Terminator::Propagate;
+            }
+            1 => {
+                let code = unit.blocks[normal.index()].instructions;
+                let instructions = code
+                    .get(&unit.instructions)
+                    .unwrap()
+                    .iter()
+                    .filter(|i| !matches!(i, Inst::Store { .. }))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                unit.blocks[normal.index()].instructions =
+                    PoolRange::push(&mut unit.instructions, instructions);
+            }
+            2 => {
+                let failure = unit.tables.failures[failure.index()].cleanup;
+                let target = unit.tables.edges[failure.index()].target;
+                let result = unit.tables.calls[0].result.unwrap();
+                unit.terminators[target.index()] = Terminator::Return(Some(result));
+            }
+            3 => {
+                unit.terminators[normal.index()] = Terminator::Return(Some(unit.parameters[0]));
+            }
+            _ => unreachable!(),
+        }
+        let errors = check(&unit, &table, &manifest, &declarations);
+        assert!(!errors.is_empty(), "mutation {mutation}");
+        if mutation == 3 {
+            assert!(errors.iter().any(|e| matches!(&e.kind, validate::ViolationKind::Sealed(message) if message.contains("ordinary return snapshot"))), "{errors:#?}");
+        }
+    }
+}
+
 #[test]
 fn mutable_pairing_survives_shared_cleanup_of_rejected_and_entered_outcomes() {
     let (mut unit, table, manifest, declarations) = fixture_passing(true, Passing::Mut);

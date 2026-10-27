@@ -9,6 +9,7 @@ impl Importer<'_> {
         self.invocation_live = false;
         self.invocation_return = None;
         self.out = Out::default();
+        self.receipt_values.clear();
         let locals = self.body.locals.len();
         self.state = State {
             slots: PVec::default(),
@@ -268,12 +269,9 @@ impl Importer<'_> {
         if let Some(source) = self.instances.receipt_source(self.id) {
             let source = source.clone();
             let contract = &source.contract;
-            if !contract.captures.is_empty()
-                || !contract.inventory.is_empty()
-                || contract.result.is_some()
-            {
+            if !contract.captures.is_empty() || !contract.inventory.is_empty() {
                 return unsupported(
-                    "receipt entry requires data parameters without captures, inventory or receipt results",
+                    "receipt entry requires data parameters and results without captures or inventory",
                 );
             }
             let mut parameters = Vec::new();
@@ -303,13 +301,30 @@ impl Importer<'_> {
                     version,
                 });
             }
+            let result = if contract.result.is_some() {
+                let profile = source
+                    .profile(hirsel_lir::sealed_payload_source::ReceiptPort::Result)
+                    .ok_or_else(|| {
+                        PassError::Malformed("receipt result original profile".into())
+                    })?;
+                if !profile.functions.is_empty() {
+                    return unsupported(
+                        "receipt result callable profiles require environment custody",
+                    );
+                }
+                let layout = self.layouts.payload_receipt(&profile.root.ty);
+                let ty = self.intern(layout);
+                Some(self.new_slot(ty, SlotKind::ReceiptResult, ScopeId(0)))
+            } else {
+                None
+            };
             self.out.tables.receipt_entry = Some(hirsel_lir::ir::ReceiptEntry {
                 contract: contract
                     .content()
                     .map_err(|e| PassError::Malformed(e.into()))?,
                 parameters,
                 captures: vec![],
-                result: None,
+                result,
                 environment: None,
             });
         }
@@ -320,7 +335,9 @@ impl Importer<'_> {
                 SlotKind::Parameter(_) | SlotKind::Capture(_) | SlotKind::ReceiptParameter(_)
             );
             self.state.slots[s] = SlotState {
-                live: if entered || slot.kind == SlotKind::ReturnSlot {
+                live: if entered
+                    || matches!(slot.kind, SlotKind::ReturnSlot | SlotKind::ReceiptResult)
+                {
                     Tri::Yes
                 } else {
                     Tri::No

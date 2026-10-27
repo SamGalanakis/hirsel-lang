@@ -1254,6 +1254,7 @@ fn import_body(
         types,
         type_memo: HashMap::new(),
         static_layout_keys: HashMap::new(),
+        receipt_values: HashMap::new(),
         required,
         finalizer_memo: std::collections::HashSet::new(),
         out: Out::default(),
@@ -1392,6 +1393,7 @@ struct Importer<'a> {
     /// Payload layouts are complete before construction; later rows cannot
     /// change their keys. Repeated empty constructions share this graph walk.
     static_layout_keys: HashMap<LayoutId, hirsel_lir::layout_types::LayoutKey>,
+    receipt_values: HashMap<ValueId, SlotId>,
     program: &'a Program,
     instances: &'a Instances,
     layouts: &'a mut dyn crate::library::builder::Layouts,

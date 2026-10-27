@@ -1,13 +1,12 @@
 //! Data entry companions are source-bound snapshots with matching custody.
-//! Captures, result publication and tasks remain closed here.
+//! Captures and tasks remain closed here.
 use super::{Cx, Inputs, Report, Site, ViolationKind as K};
 use crate::{ir::*, sealed_payload_source::*, stage::Stage};
 
 fn supported(contract: &ReceiptContract) -> Result<(), &'static str> {
-    if !contract.captures.is_empty() || !contract.inventory.is_empty() || contract.result.is_some()
-    {
+    if !contract.captures.is_empty() || !contract.inventory.is_empty() {
         return Err(
-            "receipt boundary requires data parameters without captures, inventory or receipt results",
+            "receipt boundary requires data parameters and results without captures or inventory",
         );
     }
     Ok(())
@@ -29,18 +28,18 @@ fn source(
     supported(&source.contract)
 }
 
-fn parameter_type(
+fn port_type(
     source: &ReceiptSource,
-    ordinal: u32,
+    port: ReceiptPort,
     metadata: crate::LayoutId,
-    ordinary: crate::LayoutId,
+    ordinary: Option<crate::LayoutId>,
     selected: (&hirsel_syntax::DefPath, hirsel_syntax::ContentHash),
     inputs: super::UnitInputs<'_>,
     operations: &dyn crate::operation::OperationDeclarations,
 ) -> Result<(), String> {
     let (definition, instance) = selected;
     let profile = source
-        .profile(ReceiptPort::Parameter(ordinal))
+        .profile(port)
         .ok_or("receipt boundary lacks its complete original parameter profile")?;
     if !profile.functions.is_empty() {
         return Err("receipt boundary callable profiles require environment custody".into());
@@ -60,7 +59,20 @@ fn parameter_type(
         )
         .map_err(|e| format!("receipt boundary original layout: {e:?}"))?;
     descriptor.check(inputs.layouts)?;
-    if descriptor.root_type != profile.root.ty || descriptor.root_layout != ordinary {
+    if descriptor.root_type != profile.root.ty
+        || !ordinary.map_or_else(
+            || {
+                matches!(
+                    inputs
+                        .layouts
+                        .layout(descriptor.root_layout)
+                        .map(|r| &r.kind),
+                    Some(crate::layout_types::LayoutKind::Unit)
+                )
+            },
+            |ordinary| descriptor.root_layout == ordinary,
+        )
+    {
         return Err("receipt boundary ordinary layout differs from its original profile".into());
     }
     Ok(())
@@ -113,11 +125,23 @@ pub(super) fn entry<S: Stage>(unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Result<
             .find(|p| p.source == binding.source)
             .ok_or("receipt entry lacks its original declared parameter")?;
         let metadata = unit.types[unit.slots[binding.slot.index()].ty.index()].layout;
-        parameter_type(
+        port_type(
             &selected,
-            binding.source,
+            ReceiptPort::Parameter(binding.source),
             metadata,
-            ordinary.layout,
+            Some(ordinary.layout),
+            (&unit.header.definition, unit.header.instance),
+            inputs.into(),
+            inputs.operations,
+        )?;
+    }
+    if let Some(result) = entry.result {
+        let metadata = unit.types[unit.slots[result.index()].ty.index()].layout;
+        port_type(
+            &selected,
+            ReceiptPort::Result,
+            metadata,
+            abi.result.as_ref().map(|r| r.layout),
             (&unit.header.definition, unit.header.instance),
             inputs.into(),
             inputs.operations,
@@ -188,11 +212,11 @@ pub(super) fn calls<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                         if !whole_address(unit, payload) || !whole_address(unit, address) {
                             return Err("mutable receipt requires paired whole slots".into());
                         }
-                        parameter_type(
+                        port_type(
                             selected,
-                            parameter,
+                            ReceiptPort::Parameter(parameter),
                             cx.value_layout(version),
-                            unit.types[unit.addresses[payload.index()].ty.index()].layout,
+                            Some(unit.types[unit.addresses[payload.index()].ty.index()].layout),
                             (&symbol.definition, instance),
                             super::UnitInputs {
                                 target: cx.target,
@@ -224,15 +248,33 @@ pub(super) fn calls<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                     layouts: cx.layouts.0,
                     manifest: cx.manifest,
                 };
-                parameter_type(
+                port_type(
                     selected,
-                    parameter,
+                    ReceiptPort::Parameter(parameter),
                     cx.value_layout(receipt),
-                    cx.value_layout(value),
+                    Some(cx.value_layout(value)),
                     (&symbol.definition, instance),
                     inputs,
                     cx.operations,
                 )?;
+            }
+            if let Some(result) = receipts.result {
+                port_type(
+                    selected,
+                    ReceiptPort::Result,
+                    cx.value_layout(result),
+                    call.result.map(|v| cx.value_layout(v)),
+                    (&symbol.definition, instance),
+                    super::UnitInputs {
+                        target: cx.target,
+                        layouts: cx.layouts.0,
+                        manifest: cx.manifest,
+                    },
+                    cx.operations,
+                )?;
+                if unit.values[result.index()].holding != Holding::Owned {
+                    return Err("receipt result must publish one owned holder".into());
+                }
             }
             Ok::<(), String>(())
         })();
