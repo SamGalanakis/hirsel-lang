@@ -29,13 +29,18 @@ pub fn main(rt:Io)->Result[(),GrantError] {
 }
 
 fn capture_source(source_text: &str, expected_exit: i32) {
+    capture_with_tasks(source_text, expected_exit, "tasks.cooperative@1");
+}
+
+fn capture_with_tasks(source_text: &str, expected_exit: i32, tasks: &str) {
     hirsel_engine::with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("main.hir");
         std::fs::write(&source, source_text).unwrap();
         let path = directory.path().join("hirsel.json");
         std::fs::write(&path, r#"{"schema":1,"package":{"name":"ownership","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
-        let grants = std::ffi::OsStr::new(r#"{"io":{"tasks":"tasks.cooperative@1","dirs":[]}}"#);
+        let grants_text = format!(r#"{{"io":{{"tasks":"{tasks}","dirs":[]}}}}"#);
+        let grants = std::ffi::OsStr::new(&grants_text);
         let mut reference_traces = Vec::new();
         for checked in [false, true] {
             let run = hirsel_driver::ownership_trace::run_resources_on_host(
@@ -124,9 +129,7 @@ fn capture_source(source_text: &str, expected_exit: i32) {
                     1000,
                     hirsel_driver::HostLaunch::Live {
                         config: hirsel_driver::LaunchConfig::Grants {
-                            input: std::ffi::OsStr::new(
-                                r#"{"io":{"tasks":"tasks.cooperative@1","dirs":[]}}"#,
-                            ),
+                            input: grants,
                             arguments: None,
                         },
                         record: None,
@@ -240,3 +243,30 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         hirsel_run_schema::exit::FAILED,
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn native_free_spawn_transfers_equal_resources_and_retires_the_actual_child() {
+    capture_with_tasks(
+        r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let first=Token()
+  let second=Token()
+  let child=task.async(s,fn(){
+    let x=take first
+    let y=take second
+  })
+  let _=task.await(s,take child)
+ })
+ Ok(())
+}
+"#,
+        0,
+        "tasks.free@1",
+    );
+}
+
