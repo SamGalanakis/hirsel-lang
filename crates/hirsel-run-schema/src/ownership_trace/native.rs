@@ -76,6 +76,8 @@ pub struct Log {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Metadata {
     pub action: u32,
+    /// Empty callable custody, proved by the complete checked code graph.
+    pub empty_environment: bool,
     /// Independently checked exact call-site target, present only for Alias.
     pub callee: Option<[u8; 32]>,
     /// Declaration ordinals and unit-local layouts in actual descriptor drop order.
@@ -576,6 +578,17 @@ fn decode(
                         tracker
                             .create(&context, to, value_type.to_owned())
                             .map_err(Error::Consistency)?;
+                    }
+                    1 if expected.empty_environment => {
+                        if tracker.inventory().owners.keys().any(|at| {
+                            [from.clone(), to.clone()].iter().any(|root| {
+                                at.task == root.task
+                                    && at.storage == root.storage
+                                    && at.path.starts_with(&root.path)
+                            })
+                        }) {
+                            return Err(Error::RetainedEnvironment(marker));
+                        }
                     }
                     1 => {
                         tracker

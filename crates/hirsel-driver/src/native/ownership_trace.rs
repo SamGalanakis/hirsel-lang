@@ -105,7 +105,7 @@ pub(crate) fn emit_relocated(
     fn failed(message: impl Into<String>) -> NativeError {
         NativeError::new(StageName::Emission, message)
     }
-    hirsel_lir::ownership_trace::native::Request::Relocated(plans)
+    let prepared = hirsel_lir::ownership_trace::native::Request::Relocated(plans)
         .prepare(selected, inputs.layouts)
         .map_err(failed)?;
     if selected.len() != program.summaries.len() || !program.ahead_units.is_empty() {
@@ -130,12 +130,9 @@ pub(crate) fn emit_relocated(
         let original = plans
             .get(&unit.unit().digest())
             .ok_or_else(|| failed("missing original ownership plan"))?;
-        let plan = LeafPlan::from_relocated(unit, inputs.layouts, original).map_err(|message| {
-            NativeError {
-                definition: Some(unit.unit().header.definition.clone()),
-                ..NativeError::new(StageName::Emission, message)
-            }
-        })?;
+        let plan = prepared
+            .get(&unit.unit().header.instance)
+            .ok_or_else(|| failed("missing checked ownership emission plan"))?;
         let body = unit.unit();
         let mut types = BTreeMap::new();
         for inst in &body.instructions {
@@ -167,10 +164,26 @@ pub(crate) fn emit_relocated(
                 .unwrap_or(&body.header.definition);
             let implicit = plan.implicit_parameter_cleanup_source(body, marker.id);
             let projected = implicit.map_or(marker.site, |(site, _)| site);
-            let failure = sites.failure("ownership", definition, projected)?;
-            let mut source = sites
-                .failure_site(&failure)
-                .ok_or_else(|| failed("ownership marker has no source projection"))?;
+            // Library bodies have checked recipe/parameter ordinals, not a
+            // spelled HIR file. Their independently planned runtime-bundle
+            // binding must remain explicit rather than borrowing caller spans.
+            let mut source = if body.header.origin == hirsel_lir::ir::UnitOrigin::Library
+                && matches!(
+                    program.semantic_owners.get(&body.header.definition),
+                    Some(None)
+                ) {
+                hirsel_run_schema::Site {
+                    definition: name(definition),
+                    file: format!("<native-library:{}>", name(&body.header.definition)),
+                    line: 0,
+                    column: 0,
+                }
+            } else {
+                let failure = sites.failure("ownership", definition, projected)?;
+                sites
+                    .failure_site(&failure)
+                    .ok_or_else(|| failed("ownership marker has no source projection"))?
+            };
             source.definition = match implicit {
                 Some((_, parameter)) => format!(
                     "{} [implicit parameter {parameter} cleanup]",
@@ -195,6 +208,9 @@ pub(crate) fn emit_relocated(
             };
             let metadata = Metadata {
                 action: marker.kind,
+                empty_environment: plan
+                    .empty_environment(body, inputs.layouts, marker.id)
+                    .map_err(failed)?,
                 callee: if marker.kind == 3 {
                     let row = original
                         .observations

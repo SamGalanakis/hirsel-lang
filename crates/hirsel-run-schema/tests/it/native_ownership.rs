@@ -19,6 +19,7 @@ fn fixture() -> (Log, Units) {
         (5, 2, slot, slot),
     ] {
         let metadata = Metadata {
+            empty_environment: false,
             action,
             callee: None,
             cleanup: None,
@@ -384,6 +385,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
     let mut units = Units::from([(parent, BTreeMap::new()), (child, BTreeMap::new())]);
     let mut event = |unit, frame, marker, action, token, owner| {
         let metadata = Metadata {
+            empty_environment: false,
             action,
             callee: None,
             cleanup: None,
@@ -494,6 +496,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
         units.entry(unit).or_default().insert(
             marker,
             Metadata {
+                empty_environment: false,
                 action,
                 callee: None,
                 cleanup: None,
@@ -776,6 +779,7 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
         units.entry(unit).or_default().insert(
             marker,
             Metadata {
+                empty_environment: false,
                 action,
                 callee: None,
                 cleanup: None,
@@ -1150,5 +1154,67 @@ fn native_nested_capture_retirements_require_complete_exact_declaration_paths() 
     assert_eq!(
         decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap_err(),
         Error::Binding
+    );
+}
+
+#[test]
+fn native_ownership_empty_callable_moves_need_static_evidence_and_empty_storage() {
+    let (mut empty, mut units) = fixture();
+    empty.rows = vec![empty.rows[0], empty.rows[2], *empty.rows.last().unwrap()];
+    empty.row_count = empty.rows.len() as u64;
+    units.get_mut(&[7; 32]).unwrap().retain(|id, _| *id == 1);
+    units
+        .get_mut(&[7; 32])
+        .unwrap()
+        .get_mut(&1)
+        .unwrap()
+        .empty_environment = true;
+    let trace = decode_leaf(&empty, [49; 32], &units, 100).unwrap();
+    assert!(trace.events.is_empty());
+    assert!(trace.analyze([49; 32], 100).unwrap().live.is_empty());
+    let mut missing = units.clone();
+    missing
+        .get_mut(&[7; 32])
+        .unwrap()
+        .get_mut(&1)
+        .unwrap()
+        .empty_environment = false;
+    assert!(matches!(
+        decode_leaf(&empty, [49; 32], &missing, 100),
+        Err(Error::Consistency(_))
+    ));
+    let (log, mut actual) = fixture();
+    actual
+        .get_mut(&[7; 32])
+        .unwrap()
+        .get_mut(&1)
+        .unwrap()
+        .empty_environment = true;
+    assert_eq!(
+        decode_leaf(&log, [49; 32], &actual, 100).unwrap_err(),
+        Error::RetainedEnvironment(1)
+    );
+    let mut destination = empty.clone();
+    let mut marker = actual[&[7; 32]][&0].clone();
+    marker.token = 1u64 << 32;
+    marker.owner = marker.token;
+    actual.get_mut(&[7; 32]).unwrap().insert(0, marker.clone());
+    destination.rows.insert(
+        1,
+        Row::Event {
+            task: 0,
+            frame: 1,
+            marker: 0,
+            action: 0,
+            token: marker.token,
+            owner: marker.owner,
+            site: marker.site,
+            layout: marker.layout,
+        },
+    );
+    destination.row_count = destination.rows.len() as u64;
+    assert_eq!(
+        decode_leaf(&destination, [49; 32], &actual, 100).unwrap_err(),
+        Error::RetainedEnvironment(1)
     );
 }

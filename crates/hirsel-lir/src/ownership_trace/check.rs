@@ -314,7 +314,18 @@ pub(super) fn call_alias<S: Stage>(unit: &LirUnit<S>, observation: &Observation)
         current = *parent;
     }
     chain.reverse();
-    let (mut live, mut version, mut active, mut borrowed) = (false, None, false, None);
+    // This proves local custody only. Native emission independently binds
+    // incoming code identities over the complete checked program.
+    let entered = match unit.slots[slot.index()].kind {
+        SlotKind::Parameter(parameter)
+            if parameter_address(unit, parameter, owner) == Some(slot) =>
+        {
+            unit.parameters.get(parameter as usize).copied()
+        }
+        _ => None,
+    };
+    let (mut live, mut version, mut active, mut borrowed) =
+        (entered.is_some(), entered, false, None);
     for (position, &block) in chain.iter().enumerate() {
         let Some(code) = unit.blocks[block.index()]
             .instructions

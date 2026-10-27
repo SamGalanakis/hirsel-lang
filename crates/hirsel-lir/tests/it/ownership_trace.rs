@@ -4000,3 +4000,74 @@ fn ownership_trace_alias_checks_the_live_owner_across_a_split_block() {
         Error::InvalidBinding(MarkerId(100))
     );
 }
+
+#[test]
+fn ownership_trace_alias_proves_the_callable_parameters_actual_entry_version() {
+    use hirsel_lir::abi_types::{CallMultiplicity, CallableShape};
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[(Passing::Take, l::ERASED_ONCE)], None);
+    let slot = t.slot(l::ERASED_ONCE, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    let address = t.address(AddressBase::Slot(slot), &[], l::ERASED_ONCE);
+    let cleanup = t.cleanup(&[support::Undo::Drop(slot)]);
+    let failure = t.failure(cleanup);
+    t.builder.push(ENTRY, Inst::Address { address, failure });
+    let abi = t.abi_shaped(CallableShape::Closure, &[], None);
+    t.table.fn_abis[abi.0 as usize].multiplicity = CallMultiplicity::Once;
+    let loan = t.loan(address, false);
+    t.begin(ENTRY, loan);
+    let view = t.read(ENTRY, address, version, ReadMode::Borrow, Some(loan));
+    let cleanup = [support::Undo::End(loan), support::Undo::Drop(slot)];
+    let next = t.cleanup_exit(&cleanup, None);
+    let failure = t.cleanup(&cleanup);
+    let target = t.symbol(SymbolKind::Function);
+    t.call_to(
+        ENTRY,
+        Callee::Bound {
+            code: target,
+            closure: view,
+        },
+        abi,
+        &[],
+        None,
+        &[],
+        (next, &[]),
+        failure,
+    );
+    let (raw, table, _) = t.finish();
+    let unit = checked_native_fixture(raw, &table);
+    let alias = Observation {
+        point: Point::CallEntered(ENTRY),
+        marker: ObserveOwnership {
+            id: MarkerId(100),
+            site: unit.unit().tables.source_anchors[0].site,
+            kind: Kind::Alias,
+            token: Location::Value(view),
+            owner: Location::Address(address),
+        },
+    };
+    check(unit.unit(), &Plan::new(unit.unit(), vec![alias.clone()])).unwrap();
+    let mut dynamic = unit.unit().clone();
+    dynamic.tables.calls[0].callee = Callee::Indirect(view);
+    let dynamic = checked_native_fixture(dynamic, &table);
+    let local = native::LeafPlan::prepare_value(&dynamic, &table).unwrap();
+    assert!(
+        !local
+            .observations
+            .iter()
+            .any(|row| row.marker.kind == Kind::Alias)
+    );
+    let program = native::LeafPlan::prepare_value_for_program(&dynamic, &table).unwrap();
+    let mut aliases = program
+        .observations
+        .iter()
+        .filter(|row| row.marker.kind == Kind::Alias);
+    assert_eq!(aliases.next().unwrap().marker.token, Location::Value(view));
+    assert!(aliases.next().is_none());
+    let mut forged = unit.unit().clone();
+    forged.slots[slot.index()].kind = SlotKind::Parameter(1);
+    assert_eq!(
+        check(&forged, &Plan::new(&forged, vec![alias])).unwrap_err(),
+        Error::InvalidBinding(MarkerId(100))
+    );
+}

@@ -141,6 +141,7 @@ fn metadata(program: &support::programs::Program) -> Units {
                     markers.insert(
                         marker.id.0,
                         Metadata {
+                            empty_environment: false,
                             action: marker.kind,
                             callee: None,
                             cleanup: None,

@@ -287,8 +287,10 @@ impl ReadyQueries {
         let inputs = miss.inputs;
         let value = hirsel_lir::validate::validate_value(miss.value, inputs)
             .map_err(|rejected| format!("ownership Value refused: {:?}", rejected.violations))?;
-        let initial =
-            hirsel_lir::ownership_trace::native::LeafPlan::prepare_value(&value, inputs.layouts)?;
+        let initial = hirsel_lir::ownership_trace::native::LeafPlan::prepare_value_for_program(
+            &value,
+            inputs.layouts,
+        )?;
         let facts = miss.source.local(miss.options.regions);
         self.counts.transformations += 1;
         let lowered = hirsel_rc::observed::lower_validated(

@@ -44,10 +44,11 @@ pub struct LeafPlan {
     plan: Plan,
     markers: BTreeMap<MarkerId, Vec<NativeMarker>>,
     commits: Vec<(Point, NativeMarker)>,
+    codes: Option<Vec<calls::Code>>,
 }
 impl LeafPlan {
     pub fn prepare(unit: &ValidatedUnit<Ready>, layouts: &LayoutTable) -> Result<Self, String> {
-        Self::from_unit(unit.unit(), layouts, false)
+        Self::from_unit(unit.unit(), layouts, false, true)
     }
 
     /// Initial observations precede placement, RC insertion and cleanup. The
@@ -59,13 +60,24 @@ impl LeafPlan {
         unit: &ValidatedUnit<crate::stage::Value>,
         layouts: &LayoutTable,
     ) -> Result<Plan, String> {
-        Self::from_unit(unit.unit(), layouts, true).map(|plan| plan.plan)
+        Self::from_unit(unit.unit(), layouts, true, false).map(|plan| plan.plan)
+    }
+
+    /// Build an original program plan including incoming callable custody.
+    /// This is observation data, not code authority: Request::prepare must
+    /// bind the complete checked call graph before any object can be emitted.
+    pub fn prepare_value_for_program(
+        unit: &ValidatedUnit<crate::stage::Value>,
+        layouts: &LayoutTable,
+    ) -> Result<Plan, String> {
+        Self::from_unit(unit.unit(), layouts, true, true).map(|plan| plan.plan)
     }
 
     fn from_unit<S: crate::stage::Stage>(
         unit: &LirUnit<S>,
         layouts: &LayoutTable,
         source_only: bool,
+        program: bool,
     ) -> Result<Self, String> {
         let owned = |v: ValueId| unit.values[v.index()].holding == Holding::Owned;
         let layout = |v: ValueId| unit.types[unit.values[v.index()].ty.index()].layout;
@@ -129,6 +141,13 @@ impl LeafPlan {
                     owner: to,
                 },
             };
+            if kind == Kind::Alias && source_only && !program
+                && unit.parameters.iter().enumerate().any(|(parameter, _)|
+                    matches!(to, Location::Address(address) if super::check::parameter_address(unit, parameter as u32, address).is_some())) {
+                // The per-unit API cannot bind an incoming dynamic code.
+                // A program request keeps this relation and later proves it.
+                return Ok(());
+            }
             if kind == Kind::Alias && !super::check::call_alias(unit, &observation) {
                 if source_only {
                     // Preserve source observations for callable holders whose
@@ -367,6 +386,15 @@ impl LeafPlan {
                             layout(result),
                         )?;
                     }
+                    // FunctionRef has no environment or captured resource.
+                    // Custody moves remain observed and emission separately
+                    // proves the exact code identity of empty carriers.
+                    Inst::FunctionRef { result, .. }
+                        if unit.types[unit.values[result.index()].ty.index()].repr
+                            == ValueRepr::Callable =>
+                    {
+                        ()
+                    }
                     Inst::ArenaOpen { result, .. } if source_only && !owned(result) => (),
                     Inst::RegionEnter { result, .. }
                         if unit.types[unit.values[result.index()].ty.index()].repr
@@ -564,6 +592,7 @@ impl LeafPlan {
             plan,
             markers,
             commits,
+            codes: None,
         })
     }
 
@@ -736,6 +765,7 @@ impl LeafPlan {
             plan: plan.clone(),
             markers,
             commits,
+            codes: None,
         })
     }
 
@@ -909,8 +939,9 @@ pub fn local_call_sites(
         }
         Ok(target.0)
     };
+    let codes = calls::closed(units)?;
     let mut calls = BTreeMap::new();
-    for unit in units {
+    for (index, unit) in units.iter().enumerate() {
         let body = unit.unit();
         let mut targets = BTreeMap::new();
         // Constructors and references can escape without a local invocation.
@@ -930,7 +961,7 @@ pub fn local_call_sites(
                 _ => (),
             }
         }
-        let codes = calls::discover(body);
+        let codes = &codes[index];
         for (block, terminator) in body.terminators.iter().enumerate() {
             let Terminator::Call { call, .. } = terminator else {
                 continue;
@@ -1061,15 +1092,16 @@ impl Request<'_> {
         layouts: &LayoutTable,
     ) -> Result<BTreeMap<ContentHash, LeafPlan>, String> {
         local_calls(units)?;
+        let codes = calls::closed(units)?;
         if let Self::Relocated(plans) = self
             && plans.len() != units.len()
         {
             return Err("ownership emission requires exactly one plan per unit".into());
         }
         let mut prepared = BTreeMap::new();
-        for unit in units {
+        for (index, unit) in units.iter().enumerate() {
             let body = unit.unit();
-            let plan = match self {
+            let mut plan = match self {
                 Self::Leaf => LeafPlan::prepare(unit, layouts)?,
                 Self::Relocated(plans) => LeafPlan::from_relocated(
                     unit,
@@ -1079,6 +1111,7 @@ impl Request<'_> {
                         .ok_or("ownership emission is missing a transported plan")?,
                 )?,
             };
+            plan.codes = Some(codes[index].clone());
             if prepared.insert(body.header.instance, plan).is_some() {
                 return Err("ownership emission has duplicate instance identities".into());
             }
@@ -1145,6 +1178,71 @@ pub struct CleanupCapture {
     pub layout: LayoutId,
 }
 impl LeafPlan {
+    /// A statically known function reference or resource-free environment has
+    /// no Resource lineage to move. Unknown code never proves emptiness.
+    pub fn empty_environment(
+        &self,
+        unit: &LirUnit<Ready>,
+        layouts: &LayoutTable,
+        id: MarkerId,
+    ) -> Result<bool, String> {
+        let (point, marker) = self
+            .commits
+            .iter()
+            .find(|(_, marker)| marker.id == id)
+            .ok_or("ownership marker has no committed operation")?;
+        if marker.kind != 1
+            || !layouts
+                .layout(marker.layout)
+                .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }))
+        {
+            return Ok(false);
+        }
+        let value = if marker.token.kind == 0 {
+            ValueId(marker.token.index)
+        } else {
+            match *point {
+                Point::Entry => *unit
+                    .parameters
+                    .get(marker.token.index as usize)
+                    .ok_or("ownership callable parameter is absent")?,
+                Point::CallReturned(block) => {
+                    let Terminator::Call { call, .. } = unit.terminators[block.index()] else {
+                        return Err("ownership callable result has no call".into());
+                    };
+                    unit.tables.calls[call.index()]
+                        .result
+                        .ok_or("ownership callable result is absent")?
+                }
+                Point::Instruction { block, index, .. } => {
+                    let code = unit.blocks[block.index()]
+                        .instructions
+                        .get(&unit.instructions)
+                        .ok_or("ownership callable operation is absent")?;
+                    match code[index as usize] {
+                        Inst::Read { result, .. } => result,
+                        _ => return Err("ownership callable storage is not a checked read".into()),
+                    }
+                }
+                _ => return Err("ownership callable has no exact code operand".into()),
+            }
+        };
+        let codes = self
+            .codes
+            .as_ref()
+            .ok_or("ownership callable needs the complete checked code graph")?;
+        let calls::Code::Known(target) = &codes[value.index()] else {
+            return Err("ownership callable has unresolved environment identity".into());
+        };
+        match target.environment {
+            None => Ok(true),
+            Some(environment) => layouts
+                .layout(environment)
+                .map(|record| record.drop.is_empty() && record.finalizer.is_none())
+                .ok_or_else(|| "ownership callable environment layout is absent".into()),
+        }
+    }
+
     /// Exact statically nested leaf Resource cells of the callable released by this marker.
     /// Unknown code/environment identities and ambiguous cells fail closed.
     pub fn cleanup_captures(
@@ -1178,13 +1276,13 @@ impl LeafPlan {
             }
         }
         let value = released.ok_or("ownership cleanup has no release")?;
-        let codes = calls::discover(unit);
+        let codes = self.codes.clone().unwrap_or_else(|| calls::discover(unit));
         let calls::Code::Known(target) = &codes[value.index()] else {
             return Err("ownership cleanup has unresolved callable identity".into());
         };
-        let environment = target
-            .environment
-            .ok_or("ownership cleanup has no environment")?;
+        let Some(environment) = target.environment else {
+            return Ok((value, Vec::new()));
+        };
         let record = layouts
             .layout(environment)
             .ok_or("ownership cleanup environment is absent")?;
