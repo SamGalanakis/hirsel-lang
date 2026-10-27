@@ -246,3 +246,38 @@ fn closed_callable_equations_require_the_exact_persistent_mask_when_binding_capt
         );
     }
 }
+
+#[test]
+fn finite_callable_equations_converge_when_a_cycle_reverses_predecessor_order() {
+    let a = Target {
+        symbol: Symbol {
+            kind: SymbolKind::Function,
+            definition: hirsel_syntax::DefPath::core("a"),
+            instance: Some(ContentHash::of_bytes(b"a")),
+        },
+        abi: None,
+        environment: None,
+    };
+    let b = Target {
+        symbol: Symbol {
+            definition: hirsel_syntax::DefPath::core("b"),
+            instance: Some(ContentHash::of_bytes(b"b")),
+            ..a.symbol.clone()
+        },
+        ..a.clone()
+    };
+    // x = y union {a}; y = x union {b}. Keeping insertion order would
+    // alternate [a,b] and [b,a] forever despite stable membership.
+    let mut x = Code::Known(a.clone());
+    let mut y = Code::Known(b.clone());
+    for _ in 0..3 {
+        let next_x = y.merge(&Code::Known(a.clone()), true);
+        let next_y = x.merge(&Code::Known(b.clone()), true);
+        x = next_x;
+        y = next_y;
+    }
+    assert_eq!(x, y);
+    assert_eq!(x.targets(), Some([a.clone(), b.clone()].as_slice()));
+    assert_eq!(y.merge(&Code::Known(a), true), x);
+    assert_eq!(x.merge(&Code::Known(b), true), y);
+}

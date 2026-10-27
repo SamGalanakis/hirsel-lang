@@ -5,7 +5,7 @@
 use super::*;
 use std::collections::{BTreeSet, VecDeque};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) struct Target {
     pub symbol: Symbol,
     pub abi: Option<crate::abi_types::FnAbiId>,
@@ -40,6 +40,9 @@ impl Code {
                             targets.push(target.clone());
                         }
                     }
+                    // A set has one representation even when recursive equations
+                    // discover its members in different predecessor orders.
+                    targets.sort_unstable();
                     if targets.len() == 1 {
                         Self::Known(targets.pop().unwrap())
                     } else {
