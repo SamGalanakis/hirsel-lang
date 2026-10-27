@@ -2502,13 +2502,14 @@ fn shared_handle_qualifiers_publish_canonical_copy_receipts() {
             hirsel_types::Uniqueness::Aliased
         );
         let output = engine.lower_to_tir(&path("probe")).unwrap();
+        let signature = engine
+            .signature(hirsel_syntax::DefId::intern(&path("probe")))
+            .unwrap();
         let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
         signatures.insert(path("probe"), signature.as_ref().clone());
-        assert!(
-            hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
-                .violations
-                .is_empty()
-        );
+        let report =
+            hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![]);
+        assert!(report.violations.is_empty(), "{report:?}");
         let mut forged = output.value.as_ref().clone();
         let body = &mut forged.bodies[forged.entry.0 as usize];
         let destination = body
