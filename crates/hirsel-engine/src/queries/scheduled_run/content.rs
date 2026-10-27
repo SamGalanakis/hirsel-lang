@@ -103,6 +103,16 @@ impl Content {
             references,
         })
     }
+    pub(super) fn reference_bytes(&self, weight: &mut crate::NativeMetadataWeight) {
+        weight.add(
+            self.references
+                .len()
+                .saturating_mul(std::mem::size_of::<DefPath>()),
+        );
+        for id in &self.references {
+            weight.path(id.path());
+        }
+    }
     pub(super) fn references(&self) -> Vec<DefPath> {
         self.references.iter().map(|id| id.path().clone()).collect()
     }

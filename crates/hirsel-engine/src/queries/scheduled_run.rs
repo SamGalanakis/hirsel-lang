@@ -215,10 +215,7 @@ impl QueryFactory for Factory {
         let mut retention = self.0.retention.lock().unwrap_or_else(|e| e.into_inner());
         let bytes = FrontRunQueries::output_bytes(self.0.weight).ok_or(self.0.errors.resource)?;
         if completed.is_none() {
-            *retention = retention.checked_sub(bytes).ok_or_else(|| {
-                eprintln!("RUN FACTORY grant={bytes} remaining={retention}");
-                self.0.errors.resource
-            })?;
+            *retention = retention.checked_sub(bytes).ok_or(self.0.errors.resource)?;
         }
         drop(retention);
         Ok(Box::new(Task {
@@ -240,10 +237,10 @@ struct Task {
     query: QueryId,
     root: DefPath,
     checked: bool,
-    pending: Vec<DefPath>,
+    pending: Vec<DefId>,
     nodes: BTreeMap<DefPath, content::Node>,
     contents: BTreeMap<DefPath, content::Content>,
-    uses: BTreeMap<DefPath, BTreeSet<DefPath>>,
+    uses: BTreeMap<DefId, Box<[DefId]>>,
     waiting: Option<QueryId>,
     terminal: Option<Result<ProductRef, Reference>>,
 }
@@ -308,9 +305,9 @@ impl Task {
                     .failure_record(QueryError::Diagnostics(output.checked.diagnostics))));
             }
             self.checked = true;
-            self.pending.push(self.root.clone());
+            self.pending.push(DefId::intern(&self.root));
             self.pending
-                .extend(self.queries.native_roots.iter().cloned());
+                .extend(self.queries.native_roots.iter().map(DefId::intern));
             // Legacy served_entries selects every eligible source entry in the
             // launch package, even when the root never references it.
             for (path, input) in &self.queries.inputs {
@@ -323,24 +320,25 @@ impl Task {
                     )
                     .is_ok()
                 {
-                    self.pending.push(path.clone());
+                    self.pending.push(DefId::intern(path));
                 }
             }
             // Runtime type construction historically demands all declared drop
             // bodies. These are explicit S5 dependencies, never host work.
             for nominal in &self.queries.runtime.nominals {
                 if let Some((path, _)) = &nominal.finalizer {
-                    self.pending.push(path.clone());
+                    self.pending.push(DefId::intern(path));
                 }
             }
         }
         loop {
-            while let Some(path) = self.pending.last().cloned() {
-                if self.nodes.contains_key(&path) {
+            while let Some(id) = self.pending.last().copied() {
+                let path = id.path();
+                if self.nodes.contains_key(path) {
                     self.pending.pop();
                     continue;
                 }
-                match self.node(cx, &path) {
+                match self.node(cx, path) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                     Poll::Ready(Ok((node, content, dependencies))) => {
@@ -349,14 +347,16 @@ impl Task {
                             dependencies
                                 .iter()
                                 .filter(|p| !self.nodes.contains_key(*p))
-                                .cloned(),
+                                .map(DefId::intern),
                         );
                         let semantic: BTreeSet<_> =
                             node.dependencies.iter().map(|id| id.path()).collect();
                         let semantic_dependencies = dependencies
                             .into_iter()
-                            .filter(|p| semantic.contains(&p))
-                            .collect();
+                            .filter(|p| semantic.contains(p))
+                            .map(|path| DefId::intern(&path))
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice();
                         self.nodes.insert(path.clone(), node);
                         self.contents.insert(
                             path.clone(),
@@ -367,7 +367,7 @@ impl Task {
                                 }
                             },
                         );
-                        self.uses.insert(path, semantic_dependencies);
+                        self.uses.insert(id, semantic_dependencies);
                     }
                 }
                 // Canonical input bytes plus graph rows and decoded working bodies
@@ -376,13 +376,6 @@ impl Task {
                     .graph_bytes()
                     .is_none_or(|bytes| bytes > self.queries.weight.retained)
                 {
-                    eprintln!(
-                        "RUN GRAPH bytes={:?} retained={} nodes={} contents={}",
-                        self.graph_bytes(),
-                        self.queries.weight.retained,
-                        self.nodes.len(),
-                        self.contents.len()
-                    );
                     return Poll::Ready(Err(self.queries.errors.resource));
                 }
             }
@@ -394,7 +387,8 @@ impl Task {
                 Ok(instances) => self.pending.extend(
                     instances
                         .into_iter()
-                        .filter(|p| !self.nodes.contains_key(p)),
+                        .filter(|p| !self.nodes.contains_key(p))
+                        .map(|path| DefId::intern(&path)),
                 ),
                 Err(error) => return Poll::Ready(Err(self.queries.failure_record(error))),
             }
@@ -627,6 +621,11 @@ impl Task {
             nodes.path(path);
             node.weight(&mut nodes);
         }
+        nodes.flat_vec(&self.pending);
+        nodes.tree::<DefId, Box<[DefId]>>(self.uses.len());
+        for dependencies in self.uses.values() {
+            nodes.add(std::mem::size_of_val(&**dependencies));
+        }
         bodies.checked_add(nodes.bytes())
     }
     fn program(&self, root: &DefPath) -> Result<SemanticProgram, QueryError> {
@@ -637,7 +636,13 @@ impl Task {
         loop {
             while let Some(path) = pending.pop() {
                 if definitions.insert(path.clone()) {
-                    pending.extend(self.uses.get(&path).into_iter().flatten().cloned());
+                    pending.extend(
+                        self.uses
+                            .get(&DefId::intern(&path))
+                            .into_iter()
+                            .flat_map(|ids| ids.iter())
+                            .map(|id| id.path().clone()),
+                    );
                 }
             }
             pending.extend(
@@ -661,19 +666,29 @@ impl Task {
             nodes,
             uses: definitions
                 .iter()
-                .filter_map(|p| self.uses.get(p).map(|uses| (p.clone(), uses.clone())))
+                .filter_map(|p| {
+                    self.uses
+                        .get(&DefId::intern(p))
+                        .map(|uses| (p.clone(), uses.iter().map(|id| id.path().clone()).collect()))
+                })
                 .collect(),
             definitions,
         })
     }
     fn complete(&self) -> Result<ProductRef, QueryError> {
-        eprintln!(
-            "RUN COMPLETE graph={:?} nodes={}",
-            self.graph_bytes(),
-            self.nodes.len()
-        );
         let queries = &self.queries;
         let snapshot = queries.lower.signatures();
+        let mut references = crate::NativeMetadataWeight::default();
+        references.tree::<DefPath, Vec<DefPath>>(self.contents.len());
+        for (path, content) in &self.contents {
+            references.path(path);
+            content.reference_bytes(&mut references);
+        }
+        let decode_allowance = queries
+            .weight
+            .scratch
+            .checked_sub(references.bytes())
+            .ok_or_else(|| operational("Run reference map exceeds scratch admission"))?;
         let referenced = self
             .contents
             .iter()
@@ -682,7 +697,7 @@ impl Task {
         let hashes =
             hirsel_proof_export::definition_hashes_loading(snapshot.types(), &referenced, |path| {
                 self.contents[path]
-                    .load(queries, path, queries.weight.scratch)
+                    .load(queries, path, decode_allowance)
                     .map_err(|error| format!("{error:?}"))
             })
             .map_err(operational)?;
