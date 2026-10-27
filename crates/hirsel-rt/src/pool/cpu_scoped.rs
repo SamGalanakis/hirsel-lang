@@ -867,3 +867,7 @@ mod tests {
         assert_eq!(permits.available(), 4);
     }
 }
+
+#[cfg(test)]
+#[path = "cpu_scoped/race_tests.rs"]
+mod race_tests;
