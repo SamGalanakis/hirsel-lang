@@ -113,37 +113,40 @@ fn checked_product_requests_record_private_layout_reads_as_the_cold_receipt_does
 #[test]
 fn checked_product_requests_match_the_cold_receipt_with_and_without_text() {
     hirsel_engine::with_compiler_stack(|| {
-        let (_directory, entry, _source) = fixture();
-        let mut full = request(&entry);
-        full.operation = CompileOperation::CheckedProducts {
-            lowering: LoweringPolicy::Comptime,
-            canonical: true,
-        };
-        let mut digest = full.clone();
-        digest.operation = CompileOperation::CheckedProducts {
-            lowering: LoweringPolicy::Comptime,
-            canonical: false,
-        };
-        let products = |output: Arc<crate::requests::CompileOutput>| match &output.result {
-            CompileResult::CheckedProducts { products, .. } => products.clone(),
-            _ => panic!("checked-products root returned another operation"),
-        };
-        let mut host = Host::new(CompilerRequests::for_host(crate::COMPILER, config()));
-        let full = products(host.request(&full).unwrap().wait().unwrap());
-        let digest = products(host.request(&digest).unwrap().wait().unwrap());
-        let mut cold = crate::COMPILER
-            .with_config(config())
-            .with_owned_engines()
-            .load_program(&entry)
-            .unwrap();
-        cold.check(LoweringPolicy::Comptime).unwrap();
-        let expected = cold.engine.checked_products(&cold.entry).unwrap();
-        assert_eq!(full.digest, expected.digest);
-        assert_eq!(full.canonical, expected.canonical);
-        assert_eq!(full.canonical_reads(), expected.canonical_reads());
-        assert_eq!(digest.digest, expected.digest);
-        assert_eq!(digest.canonical, None);
-        assert_eq!(digest.canonical_reads(), expected.canonical_reads());
+        for source in [ORIGINAL, "const VALUE:u8=7u8\npub fn main()->u8{VALUE}\n"] {
+            let (_directory, entry, source_path) = fixture();
+            std::fs::write(source_path, source).unwrap();
+            let mut full = request(&entry);
+            full.operation = CompileOperation::CheckedProducts {
+                lowering: LoweringPolicy::Comptime,
+                canonical: true,
+            };
+            let mut digest = full.clone();
+            digest.operation = CompileOperation::CheckedProducts {
+                lowering: LoweringPolicy::Comptime,
+                canonical: false,
+            };
+            let products = |output: Arc<crate::requests::CompileOutput>| match &output.result {
+                CompileResult::CheckedProducts { products, .. } => products.clone(),
+                _ => panic!("checked-products root returned another operation"),
+            };
+            let mut host = Host::new(CompilerRequests::for_host(crate::COMPILER, config()));
+            let full = products(host.request(&full).unwrap().wait().unwrap());
+            let digest = products(host.request(&digest).unwrap().wait().unwrap());
+            let mut cold = crate::COMPILER
+                .with_config(config())
+                .with_owned_engines()
+                .load_program(&entry)
+                .unwrap();
+            cold.check(LoweringPolicy::Comptime).unwrap();
+            let expected = cold.engine.checked_products(&cold.entry).unwrap();
+            assert_eq!(full.digest, expected.digest);
+            assert_eq!(full.canonical, expected.canonical);
+            assert_eq!(full.canonical_reads(), expected.canonical_reads());
+            assert_eq!(digest.digest, expected.digest);
+            assert_eq!(digest.canonical, None);
+            assert_eq!(digest.canonical_reads(), expected.canonical_reads());
+        }
     });
 }
 

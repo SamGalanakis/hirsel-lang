@@ -203,17 +203,22 @@ impl FrontCheckScope {
             {
                 continue;
             }
-            signatures.insert(path.clone(), headers.section(path).ok_or_else(|| {
-                receipt_input_failure("signature", path, QueryError::NotImplemented)
-            })?);
+            signatures.insert(
+                path.clone(),
+                headers.section(path).ok_or_else(|| {
+                    receipt_input_failure("signature", path, QueryError::NotImplemented)
+                })?,
+            );
         }
         let mut definitions = BTreeMap::new();
         for path in self.lowered() {
             // The guard is checked before any decoder touches a failed root.
             if !self.failed_lowered().contains(path) {
-                definitions.insert(path.clone(), self.definition(path).map_err(|error| {
-                    receipt_input_failure("original body", path, error)
-                })?);
+                definitions.insert(
+                    path.clone(),
+                    self.definition(path)
+                        .map_err(|error| receipt_input_failure("original body", path, error))?,
+                );
             }
         }
         let mut required = BTreeMap::new();
@@ -252,9 +257,10 @@ impl FrontCheckScope {
         for (selected, (path, arguments)) in required {
             constants.insert(
                 selected,
-                (*lower.settled_constant(&path, &arguments).map_err(|error| {
-                    receipt_input_failure("constant", &path, error)
-                })?).clone(),
+                (*lower
+                    .settled_constant(&path, &arguments)
+                    .map_err(|error| receipt_input_failure("constant", &path, error))?)
+                .clone(),
             );
         }
         let sources = Rc::new(lower.sources().clone());
