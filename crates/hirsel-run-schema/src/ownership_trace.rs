@@ -257,6 +257,11 @@ impl Inventory {
         }
     }
 
+    /// Whether this exact logical location currently owns a tracked token.
+    pub fn contains_owner(&self, owner: &Owner) -> bool {
+        self.owners.contains_key(owner)
+    }
+
     pub fn lineage(&self, token: &Token) -> Option<&Lineage> {
         self.lineages.get(token)
     }

@@ -1,7 +1,7 @@
 use super::closure_support::{children, resources_in};
 use super::{Observer, TraceError};
-use crate::Value;
 use crate::frame::Frame;
+use crate::{OperationResult, Value};
 use hirsel_run_schema::ownership_trace::{
     Context, Owner, Projection as Step, Storage, TaskPath, Trace, Tracker,
 };
@@ -111,6 +111,7 @@ pub(super) struct Resources {
     spawns: BTreeMap<u64, SpawnState>,
     results: BTreeMap<u64, ResultState>,
     awaits: BTreeMap<u64, AwaitState>,
+    seals: BTreeMap<u64, CallState>,
     tracker: Tracker,
     channels: Channels,
     callbacks: Callbacks,
@@ -137,6 +138,7 @@ impl Resources {
             spawns: BTreeMap::new(),
             results: BTreeMap::new(),
             awaits: BTreeMap::new(),
+            seals: BTreeMap::new(),
             tracker: Tracker::new(event_limit),
             channels: Channels::default(),
             callbacks: Callbacks::default(),
@@ -257,7 +259,7 @@ impl Resources {
         matches!(
             value,
             Value::Resource { .. } | Value::ResourceVariant { .. }
-        )
+        ) || matches!(value, Value::Handle { kind, .. } if kind == "Region")
     }
     fn capture_local(frame: &Frame, capture: u32) -> Option<u32> {
         frame
@@ -270,6 +272,9 @@ impl Resources {
             .map(|(local, _)| local as u32)
     }
     fn type_name(value: &Value) -> Option<String> {
+        if matches!(value, Value::Handle { kind, .. } if kind == "Region") {
+            return Some("core@1::Region".into());
+        }
         let (Value::Resource { definition, .. } | Value::ResourceVariant { definition, .. }) =
             value
         else {
@@ -313,6 +318,9 @@ impl Resources {
         let mut work = vec![value];
         while let Some(value) = work.pop() {
             if resources_in(value) == 0 {
+                continue;
+            }
+            if matches!(value, Value::Handle { kind, .. } if kind == "Region") {
                 continue;
             }
             if Self::field(value, 0).is_none() {
@@ -778,7 +786,7 @@ impl Observer for Resources {
                     } else {
                         let mut borrowed_captures = vec![];
                         let mut capture_views = vec![];
-                        let (mut definition, body, captures) = match callee {
+                        let (mut definition, mut body, captures) = match callee {
                             hirsel_tir::Callee::Definition { path, .. } => {
                                 (path.clone(), None, vec![])
                             }
@@ -910,17 +918,41 @@ impl Observer for Resources {
                                 .iter()
                                 .find(|argument| argument.parameter.0 == 0)
                                 .and_then(|argument| frame.observe(argument.value.place).ok());
-                            let Some(Value::FunctionReference(callback)) = callback else {
-                                self.unsupported("arena callback needs observed capture transport");
-                                return;
-                            };
                             if !incoming.is_empty() || !views.is_empty() {
                                 self.unsupported(
                                     "arena callback has untransported resource arguments",
                                 );
                                 return;
                             }
-                            definition = callback.definition.clone();
+                            match callback {
+                                Some(Value::FunctionReference(callback)) => {
+                                    definition = callback.definition.clone();
+                                }
+                                Some(Value::Closure {
+                                    definition: callback,
+                                    body: callback_body,
+                                    captures,
+                                    environment,
+                                    invoked,
+                                }) if captures.len() == environment.owned_captures.len()
+                                    && invoked
+                                        .as_ref()
+                                        .is_none_or(|state| state.get().is_none())
+                                    && captures
+                                        .iter()
+                                        .flatten()
+                                        .all(|value| resources_in(value) == 0) =>
+                                {
+                                    definition = callback.path().clone();
+                                    body = Some(*callback_body);
+                                }
+                                _ => {
+                                    self.unsupported(
+                                        "arena callback needs observed capture transport",
+                                    );
+                                    return;
+                                }
+                            }
                         }
                         self.call = Some(CallState {
                             definition,
@@ -1065,6 +1097,47 @@ impl Observer for Resources {
             self.unsupported("builtin entered without its actual source call");
             return;
         };
+        if call.definition.is_core("arena.seal") {
+            if !matches!(result, OperationResult::SealArena { .. }) || !call.arguments.is_empty() {
+                self.unsupported("seal has no resource-free entered root");
+                return;
+            }
+            let Some(state) = self.frames.last() else {
+                self.unsupported("seal has no observed caller");
+                return;
+            };
+            if self.seals.insert(state.id, call).is_some() {
+                self.unsupported("seal caller reused before completion");
+            }
+            return;
+        }
+        if call.definition.is_core("region.with") {
+            let OperationResult::BorrowRegion { owner, result, .. } = result else {
+                self.unsupported("region callback has no exclusive root loan");
+                return;
+            };
+            if !matches!(arguments.first(), Some(Value::Handle { kind, id }) if kind == "Region" && id == owner)
+            {
+                self.unsupported("region callback owner differs from its actual argument");
+                return;
+            }
+            let mut call = call;
+            let Some(index) = call
+                .arguments
+                .iter()
+                .position(|(index, usage, _)| *index == 0 && *usage == UseKind::Mut)
+            else {
+                self.unsupported("region callback lacks its exclusive owner");
+                return;
+            };
+            let (_, _, at) = call.arguments.remove(index);
+            if !self.tracker.inventory().contains_owner(&at) {
+                self.unsupported("region callback owner has no live lineage");
+                return;
+            }
+            self.callback_called(call, arguments, result);
+            return;
+        }
         if call.definition.is_core("mutex.create") {
             self.mutex_created(call, arguments, result);
             return;
@@ -1197,6 +1270,11 @@ impl Observer for Resources {
         self.callback_frame(callee);
     }
     fn builtin_completed(&mut self, _task: u64, _frame: &Frame, result: &crate::OperationResult) {
+        if matches!(result, OperationResult::Failed(_))
+            && let Some(state) = self.frames.last()
+        {
+            self.seals.remove(&state.id);
+        }
         if let Some(state) = self.frames.last() {
             self.channel_committed(state.id, result);
         }
@@ -1241,6 +1319,25 @@ impl Observer for Resources {
     }
     fn builtin_returned(&mut self, _task: u64, _frame: &Frame, value: &Value) {
         if self.error.is_some() {
+            return;
+        }
+        if let Some(call) = self
+            .frames
+            .last()
+            .and_then(|state| self.seals.remove(&state.id))
+        {
+            if !matches!(value, Value::Handle { kind, .. } if kind == "Region") {
+                self.unsupported("seal returned no committed owner");
+                return;
+            }
+            let Some(owner) = call.destination else {
+                self.unsupported("seal has no receiving place");
+                return;
+            };
+            let created = self
+                .tracker
+                .create(&call.context, owner, "core@1::Region".into());
+            self.checked(created);
             return;
         }
         let count = resources_in(value);

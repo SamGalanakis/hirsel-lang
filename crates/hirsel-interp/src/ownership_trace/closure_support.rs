@@ -33,10 +33,12 @@ pub(super) fn resources_in(value: &Value) -> u64 {
     let mut count = 0;
     let mut work = vec![value];
     while let Some(value) = work.pop() {
-        count += u64::from(matches!(
-            value,
-            Value::Resource { .. } | Value::ResourceVariant { .. }
-        ));
+        count += u64::from(
+            matches!(
+                value,
+                Value::Resource { .. } | Value::ResourceVariant { .. }
+            ) || matches!(value, Value::Handle { kind, .. } if kind == "Region"),
+        );
         children(value, |_, child| work.push(child));
     }
     count

@@ -517,6 +517,41 @@ impl LeafPlan {
                     {
                         ()
                     }
+                    Inst::SealArena {
+                        result,
+                        root,
+                        shape,
+                        ..
+                    } => {
+                        let descriptor = unit
+                            .tables
+                            .seal_descriptors
+                            .get(shape.index())
+                            .ok_or("ownership seal has no checked descriptor")?;
+                        descriptor.bits_root(layouts)?;
+                        if owned(root) || !owned(result) {
+                            return Err(
+                                "ownership seal requires plain root and owned result".into()
+                            );
+                        }
+                        push(
+                            after,
+                            Kind::Create,
+                            Location::Value(result),
+                            Location::Value(result),
+                            layout(result),
+                        )?;
+                    }
+                    Inst::BorrowSealedRoot { result, shape, .. } => {
+                        unit.tables
+                            .seal_descriptors
+                            .get(shape.index())
+                            .ok_or("ownership sealed view has no descriptor")?
+                            .bits_root(layouts)?;
+                        if owned(result) {
+                            return Err("ownership sealed view must be plain".into());
+                        }
+                    }
                     Inst::ArenaOpen { result, .. } if source_only && !owned(result) => (),
                     Inst::RegionEnter { result, .. }
                         if unit.types[unit.values[result.index()].ty.index()].repr
@@ -1629,7 +1664,9 @@ fn leaf(table: &LayoutTable, id: LayoutId) -> bool {
         LayoutKind::Resource | LayoutKind::Aggregate => {
             record.fields.iter().all(|f| plain(table, f.layout, 0))
         }
-        LayoutKind::Handle | LayoutKind::HostCapability { .. } => true,
+        LayoutKind::Handle
+        | LayoutKind::HostCapability { .. }
+        | LayoutKind::SealedRegion { .. } => true,
         _ => false,
     }
 }

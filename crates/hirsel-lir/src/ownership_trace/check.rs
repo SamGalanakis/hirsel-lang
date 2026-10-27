@@ -550,6 +550,7 @@ pub(super) fn binding<S: Stage>(
                 .get(index as usize)
                 .ok_or(Error::InvalidPoint(m.id))?;
             match (*inst, moment) {
+                (Inst::SealArena { result, .. }, Moment::After) => same(Create, Value(result)),
                 (
                     Inst::Construct {
                         result, construct, ..

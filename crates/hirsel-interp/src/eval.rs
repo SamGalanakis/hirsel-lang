@@ -1724,6 +1724,13 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         && kind == "Region"
                     {
                         let mut owner = budgets.storage.release_owner(*id)?;
+                        observer.released_without_finalizer(
+                            task,
+                            frame,
+                            &value,
+                            anchor.site,
+                            sources,
+                        );
                         if let Some(check) = &frame.check {
                             check.state.borrow_mut().released += 1;
                         }

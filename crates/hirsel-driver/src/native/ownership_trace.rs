@@ -141,6 +141,12 @@ pub(crate) fn emit_relocated(
         let body = unit.unit();
         let mut types = BTreeMap::new();
         for inst in &body.instructions {
+            if let Inst::SealArena { result, .. } = inst {
+                types.insert(
+                    body.types[body.values[result.index()].ty.index()].layout,
+                    "core@1::Region".into(),
+                );
+            }
             if let Inst::Construct {
                 result, construct, ..
             } = inst
