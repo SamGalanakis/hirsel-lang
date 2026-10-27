@@ -9,6 +9,7 @@ as Cargo's rustc -l static:+bundle produces. No object-code format is parsed her
 import argparse
 from pathlib import Path
 import subprocess
+import tempfile
 
 
 def main():
@@ -17,6 +18,7 @@ def main():
     parser.add_argument('--output', required=True)
     parser.add_argument('--archive', action='append', required=True)
     parser.add_argument('--object', action='append', default=[])
+    parser.add_argument('--member', nargs=2, action='append', default=[], metavar=('ARCHIVE', 'NAME'))
     args = parser.parse_args()
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -25,11 +27,20 @@ def main():
         if any(c in str(path) for c in '\n\r"'):
             raise ValueError('archive artifact path cannot be represented in MRI')
         return '"' + str(path) + '"'
-    script = ['CREATE ' + quoted(output)]
-    script.extend('ADDLIB ' + quoted(path) for path in args.archive)
-    script.extend('ADDMOD ' + quoted(path) for path in args.object)
-    script.extend(['SAVE', 'END', ''])
-    subprocess.run([args.ar, '-M'], input='\n'.join(script), text=True, check=True)
+    with tempfile.TemporaryDirectory(prefix='hirsel-archive-members-') as scratch:
+        objects = list(args.object)
+        for index, (archive, member) in enumerate(args.member):
+            path = Path(scratch) / f'{index}.o'
+            with path.open('wb') as destination:
+                subprocess.run([args.ar, 'p', archive, member], stdout=destination, check=True)
+            if path.stat().st_size == 0:
+                raise ValueError(f'{archive}: missing archive member {member}')
+            objects.append(path)
+        script = ['CREATE ' + quoted(output)]
+        script.extend('ADDLIB ' + quoted(path) for path in args.archive)
+        script.extend('ADDMOD ' + quoted(path) for path in objects)
+        script.extend(['SAVE', 'END', ''])
+        subprocess.run([args.ar, '-M'], input='\n'.join(script), text=True, check=True)
 
 
 if __name__ == '__main__':
