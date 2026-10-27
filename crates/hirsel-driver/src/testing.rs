@@ -334,6 +334,139 @@ pub fn discover(
     if check.completion != hirsel_engine::CheckCompletion::Complete {
         return Err(program.error(hirsel_engine::QueryError::NotImplemented));
     }
+    plan_entries(
+        program,
+        filters,
+        override_seed,
+        selection,
+        |program, source, entry| {
+            let file = program
+                .engine
+                .sources
+                .add(source.name, source.text.to_string())
+                .ok_or(ToolError::SourceTooLarge)?;
+            let parsed = program
+                .engine
+                .parse_file(file, &source.context)
+                .map_err(|error| program.error(error))?;
+            if !parsed.diagnostics.is_empty() {
+                return Err(
+                    program.error(hirsel_engine::QueryError::Diagnostics(parsed.diagnostics))
+                );
+            }
+            program
+                .engine
+                .lower_to_tir(entry)
+                .map_err(|error| program.error(error))?;
+            Ok(())
+        },
+    )
+}
+
+/// Discovery observes one immutable source namespace and accepts only the
+/// ordinary admitted Check. Wrapper text is an input to the later compilation;
+/// finding tests never checks or lowers a second mutable program.
+pub(crate) struct TestDiscovery {
+    pub inputs: hirsel_engine::loader_inputs::FrozenInputs,
+    pub tests: Vec<Test>,
+    pub sources: Vec<crate::requests::NativeSourceText>,
+}
+
+pub(crate) fn discover_request(
+    path: &Path,
+    filters: &[String],
+    override_seed: Option<u64>,
+    selection: Selection,
+    verify: hirsel_engine::Verify,
+) -> Result<TestDiscovery, ToolError> {
+    use crate::requests::{CompileOperation, CompileRequest, CompileResult, CompilerRequests};
+    use hirsel_engine::{
+        requests::{OutputReadiness, RequestEngine, observe_inputs},
+        runtime::QueryRuntime,
+    };
+    let compiler = crate::COMPILER.with_verify(verify);
+    let mut selector = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+    let (program, inputs) = observe_inputs(
+        selector.input_limits(),
+        selector.capture_attempts(),
+        |inputs| compiler.load_test_package_inputs(path, inputs),
+    )
+    .map_err(|_| ToolError::Runtime("test package inputs changed during capture".into()))?;
+    let mut program = program?;
+    let mut selected = selector.select(&CompileRequest {
+        path: path.to_owned(),
+        inputs: inputs.clone(),
+        operation: CompileOperation::Check {
+            lowering: hirsel_engine::LoweringPolicy::Reachable,
+        },
+    })?;
+    let completed = {
+        let mut runtime = selected
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let request = runtime.request(&selected.roots);
+        runtime.wait(request)
+    }
+    .map_err(|reference| {
+        selected.output.failed(reference).unwrap_or_else(|| {
+            ToolError::Runtime("test discovery Check diagnostics unavailable".into())
+        })
+    })?;
+    let output = selected.output.ready(&completed)?;
+    let CompileResult::Check(checked) = &output.result else {
+        return Err(ToolError::Runtime(
+            "test discovery completed another operation".into(),
+        ));
+    };
+    if checked
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == hirsel_diag::Severity::Error)
+    {
+        return Err(ToolError::Query {
+            error: hirsel_engine::QueryError::Diagnostics(checked.diagnostics.clone()),
+            phase: None,
+            sources: checked.sources.clone(),
+        });
+    }
+    if let hirsel_engine::CheckCompletion::Incomplete { phase } = checked.completion {
+        return Err(ToolError::Query {
+            error: hirsel_engine::QueryError::NotImplemented,
+            phase: Some(phase),
+            sources: checked.sources.clone(),
+        });
+    }
+    let mut sources = Vec::new();
+    let tests = plan_entries(
+        &mut program,
+        filters,
+        override_seed,
+        selection,
+        |_, mut source, _| {
+            source.name = format!("native-testing/{}.hir", source.name);
+            sources.push(source);
+            Ok(())
+        },
+    )?;
+    Ok(TestDiscovery {
+        inputs,
+        tests,
+        sources,
+    })
+}
+
+fn plan_entries(
+    program: &mut LoadedProgram,
+    filters: &[String],
+    override_seed: Option<u64>,
+    selection: Selection,
+    mut install: impl FnMut(
+        &mut LoadedProgram,
+        crate::requests::NativeSourceText,
+        &DefPath,
+    ) -> Result<(), ToolError>,
+) -> Result<Vec<Test>, ToolError> {
     let mut definitions = Vec::new();
     let mut sources = std::collections::BTreeMap::new();
     let mut names = BTreeSet::new();
@@ -383,7 +516,7 @@ pub fn discover(
             unreachable!("checked @test")
         };
         let unit = matches!(program.engine.types().get(f.result).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty());
-        let mut generate = |iterations: Option<u64>| {
+        let mut generate = |iterations: Option<u64>| -> Result<DefPath, ToolError> {
             let prefix = if iterations.is_some() {
                 "bench"
             } else {
@@ -431,35 +564,21 @@ pub fn discover(
                 "@track_caller\npub fn {}({}: core@1/Test) -> core@1/Result[(), ()] {{\n{body}}}\n",
                 entry.0.name, context_name.0.name
             );
-            let file = program
-                .engine
-                .sources
-                .add(
-                    match iterations {
-                        // Source names are keys: each loop entry needs its own.
+            install(
+                program,
+                crate::requests::NativeSourceText {
+                    name: match iterations {
                         Some(count) => format!("<bench entry {definition} x{count}>"),
                         None => format!("<test entry {definition}>"),
                     },
-                    source,
-                )
-                .ok_or(ToolError::SourceTooLarge)?;
-            let context = FileContext {
-                package: definition.0.package.clone(),
-                modules: definition.0.modules.clone(),
-            };
-            let parsed = program
-                .engine
-                .parse_file(file, &context)
-                .map_err(|e| program.error(e))?;
-            if !parsed.diagnostics.is_empty() {
-                return Err(
-                    program.error(hirsel_engine::QueryError::Diagnostics(parsed.diagnostics))
-                );
-            }
-            program
-                .engine
-                .lower_to_tir(&entry)
-                .map_err(|e| program.error(e))?;
+                    context: FileContext {
+                        package: definition.0.package.clone(),
+                        modules: definition.0.modules.clone(),
+                    },
+                    text: source.into(),
+                },
+                &entry,
+            )?;
             Ok(entry)
         };
         let (entry, loops) = match selection {
