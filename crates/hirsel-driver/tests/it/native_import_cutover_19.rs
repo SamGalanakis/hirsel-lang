@@ -42,32 +42,17 @@ fn import_engine_with_validation(
     store: Arc<dyn ResultStore>,
     validation: native::Validation,
 ) -> (Bodies, u64, u64) {
-    let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-    let declarations = NativeDeclarations::collect(&mut engine, &mut discovery, roots).unwrap();
-    let paths = declarations
-        .context
-        .sources
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    let context = engine.native_original_context(&paths).unwrap();
-    let records = NativeRecords::new(engine.types().clone(), store.clone());
-    let mut originals = Vec::new();
-    for path in &paths {
-        let source = &declarations.sources[path];
-        let (body, verified) = engine.native_definition_body_with_output(source).unwrap();
-        let bytes = records.encode(&engine, &body).unwrap();
-        originals.push(NativeOriginalProduct {
-            definition: path.clone(),
-            implementation_revision: source.source.implementation_revision,
-            signature: source.signature.fingerprint,
-            body: store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap(),
-            verified,
-        });
-    }
-    let reader = context.reader(originals, store.clone()).unwrap();
+    let facts = crate::native_front_fixture::products(&mut engine, roots).unwrap();
+    let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
+    let reader = facts
+        .original_context
+        .reader(
+            facts.originals.iter().map(|product| (**product).clone()),
+            store.clone(),
+        )
+        .unwrap();
+    drop(facts);
     let inputs = NativeInstanceInputs::from_products(declarations, reader).unwrap();
-    drop(discovery);
     drop(engine);
     let mut source = inputs.provider();
     let target = native::TargetSpec::x86_64_unknown_linux_gnu();
