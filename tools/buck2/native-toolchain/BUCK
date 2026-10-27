@@ -91,7 +91,7 @@ toolchain_proof(name = "root-plan-proof", tools = [":llvm", ":linker", ":kit", "
 toolchain_proof(name = "root-frozen-kit-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_frozen_kit_proof.py", interpreter = "python3")
 toolchain_proof(name = "source-metadata-proof", tools = [":llvm", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-unittest-harness", "root//:hirsel-driver-test-it-harness"], script = "source_metadata_proof.sh")
 
-toolchain_proof(name = "native-bootstrap-link-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-unittest-harness"], script = "native_bootstrap_link_proof.py", interpreter = "python3")
+toolchain_proof(name = "native-bootstrap-link-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "native_bootstrap_link_proof.py", interpreter = "python3")
 
 toolchain_proof(name = "native-closed-bootstrap-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "native_closed_bootstrap_proof.py", interpreter = "python3")
 

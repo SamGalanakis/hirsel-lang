@@ -50,6 +50,10 @@ DELEGATED = {
     ('crates/hirsel-cli/tests/cli/policy_evaluator_33.rs', 'policy_evaluator_33_cell'):
         ('policy_evaluator_33_simulation', 'campaign'),
 }
+REPLAY_ACTIONS = {
+    ('crates/hirsel-cli/tests/cli/ordered_deadline_liveness_55.rs', 'fixture'),
+    ('crates/hirsel-cli/tests/cli/ordered_deadline_liveness_55.rs', 'cell'),
+}
 # These Buck proof targets supply their own immutable tool inputs, rather than
 # the archival runner's environment. Each probe checks exact identity/counts.
 PROOFS = {
@@ -68,10 +72,12 @@ PROOFS = {
         'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
         'target': '//tools/buck2/native-toolchain:native-bootstrap-link-proof',
         'probe': 'tools/buck2/native-toolchain/native_bootstrap_link_proof.py',
-        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected harness'],
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected auditors', '/selected floor', '/selected qemu', '/selected harness'],
         'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
-                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime'},
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
+                        'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
+                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
     },
     'requests::native_bootstrap::tests::actual_native_bootstrap_uses_selected_closed_runtime_on_link_and_reopen': {
         'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
@@ -225,6 +231,8 @@ def orphans(sources):
                 continue
             if (path, name) in DELEGATED:
                 continue
+            if (path, name) in REPLAY_ACTIONS:
+                continue
             if any(home['source'] == path and case.rsplit('::', 1)[-1] == name
                    for case, home in PROOFS.items()):
                 continue
@@ -257,20 +265,28 @@ class IgnoredTests(unittest.TestCase):
             parent_body = text.split(f'fn {parent}()', 1)[1].split('\n#[test]', 1)[0]
             self.assertIn(f'{helper}(', parent_body)
             helper_body = text.split(f'fn {helper}(', 1)[1].split('\nfn ', 1)[0]
-            self.assertIn('current_exe()', helper_body)
             if helper == 'child':
                 self.assertIn('"index::tests::races::cooperating_child"', helper_body)
-                self.assertIn('"--exact"', helper_body)
+                command_body = text.split('fn test_command(', 1)[1].split('\nfn ', 1)[0]
+                self.assertIn('current_exe()', command_body)
+                self.assertIn('["--exact", name,', command_body)
+                self.assertIn('TestChild::spawn(', helper_body)
+                self.assertIn('self.process.wait()', text)
+                self.assertIn('test result: ok. 1 passed; 0 failed;', text)
                 self.assertIn('"--ignored"', helper_body)
                 for key in ('INDEX36_CHILD_ROOT', 'INDEX36_CHILD_MODE', 'INDEX36_CHILD_ID'):
                     self.assertIn(key, helper_body)
                 self.assertIn('child(', parent_body)
-                self.assertIn('.spawn()', parent_body)
+                self.assertIn('.spawn()', text.split('impl TestChild {', 1)[1].split('impl Drop', 1)[0])
+                self.assertIn('a.finish()', parent_body)
+                self.assertIn('b.finish()', parent_body)
                 self.assertIn('mod races;', (ROOT / Path(path).parent / 'modules.rs').read_text())
             elif helper == 'isolated':
+                self.assertIn('current_exe()', helper_body)
                 self.assertRegex(helper_body, rf'"--exact",\s+"{module}::{worker}",\s+"--ignored"')
                 self.assertIn('child.wait()', helper_body)
             else:
+                self.assertIn('current_exe()', helper_body)
                 self.assertRegex(helper_body, rf'"--exact",\s+"{module}::{worker}",\s+"--ignored"')
                 self.assertIn('.output()', helper_body)
                 self.assertIn('output.status.success()', helper_body)
@@ -281,6 +297,19 @@ class IgnoredTests(unittest.TestCase):
             # The annotation covers only the named child, never a sibling.
             sources = {path: '#[test]\n#[ignore]\nfn unregistered_worker() {}\n'}
             self.assertEqual(orphans(sources), [(path, 'unregistered_worker')])
+
+    def test_deadline_replay_actions_select_exact_workers_and_supply_their_inputs(self):
+        definitions = (ROOT / 'tools/buck2/defs.bzl').read_text()
+        for path, name in REPLAY_ACTIONS:
+            self.assertIn(name, [name for _, name in ignored_declarations((ROOT / path).read_text())])
+            self.assertIn(f'args = ["--ignored", "--exact", "ordered_deadline_liveness_55::{name}", "--nocapture"]', definitions)
+            self.assertEqual(orphans({path: '#[ignore]\nfn unregistered() {}'}), [(path, 'unregistered')])
+        for supplied in ['env["HIRSEL_REPLAY_FIXTURE_OUT"] = cmd_args(fixture.as_output())',
+                         'files_env = {"HIRSEL_REPLAY_FIXTURE": ":" + fixture}',
+                         'extra_env = {"HIRSEL_REPLAY_BACKEND": backend, "HIRSEL_REPLAY_CELL": cell}']:
+            self.assertIn(supplied, definitions)
+        self.assertIn('call("hirsel_deadline_replay_matrix", name="deadline-select-replay"',
+                      (ROOT / 'tools/buck2/sync.py').read_text())
 
     def test_explicit_homes_execute_exact_ignored_identity_and_forward_required_inputs(self):
         runner = runpy.run_path(str(ROOT / 'tools/ignored-tests'))
@@ -318,6 +347,10 @@ class IgnoredTests(unittest.TestCase):
             target = (ROOT / 'tools/buck2/native-toolchain/BUCK').read_text()
             self.assertIn(f'name = "{home["target"].rsplit(":", 1)[-1]}"', target)
             self.assertIn(f'script = "{Path(home["probe"]).name}", interpreter = "python3"', target)
+            declaration = next(line for line in target.splitlines()
+                               if f'name = "{home["target"].rsplit(":", 1)[-1]}"' in line)
+            tools = re.search(r'tools = \[([^\]]*)\]', declaration)[1]
+            self.assertEqual(len(re.findall(r'"[^"]+"', tools)), len(home.get('arguments', [0, 0, 0])), case)
             probe = runpy.run_path(str(ROOT / home['probe']))
             arguments = home.get('arguments', ['/original packaged linker', '/original pinned llvm', '/selected harness'])
             selected, environment = probe['command'](arguments, {'KEEP': 'original'})

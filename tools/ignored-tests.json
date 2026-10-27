@@ -302,5 +302,128 @@
       "hirsel.ownership_trace=true"
     ],
     "inputs": []
+  },
+  "ownership_source_request_49::ownership_native_cli_runs_selected_source_plans_on_both_backends": {
+    "source": "crates/hirsel-cli/tests/cli/ownership_source_request_49.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ]
+  },
+  "pubsub_relay_30::historical_native_prefix_complements": {
+    "source": "crates/hirsel-cli/tests/cli/pubsub_relay_30.rs",
+    "inputs": []
+  },
+  "ownership_execution_49::ownership_selected_source_objects_execute_original_lineage_on_both_backends": {
+    "source": "crates/hirsel-driver/tests/it/ownership_execution_49.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_owned_direct_calls_keep_arguments_results_and_equal_tokens_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_owned_join_keeps_selected_branch_token_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_failed_finalizer_retires_callee_and_outer_resource_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_once_capture_returns_original_resource_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_uncalled_once_environment_drops_original_resources_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_called_once_environment_drops_only_retained_capture_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_failed_capture_cleanup_retires_actual_resources_after_finalizer_locals_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_nested_aggregate_keeps_original_field_resources_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_compound_parameter_keeps_original_children_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_compound_parameter_failure_retires_each_actual_child_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_uncalled_once_environment_drops_nested_original_children_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_failed_nested_capture_cleanup_retires_actual_children_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_trace::ownership_native_called_once_environment_drops_only_retained_nested_children_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_trace.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }
