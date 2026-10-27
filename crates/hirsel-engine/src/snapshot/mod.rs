@@ -200,7 +200,7 @@ impl SignatureSnapshot {
                             .iter()
                             .filter(|v| visible.contains(&v.d.path().0.package))
                             .map(|v| v.signature().clone()),
-                        previous.and_then(|p| p.bases.get(package)).map(Arc::as_ref),
+                        Some(&views),
                         &mut validated,
                         old,
                     ))
