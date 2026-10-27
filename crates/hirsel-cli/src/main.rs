@@ -70,7 +70,7 @@ Run a source entry; the default engine is the interpreter.
   --trace-events <jsonl> Native canonical Ordered events; requires qualified executor
   --trace-ownership <json> Print where each resource was created, moved and dropped,
                       and write the complete lineage as JSON; with --native,
-                      only grant-free programs the native tracer supports
+                      admitted grants, recording and replay use the native tracer
   -- args...          Replace template Args; excludes --run, --replay, --simulation
   --json              Machine-readable diagnostics
   --verify-cache      Recompute cached results and compare
@@ -947,19 +947,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 }
                 if trace_ownership.is_some()
                     && native
-                    && (config.is_some()
-                        || record.is_some()
-                        || replay.is_some()
-                        || arguments.is_some()
-                        || cores.is_some()
-                        || proofs.sidecar.is_some()
-                        || validate_stages
-                        || trace_events.is_some())
+                    && (cores.is_some() || proofs.sidecar.is_some() || trace_events.is_some())
                 {
-                    return Err(
-                        "--native --trace-ownership runs without grants, records or other native options"
-                            .into(),
-                    );
+                    return Err("--native --trace-ownership does not combine with --cores, --proofs or --trace-events".into());
                 }
                 if revocations.is_some() && (config.is_none() || replay.is_some()) {
                     return Err("--revocations requires a live --run or --grants launch".into());
@@ -1801,6 +1791,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             if let Some(sidecar) = trace_ownership {
                 return ownership_trace::run_native(
                     Path::new(&file),
+                    launch.host(arguments.as_deref()),
                     backend.unwrap_or(hirsel_driver::native::Backend::Cranelift),
                     verify,
                     Path::new(&sidecar),

@@ -138,13 +138,15 @@ pub(super) fn test(
 /// the executable wrote it; the exit status is the executable's.
 pub(super) fn run_native(
     path: &Path,
+    launch: hirsel_driver::HostLaunch<'_>,
     backend: hirsel_driver::native::Backend,
     verify: hirsel_engine::Verify,
     sidecar: &Path,
     json: bool,
 ) -> u8 {
-    let run = match hirsel_driver::native::ownership_trace::run_path(
+    let run = match hirsel_driver::native::ownership_trace::run_path_with_launch(
         path,
+        launch,
         backend,
         verify,
         EVENT_LIMIT,

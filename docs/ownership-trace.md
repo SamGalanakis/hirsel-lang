@@ -35,7 +35,7 @@ resource held by `Forgotten` storage. The trace does not change the program's
 exit status for a retained resource. JSON includes the program binding,
 completeness flag and the same ordered events as the readable output.
 
-Native leaf programs can select either backend:
+Native programs can select either backend:
 
 ```sh
 hirsel run app.hir --native --backend llvm --trace-ownership /tmp/llvm.json
@@ -47,15 +47,24 @@ failure cleanup, owned direct-call parameters and results, checked once captures
 named arena callbacks, and parallel SSA moves including swaps. Swaps capture all
 sources before replacing any destination, so equal payloads retain their distinct
 identities. Resources created and dropped inside a child task are supported
-when its callback captures and result carry no tracked resources. The compiler
-proves callback emptiness from the complete checked code and capture graph;
-unknown callbacks and Resource-bearing task inputs or results refuse before launch.
+along with captured Resources transferred at the actual committed spawn. The
+compiler binds the callback and capture paths from the complete checked code
+graph. Unknown callbacks and Resource-bearing task results refuse before launch.
 The runtime sidecar binds each created task's generation and canonical path,
 so interleaved frames and reused scheduler slots remain distinct. Channel
 payloads and unsupported dynamic storage still refuse before launch.
 Native launches accept the validated grants, arguments and recording or replay
 selected for the ordinary program. The diagnostic runtime must be available;
 the default runtime archive contains no ownership hooks.
+
+```sh
+hirsel run app.hir --native --grants grants.json --record /tmp/app.tape --trace-ownership /tmp/live.json
+hirsel run app.hir --native --replay /tmp/app.tape --trace-ownership /tmp/replay.json
+```
+
+Replay uses the recorded admission and leaves the tape unchanged. The ownership
+sidecar remains separate from the tape. Native tracing cannot combine with
+`--cores`, `--proofs` or `--trace-events`.
 Interpreted test tracing runs one default schedule; native tests, benchmarks,
 blessing, JSON test reports and custom schedules are not supported by this flag.
 `run --simulation` also refuses the flag.

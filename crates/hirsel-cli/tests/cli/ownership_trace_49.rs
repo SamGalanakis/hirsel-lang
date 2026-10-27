@@ -81,11 +81,7 @@ fn ownership_trace_49_run_drops_every_lifetime_and_keeps_the_program_outcome() {
 #[test]
 fn ownership_trace_49_run_refuses_launches_it_does_not_trace() {
     let path = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
-    for extra in [
-        &["--simulation", "{}"][..],
-        &["--native", "--grants", "{}"],
-        &["--native", "--record", "tape"],
-    ] {
+    for extra in [&["--simulation", "{}"][..], &["--native", "--cores", "1"]] {
         let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .arg("run")
             .arg(&path)

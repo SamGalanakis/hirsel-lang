@@ -579,6 +579,24 @@ pub fn run_path(
     verify: hirsel_engine::Verify,
     event_limit: usize,
 ) -> Result<Result<LeafExecution, NativeError>, crate::ToolError> {
+    run_path_with_launch(
+        path,
+        crate::HostLaunch::empty(),
+        backend,
+        verify,
+        event_limit,
+    )
+}
+
+/// Admit the same grants or replay record as ordinary native execution before
+/// launching the source-owned diagnostic objects. No trace grants authority.
+pub fn run_path_with_launch(
+    path: &std::path::Path,
+    launch: crate::HostLaunch<'_>,
+    backend: Backend,
+    verify: hirsel_engine::Verify,
+    event_limit: usize,
+) -> Result<Result<LeafExecution, NativeError>, crate::ToolError> {
     hirsel_engine::with_compiler_stack(|| {
         use crate::requests::{
             CompileOperation, CompileResult, CompilerRequests, OwnershipRequest,
@@ -628,7 +646,7 @@ pub fn run_path(
             )?;
             let scratch = super::executable::Scratch::new()?;
             execution
-                .launch(&objects, &toolchain, &scratch.0, event_limit)
+                .launch_with(&objects, &toolchain, &scratch.0, event_limit, launch)
                 .map_err(|error| NativeError::new(StageName::Link, error))
         })())
     })
