@@ -40,3 +40,9 @@ include!("support/cpu_pool/allocation_audit.rs");
 fn native_typed_prefix_allocations_are_freed_before_heap_teardown() {
     typed_prefix_allocation_audit(1);
 }
+
+include!("support/cpu_pool/interpreter.rs");
+#[test]
+fn cpu_interpreter_matches_native_phases_and_strict_replay() {
+    cpu_interpreter_native_phases(1);
+}

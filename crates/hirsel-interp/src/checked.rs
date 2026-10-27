@@ -948,6 +948,8 @@ pub(crate) struct OperationCheck {
     pub updates: Vec<(usize, Shadow)>,
     pub inputs: Vec<Argument>,
     pub callbacks: Bound,
+    /// Checked preparation result retained as a tooling snapshot, without credits.
+    pub task_arguments: Option<(Value, Shadow)>,
 }
 impl OperationCheck {
     /// Native list edits move the corresponding ownership subtrees as well as
@@ -1202,6 +1204,34 @@ pub(crate) fn native_shadow(target: &Value, values: &[Value], check: &OperationC
     } else {
         Shadow::of(check.input_bound())
     }
+}
+
+/// Select an owned mapper input by its preparation ordinal. Equal data at
+/// another ordinal cannot substitute another allocation's ownership witness.
+pub(crate) fn task_argument_shadow(
+    check: &OperationCheck,
+    path: &[usize],
+    argument: &Value,
+) -> Result<Shadow, Error> {
+    let (mut value, mut shadow) = check
+        .task_arguments
+        .as_ref()
+        .map(|(value, shadow)| (value, shadow.clone()))
+        .ok_or_else(|| crate::invalid("task argument without its checked callback return"))?;
+    for &field in path {
+        value = value
+            .fields()
+            .and_then(|fields| fields.get(field))
+            .and_then(Option::as_ref)
+            .ok_or_else(|| crate::invalid("task argument projection outside callback return"))?;
+        shadow = shadow.part(field);
+    }
+    if value != argument {
+        return Err(crate::invalid(
+            "task argument differs from its checked callback projection",
+        ));
+    }
+    Ok(shadow.for_value(argument))
 }
 
 /// A frame's lifetimes: what each slot's storage is bounded by, and what its
@@ -1564,6 +1594,7 @@ mod tests {
                 ..Default::default()
             }],
             callbacks: vec![],
+            task_arguments: None,
         };
         let recovered = native_shadow(&value, &[value.clone()], &check);
         state.close(borrowed);
@@ -1595,6 +1626,7 @@ mod tests {
                 })
                 .into(),
             callbacks: vec![],
+            task_arguments: None,
         };
         let recovered = native_shadow(&value, &[value.clone(), value.clone()], &check);
         for borrowed in [first, second] {
@@ -1680,6 +1712,7 @@ mod tests {
                     },
                 ],
                 callbacks: vec![],
+                task_arguments: None,
             };
             let completion = crate::OperationResult::Complete {
                 value: returned,
@@ -1738,6 +1771,7 @@ mod tests {
                 updates: vec![(0, Shadow::Parts(vec![element]))],
                 inputs: vec![],
                 callbacks: vec![],
+                task_arguments: None,
             };
             let popped = Value::Variant {
                 variant: 1,

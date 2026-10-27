@@ -314,8 +314,14 @@ impl Library {
                     .get_mut(batch.next)
                     .and_then(Option::take)
                     .ok_or_else(|| invalid("CPU job moved twice"))?;
-                let child =
-                    self.spawn_child(batch.scope, batch.mapper.clone(), vec![job], true, context)?;
+                let child = self.spawn_child(
+                    batch.scope,
+                    batch.mapper.clone(),
+                    vec![job],
+                    true,
+                    vec![vec![batch.next]],
+                    context,
+                )?;
                 batch.children.push_back(child);
                 batch.next += 1;
                 batch.stage = Stage::Preclaim;
@@ -513,6 +519,7 @@ mod tests {
                     for start in library.take_tasks() {
                         assert_eq!(start.parent, 0);
                         assert!(start.borrowed);
+                        assert_eq!(start.argument_paths, vec![vec![spawned as usize]]);
                         assert_eq!(library.ownership_task_path(start.id), Some(vec![spawned]));
                         assert_eq!(
                             start.arguments,

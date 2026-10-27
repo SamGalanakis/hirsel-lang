@@ -1,0 +1,11 @@
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  for repeat in 0u64..2u64 {
+    let rows = core@1/cpu.map_scoped(tasks, WIDTH,
+      fn() -> List[u64] uses {} { JOBS },
+      fn(take job: u64) -> u64 uses {} { job + 7u64 })
+    failure.check(rows == Ok(EXPECTED), Bounds())
+  }
+  let _ = out.print(io.stdout(rt)?, "cpu-scalar-ok\n")
+  Ok(())
+}

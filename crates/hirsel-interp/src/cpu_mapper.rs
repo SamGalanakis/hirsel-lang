@@ -70,7 +70,11 @@ pub(crate) async fn certified(
     let mut checked = BTreeSet::new();
     let mut instructions = 0;
     while let Some((path, selected, leave)) = todo.pop() {
-        let definition = provider.definition(&path).await.map_err(Error::Query)?;
+        let definition = match provider.definition(&path).await {
+            Ok(definition) => definition,
+            Err(hirsel_types::QueryError::NotImplemented) => return Ok(false),
+            Err(error) => return Err(Error::Query(error)),
+        };
         let body_id = selected.unwrap_or(definition.entry);
         let key = (path.clone(), body_id.0);
         if leave {

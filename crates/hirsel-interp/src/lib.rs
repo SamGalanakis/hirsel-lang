@@ -320,6 +320,9 @@ pub struct TaskStart {
     pub callee: Value,
     /// Owned inputs moved into the child in parameter order.
     pub arguments: Vec<Value>,
+    /// Per argument, an exact projection of this operation's retained callback return.
+    /// An absent entry recovers an ordinary operation input instead.
+    pub argument_paths: Vec<Vec<usize>>,
     /// The scope retains an immutable mapper environment until every child rests.
     pub borrowed: bool,
 }
@@ -378,6 +381,8 @@ operation_boundary! {
     /// taken owners need release. Adapters introducing those effects override this
     /// promise. Checked and memory-metered runs retain scheduled completion.
     fn immediate(&self, _operation: OperationId) -> bool { false }
+    /// This callback transfers its returned data into later task arguments.
+    fn retains_task_arguments(&self, _continuation: u64) -> bool { false }
     /// Absolute deadline of a parked timer, independent of host readiness or replay.
     /// The scheduler polls timers by deadline, preserving suspension order on ties.
     fn wait_deadline(&self, _token: u64) -> Option<u64> { None }

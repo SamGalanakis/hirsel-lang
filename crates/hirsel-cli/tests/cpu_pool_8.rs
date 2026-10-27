@@ -105,3 +105,9 @@ fn native_wide_failure_every_byte_cleanup_cut() {
 fn native_wide_cancel_every_byte_cleanup_cut() {
     wide_cleanup_cuts(8, "cancel");
 }
+
+include!("support/cpu_pool/interpreter.rs");
+#[test]
+fn cpu_interpreter_matches_native_phases_and_strict_replay() {
+    cpu_interpreter_native_phases(8);
+}

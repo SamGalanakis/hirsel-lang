@@ -569,6 +569,7 @@ impl Library {
         callee: Value,
         arguments: Vec<Value>,
         borrowed: bool,
+        argument_paths: Vec<Vec<usize>>,
         context: &OperationContext<'_>,
     ) -> Result<u64, Error> {
         let task = self.tasks.fresh();
@@ -614,6 +615,7 @@ impl Library {
                 parent: self.tasks.current,
                 callee,
                 arguments,
+                argument_paths,
                 borrowed,
             });
         }
@@ -885,7 +887,8 @@ impl Library {
             }
             "task.async" => {
                 let scope = id(arg(a, 0)?, "Scope")?;
-                let task = self.spawn_child(scope, arg(a, 1)?.clone(), vec![], false, context)?;
+                let task =
+                    self.spawn_child(scope, arg(a, 1)?.clone(), vec![], false, vec![], context)?;
                 OperationResult::returned(handle("Task", task)).transferring([1])
             }
             "task.await" | "task.cancel" | "task.detach" => {

@@ -574,19 +574,25 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         start
                             .arguments
                             .iter()
-                            .map(|value| {
-                                let shadow =
+                            .enumerate()
+                            .map(|(parameter, value)| {
+                                let shadow = if let Some(path) = start.argument_paths.get(parameter)
+                                {
+                                    crate::checked::task_argument_shadow(bounds, path, value)?
+                                } else {
                                     crate::checked::native_shadow(value, &state.arguments, bounds)
-                                        .for_value(value);
+                                        .for_value(value)
+                                };
                                 shadow.release();
-                                crate::checked::Argument {
+                                Ok(crate::checked::Argument {
                                     lifetime: shadow.total(),
                                     shadow,
                                     mutable: false,
-                                }
+                                })
                             })
-                            .collect()
+                            .collect::<Result<Vec<_>, Error>>()
                     })
+                    .transpose()?
                     .unwrap_or_default();
                 child.check = Some(enter_checked(&parent.state, &child, arguments, callee)?);
             }
@@ -1448,6 +1454,10 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     let written: Vec<_> =
                                         child.updates.iter().map(|(_, s)| s.clone()).collect();
                                     parent.accept_callback(&child.result, &written);
+                                    if operations.retains_task_arguments(callback.token) {
+                                        parent.task_arguments =
+                                            Some((value.clone(), child.result.clone()));
+                                    }
                                 }
                                 enqueue_owned(frame, &mut callback.state);
                                 let arguments = state
@@ -2188,6 +2198,11 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     }
                     if let Some(bounds) = &mut callback.state.bounds {
                         bounds.accept_callback(&returned, &shadows);
+                        if operations.retains_task_arguments(callback.token)
+                            && let crate::resources::Ending::Return(value) = &ending
+                        {
+                            bounds.task_arguments = Some((value.clone(), returned.clone()));
+                        }
                     }
                 }
                 let result = match ending {
@@ -5650,6 +5665,7 @@ fn operation_bounds(
         updates,
         inputs: checks.to_vec(),
         callbacks: vec![],
+        task_arguments: None,
     }
 }
 fn failure_cleanup_at(frame: &Frame) -> Option<CleanupId> {

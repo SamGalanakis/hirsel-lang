@@ -49,6 +49,13 @@ pub(crate) struct Callback {
 }
 impl Drop for OperationState {
     fn drop(&mut self) {
+        if let Some((value, _)) = self
+            .bounds
+            .as_mut()
+            .and_then(|bounds| bounds.task_arguments.take())
+        {
+            value.discard();
+        }
         for value in self.arguments.drain(..).chain(self.owned.drain(..)) {
             value.discard();
         }

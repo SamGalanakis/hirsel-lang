@@ -1540,6 +1540,12 @@ impl Operations for Library {
             self.tasks.child_path(id)
         }
     }
+    fn retains_task_arguments(&self, token: u64) -> bool {
+        matches!(
+            self.callbacks.get(&token),
+            Some(super::callbacks::Pending::Cpu(_))
+        )
+    }
     fn cpu_mapper_certified(&mut self, certified: bool) {
         self.cpu_certified = certified;
     }

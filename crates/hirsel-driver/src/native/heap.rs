@@ -2196,7 +2196,11 @@ fn config(
             }
         }
     }
-    let ahead = super::ahead::plan(program);
+    let ahead = program
+        .units
+        .iter()
+        .any(|unit| unit.unit().header.definition.is_core("cpu.map_scoped"))
+        .then(|| super::ahead::plan(program));
     let cpu_starts = program
         .units
         .iter()
@@ -2208,6 +2212,7 @@ fn config(
                 .iter()
                 .enumerate()
                 .filter_map(move |(index, _)| {
+                    let ahead = ahead.as_ref()?;
                     let root =
                         ahead.cpu_start(unit.unit(), hirsel_lir::ir::CallId(index as u32))?;
                     Some((

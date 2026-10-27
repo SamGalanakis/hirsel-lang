@@ -15,7 +15,7 @@ fn grant(workers: u32) -> hirsel_run_schema::CpuGrant {
 }
 
 fn agree(source: &str, cpu: Option<hirsel_run_schema::CpuGrant>, expected: &[u8], campaign: bool) {
-    agree_in(source, cpu, expected, campaign, true);
+    agree_in(source, cpu, expected, campaign, true, false);
 }
 
 fn agree_in(
@@ -24,6 +24,7 @@ fn agree_in(
     expected: &[u8],
     campaign: bool,
     free: bool,
+    native: bool,
 ) {
     with_compiler_stack(|| {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
@@ -83,6 +84,49 @@ fn agree_in(
         }
         .unwrap();
         assert_eq!(heap.observation, reference);
+        if native {
+            let root = tempfile::tempdir().unwrap();
+            let mut tools = native::Toolchain::in_tree_diagnostic(
+                &root.path().join("runtime"),
+                &[&program.target],
+            )
+            .unwrap();
+            tools.execution = native::Execution::Executable;
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+                let objects = native::emit_backend_objects(
+                    &program,
+                    backend,
+                    native::OptLevel::Default,
+                    native::Partition::Whole,
+                    false,
+                    None,
+                )
+                .unwrap();
+                let dir = root.path().join(format!("{backend:?}"));
+                std::fs::create_dir_all(&dir).unwrap();
+                let executable = native::link_fixture_runnable(
+                    &program, &entry, &objects, &tools, &dir, &fixture,
+                )
+                .unwrap();
+                let launched = native::launch_fixture(
+                    &executable,
+                    &program.target,
+                    &tools,
+                    &dir,
+                    true,
+                    native::Tape::Live {
+                        record: None,
+                        revocations: None,
+                    },
+                    &fixture,
+                )
+                .unwrap();
+                assert_eq!(
+                    native::observe(&launched, &program, &sites).unwrap(),
+                    reference
+                );
+            }
+        }
         let run = native::fixture_run_record(&program, &entry, &fixture).unwrap();
         assert_eq!(run.record().io.as_ref().unwrap().cpu, fixture.cpu);
         assert_eq!(
@@ -222,21 +266,19 @@ fn cpu_scalar_scopes_agree_under_free_and_ordered_at_widths_1_4_8() {
             .map(|n| format!("{}u64", n + 7))
             .collect::<Vec<_>>()
             .join(",");
-        let source = format!(
-            r#"
-pub fn main(rt: Io) -> Result[(), GrantError] {{
-  let tasks = io.tasks(rt)?
-  let rows = core@1/cpu.map_scoped(tasks, {width}u32,
-    fn() -> List[u64] uses {{}} {{ [{jobs}] }},
-    fn(take job: u64) -> u64 uses {{}} {{ job + 7u64 }})
-  failure.check(rows == Ok([{expected}]), Bounds())
-  let _ = out.print(io.stdout(rt)?, "cpu-scalar-ok\n")
-  Ok(())
-}}
-"#
-        );
+        let source = include_str!("../../../hirsel-cli/tests/support/cpu_pool/interpreter.hir")
+            .replace("WIDTH", &format!("{width}u32"))
+            .replace("JOBS", &format!("[{jobs}]"))
+            .replace("EXPECTED", &format!("[{expected}]"));
         for free in [true, false] {
-            agree_in(&source, Some(grant(width)), b"cpu-scalar-ok\n", false, free);
+            agree_in(
+                &source,
+                Some(grant(width)),
+                b"cpu-scalar-ok\n",
+                false,
+                free,
+                width == 1,
+            );
         }
     }
 }
@@ -245,7 +287,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {{
 fn cpu_ordered_unknown_mapper_refuses_before_preparation() {
     for mapper in [
         "let xs = [job]; xs[0u64]",
-        "core@1/f64.bits(core@1/f64.from_bits(job))",
+        "core@1/f64.bits(float.sqrt(core@1/f64.from_bits(job)))",
     ] {
         agree_in(
             &format!(
@@ -265,6 +307,27 @@ pub fn main(rt: Io) -> Result[(), GrantError] {{
             b"cpu-uncertified\n",
             false,
             false,
+            false,
         );
     }
+}
+
+#[test]
+fn cpu_equal_owned_jobs_keep_distinct_checked_ownership() {
+    agree(
+        r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let rows = core@1/cpu.map_scoped(tasks, 4u32,
+    fn() -> List[unique List[u64]] uses {} { [[1u64], [1u64], [1u64], [1u64]] },
+    fn(take job: unique List[u64]) -> unique List[u64] uses {} { take job })
+  failure.check(rows == Ok([[1u64], [1u64], [1u64], [1u64]]), Bounds())
+  let _ = out.print(io.stdout(rt)?, "cpu-equal-ok\n")
+  Ok(())
+}
+"#,
+        Some(grant(4)),
+        b"cpu-equal-ok\n",
+        false,
+    );
 }
