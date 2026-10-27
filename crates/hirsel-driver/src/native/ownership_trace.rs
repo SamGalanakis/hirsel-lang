@@ -83,7 +83,15 @@ pub fn emit_leaf(
         measurement: false,
         fuel: program.fuel,
     };
-    emit_relocated(program, entry, &selected, &inputs, &plans, sites, backend)
+    emit_relocated(
+        program,
+        entry,
+        &selected,
+        &inputs,
+        hirsel_lir::ownership_trace::native::Request::Relocated(&plans),
+        sites,
+        backend,
+    )
 }
 
 /// Complete checked diagnostic closure with the original transported plans.
@@ -93,16 +101,21 @@ pub(crate) fn emit_relocated(
     entry: &DefPath,
     selected: &[&hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>],
     inputs: &EmitInputs<'_>,
-    plans: &BTreeMap<hirsel_syntax::ContentHash, hirsel_lir::ownership_trace::Plan>,
+    request: hirsel_lir::ownership_trace::native::Request<'_>,
     sites: &Sites<'_>,
     backend: Backend,
 ) -> Result<LeafObjects, NativeError> {
     fn failed(message: impl Into<String>) -> NativeError {
         NativeError::new(StageName::Emission, message)
     }
-    let prepared = hirsel_lir::ownership_trace::native::Request::Relocated(plans)
-        .prepare(selected, inputs.layouts)
-        .map_err(failed)?;
+    let (plans, resources) = match request {
+        hirsel_lir::ownership_trace::native::Request::Relocated(plans) => (plans, false),
+        hirsel_lir::ownership_trace::native::Request::Resources(plans) => (plans, true),
+        hirsel_lir::ownership_trace::native::Request::Leaf => {
+            return Err(failed("original plans required for relocated emission"));
+        }
+    };
+    let prepared = request.prepare(selected, inputs.layouts).map_err(failed)?;
     if selected.len() != program.summaries.len() {
         return Err(failed(
             "ownership emission requires the complete checked closure",
@@ -298,6 +311,14 @@ pub(crate) fn emit_relocated(
     }
     super::check_runtime_calls(program)?;
     let object = match backend {
+        Backend::Llvm if resources => {
+            hirsel_llvm::emit_object_resources_ownership(selected, inputs, plans)
+                .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
+        }
+        Backend::Cranelift if resources => {
+            hirsel_cranelift::emit_object_resources_ownership(selected, inputs, plans)
+                .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
+        }
         Backend::Llvm => hirsel_llvm::emit_object_relocated_ownership(selected, inputs, plans)
             .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?,
         Backend::Cranelift => {

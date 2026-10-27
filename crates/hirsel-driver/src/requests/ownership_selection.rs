@@ -67,7 +67,7 @@ impl OwnershipExecution {
                     &self.entry,
                     units,
                     inputs,
-                    plans,
+                    hirsel_lir::ownership_trace::native::Request::Resources(plans),
                     &self.link.sites(),
                     backend,
                 )

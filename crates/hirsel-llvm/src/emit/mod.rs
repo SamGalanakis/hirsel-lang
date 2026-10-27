@@ -510,6 +510,22 @@ pub fn emit_object_relocated_ownership(
     )
 }
 
+/// Emit the explicit resource selection of a source diagnostic request.
+pub fn emit_object_resources_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &BTreeMap<ContentHash, hirsel_lir::ownership_trace::Plan>,
+) -> Result<ObjectArtifact, CodegenError> {
+    emit_object_inner(
+        units,
+        inputs,
+        Profile::default(),
+        Some(hirsel_lir::ownership_trace::native::Request::Resources(
+            plans,
+        )),
+    )
+}
+
 pub fn emit_ir_relocated_ownership(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,

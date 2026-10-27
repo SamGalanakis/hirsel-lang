@@ -381,7 +381,7 @@ impl OwnershipTasks {
             fuel: snapshot.emission.fuel,
         };
         let units = units.iter().collect::<Vec<_>>();
-        hirsel_lir::ownership_trace::native::Request::Relocated(&plans)
+        hirsel_lir::ownership_trace::native::Request::Resources(&plans)
             .prepare(&units, &binding.table)?;
         use_units(&units, &emit, &plans)
     }

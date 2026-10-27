@@ -218,6 +218,29 @@ pub fn emit_object_relocated_ownership(
     .map(|(artifact, _, _)| artifact)
 }
 
+/// Emit the explicit resource selection of a source diagnostic request.
+pub fn emit_object_resources_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &std::collections::BTreeMap<
+        hirsel_syntax::ContentHash,
+        hirsel_lir::ownership_trace::Plan,
+    >,
+) -> Result<ObjectArtifact, CodegenError> {
+    caught(|| {
+        module::emit(
+            units,
+            inputs,
+            false,
+            Default::default(),
+            Some(hirsel_lir::ownership_trace::native::Request::Resources(
+                plans,
+            )),
+        )
+    })
+    .map(|(artifact, _, _)| artifact)
+}
+
 pub fn emit_clif_relocated_ownership(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,

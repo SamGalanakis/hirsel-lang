@@ -290,10 +290,17 @@ impl ReadyQueries {
         let inputs = miss.inputs;
         let value = hirsel_lir::validate::validate_value(miss.value, inputs)
             .map_err(|rejected| format!("ownership Value refused: {:?}", rejected.violations))?;
-        let initial = hirsel_lir::ownership_trace::native::LeafPlan::prepare_value_for_program(
-            &value,
-            inputs.layouts,
-        )?;
+        let initial =
+            hirsel_lir::ownership_trace::native::LeafPlan::prepare_resources_value_for_program(
+                &value,
+                inputs.layouts,
+            )
+            .map_err(|error| {
+                format!(
+                    "ownership Value plan for {}: {error}",
+                    value.unit().header.definition
+                )
+            })?;
         let facts = miss.source.local(miss.options.regions);
         self.counts.transformations += 1;
         let lowered = hirsel_rc::observed::lower_validated(
@@ -309,7 +316,13 @@ impl ReadyQueries {
                 },
                 finalizers: miss.finalizers,
             },
-        )?;
+        )
+        .map_err(|error| {
+            format!(
+                "ownership lowering for {}: {error}",
+                value.unit().header.definition
+            )
+        })?;
         self.counts.validations += 1;
         let (unit, output) = self
             .native
@@ -334,7 +347,13 @@ impl ReadyQueries {
             &unit,
             inputs.layouts,
             &lowered.plan,
-        )?;
+        )
+        .map_err(|error| {
+            format!(
+                "ownership Ready plan for {}: {error}",
+                unit.unit().header.definition
+            )
+        })?;
         Ok(ObservedReady {
             unit,
             layouts: inputs.layouts.clone(),
