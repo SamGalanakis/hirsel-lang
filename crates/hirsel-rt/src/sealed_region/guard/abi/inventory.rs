@@ -96,7 +96,7 @@ unsafe fn publish(
         .unwrap_or_else(|| crate::fault("consumed arena inventory"));
     let origin = Origin::Arena(journal.grant());
     let receipt = if let Some(root) = paired {
-        if root.run() != unsafe { metadata_run(ctx) }
+        if Receipt::run(root) != unsafe { metadata_run(ctx) }
             || root.record().origin() != Origin::Inline
             || root.bytes() != Some(unsafe { std::slice::from_raw_parts(value.cast::<u8>(), 8) })
         {

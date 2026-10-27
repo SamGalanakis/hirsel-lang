@@ -182,7 +182,7 @@ unsafe fn construct(
     let mut children = Vec::new();
     for &handle in handles {
         let child = ManuallyDrop::new(unsafe { Snapshot::from_raw(handle) });
-        if child.run() != run || child.record().origin() != Origin::Inline {
+        if Receipt::run(&child) != run || child.record().origin() != Origin::Inline {
             crate::fault("construction input is not a paired inline receipt");
         }
         children.extend(child.children().map(|view| view.retain()));
