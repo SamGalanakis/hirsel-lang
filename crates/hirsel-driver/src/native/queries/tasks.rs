@@ -253,12 +253,12 @@ impl NativeTasks {
     pub(super) fn ownership_reads(
         &self,
         owner: &InstanceAddress,
-    ) -> Result<Vec<(QueryId, Reference)>, String> {
+    ) -> Result<&[(QueryId, Reference)], String> {
         let request = self
             .requests
             .get(&id(owner.ready_query_id()))
             .ok_or("ownership diagnostic has no settled Ready dependency plan")?;
-        Ok(request.reads.clone())
+        Ok(&request.reads)
     }
     pub fn guard_factory(&self) -> Option<(QueryId, Arc<dyn QueryFactory>)> {
         self.snapshot

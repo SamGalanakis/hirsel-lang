@@ -44,10 +44,14 @@ hirsel_codec::snapshot_struct!(Payload {
     recipes
 });
 struct Request {
-    owner: InstanceAddress,
+    owner: ContentHash,
     query: QueryId,
-    reads: Vec<(QueryId, Reference)>,
     completed: OnceLock<ProductRef>,
+}
+impl Request {
+    fn owner<'a>(&self, native: &'a NativeTasks) -> &'a InstanceAddress {
+        &native.snapshot.owners[&self.owner]
+    }
 }
 /// Compact request/completion records only. Diagnostic bodies and side tables
 /// live in the selected result store; C authority is never serialized.
@@ -67,18 +71,23 @@ impl OwnershipTasks {
         allowance: MemoryReservation,
     ) -> Result<Arc<Self>, String> {
         let mut requests = BTreeMap::new();
-        for owner in native.snapshot.owners.values() {
+        for (key, owner) in &native.snapshot.owners {
             let query = QueryId {
                 kind: OWNERSHIP_READY_KIND,
                 address: owner.address(OWNERSHIP_READY_KIND),
             };
             let reads = native.ownership_reads(owner)?;
+            if (std::mem::size_of::<Task>()
+                + reads.len() * std::mem::size_of::<(QueryId, Reference)>()) as u64
+                > weight.retained
+            {
+                return Err("ownership diagnostic continuation exceeds original admission".into());
+            }
             requests.insert(
                 query.address.0,
                 Request {
-                    owner: owner.clone(),
+                    owner: *key,
                     query,
-                    reads,
                     completed: OnceLock::new(),
                 },
             );
@@ -88,23 +97,20 @@ impl OwnershipTasks {
         }
         let mut copied = hirsel_engine::NativeMetadataWeight::default();
         copied.add(std::mem::size_of::<Self>() + 3 * std::mem::size_of::<usize>());
-        copied.packed_map(&mut requests, |w, _, request| {
-            w.path(request.owner.instance.definition());
-            w.add(request.owner.instance.encoding().len());
-            w.flat_vec(&request.reads);
-        });
+        // Owner encodings and dependency rows remain in the already admitted
+        // native snapshot/dispatch. This graph retains their sole Arc owner,
+        // and stores only checked lookup keys and its own completion cells.
+        copied.packed_map(&mut requests, |_, _, _| {});
         if copied.bytes() > allowance.bytes()
-            || requests.values().any(|request| {
-                (std::mem::size_of::<Task>()
-                    + request.reads.len() * std::mem::size_of::<(QueryId, Reference)>())
-                    as u64
-                    > weight.retained
-            })
             || (std::mem::size_of::<Task>() + requests.len() * std::mem::size_of::<QueryId>())
                 as u64
                 > weight.retained
         {
-            return Err("ownership diagnostic metadata exceeds original admission".into());
+            return Err(format!(
+                "ownership diagnostic metadata exceeds original admission: {} bytes, {} available",
+                copied.bytes(),
+                allowance.bytes()
+            ));
         }
         let selection = requests.keys().copied().collect::<Vec<_>>();
         let root = QueryId {
@@ -234,16 +240,18 @@ impl OwnershipTasks {
             let request = &self.requests[&product.address.0];
             let declarations = snapshot
                 .instances
-                .operations(&request.owner, &environment)?;
-            let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
+                .operations(request.owner(&self.native), &environment)?;
+            let (owner, _) = snapshot
+                .instances
+                .admitted(request.owner(&self.native), &environment)?;
             let operations = super::instance_operations::InstanceOperations {
                 inventory: None,
                 receipts: None,
                 declarations: &declarations,
                 all_sources: false,
                 source: (!owner.templates.library).then_some((
-                    request.owner.instance.definition(),
-                    request.owner.instance.digest(),
+                    request.owner(&self.native).instance.definition(),
+                    request.owner(&self.native).instance.digest(),
                 )),
                 pretransfer: Some(super::instance_operations::bind_pretransfer(
                     &declarations,
@@ -296,16 +304,18 @@ impl OwnershipTasks {
             let request = &self.requests[&product.address.0];
             let declarations = snapshot
                 .instances
-                .operations(&request.owner, &environment)?;
-            let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
+                .operations(request.owner(&self.native), &environment)?;
+            let (owner, _) = snapshot
+                .instances
+                .admitted(request.owner(&self.native), &environment)?;
             let operations = super::instance_operations::InstanceOperations {
                 inventory: None,
                 receipts: None,
                 declarations: &declarations,
                 all_sources: false,
                 source: (!owner.templates.library).then_some((
-                    request.owner.instance.definition(),
-                    request.owner.instance.digest(),
+                    request.owner(&self.native).instance.definition(),
+                    request.owner(&self.native).instance.digest(),
                 )),
                 pretransfer: Some(super::instance_operations::bind_pretransfer(
                     &declarations,
@@ -422,11 +432,13 @@ impl OwnershipTasks {
                     return Err("mixed ownership semantic owner origins".into());
                 }
                 for request in self.requests.values().filter(|request| {
-                    request.owner.instance.digest() == summary.instance
-                        && request.owner.instance.definition() == &summary.definition
+                    request.owner(&self.native).instance.digest() == summary.instance
+                        && request.owner(&self.native).instance.definition() == &summary.definition
                 }) {
-                    if source.functions().get(request.owner.instance.definition())
-                        == Some(&request.owner.instance.body())
+                    if source
+                        .functions()
+                        .get(request.owner(&self.native).instance.definition())
+                        == Some(&request.owner(&self.native).instance.body())
                         && functions
                             .insert(summary.definition.clone(), summary.instance)
                             .is_some()
@@ -439,7 +451,9 @@ impl OwnershipTasks {
             let environment = snapshot.environment();
             let mut finalizers = BTreeMap::new();
             for request in self.requests.values() {
-                let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
+                let (owner, _) = snapshot
+                    .instances
+                    .admitted(request.owner(&self.native), &environment)?;
                 let reference = owner.product.statics_finalizers;
                 if reference.domain != super::instance::STATICS_FINALIZERS_DOMAIN {
                     return Err("wrong ownership finalizer domain".into());
@@ -513,7 +527,9 @@ impl OwnershipTasks {
         }
         let snapshot = &self.native.snapshot;
         let environment = snapshot.environment();
-        snapshot.instances.admitted(&request.owner, &environment)?;
+        snapshot
+            .instances
+            .admitted(request.owner(&self.native), &environment)?;
         let bytes = snapshot
             .store
             .get_content(product.record)
@@ -536,16 +552,18 @@ impl OwnershipTasks {
         let source_action = Action(source_action);
         let declarations = snapshot
             .instances
-            .operations(&request.owner, &environment)?;
-        let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
+            .operations(request.owner(&self.native), &environment)?;
+        let (owner, _) = snapshot
+            .instances
+            .admitted(request.owner(&self.native), &environment)?;
         let operations = super::instance_operations::InstanceOperations {
             inventory: None,
             receipts: None,
             declarations: &declarations,
             all_sources: false,
             source: (!owner.templates.library).then_some((
-                request.owner.instance.definition(),
-                request.owner.instance.digest(),
+                request.owner(&self.native).instance.definition(),
+                request.owner(&self.native).instance.digest(),
             )),
             pretransfer: Some(super::instance_operations::bind_pretransfer(
                 &declarations,
@@ -638,9 +656,10 @@ impl Task {
                 .map(|query| (query, None))
                 .collect::<Vec<_>>()
         } else {
-            request
-                .unwrap()
-                .reads
+            owner
+                .native
+                .ownership_reads(request.unwrap().owner(&owner.native))
+                .map_err(fail)?
                 .iter()
                 .map(|(query, record)| (*query, Some(*record)))
                 .collect()
@@ -682,7 +701,9 @@ impl Task {
         } else {
             let request = request.unwrap();
             let mut products = DemandProducts::new(owner.native.snapshot.clone());
-            let observed = products.observe(&request.owner).map_err(fail)?;
+            let observed = products
+                .observe(request.owner(&owner.native))
+                .map_err(fail)?;
             owner.transformations.fetch_add(
                 products.local.queries.counts.transformations,
                 Ordering::Relaxed,
