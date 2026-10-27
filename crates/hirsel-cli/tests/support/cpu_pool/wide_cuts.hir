@@ -1,0 +1,25 @@
+type CutJob { input: Shared[List[u64]], output: unique List[u64] }
+fn cut_batch(tasks: Tasks) -> Result[List[Shared[List[u64]]], CpuPoolError] {
+  core@1/cpu.map_scoped(tasks, WIDTH,
+    fn() -> List[unique CutJob] uses {} {
+      let input = shared.freeze([7u64, 11u64])
+      let mut jobs: List[unique CutJob] = []
+      for i in 0u64..COUNT { list.push(mut jobs, CutJob(input: copy input, output: [i])) }
+      take jobs
+    },
+    fn(take job: unique CutJob) -> Shared[List[u64]] uses {} {
+      let CutJob(input: moved_input, output: moved_output) = take job
+      let mut output = take moved_output
+      let sum = shared.with(moved_input, fn(xs: List[u64]) -> u64 uses {} { xs[0] + xs[1] })
+      output[0] += sum
+      shared.freeze(take output)
+    })
+}
+fn check_rows(rows: List[Shared[List[u64]]]) -> () uses {} {
+  failure.check(list.len(rows) == COUNT, Bounds())
+  for i in 0u64..COUNT {
+    let value = shared.with(rows[i], fn(xs: List[u64]) -> u64 uses {} { xs[0] })
+    failure.check(value == i + 18u64, Arithmetic())
+  }
+}
+pub type AppError = Grant(GrantError) | Pool(CpuPoolError)

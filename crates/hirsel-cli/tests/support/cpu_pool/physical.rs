@@ -4,6 +4,8 @@ use std::{
     process::Command,
 };
 
+include!("physical_host.rs");
+
 fn checked(output: std::process::Output) -> std::process::Output {
     assert!(
         output.status.success(),
@@ -126,9 +128,12 @@ fn run_width_policy(width: usize, provider: &str) {
             .filter(|&cpu| unsafe { libc::CPU_ISSET(cpu, &allowed) })
             .collect();
         assert_eq!(cpus.len(), width);
+        let before = physical_host_snapshot(child.id(), &cpus);
+        let mut threads = PhysicalThreads::default();
         let mut pinned = BTreeSet::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while pinned.len() < width && std::time::Instant::now() < deadline {
+            threads.capture(child.id());
             if let Ok(entries) = fs::read_dir(format!("/proc/{}/task", child.id())) {
                 for entry in entries.flatten() {
                     let Ok(name) = fs::read_to_string(entry.path().join("comm")) else {
@@ -160,16 +165,22 @@ fn run_width_policy(width: usize, provider: &str) {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        while child.try_wait().unwrap().is_none() {
+            threads.capture(child.id());
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let after = physical_host_snapshot(std::process::id(), &cpus);
         checked(child.wait_with_output().unwrap());
         assert_eq!(
             pinned.len(),
             width,
-            "all fresh workers must receive the exact admitted placement"
+            "all fresh workers must receive the exact admitted placement\n{before}\n{after}\n{threads:?}"
         );
         let samples = fs::read_to_string(&probe).unwrap();
+        let rejected = fs::read_to_string(root.join("probe.txt.rejected")).unwrap();
         assert!(
             overlap(&samples, width),
-            "no switch-free CPU overlap at W={width}\n{samples}"
+            "no switch-free CPU overlap at W={width}\n{before}\n{after}\n{threads:?}\n{samples}\n{rejected}"
         );
         eprintln!(
             "CPU {provider} {backend} P({width}): overlapping switch-free intervals on {width} distinct CPUs with positive CPU progress"

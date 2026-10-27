@@ -9,6 +9,9 @@ use std::sync::{
 pub(crate) struct Probe {
     output: std::fs::File,
     lifecycle: Mutex<std::fs::File>,
+    controls: Mutex<std::fs::File>,
+    rejected_output: std::fs::File,
+    rejected: [Mutex<Vec<(Sample, Sample)>>; 16],
     jitter: u64,
     checkpoints: AtomicU64,
     samples: [Mutex<Vec<(Sample, Sample, u64)>>; 16],
@@ -27,9 +30,16 @@ impl Probe {
     pub(crate) fn open(path: &std::path::Path) -> std::io::Result<Self> {
         let mut lifecycle = path.as_os_str().to_os_string();
         lifecycle.push(".lifecycle");
+        let mut controls = path.as_os_str().to_os_string();
+        controls.push(".control");
+        let mut rejected = path.as_os_str().to_os_string();
+        rejected.push(".rejected");
         Ok(Self {
             output: std::fs::File::create(path)?,
             lifecycle: Mutex::new(std::fs::File::create(lifecycle)?),
+            controls: Mutex::new(std::fs::File::create(controls)?),
+            rejected_output: std::fs::File::create(rejected)?,
+            rejected: std::array::from_fn(|_| Mutex::new(Vec::new())),
             jitter: std::env::var("HIRSEL_RT_CPU_JITTER")
                 .ok()
                 .and_then(|seed| seed.parse().ok())
@@ -49,6 +59,14 @@ impl Probe {
             "{kind} {domain} {owner} {value}"
         )
         .expect("CPU lifecycle probe write");
+    }
+
+    pub(crate) fn control(&self, task: u64, width: u32, action: u32, count: u64, outcome: u32) {
+        writeln!(
+            self.controls.lock().unwrap(),
+            "control {task} {width} {action} {count} {outcome}"
+        )
+        .expect("CPU control probe write");
     }
 
     fn perturb(&self, domain: u64, worker: u32) {
@@ -104,7 +122,7 @@ impl Sample {
             }
         }
     }
-    fn end(self) -> Option<(Self, u64)> {
+    fn end(self) -> (Self, bool) {
         // The ending usage read is after the interval's end. The starting read
         // precedes its beginning, so unchanged switches prove no deschedule
         // throughout the reported wall interval. Migration requires a switch.
@@ -130,12 +148,12 @@ impl Sample {
                 cpu,
                 ..self
             };
-            (self.cpu >= 0
+            let valid = self.cpu >= 0
                 && end.cpu == self.cpu
                 && end.switches == self.switches
                 && end.wall > self.wall
-                && end.cpu_time > self.cpu_time)
-                .then_some((end, end.cpu_time.saturating_sub(self.cpu_time)))
+                && end.cpu_time > self.cpu_time;
+            (end, valid)
         }
     }
 }
@@ -150,10 +168,19 @@ pub(crate) unsafe fn checkpoint(ctx: *mut TaskCtx) {
             return;
         };
         probe.perturb(start.domain, start.worker);
-        if let Some((end, progress)) = start.end() {
+        let (end, valid) = start.end();
+        if valid {
+            let progress = end.cpu_time.saturating_sub(start.cpu_time);
             let mut samples = probe.samples[start.worker as usize].lock().unwrap();
             if samples.len() < 4096 {
                 samples.push((start, end, progress));
+            }
+        } else {
+            let mut rejected = probe.rejected[start.worker as usize].lock().unwrap();
+            // At most 4096 rejected rows across the 16 workers. Accepted
+            // samples retain their independent, unchanged 4096-per-worker cap.
+            if rejected.len() < 256 {
+                rejected.push((start, end));
             }
         }
         (*ctx).cpu_sample = Some(Sample::now(start.domain, start.worker));
@@ -203,6 +230,23 @@ pub(crate) unsafe fn begin(ctx: *mut TaskCtx, domain: u64, worker: u32) {
 
 impl Drop for Probe {
     fn drop(&mut self) {
+        for rejected in &mut self.rejected {
+            for (start, end) in rejected.get_mut().unwrap() {
+                writeln!(
+                    self.rejected_output,
+                    "rejected {} {} {} {} {} {} switches={} cpu_ns={}",
+                    start.domain,
+                    start.worker,
+                    start.cpu,
+                    end.cpu,
+                    start.wall,
+                    end.wall,
+                    end.switches - start.switches,
+                    end.cpu_time.saturating_sub(start.cpu_time),
+                )
+                .expect("CPU rejected interval probe write");
+            }
+        }
         for samples in &mut self.samples {
             for (start, end, progress) in samples.get_mut().unwrap() {
                 writeln!(

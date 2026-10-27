@@ -43,3 +43,17 @@ fn free_diverging_mappers_stop_for_fuel_or_external_stop_and_replay() {
 fn free_typed_preparation_prefixes_release_each_row_root() {
     typed_preparation_prefix_census(4);
 }
+
+include!("support/cpu_pool/cleanup_cuts.rs");
+#[test]
+fn native_wide_success_every_byte_cleanup_cut() {
+    wide_cleanup_cuts(4, "success");
+}
+#[test]
+fn native_wide_failure_after_result_transfer_every_byte_cleanup_cut() {
+    wide_cleanup_cuts(4, "failure");
+}
+#[test]
+fn native_wide_cancel_after_result_transfer_every_byte_cleanup_cut() {
+    wide_cleanup_cuts(4, "cancel");
+}

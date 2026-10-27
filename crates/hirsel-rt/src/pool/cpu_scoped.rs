@@ -656,6 +656,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
             unsafe { probe::begin(ctx, workers.domain, u32::from(worker)) };
         }
     }
+    if let Some(probe) = unsafe { (*ctx).run_ref().cpu_probe.as_ref() } {
+        probe.control(
+            crate::tasks::running_key(ctx).word(),
+            width,
+            action,
+            count,
+            value,
+        );
+    }
     unsafe { out.write(value) };
     crate::STATUS_OK
 }

@@ -1,10 +1,14 @@
 fn native_result_cleanup_cuts() {
+    native_cleanup_cut_history(1, include_str!("cleanup_cuts.hir"), 3, "success");
+}
+
+fn native_cleanup_cut_history(width: usize, source: &str, logs: usize, name: &str) {
     let _compiler = QUAL_COMPILER.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
-    let manifest = qual_manifest(root, include_str!("cleanup_cuts.hir"));
+    let manifest = qual_manifest(root, source);
     let grants = root.join("grants.json");
-    let mut authority = qual_grants(1);
+    let mut authority = qual_grants(width);
     authority["io"]["stdout"] = serde_json::json!("stdout.bytes@1");
     authority["recording"] = serde_json::json!("durable");
     fs::write(&grants, authority.to_string()).unwrap();
@@ -28,8 +32,8 @@ fn native_result_cleanup_cuts() {
         assert!(!complete.torn && complete.end.is_some());
         assert_eq!(
             complete.logs.len(),
-            3,
-            "the caller and both native result paths must be recorded"
+            logs,
+            "every native result path must be recorded"
         );
         assert!(
             complete
@@ -113,8 +117,91 @@ fn native_result_cleanup_cuts() {
         assert_eq!(fs::read_to_string(&projection).unwrap(), live_projection);
         assert!(fs::read(&probe).unwrap().is_empty());
         eprintln!(
-            "Free {backend} native job-result/cleanup: {cuts} byte cuts across {} durable frames replayed plus complete history",
+            "Free {backend} W{width} {name} native job-result/cleanup: {cuts} byte cuts across {} durable frames replayed plus complete history",
             frames.len() - 1
         );
     }
+}
+
+fn wide_cleanup_cuts(width: usize, name: &str) {
+    let main = match name {
+        "success" => {
+            r#"
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?Grant
+  let out = io.stdout(rt)?Grant
+  {
+    let rows = cut_batch(tasks)?Pool
+    let _ = out.print(out, "results\n")
+    check_rows(rows)
+  }
+  let _ = out.print(out, "cleaned\n")
+  Ok(())
+}
+"#
+        }
+        "failure" => {
+            r#"
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?Grant
+  let out = io.stdout(rt)?Grant
+  let caught = task.isolate(tasks, fn() -> () {
+    let Ok(rows) = cut_batch(tasks) else { failure.check(false, Arithmetic()); return () }
+    check_rows(rows)
+    let _ = out.print(out, "results\n")
+    failure.check(false, Bounds())
+    check_rows(rows)
+  })
+  failure.check(match caught { Error(primary) => primary.site.line == FAILURE_LINE, _ => false }, Arithmetic())
+  let _ = out.print(out, "cleaned\n")
+  Ok(())
+}
+"#
+        }
+        "cancel" => {
+            r#"
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?Grant
+  let out = io.stdout(rt)?Grant
+  task.scope(tasks, fn(scope: Scope) -> () {
+    let (ready, started): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let (wake, sleep): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let child = task.async(scope, fn() -> bool {
+      let Ok(rows) = cut_batch(tasks) else { failure.check(false, Arithmetic()); return false }
+      check_rows(rows)
+      let _ = out.print(out, "results\n")
+      let mut signal = take ready
+      failure.check(channel.send(tasks, mut signal, 1u32) == Ok(()), Arithmetic())
+      let mut gate = take sleep
+      let canceled = channel.receive(tasks, mut gate) == Error(Canceled(Requested()))
+      check_rows(rows)
+      canceled
+    })
+    let mut signal = take started
+    failure.check(channel.receive(tasks, mut signal) == Ok(1u32), Arithmetic())
+    task.cancel(scope, child)
+    failure.check(task.await(scope, take child), Bounds())
+    let _ = wake
+  })
+  let _ = out.print(out, "cleaned\n")
+  Ok(())
+}
+"#
+        }
+        _ => unreachable!(),
+    };
+    let source = format!("{}\n{main}", include_str!("wide_cuts.hir"))
+        .replace("WIDTH", &format!("{width}u32"))
+        .replace("COUNT", &format!("{}u64", 2 * width));
+    let failure_line = source
+        .lines()
+        .position(|line| line.trim() == "failure.check(false, Bounds())")
+        .map_or(0, |line| line + 1);
+    let source = source.replace("FAILURE_LINE", &format!("{failure_line}u64"));
+    native_cleanup_cut_history(
+        width,
+        &source,
+        1 + 2 * width + usize::from(name == "cancel"),
+        name,
+    );
 }
