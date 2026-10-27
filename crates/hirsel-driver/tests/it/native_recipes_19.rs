@@ -196,7 +196,8 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
                 .sources
                 .add("library-recipe.hir", SOURCE.into())
                 .unwrap();
-            engine.parse_file(file, &default_context()).unwrap();
+            let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
             engine
         };
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
