@@ -113,7 +113,7 @@ impl OwnershipExecution {
         event_limit: usize,
         launch: crate::HostLaunch<'_>,
     ) -> Result<native::ownership_trace::LeafExecution, String> {
-        use crate::{BoundHostRun, launch_binding::LaunchSelection};
+        use crate::launch_binding::LaunchSelection;
         if objects.root != self.root || !std::ptr::eq(&*objects._owner, self) {
             return Err("ownership objects belong to another selected completion".into());
         }
@@ -139,6 +139,21 @@ impl OwnershipExecution {
                 source.run.code.clone(),
             )
             .map_err(|e| e.to_string())?;
+        self.launch_bound(objects, tools, directory, event_limit, launch, bound)
+    }
+    pub(crate) fn launch_bound(
+        &self,
+        objects: &OwnershipObjects,
+        tools: &native::Toolchain,
+        directory: &std::path::Path,
+        event_limit: usize,
+        launch: crate::HostLaunch<'_>,
+        bound: crate::BoundHostRun,
+    ) -> Result<native::ownership_trace::LeafExecution, String> {
+        use crate::BoundHostRun;
+        if objects.root != self.root || !std::ptr::eq(&*objects._owner, self) {
+            return Err("ownership objects belong to another selected completion".into());
+        }
         let (run, tape) = match (bound, launch) {
             (
                 BoundHostRun::Live(bound),
@@ -226,6 +241,7 @@ fn request_key(request: &OwnershipRequest) -> Result<ContentHash, ToolError> {
         request.target.digest(),
         format!("{:?}", request.validation),
         &request.launch,
+        request.fuel,
     ))
     .map_err(|e| ToolError::Runtime(e.to_string()))?;
     Ok(ContentHash::of_parts(
@@ -299,6 +315,7 @@ impl OwnershipSelection {
             },
             ownership_bootstrap::Plan {
                 options,
+                fuel: request.fuel,
                 policy: request_key,
                 verify_store,
                 admission: Admission {

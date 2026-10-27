@@ -57,6 +57,7 @@ fn source_request(explicit_manifest: bool) {
                 target: native::TargetSpec::x86_64_unknown_linux_gnu(),
                 validation: native::Validation::EveryStage,
                 launch: Default::default(),
+                fuel: false,
             }))
             .unwrap_or_else(|e| panic!("ownership source request: {e}"));
         let CompileResult::Ownership(execution) = &output.result else {

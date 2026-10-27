@@ -515,6 +515,14 @@ impl LeafObjects {
         run: Option<&hirsel_run_config::ValidatedRun>,
         tape: super::Tape<'_>,
     ) -> Result<LeafExecution, NativeError> {
+        if run.is_some_and(|run| run.budgets().is_some_and(|budgets| budgets.fuel.is_some()))
+            && !program.fuel
+        {
+            return Err(NativeError::new(
+                StageName::Launch,
+                "the selected ownership executable has no fuel checks",
+            ));
+        }
         if run.is_some_and(|run| run.record().inputs != program.launch) {
             return Err(NativeError::new(
                 StageName::Launch,
@@ -606,6 +614,13 @@ pub fn run_path_with_launch(
         use crate::requests::{
             CompileOperation, CompileResult, CompilerRequests, OwnershipRequest,
         };
+        if matches!(launch, crate::HostLaunch::Callee { .. }) {
+            return Err(crate::ToolError::Runtime(
+                "launch: a runner host runs its callees interpreted".into(),
+            ));
+        }
+        let selection = crate::launch_binding::LaunchSelection::read(launch)?;
+        let definition = selection.entry().cloned();
         let compiler = crate::COMPILER.with_verify(verify).with_owned_engines();
         let config = compiler.configuration();
         let selector = CompilerRequests::for_host(compiler.clone(), config.clone());
@@ -620,17 +635,52 @@ pub fn run_path_with_launch(
             attempts,
         );
         let target = super::TargetSpec::x86_64_unknown_linux_gnu();
-        let output = host.request(CompileOperation::NativeOwnership(OwnershipRequest {
-            definition: None,
+        let selected_facts = host.request(CompileOperation::Tir {
+            definition: definition.clone(),
+        })?;
+        let CompileResult::Tir(facts) = &selected_facts.result else {
+            return Err(crate::ToolError::Runtime(
+                "ownership launch facts returned another operation".into(),
+            ));
+        };
+        if selection.requires_replayable(launch) {
+            if let Some((user, extern_)) = facts.foreign.unmodeled.first_key_value() {
+                return Err(crate::ToolError::Runtime(format!(
+                    "launch: {user} calls the extern {extern_} and is not a wrapper with a \
+                     deterministic model, so this run cannot be recorded or replayed (PROG-4)"
+                )));
+            }
+        }
+        let bound = selection.bind(
+            launch,
+            &facts.runtime.types,
+            &facts.signature,
+            &facts.revision,
+            facts.code.clone(),
+        )?;
+        let revision = facts.revision.digest();
+        drop(selected_facts);
+        let run = match &bound {
+            crate::BoundHostRun::Live(bound) => bound.run(),
+            crate::BoundHostRun::Replay { run, .. } => run,
+        };
+        let output = host.request_applied(CompileOperation::NativeOwnership(OwnershipRequest {
+            definition,
             target: target.clone(),
             validation: super::Validation::EveryStage,
-            launch: Default::default(),
+            launch: run.record().inputs.clone(),
+            fuel: run.budgets().is_some_and(|budgets| budgets.fuel.is_some()),
         }))?;
         let CompileResult::Ownership(execution) = &output.result else {
             return Err(crate::ToolError::Runtime(
                 "ownership request returned another operation".into(),
             ));
         };
+        if execution.revision.digest() != revision {
+            return Err(crate::ToolError::Runtime(
+                "ownership launch revision changed during selection".into(),
+            ));
+        }
         let execution = execution.clone();
         drop(output);
         drop(host);
@@ -651,7 +701,7 @@ pub fn run_path_with_launch(
             )?;
             let scratch = super::executable::Scratch::new()?;
             execution
-                .launch_with(&objects, &toolchain, &scratch.0, event_limit, launch)
+                .launch_bound(&objects, &toolchain, &scratch.0, event_limit, launch, bound)
                 .map_err(|error| NativeError::new(StageName::Link, error))
         })())
     })

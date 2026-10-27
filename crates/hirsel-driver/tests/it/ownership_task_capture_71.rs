@@ -101,6 +101,7 @@ fn capture_with_tasks(source_text: &str, expected_exit: i32, tasks: &str) {
                 target: target.clone(),
                 validation: native::Validation::EveryStage,
                 launch: Default::default(),
+                fuel: false,
             }))
             .unwrap();
         let CompileResult::Ownership(execution) = &output.result else {

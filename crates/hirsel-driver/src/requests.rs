@@ -138,6 +138,7 @@ pub struct OwnershipRequest {
     pub target: TargetSpec,
     pub validation: Validation,
     pub launch: LaunchInputs,
+    pub fuel: bool,
 }
 
 /// The requested build artifact, independent of runtime launchability.

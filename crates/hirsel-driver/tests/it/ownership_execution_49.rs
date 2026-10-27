@@ -39,6 +39,7 @@ fn ownership_selected_source_objects_execute_original_lineage_on_both_backends()
                 target: target.clone(),
                 validation: native::Validation::EveryStage,
                 launch: Default::default(),
+                fuel: false,
             }))
             .unwrap();
         let CompileResult::Ownership(execution) = &output.result else {

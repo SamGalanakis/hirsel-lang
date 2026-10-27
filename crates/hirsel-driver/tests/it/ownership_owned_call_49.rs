@@ -74,6 +74,7 @@ pub(super) fn source_calls_exit(source: &str, created: u64, expected_exit: i32) 
                 target: target.clone(),
                 validation: native::Validation::EveryStage,
                 launch: Default::default(),
+                fuel: false,
             }))
             .unwrap();
         let CompileResult::Ownership(execution) = &output.result else {

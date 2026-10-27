@@ -94,6 +94,7 @@ fn child_local_source(source_text: &str, expected_tasks: usize, require_spawn_bi
                 target: target.clone(),
                 validation: native::Validation::EveryStage,
                 launch: Default::default(),
+                fuel: false,
             }))
             .unwrap();
         let CompileResult::Ownership(execution) = &output.result else {

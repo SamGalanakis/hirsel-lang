@@ -39,6 +39,7 @@ fn ownership_native_granted_args_record_and_replay_keep_the_selected_resource_li
                 target: target.clone(),
                 validation: native::Validation::EveryStage,
                 launch: Default::default(),
+                fuel: false,
             }))
             .unwrap();
         let CompileResult::Ownership(execution) = &output.result else {
@@ -74,6 +75,33 @@ fn ownership_native_granted_args_record_and_replay_keep_the_selected_resource_li
             assert!(
                 !denied.exists(),
                 "ungranted roots refuse before process creation"
+            );
+            let fuel_denied = directory
+                .path()
+                .join(format!("{}-fuel-denied", backend.name()));
+            let error = execution
+                .launch_with(
+                    &objects,
+                    &tools,
+                    &fuel_denied,
+                    1000,
+                    hirsel_driver::HostLaunch::Live {
+                        config: hirsel_driver::LaunchConfig::Grants {
+                            input: std::ffi::OsStr::new(
+                                r#"{"args":["kept"],"budgets":{"provider":"budgets.limits@2","fuel":1000000}}"#,
+                            ),
+                            arguments: None,
+                        },
+                        record: None,
+                        revocations: None,
+                    },
+                )
+                .err()
+                .expect("a fuel budget must not run objects compiled without checks");
+            assert!(error.contains("has no fuel checks"), "{error}");
+            assert!(
+                !fuel_denied.exists(),
+                "fuel mismatch refuses before linking"
             );
             let tape = directory.path().join(format!("{}.tape", backend.name()));
             for replay in [false, true] {

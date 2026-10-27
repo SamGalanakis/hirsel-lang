@@ -47,6 +47,7 @@ pub(super) struct Source {
 }
 pub(super) struct Plan {
     pub options: native::Options,
+    pub fuel: bool,
     pub policy: ContentHash,
     pub verify_store: VerifyStore,
     pub admission: Admission,
@@ -345,7 +346,7 @@ impl OwnershipBootstrap {
                 link.foreign_dispatch(),
                 true,
                 false,
-                false,
+                plan.fuel,
             ),
             self.weight,
             plan.admission.compilation,
