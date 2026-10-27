@@ -27,10 +27,11 @@ struct Files {
 }
 pub(super) struct ScratchStore {
     selected: Arc<dyn ResultStore>,
+    // Close the spool before the last directory owner can remove its path.
+    files: Mutex<Files>,
     admission: Arc<Admission>,
     root: Arc<Root>,
     disk_limit: u64,
-    files: Mutex<Files>,
 }
 struct ReadOwner {
     admission: Arc<Admission>,
