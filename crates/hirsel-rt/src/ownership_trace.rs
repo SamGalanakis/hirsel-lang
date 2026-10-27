@@ -311,8 +311,8 @@ pub struct CleanupScope {
     count: u64,
 }
 /// # Safety
-/// Current task; scope and four-word binding rows remain live until cleanup_end.
-/// Each row is (offset, linked descriptor index, capture ordinal, local layout).
+/// Current task; scope and five-word binding rows remain live until cleanup_end.
+/// Each row is (offset, linked descriptor index, binding ordinal, local layout, declaration field).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_ownership_cleanup_begin(
     ctx: *mut TaskCtx,
@@ -373,13 +373,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_cleanup_end(
 /// Called only after the actual finalizer and field continuation retire.
 /// # Safety
 /// layout/value come from the checked descriptor program's completed end step.
-pub(crate) unsafe fn retired(ctx: &TaskCtx, layout: *const crate::release::Layout, value: *mut u8) {
+pub(crate) unsafe fn retired(
+    ctx: &TaskCtx,
+    layout: *const crate::release::Layout,
+    value: *mut u8,
+    base: *mut u8,
+    declaration: u32,
+) {
     unsafe {
         let mut scope = ctx.ownership_cleanup;
         while !scope.is_null() {
             for index in 0..(*scope).count {
-                let row = std::slice::from_raw_parts((*scope).bindings.add(index as usize * 4), 4);
-                if !(*scope).base.is_null()
+                let row = std::slice::from_raw_parts((*scope).bindings.add(index as usize * 5), 5);
+                if !base.is_null()
+                    && (*scope).base == base
+                    && row[4] == u64::from(declaration)
                     && (*scope).base.wrapping_add(row[0] as usize) == value
                     && ctx.descriptor(row[1] as u32) == layout
                 {

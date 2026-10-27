@@ -176,18 +176,19 @@ impl FnEmitter<'_, '_, '_> {
             return self.invalid("ownership cleanup has no callable pair");
         };
         let (scope, _) = self.stack_bytes(48, 8);
-        let (bindings, _) = self.stack_bytes(fields.len().max(1) as u64 * 32, 8);
+        let (bindings, _) = self.stack_bytes(fields.len().max(1) as u64 * 40, 8);
         for (i, field) in fields.iter().enumerate() {
             let descriptor = self.descriptor_value(field.layout)?;
             let descriptor = self.b.ins().uextend(types::I64, descriptor);
             let offset = self.u64c(field.offset);
             let ordinal = self.u64c(u64::from(field.field));
             let layout = self.u64c(u64::from(field.layout.0));
-            for (j, word) in [offset, descriptor, ordinal, layout]
+            let declaration = self.u64c(u64::from(field.path[0]));
+            for (j, word) in [offset, descriptor, ordinal, layout, declaration]
                 .into_iter()
                 .enumerate()
             {
-                self.store_at(word, bindings, (i * 4 + j) as u64 * 8);
+                self.store_at(word, bindings, (i * 5 + j) as u64 * 8);
             }
         }
         let begin = self.ownership_function(

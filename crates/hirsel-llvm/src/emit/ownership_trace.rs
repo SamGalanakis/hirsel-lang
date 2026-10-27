@@ -171,7 +171,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let i64 = self.module.int_type(64);
         let scope = self.prologue.alloca(self.module.array_type(i64, 6), 8);
         let bindings = self.prologue.alloca(
-            self.module.array_type(i64, fields.len().max(1) as u64 * 4),
+            self.module.array_type(i64, fields.len().max(1) as u64 * 5),
             8,
         );
         for (i, field) in fields.iter().enumerate() {
@@ -182,12 +182,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 descriptor,
                 self.const_u64(u64::from(field.field)),
                 self.const_u64(u64::from(field.layout.0)),
+                self.const_u64(u64::from(field.path[0])),
             ];
             for (j, word) in words.into_iter().enumerate() {
                 self.builder.store(
                     word,
                     self.builder
-                        .offset(bindings, self.const_u64((i * 4 + j) as u64 * 8)),
+                        .offset(bindings, self.const_u64((i * 5 + j) as u64 * 8)),
                     8,
                 );
             }

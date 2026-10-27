@@ -207,3 +207,80 @@ fn ownership_cleanup_scopes_nest_without_io_and_poison_overflow_or_bad_retiremen
         }
     }
 }
+
+#[test]
+fn zero_sized_capture_retirement_uses_the_actual_declaration_and_live_mask() {
+    use crate::support::{end_finalize_step, finalize_step, layout};
+    use hirsel_rt::ownership_trace::{
+        CleanupScope, hirsel_rt_v2_ownership_cleanup_begin, hirsel_rt_v2_ownership_cleanup_end,
+    };
+    unsafe extern "C" fn finish(_: *mut hirsel_rt::TaskCtx, _: *mut u8, _: u64, _: u64) -> u8 {
+        hirsel_rt::STATUS_OK
+    }
+    let token = layout(0, 0, Some(finish), vec![]);
+    let environment = layout(
+        0,
+        2,
+        None,
+        vec![
+            finalize_step(1, 0, token),
+            end_finalize_step(1, 0, token),
+            finalize_step(0, 0, token),
+            end_finalize_step(0, 0, token),
+        ],
+    );
+    let layouts = [token as *const _, environment as *const _];
+    for (mask, expected) in [
+        (None, vec![11, 10]),
+        (Some(1u64), vec![10]),
+        (Some(2), vec![11]),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace.json");
+        let config = Config {
+            layouts: layouts.as_ptr(),
+            layout_count: layouts.len() as u32,
+            ..Config::new()
+        };
+        let mut ctx = std::ptr::null_mut();
+        assert_eq!(unsafe { hirsel_rt_v2_ctx_create(&config, &mut ctx) }, 0);
+        let context = Context(ctx);
+        context.start(path.clone(), 16);
+        let frame = unsafe { hirsel_rt_v2_ownership_enter(ctx, ABI_VERSION, [7; 32].as_ptr()) };
+        // Both declaration fields have the same physical address and descriptor.
+        let bindings = [0, 2, 10, 7, 0, 0, 2, 11, 7, 1];
+        let mut scope = std::mem::MaybeUninit::<CleanupScope>::uninit();
+        unsafe {
+            let block = hirsel_rt::hirsel_rt_v2_alloc(ctx, 3, 0, 8, hirsel_rt::DOMAIN_HEAP, 0);
+            assert!(!block.is_null());
+            hirsel_rt_v2_ownership_cleanup_begin(
+                ctx,
+                scope.as_mut_ptr(),
+                frame,
+                9,
+                block,
+                bindings.as_ptr(),
+                2,
+            );
+            let mask = mask.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            assert_eq!(
+                hirsel_rt::hirsel_rt_v2_release(ctx, block, 3, mask, 0, 0),
+                0
+            );
+            hirsel_rt_v2_ownership_cleanup_end(ctx, scope.as_mut_ptr());
+            hirsel_rt_v2_ownership_leave(ctx, frame);
+        }
+        drop(context);
+        let log: Log = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(log.complete);
+        let actual = log
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::CleanupDrop { field, .. } => Some(*field),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+}
