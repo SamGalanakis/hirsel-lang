@@ -312,7 +312,7 @@ mod tests {
             let (types, signature, revision) = fixture("main", "args:Args");
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("grants.json");
-            std::fs::write(&path, r#"{"args":["kept"],"inputs":{"hash_seed":17},"budgets":{"provider":"budgets.limits@2","fuel":1000}}"#).unwrap();
+            std::fs::write(&path, r#"{"args":["kept"],"inputs":{"hash_seed":17,"random_seed":0,"test_seed":0,"scheduler":null},"budgets":{"provider":"budgets.limits@2","fuel":1000}}"#).unwrap();
             let launch = HostLaunch::Live {
                 config: crate::LaunchConfig::Grants {
                     input: path.as_os_str(),
