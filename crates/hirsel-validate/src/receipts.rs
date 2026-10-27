@@ -81,16 +81,9 @@ pub fn validate_definition(
     Option<VerifiedDefinition>,
 ) {
     let mut reads = vec![];
-    let (report, ran, accepted) = if cache.is_some() {
-        let artifact = Artifact::new(definition, types.clone(), owner);
-        validate_with_receipt(&artifact, signatures, policy, cache, &mut reads)
-    } else {
-        (
-            crate::validate(definition, &types, signatures, &mut reads),
-            true,
-            None,
-        )
-    };
+    let artifact = Artifact::new(definition, types.clone(), owner);
+    let (report, ran, accepted) =
+        validate_with_receipt(&artifact, signatures, policy, cache, &mut reads);
     let evidence = report.violations.is_empty().then(|| VerifiedDefinition {
         definition: Arc::downgrade(definition),
         owner: definition.path,
@@ -1148,7 +1141,7 @@ mod tests {
         let types = session();
         let definition = Arc::new(f.definition.clone());
         let policy = ContentHash::of_bytes(b"source policy");
-        let (report, ran, _, evidence) = validate_definition(
+        let (report, ran, accepted, evidence) = validate_definition(
             &definition,
             types.clone(),
             |_| Some((path("main"), 0)),
@@ -1157,7 +1150,12 @@ mod tests {
             None,
         );
         assert!(ran && report.violations.is_empty());
+        assert!(
+            accepted.is_some(),
+            "uncached V must issue execution acceptance"
+        );
         let evidence = evidence.unwrap();
+        assert_eq!(evidence.accepted_artifact(), accepted);
         assert!(evidence.holds(&definition, &types, policy, &f.signatures));
         assert!(!evidence.holds(
             &Arc::new((*definition).clone()),
@@ -1169,19 +1167,17 @@ mod tests {
         let mut changed = definition.clone();
         Arc::make_mut(&mut changed).entry = BodyId(u32::MAX);
         assert!(!evidence.holds(&changed, &types, policy, &f.signatures));
-        assert!(
-            !validate_definition(
-                &changed,
-                types.clone(),
-                |_| Some((path("main"), 0)),
-                &f.signatures,
-                policy,
-                None
-            )
-            .0
-            .violations
-            .is_empty()
+        let (rejected, _, accepted, rejected_evidence) = validate_definition(
+            &changed,
+            types.clone(),
+            |_| Some((path("main"), 0)),
+            &f.signatures,
+            policy,
+            None,
         );
+        assert!(!rejected.violations.is_empty());
+        assert!(accepted.is_none());
+        assert!(rejected_evidence.is_none());
         assert_eq!(
             Arc::strong_count(&definition),
             1,

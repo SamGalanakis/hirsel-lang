@@ -204,6 +204,12 @@ fn closed_instances_accept_two_types_deduplicate_and_select_nested_instances_bef
                 + &SOURCE[SOURCE.find("fn make").unwrap()..SOURCE.find("fn generated").unwrap()]
                     .replace("make[T]", "inner_make[T]");
             fixture(&source, jobs, |program, budget| {
+                drop(
+                    program
+                        .engine
+                        .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+                        .unwrap(),
+                );
                 let first = front(program, budget, jobs, &[]);
                 let round = discovery(program, budget, &[first]);
                 assert_eq!(round.requests().len(), 2);

@@ -200,7 +200,15 @@ impl QueryEngine {
             // The caller admits an output ceiling before generation. Keep only
             // the measured successful product through source/view clones; the
             // unused part releases when this acceptance call returns.
-            let retained_allowance = Arc::new(allowance.split(retained).ok_or_else(refusal)?);
+            let retained_allowance = Arc::new(allowance.split(retained).ok_or_else(|| {
+                QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "generated syntax acceptance".into(),
+                    message: format!(
+                        "{definition}: generated syntax requires {retained} retained bytes, {} available",
+                        allowance.bytes()
+                    ),
+                })
+            })?);
             self.sources = self
                 .sources
                 .clone()

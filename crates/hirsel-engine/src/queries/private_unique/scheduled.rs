@@ -836,7 +836,8 @@ impl QueryEngine {
         let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         static BUDGET: OnceLock<Arc<ProcessBudget>> = OnceLock::new();
         let budget = BUDGET.get_or_init(|| ProcessBudget::new(512 << 20));
-        if let Ok(reservation) = budget.reserve(512 << 20) {
+        let available = budget.limit().saturating_sub(budget.reserved());
+        if let Ok(reservation) = budget.reserve(available) {
             let _ = self.standalone_inference(reservation).inspect_err(|error| {
                 self.private_summary_failure = Some((self.graph.revision(), error.clone()));
             });

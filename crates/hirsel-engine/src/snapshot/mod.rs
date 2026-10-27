@@ -284,32 +284,23 @@ impl SignatureSnapshot {
         Option<hirsel_validate::AcceptedArtifact>,
     ) {
         let views = self.validation_with(&definition.path.path().0.package, signature.clone());
-        if let Some(cache) = &self.verifier {
-            let artifact =
-                hirsel_validate::Artifact::new(definition, self.types.clone(), |anchor| {
-                    origin
-                        .filter(|(expected, _, _)| *expected == anchor)
-                        .map(|(_, path, occurrence)| (path.clone(), *occurrence))
-                })
-                .with_overlay(signature);
-            let (report, ran, acceptance) = hirsel_validate::validate_with_receipt(
-                &artifact,
-                &views,
-                self.verifier_policy,
-                Some(cache),
-                &mut vec![],
-            );
-            if ran {
-                hirsel_intern::timings::count(hirsel_intern::timings::Count::VRuns);
-            }
-            (report, acceptance)
-        } else {
+        let artifact = hirsel_validate::Artifact::new(definition, self.types.clone(), |anchor| {
+            origin
+                .filter(|(expected, _, _)| *expected == anchor)
+                .map(|(_, path, occurrence)| (path.clone(), *occurrence))
+        })
+        .with_overlay(signature);
+        let (report, ran, acceptance) = hirsel_validate::validate_with_receipt(
+            &artifact,
+            &views,
+            self.verifier_policy,
+            self.verifier.as_deref(),
+            &mut vec![],
+        );
+        if ran {
             hirsel_intern::timings::count(hirsel_intern::timings::Count::VRuns);
-            (
-                hirsel_validate::validate(definition, &self.types, &views, &mut vec![]),
-                None,
-            )
         }
+        (report, acceptance)
     }
     /// Resolve a provider lookup as the engine's provider does: a path naming
     /// a definition this snapshot holds (or a source builtin), else a bare
