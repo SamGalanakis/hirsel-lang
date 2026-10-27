@@ -31,10 +31,11 @@ fn run_growth(sequence: bool, refuse: bool, repeat: bool) {
     let ledger = Ledger::new(&grant);
     let _topology = ledger.topology(4).unwrap();
     let configured = ledger.clone();
+    let setup_grant = grant.clone();
     let outcome = crate::host::BodyRun::new(1, false).run(
-        |ctx| unsafe {
-            (*ctx).run().cpu_grant = Some(grant.clone());
-            (*ctx).set_budgets(Some(100), Some(grant.max_batch_bytes));
+        move |ctx| unsafe {
+            (*ctx).run().cpu_grant = Some(setup_grant.clone());
+            (*ctx).set_budgets(Some(100), Some(setup_grant.max_batch_bytes));
             (*ctx).heap().idle_cap = 0;
             (*ctx).heap_ref().meter.cpu.set(configured).ok().unwrap();
             engine::enable(
@@ -43,7 +44,7 @@ fn run_growth(sequence: bool, refuse: bool, repeat: bool) {
             );
             events::enable(ctx);
         },
-        |ctx| unsafe {
+        move |ctx| unsafe {
             engine::fuel_in(ctx);
             assert_eq!(cpu::control(ctx, 4, 2, 1, || 0), Ok(0));
             assert_eq!(cpu::control(ctx, 4, 3, 0, || 0), Ok(0));
