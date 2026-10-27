@@ -158,6 +158,20 @@ N fn group.kill(p: Proc, mut g: ChildGroup of p, signal: Signal) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn cpu.map_scoped[J: sendable + inert, R: sendable + inert](tasks: Tasks, width: u32, take prepare: sendable once fn() -> List[J] uses {}, take map: sendable fn(take job: J) -> R uses {}) -> Result[List[R], CpuPoolError]
+// The CPU operation requires a direct call; it cannot escape as a function value.
+// CPU callbacks require locally visible closures with closed calls. Captures,
+// jobs and results contain no capabilities, resources, synchronization handles,
+// pointers or opaque function values. Immutable Shared reads and thaw are allowed.
+// Free requires io.cpu cpu.scoped@1, width 1/4/8/16 and at most 2*width jobs.
+// Preparation runs on worker 0 after all fresh workers are ready. All workers
+// join before results return in input order; language failures retain FAIL-2.
+// InvalidWidth, NotGranted, Busy, WidthUnavailable, NestedPool, BatchTooLarge,
+// WorkerStartFailed, CapacityLost, Canceled, NotSupported and ResourceLimit
+// refuse a batch without returning a partial result. Ordered returns NotSupported.
+// Physical and batch byte limits conservatively include run heap backing that
+// predates entry and result heaps retained after worker exit. Exceeding a live
+// allocation cap stops through the existing memory meter. Native replay starts
+// no CPU workers and substitutes recorded admission and capacity outcomes.
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R
 fn task.scope_until[R](tasks: Tasks, deadline: Deadline, body: once fn(s: Scope) -> R) -> Bounded[R]
 fn task.async[R: sendable](s: Scope, take f: once fn() -> R) -> Task[R] of s
