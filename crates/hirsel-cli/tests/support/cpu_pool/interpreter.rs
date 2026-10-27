@@ -32,6 +32,20 @@ fn cpu_interpreter_native_policy(width: usize, free: bool) {
     fs::write(&grants, serde_json::json!({"placement":{"cores":1,"reorder":"auto"},
         "io":{"stdout":"stdout.bytes@1","dirs":[],"tasks":if free { "tasks.free@1" } else { "tasks.cooperative@1" },"cpu":{"provider":"cpu.scoped@1",
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
+    let interpreted_tape = root.join("interpreted.tape");
+    if !free {
+        checked(
+            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("run")
+                .arg(&manifest)
+                .arg("--grants")
+                .arg(&grants)
+                .arg("--record")
+                .arg(&interpreted_tape)
+                .output()
+                .unwrap(),
+        );
+    }
     let mut reference = None;
     for backend in ["llvm", "cranelift"] {
         let executable = root.join(backend);
@@ -44,6 +58,15 @@ fn cpu_interpreter_native_policy(width: usize, free: bool) {
                 .output()
                 .unwrap(),
         );
+        if !free {
+            checked(
+                Command::new(&executable)
+                    .arg("--hirsel-replay")
+                    .arg(&interpreted_tape)
+                    .output()
+                    .unwrap(),
+            );
+        }
         let tape = root.join(format!("{backend}.tape"));
         let native_projection = root.join(format!("{backend}-native.projection"));
         let events = root.join(format!("{backend}.events"));
