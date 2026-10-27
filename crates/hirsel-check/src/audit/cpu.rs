@@ -2,6 +2,10 @@ use super::*;
 
 impl Audit<'_, '_> {
     pub(super) fn cpu_callbacks(&mut self) -> Result<(), QueryError> {
+        if !self.input.checked.resolution.expressions.iter().any(|(_, name)|
+            matches!(name, ResolvedName::Definition(path) if path.is_core("cpu.map_scoped"))) {
+            return Ok(());
+        }
         let calls = self.input.checked.calls.clone();
         for (expression, name) in self.input.checked.resolution.expressions.clone() {
             if !matches!(name, ResolvedName::Definition(ref path) if path.is_core("cpu.map_scoped"))
