@@ -54,7 +54,7 @@ def generate():
     path.write_text(json.dumps(manifest, indent=2) + '\n')
     grants = dict(io=dict(tasks='tasks.free@1',
                           cpu=dict(provider='cpu.scoped@1', max_workers=16, max_domains=1,
-                                   max_physical_bytes=1073741824, max_batch_bytes=16777216),
+                                   max_physical_bytes=1073741824, max_batch_bytes=67108864),
                           stdout='stdout.bytes@1', monotonic_clock='clock.monotonic.ns@1',
                           wall_clock='clock.wall.unix_ns@1',
                           dirs=[dict(path='', host=str(ROOT), access='read')]), args=[])
