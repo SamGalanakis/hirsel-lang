@@ -406,70 +406,6 @@ impl Compiler {
         }
         Ok(())
     }
-    /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
-    pub fn check_path(&self, path: &Path) -> Result<CheckOutput, ToolError> {
-        let mut compiler = self.clone();
-        // Select one physical provider before package loading can publish its
-        // first parse/type/V product. Engines and workers share this owner.
-        if compiler.result_store.is_none() && crate::policy::uses_persistent_results() {
-            if crate::policy::verifies_cached_results()
-                || std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0")
-            {
-                compiler.verify_store = crate::store::VerifyStore::Recompute;
-            }
-            let name = std::env::var("HIRSEL_RESULTS").unwrap_or_else(|_| "dir@1".into());
-            compiler.result_store = crate::store::store_by_name(
-                &name,
-                std::env::var_os("HIRSEL_RESULTS_DIR")
-                    .filter(|v| !v.is_empty())
-                    .map(Into::into),
-            )
-            .ok();
-        }
-        let publication = compiler
-            .result_store
-            .as_ref()
-            .and_then(|store| store.local_product_store())
-            .map(|store| store.request());
-        let result = with_compiler_stack(|| {
-            let mut program = compiler.load_check_package(path)?;
-            program
-                .check(self.lowering)
-                .map_err(|error| program.error(error))
-        });
-        if result
-            .as_ref()
-            .is_ok_and(|output| output.completion == CheckCompletion::Complete)
-            && let Some(publication) = publication
-        {
-            let _ = publication.finish();
-        }
-        result.or_else(check_diagnostics)
-    }
-    /// `check_path`, then, when the program checks complete and accepted, the
-    /// escape from capability checking its entry reaches (CAP-6).
-    pub fn check_safe_path(
-        &self,
-        path: &Path,
-    ) -> Result<(CheckOutput, Option<(DefPath, Option<UnsafeReach>)>), ToolError> {
-        with_compiler_stack(|| {
-            let mut program = self.load_check_package(path)?;
-            let output = program
-                .check(self.lowering)
-                .map_err(|error| program.error(error))?;
-            if crate::queries::has_errors(&output.diagnostics)
-                || output.completion != CheckCompletion::Complete
-            {
-                return Ok((output, None));
-            }
-            if program.launch_entry().is_none() {
-                return Ok((output, None));
-            }
-            let reach = program.unsafe_reach()?;
-            Ok((output, Some((program.entry.clone(), reach))))
-        })
-        .or_else(|error| check_diagnostics(error).map(|output| (output, None)))
-    }
     /// Format one source, preserving the single-source API's output.
     pub fn format_path(&self, path: &Path) -> Result<String, ToolError> {
         self.prepare_format_source(path)
@@ -521,23 +457,6 @@ impl Compiler {
             inputs: vec![],
         };
         run_snapshot(&mut program.engine, &config, simulation, stdout)
-    }
-}
-
-/// Parsing may reject while the graph is indexed, before LoadedProgram exists.
-/// Checks return those language diagnostics through the same output as body errors.
-fn check_diagnostics(error: ToolError) -> Result<CheckOutput, ToolError> {
-    match error {
-        ToolError::Query {
-            error: QueryError::Diagnostics(diagnostics),
-            sources,
-            ..
-        } => Ok(CheckOutput {
-            diagnostics: select_diagnostics(diagnostics, Some(&sources)),
-            sources,
-            ..Default::default()
-        }),
-        error => Err(error),
     }
 }
 

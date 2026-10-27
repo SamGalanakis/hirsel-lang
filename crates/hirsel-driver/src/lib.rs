@@ -12,6 +12,8 @@ use hirsel_engine::{
 };
 pub mod api_index;
 pub mod candidate;
+mod compiler_requests;
+pub use compiler_requests::CompilerRequestsExt;
 pub mod dependency_card;
 mod launch_binding;
 pub mod native;
