@@ -75,6 +75,11 @@ impl QueryTask for SemanticTask {
             ..weight
         }
     }
+    fn continuation_bytes(&self) -> u64 {
+        // Completed nodes live in semantic_completed under the independent
+        // source-output reservation, just like settled Lower products.
+        self.weight().retained
+    }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         let result = if let Some(result) = self.node.terminal {
             result

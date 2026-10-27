@@ -209,11 +209,11 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"semantic_library","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[]}"#).unwrap();
-        std::fs::write(
-            directory.path().join("main.hir"),
-            "pub fn value()->u64 {7u64}\nfn invalid()->u64 {true}\n",
-        )
-        .unwrap();
+        let mut source = (0..32)
+            .map(|n| format!("pub fn value_{n}()->u64 {{{n}u64}}\n"))
+            .collect::<String>();
+        source.push_str("fn invalid()->u64 {true}\n");
+        std::fs::write(directory.path().join("main.hir"), source).unwrap();
         let mut program = COMPILER
             .with_config(CompileConfig {
                 store: Arc::new(MemStore::default()),
@@ -251,14 +251,17 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
             .front_semantic_queries(
                 front.clone(),
                 lower.clone(),
-                weight,
+                MemoryWeight {
+                    retained: 8 << 20,
+                    ..weight
+                },
                 budget.reserve(16 << 20).unwrap(),
                 errors,
             )
             .unwrap();
         let path = paths
             .iter()
-            .find(|path| path.0.name == "value")
+            .find(|path| path.0.name == "value_0")
             .unwrap()
             .clone();
         let query = run.semantic_query(&path).unwrap();
@@ -270,10 +273,15 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
             .into_iter()
             .find(|node| node.identity == path.to_string())
             .unwrap();
+        let queries = paths
+            .iter()
+            .filter(|path| path.0.name.starts_with("value_"))
+            .map(|path| run.semantic_query(path).unwrap())
+            .collect::<Vec<_>>();
         drop(program);
         let mut runtime = AdmittedRuntime::new(
             hirsel_intern::jobs::Jobs::new(2),
-            budget.reserve(128 << 20).unwrap(),
+            budget.reserve(192 << 20).unwrap(),
             errors,
         )
         .unwrap();
@@ -294,6 +302,13 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
         assert_eq!(actual.content, expected.content);
         assert_eq!(actual.dependencies, expected.dependencies);
         assert!(run.outcome(product).is_none());
+        // Their 32 four-MiB continuation grants cannot all fit this existing
+        // 64-MiB working grant plus its existing 128-MiB worker stack. Completed node outputs have their own reservation.
+        for query in queries {
+            let request = runtime.request(&[query]);
+            let product = runtime.wait(request).unwrap()[0];
+            assert!(run.semantic_node(product).is_ok());
+        }
         let before = lower.work_snapshot();
         let repeated = runtime.request(&[query]);
         assert_eq!(runtime.wait(repeated).unwrap(), vec![product]);
