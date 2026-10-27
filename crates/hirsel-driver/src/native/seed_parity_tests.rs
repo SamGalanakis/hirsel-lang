@@ -11,10 +11,14 @@ use std::sync::Arc;
 const NEXT_STREAM: &str = "pub fn main()->Result[(),()]{let f=std@1/http.next_stream;Ok(())}";
 
 fn consumer(path: &std::path::Path) -> ValidatedNativeInput {
-    let mut loaded = crate::COMPILER
-        .with_owned_engines()
-        .load_program(path)
-        .unwrap();
+    checked_consumer(&crate::COMPILER.with_owned_engines(), path)
+}
+
+fn checked_consumer(
+    compiler: &hirsel_engine::Compiler,
+    path: &std::path::Path,
+) -> ValidatedNativeInput {
+    let mut loaded = compiler.load_program(path).unwrap();
     loaded.check_for_execution().unwrap();
     loaded
         .engine
@@ -29,13 +33,20 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
         let source = scratch.0.join("next-stream.hir");
         std::fs::write(&source, NEXT_STREAM).unwrap();
         let shared = scratch.0.join("shared");
+        let mut compiler = crate::COMPILER.with_owned_engines();
+        if let Some(products) = std::env::var_os("HIRSEL_SEED_SOURCE_PRODUCTS") {
+            compiler = compiler.with_config(hirsel_engine::CompileConfig {
+                store: Arc::new(hirsel_engine::store::DirStore::new(products.into())),
+                ..Default::default()
+            });
+        }
         // Produce ordinary fragments in a distinct program. Its extra tuple
         // shifts layout numbering before the HTTP resource closure.
         {
             let donor = scratch.0.join("donor.hir");
             std::fs::write(&donor,
                 "fn aaa()->(bool,u32){(true,0u32)}\npub fn main()->Result[(),()]{let _=aaa();let f=std@1/http.next_stream;Ok(())}").unwrap();
-            let input = consumer(&donor);
+            let input = checked_consumer(&compiler, &donor);
             let mut opts = options(Arc::new(DirObjects::new(shared.clone())), 1);
             let objects = opts.objects.as_mut().unwrap();
             objects.backend = backend;
@@ -46,7 +57,7 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
             // Source checking is independent of the object-store policy under
             // test. Keep a fresh verified source snapshot for each salt, then
             // compare every cold/warm/donor/verified native consumer against it.
-            let input = consumer(&source);
+            let input = checked_consumer(&compiler, &source);
             let mut opts = options(
                 Arc::new(DirObjects::new(scratch.0.join("source-cache"))),
                 jobs,
@@ -116,11 +127,24 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
     })
 }
 
-fn salted(test: &str, backend: Backend, jobs: usize) {
+fn salted(test: &str, backend: Backend, jobs: usize, salts: &[u64]) {
+    let source = crate::native::executable::Scratch::new().unwrap();
+    let products = source.0.join("source-products");
     let mut outputs = Vec::new();
-    // Sequential fresh processes keep the HTTP closure under the normal cap.
-    for salt in [1, 17, 65537] {
-        match hirsel_intern::under_salts(test, &[salt], || next_stream(backend, jobs)) {
+    // Source products are ordinary checked query results. Native object stores
+    // and every compiler engine remain fresh in each independently salted child.
+    for &salt in salts {
+        let output = if backend == Backend::Cranelift {
+            hirsel_intern::under_salts(test, &[salt], || next_stream(backend, jobs))
+        } else {
+            hirsel_intern::under_salts_with_env(
+                test,
+                &[salt],
+                &[("HIRSEL_SEED_SOURCE_PRODUCTS", products.as_os_str())],
+                || next_stream(backend, jobs),
+            )
+        };
+        match output {
             Some(output) => outputs.extend(output),
             None => return,
         }
@@ -128,23 +152,36 @@ fn salted(test: &str, backend: Backend, jobs: usize) {
     assert!(outputs.windows(2).all(|w| w[0] == w[1]));
 }
 
-#[test]
-fn ordinary_next_stream_cranelift_jobs8() {
-    salted(
-        "native::plan::seed_parity_tests::ordinary_next_stream_cranelift_jobs8",
-        Backend::Cranelift,
-        8,
-    );
+// Compare both remaining salts with the same reference. Requiring both
+// equalities still requires all three original outputs to be identical.
+macro_rules! stream_salts {
+    ($name:ident, $backend:expr, $salts:expr) => {
+        #[test]
+        fn $name() {
+            salted(
+                concat!("native::plan::seed_parity_tests::", stringify!($name)),
+                $backend,
+                8,
+                $salts,
+            );
+        }
+    };
 }
-
-#[test]
-fn ordinary_next_stream_llvm_jobs8() {
-    salted(
-        "native::plan::seed_parity_tests::ordinary_next_stream_llvm_jobs8",
-        Backend::Llvm,
-        8,
-    );
-}
+stream_salts!(
+    ordinary_next_stream_cranelift_jobs8,
+    Backend::Cranelift,
+    &[1, 17, 65537]
+);
+stream_salts!(
+    ordinary_next_stream_llvm_jobs8_salts1_17,
+    Backend::Llvm,
+    &[1, 17]
+);
+stream_salts!(
+    ordinary_next_stream_llvm_jobs8_salts1_65537,
+    Backend::Llvm,
+    &[1, 65537]
+);
 
 // Ordinary local publication replaces the former dedicated seed builder. Each
 // consumer opens a fresh compiler and cache handle; neither V nor import/Ready

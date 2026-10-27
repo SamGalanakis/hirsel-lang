@@ -194,6 +194,17 @@ class GeneratedParts(unittest.TestCase):
         self.assertIn('    name = "hirsel-span-test-added",\n', self.buck())
         self.assertEqual(self.rewritten(), ['BUCK'])
 
+    def test_unit_costs_split_actions_without_changing_the_compiled_library(self):
+        library = self.library('hirsel-driver')
+        self.edit('tools/buck2/test-costs/hirsel-driver-unittest.tsv',
+                  'first::case\t240.0\nsecond::case\t240.0\n')
+        self.assertEqual(self.sync('--if-stale'), ['first-party'])
+        block = next(block.split('\n)\n')[0] for block in self.buck().split('hirsel_test(\n')[1:]
+                     if '    name = "hirsel-driver-unittest",\n' in block.split('\n)\n')[0])
+        self.assertIn('    shards = 2,\n', block)
+        self.assertIn('    costs = "//tools/buck2:test-costs/hirsel-driver-unittest.tsv",\n', block)
+        self.assertEqual(self.library('hirsel-driver'), library)
+
     def library(self, name):
         """The crate's hirsel_library call in the root BUCK."""
         return next(block.split('\n)\n')[0] for block in self.buck().split('hirsel_library(\n')[1:]

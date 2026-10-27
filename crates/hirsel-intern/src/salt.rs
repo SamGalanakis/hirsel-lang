@@ -129,6 +129,18 @@ pub fn under_salts(
     seeds: &[u64],
     body: impl FnOnce() -> String,
 ) -> Option<Vec<String>> {
+    under_salts_with_env(test, seeds, &[], body)
+}
+
+/// Run the same fresh salted processes with explicit child-only environment.
+/// The caller owns any shared fixture for the lifetime of all children.
+#[cfg(feature = "id-salt")]
+pub fn under_salts_with_env(
+    test: &str,
+    seeds: &[u64],
+    environment: &[(&str, &std::ffi::OsStr)],
+    body: impl FnOnce() -> String,
+) -> Option<Vec<String>> {
     if let Ok(seed) = std::env::var(SEED_VARIABLE) {
         salt_ids(seed.parse().expect("a numeric id salt"));
         print!("{OUTPUT_START}{}{OUTPUT_END}", body());
@@ -140,6 +152,7 @@ pub fn under_salts(
         .map(|seed| {
             let child = std::process::Command::new(&binary)
                 .args([test, "--exact", "--nocapture", "--test-threads=1"])
+                .envs(environment.iter().copied())
                 .env(SEED_VARIABLE, seed.to_string())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())

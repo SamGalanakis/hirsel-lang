@@ -196,7 +196,7 @@ macro_rules! smoke_campaign_slices {
             let list = smoke_programs();
             let mut counts = BTreeMap::new();
             let slice = list.iter().skip($slice * PER_SLICE).take(PER_SLICE);
-            let programs = campaign(slice, &mut counts, false);
+            let programs = campaign(slice, &mut counts, false, None);
             eprintln!(
                 "{programs} smoke programs; mutants [pass rejected, Ready rejected, identical live-unit normalization]: {counts:?}"
             );
@@ -220,12 +220,29 @@ smoke_campaign_slices! {
     ready_only_rejects_smoke_pass_faults_13 = 13,
     ready_only_rejects_smoke_pass_faults_14 = 14,
     ready_only_rejects_smoke_pass_faults_15 = 15,
-    ready_only_rejects_smoke_pass_faults_16 = 16,
     ready_only_rejects_smoke_pass_faults_17 = 17,
     ready_only_rejects_smoke_pass_faults_18 = 18,
     ready_only_rejects_smoke_pass_faults_19 = 19,
     ready_only_rejects_smoke_pass_faults_20 = 20,
     ready_only_rejects_smoke_pass_faults_21 = 21,
+}
+
+macro_rules! smoke_sixteen {
+    ($($name:ident = $offset:expr,)*) => {$(
+        #[test]
+        fn $name() {
+            let list = smoke_programs();
+            let mut counts = BTreeMap::new();
+            assert_eq!(campaign(list.iter().skip(16 * PER_SLICE + $offset).take(1), &mut counts, false, None), 1);
+        }
+    )*};
+}
+smoke_sixteen! {
+    ready_only_rejects_smoke_pass_faults_16_0 = 0,
+    ready_only_rejects_smoke_pass_faults_16_1 = 1,
+    ready_only_rejects_smoke_pass_faults_16_2 = 2,
+    ready_only_rejects_smoke_pass_faults_16_3 = 3,
+    ready_only_rejects_smoke_pass_faults_16_4 = 4,
 }
 
 /// Across the whole selection the stage ladder rejects some fault at every
@@ -241,8 +258,10 @@ fn smoke_ladder_rejects_every_stage_and_fault_class() {
                 .all(|fault| counts.keys().any(|(_, f)| *f == fault))
     };
     let mut counts = BTreeMap::new();
+    let store: std::sync::Arc<dyn hirsel_engine::store::ResultStore> =
+        hirsel_engine::store::MemStore::shared();
     for path in &smoke_programs() {
-        campaign([path], &mut counts, true);
+        campaign([path], &mut counts, true, Some(store.clone()));
         if complete(&counts) {
             return;
         }
@@ -272,14 +291,30 @@ fn campaign<'a>(
     paths: impl IntoIterator<Item = &'a String> + Send,
     counts: &mut BTreeMap<(StageKind, Fault), [usize; 3]>,
     coverage: bool,
+    store: Option<std::sync::Arc<dyn hirsel_engine::store::ResultStore>>,
 ) -> usize {
     hirsel_engine::with_compiler_stack(|| {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let compiler =
+            crate::COMPILER
+                .with_owned_engines()
+                .with_config(hirsel_engine::CompileConfig {
+                    store: store.unwrap_or_else(|| hirsel_engine::store::MemStore::shared()),
+                    ..Default::default()
+                });
         let mut programs = 0;
         for path in paths {
-            eprintln!("fault campaign: {path}");
-            let mut loaded = crate::load_program(&root.join(path)).unwrap();
+            use std::io::Write;
+            let started = std::time::Instant::now();
+            writeln!(std::io::stderr().lock(), "fault campaign: {path}").unwrap();
+            let mut loaded = compiler.load_program(&root.join(path)).unwrap();
             loaded.check_for_execution().unwrap();
+            writeln!(
+                std::io::stderr().lock(),
+                "fault checked: {path} {:?}",
+                started.elapsed()
+            )
+            .unwrap();
             let input = loaded.engine.export_native_input().unwrap();
             let validated = loaded.engine.import_native_input(input).unwrap();
             let program = super::program(&validated);
@@ -353,6 +388,12 @@ fn campaign<'a>(
                 let ready = hirsel_rc::ready::ready(reused, table, &finalizers).unwrap();
                 judge(&ready, &inputs, &context, Ok, counts, coverage);
             }
+            writeln!(
+                std::io::stderr().lock(),
+                "fault finished: {path} {:?}",
+                started.elapsed()
+            )
+            .unwrap();
             programs += 1;
         }
         programs

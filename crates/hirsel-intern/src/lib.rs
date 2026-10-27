@@ -15,7 +15,7 @@ pub mod work;
 
 pub use salt::Scramble;
 #[cfg(feature = "id-salt")]
-pub use salt::{salt_ids, under_salts};
+pub use salt::{salt_ids, under_salts, under_salts_with_env};
 pub use table::AppendTable;
 
 use std::cmp::Ordering;

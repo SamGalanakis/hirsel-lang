@@ -230,6 +230,7 @@ def seeded(source_dir: pathlib.Path, crate_root: pathlib.Path) -> bool:
 # 173-188 s per shard on the pool, and in six shards at most 86 s. The gate
 # keeps every test target near two minutes.
 SHARDED = [
+    "hirsel-driver-unittest",
     "hirsel-cli-test-cli",
     "hirsel-driver-test-it",
     "hirsel-driver-test-it-stdlib",
@@ -925,8 +926,11 @@ def first_party(meta: dict) -> str:
                     **{**attrs, "features": ["default"], "build_script": None},
                 ))
             if lib.get("test", True):
-                out.append("\n" + call("hirsel_test", **profile, name=f"{name}-unittest", deps=test_deps,
-                                        **test_attrs(f"{name}-unittest", src), **attrs))
+                binary = f"{name}-unittest"
+                count, costs = shards(binary)
+                out.append("\n" + call("hirsel_test", **profile, name=binary, deps=test_deps,
+                                        shards=count if count > 1 else None, costs=costs,
+                                        **test_attrs(binary, src), **attrs))
         own = [f"//:{name}"] if lib else []
         if lib and lib.get("test", True) and not guarded(pathlib.Path(lib["src_path"])):
             unguarded.append(relative(pathlib.Path(lib["src_path"])))
