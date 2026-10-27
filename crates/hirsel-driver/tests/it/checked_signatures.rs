@@ -134,9 +134,9 @@ fn generated_ps9_headers_require_the_admitted_registration_view() {
         };
         let mut session = session::Session::open_configured(&manifest, config);
         let output = session
-            .request(requests::CompileOperation::ExportTir)
+            .request(hirsel_driver::requests::CompileOperation::ExportTir)
             .unwrap();
-        let requests::CompileResult::ExportTir(text) = &output.result else {
+        let hirsel_driver::requests::CompileResult::ExportTir(text) = &output.result else {
             panic!("wrong export operation")
         };
         assert!(text.contains("generated_headers@1/main"), "{text}");
