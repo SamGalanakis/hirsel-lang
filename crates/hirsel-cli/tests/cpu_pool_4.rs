@@ -84,3 +84,10 @@ include!("support/cpu_pool/allocation_audit.rs");
 fn native_typed_prefix_allocations_are_freed_before_heap_teardown() {
     typed_prefix_allocation_audit(4);
 }
+
+include!("support/cpu_pool/host_contraction.rs");
+#[test]
+#[ignore = "requires a delegated CPU controller in the current user's systemd manager"]
+fn native_host_quota_contraction_drains_and_replays() {
+    host_quota_contraction();
+}
