@@ -1,6 +1,18 @@
 //! Per-definition proof caches. Temporary rows are interned into the session
 //! interner; none is published back into immutable IR.
+use hirsel_types::TypeId;
 use std::cell::RefCell;
+
+/// Like V's property proofs, these answers depend only on immutable rows,
+/// signature views and this body's generic declarations. Live evidence is
+/// applied by `transferred_type` before selecting a transformation.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub(super) enum Transformation {
+    Copy(TypeId),
+    Unique,
+    Weaken,
+}
+pub(super) type Transformations = crate::hashed::HashMap<(TypeId, Transformation), TypeId>;
 
 pub(super) type Acquisitions =
     std::collections::BTreeMap<(u32, Option<u32>), Vec<(hirsel_tir::PlaceId, &'static str)>>;
@@ -31,6 +43,8 @@ pub(super) struct Scratch {
         >,
     >,
     pub(super) variant_inputs: Vec<std::cell::OnceCell<super::variant_brands::Inputs>>,
+    /// Successful immutable row transformations, with a separate environment per body.
+    pub(super) transformations: Vec<RefCell<Transformations>>,
     /// Per body: its structural property proofs (`proofs`).
     pub(super) proofs: Vec<RefCell<super::proofs::Proofs>>,
     /// Canonical Plain rows (`Checker::canonical_plain`), for every body.
@@ -62,6 +76,7 @@ impl Scratch {
             acquisitions: (0..bodies).map(|_| RefCell::default()).collect(),
             parameter_authorities: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             variant_inputs: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
+            transformations: (0..bodies).map(|_| RefCell::default()).collect(),
             proofs: (0..bodies).map(|_| RefCell::default()).collect(),
             layouts: (0..bodies).map(|_| RefCell::default()).collect(),
             relations: (0..bodies).map(|_| RefCell::default()).collect(),

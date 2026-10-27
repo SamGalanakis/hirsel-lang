@@ -2,6 +2,8 @@
 use super::*;
 use hirsel_types::{Sendability, TypeId, TypeInterner, TypeKind, Uniqueness};
 
+use crate::scratch::Transformation;
+
 // A mode transformation that leaves its immutable input unchanged needs no
 // canonical lookup. Changed rows still use the interner's complete equality.
 fn update_type(store: &TypeInterner, original: TypeId, row: hirsel_types::Type) -> TypeId {
@@ -13,6 +15,29 @@ fn update_type(store: &TypeInterner, original: TypeId, row: hirsel_types::Type) 
 }
 
 impl Checker<'_> {
+    fn transformed(
+        &self,
+        store: &TypeInterner,
+        ty: TypeId,
+        transformation: Transformation,
+        generics: &hirsel_types::GenericDeclarations,
+        compute: impl FnOnce() -> TypeId,
+    ) -> TypeId {
+        if !std::ptr::eq(store, self.t) || !std::ptr::eq(generics, self.generic_declarations()) {
+            return compute();
+        }
+        let cache = &self.scratch.transformations[self.site.body.0 as usize];
+        if let Some(&answer) = cache.borrow().get(&(ty, transformation)) {
+            return answer;
+        }
+        let answer = compute();
+        // A tooling-limit fallback is site-dependent and must report again at
+        // every use. Never publish it as a successful transformation.
+        if self.proof_errors.borrow().is_empty() {
+            cache.borrow_mut().insert((ty, transformation), answer);
+        }
+        answer
+    }
     /// Core consuming cursors retain their owner's current evidence, rather
     /// than manufacturing a fresh unique payload from a type argument.
     pub(super) fn consuming_protocol(&self, callee: &Callee) -> bool {
@@ -41,6 +66,15 @@ impl Checker<'_> {
         if value.usage != UseKind::Copy {
             return ty;
         }
+        self.transformed(
+            store,
+            ty,
+            Transformation::Copy(self.place_type(value.place)),
+            self.generic_declarations(),
+            || self.compute_copied_type(store, value, ty),
+        )
+    }
+    fn compute_copied_type(&self, store: &TypeInterner, value: &Operand, ty: TypeId) -> TypeId {
         if !self.flat_value(value.place) && self.copy_detaches(store, ty) {
             // MEM-11, CONC-2: a copied Shared root, Mutex or Atomic, or an
             // aggregate of them and plain bits, is an independently counted
@@ -79,6 +113,16 @@ impl Checker<'_> {
         update_type(store, ty, row)
     }
     pub(crate) fn weakened_type(
+        &self,
+        store: &TypeInterner,
+        ty: TypeId,
+        generics: &hirsel_types::GenericDeclarations,
+    ) -> TypeId {
+        self.transformed(store, ty, Transformation::Weaken, generics, || {
+            self.compute_weakened_type(store, ty, generics)
+        })
+    }
+    fn compute_weakened_type(
         &self,
         store: &TypeInterner,
         ty: TypeId,
@@ -1088,6 +1132,15 @@ impl Checker<'_> {
         }
     }
     pub(crate) fn unique_type(&self, store: &TypeInterner, ty: TypeId) -> TypeId {
+        self.transformed(
+            store,
+            ty,
+            Transformation::Unique,
+            self.generic_declarations(),
+            || self.compute_unique_type(store, ty),
+        )
+    }
+    fn compute_unique_type(&self, store: &TypeInterner, ty: TypeId) -> TypeId {
         let mut row = store.get(ty).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let root = update_type(store, ty, row);

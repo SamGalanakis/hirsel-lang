@@ -628,3 +628,59 @@ fn a_single_body_without_closures_solves_its_flow_once() {
         "no closure environment needs a preliminary fixed point"
     );
 }
+
+#[test]
+fn row_transformations_respect_a_foreign_generic_environment() {
+    let f = Fixture::unit();
+    let types = interner();
+    let reader = crate::input::Reader::new(types, &f.signatures);
+    let declarations = vec![GenericDeclarations::default()];
+    let scratch = scratch::Scratch::new(1);
+    let memo = TypeMemo::new();
+    let checker = Checker {
+        definition: &f.definition,
+        t: types,
+        memo: &memo,
+        body: &f.definition.bodies[0],
+        signatures: &reader,
+        declarations: &declarations,
+        scratch: &scratch,
+        contract: false,
+        site: Site {
+            body: BodyId(0),
+            block: None,
+            instruction: None,
+        },
+        errors: vec![],
+        captured: BTreeMap::new(),
+        returned: BTreeMap::new(),
+        static_data: None,
+        proof_errors: std::cell::RefCell::new(Vec::new()),
+        unique_parts_cache: Default::default(),
+    };
+    let parameter = types.intern(ty(TypeKind::Parameter(TypeParameterRef::body(
+        checker.body.parameter_scope,
+        hirsel_types::TypeParamId(0),
+    ))));
+    let mut flat = GenericDeclarations::default();
+    flat.insert(
+        checker.body.parameter_scope,
+        vec![GenericParameter::Type {
+            name: "T".into(),
+            bounds: vec![Bound::Flat].into(),
+        }],
+    );
+    let current = checker.weakened_type(types, parameter, checker.generic_declarations());
+    let foreign = checker.weakened_type(types, parameter, &flat);
+    assert_eq!(
+        types.row(current).modes.sendability,
+        Sendability::NotSendable
+    );
+    assert_eq!(types.row(foreign).modes.sendability, Sendability::Sendable);
+    assert_eq!(
+        checker.weakened_type(types, parameter, checker.generic_declarations()),
+        current
+    );
+    assert_eq!(checker.weakened_type(types, parameter, &flat), foreign);
+    assert!(checker.proof_errors.borrow().is_empty());
+}
