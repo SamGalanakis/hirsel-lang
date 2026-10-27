@@ -1,7 +1,7 @@
 //! Independent TIR certificate for the scalar CPU mapper subset. The native
 //! reference is hirsel-lir's ahead scalar_graph; this walk never consumes its plan.
-use crate::{Error, Value};
-use hirsel_tir::{AsyncTirProvider, Callee, Constant, Rvalue, Terminator};
+use crate::{AsyncTirProvider, Error, Value};
+use hirsel_tir::{Callee, Constant, Rvalue, Terminator};
 use hirsel_types::{Primitive, TypeId, TypeInterner, TypeKind};
 use std::collections::BTreeSet;
 

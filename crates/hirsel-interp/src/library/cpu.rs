@@ -258,7 +258,7 @@ impl Library {
             Stage::Prepare => {
                 let prepare = batch.prepare.take().expect("CPU preparation");
                 let mut result = self.schedule(
-                    Pending::Cpu(batch.with_preparation()),
+                    Pending::Cpu(Box::new(batch)),
                     prepare,
                     vec![],
                     vec![],
@@ -424,12 +424,6 @@ impl Library {
         Ok(Some(self.cpu_pause(batch, context)))
     }
 }
-impl Batch {
-    fn with_preparation(mut self) -> Self {
-        self.stage = Stage::Receipt;
-        self
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -552,7 +546,7 @@ mod tests {
                                 BuiltinType::List,
                                 (1..=2 * width)
                                     .map(|n| super::super::u64_value(u64::from(n)))
-                                    .collect(),
+                                    .collect::<Vec<_>>(),
                             );
                             library
                                 .resume(
@@ -576,7 +570,7 @@ mod tests {
                                     BuiltinType::List,
                                     (1..=2 * width)
                                         .map(|n| super::super::u64_value(u64::from(n) * 10))
-                                        .collect()
+                                        .collect::<Vec<_>>()
                                 ))
                             );
                             finished = true;

@@ -1517,7 +1517,7 @@ impl Operations for Library {
                 unreachable!()
             };
             self.cpu_active.remove(&self.tasks.current);
-            return Ok(batch.release());
+            return Ok((*batch).release());
         }
         self.synchronization_writeback(token, updates, abandoned)
     }
