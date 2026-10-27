@@ -2324,3 +2324,36 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     assert_eq!(observation.output, b"hash aliases preserved\n");
     assert!(observation.failures.is_empty(), "{observation:?}");
 }
+
+#[test]
+fn scalar_map_queries_keep_independent_updates_and_saved_versions() {
+    let source = r#"
+fn read(m: Map[u32, u64], key: u32) -> u64 {
+  match map.get(m, key) { Some(value) => value, None => 0 }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut first: Map[u32, u64] = map.empty()
+  let mut second: Map[u32, u64] = map.empty()
+  for key in 0u32..64u32 {
+    map.insert(mut first, key, 100u64 + int.widen(key))
+    map.insert(mut second, key, 200u64 + int.widen(key))
+  }
+  let saved = copy first
+  for key in 0u32..64u32 {
+    let earlier = read(first, key)
+    failure.check(earlier == 100u64 + int.widen(key), TextInvariant())
+    map.insert(mut first, key, earlier + 17)
+    failure.check(read(first, key) == earlier + 17, TextInvariant())
+    failure.check(read(saved, key) == earlier, TextInvariant())
+    failure.check(read(second, key) == earlier + 100, TextInvariant())
+    failure.check(map.contains(first, key), TextInvariant())
+  }
+  failure.check(read(first, 64) == 0 && !map.contains(first, 64), TextInvariant())
+  let _ = out.print(io.stdout(rt)?, "scalar maps preserved\n")
+  Ok(())
+}
+"#;
+    let observation = agree("scalar-map-source", source, &topology_matrix(0));
+    assert_eq!(observation.output, b"scalar maps preserved\n");
+    assert!(observation.failures.is_empty(), "{observation:?}");
+}
