@@ -410,3 +410,38 @@ fn private_helper_uniqueness_59_body_edit_invalidates_summary_and_caller() {
         );
     });
 }
+
+#[test]
+fn private_helper_uniqueness_59_closure_calls_share_through_borrowed_views() {
+    with_compiler_stack(|| {
+        for (body, preserves) in [
+            ("{let v=view(x);let kept=v;()};()", true),
+            ("{let v=view(x);let kept=(fn(){v})();()};()", false),
+        ] {
+            let source = format!(
+                "fn view(x:Bytes)->Bytes in x{{copy x}}\nfn probe(mut x:Bytes){{{body}}}\npub fn main(){{}}"
+            );
+            let (mut engine, output) = check(&source);
+            assert!(
+                output.diagnostics.is_empty(),
+                "{source}: {:?}",
+                output.diagnostics
+            );
+            let mut probe = entry_path(&default_context());
+            probe.0.name = "probe".into();
+            engine.lower_to_tir(&probe).unwrap();
+            let signature = engine
+                .signature(hirsel_syntax::DefId::intern(&probe))
+                .unwrap();
+            assert_eq!(
+                signature
+                    .metadata
+                    .inferred_unique
+                    .preserves_unique
+                    .contains(&hirsel_types::ParamId(0)),
+                preserves,
+                "{source}"
+            );
+        }
+    });
+}

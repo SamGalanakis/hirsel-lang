@@ -7615,7 +7615,12 @@ impl Checker<'_, '_> {
                         .property(*expression)
                         .is_some_and(|p| !p.plain && !p.flat && !p.shared)
                 {
-                    for root in self.value(state, *callee).captures().collect::<Vec<_>>() {
+                    let mut shared = BTreeSet::new();
+                    for root in self.value(state, *callee).captures() {
+                        shared.insert(root);
+                        shared.extend(self.reached_bindings(state, &state.slots[root].value));
+                    }
+                    for root in shared {
                         let owner = state.slots[root].value.element_owner();
                         state.share_element_owners(owner.filter(|owner| *owner != root), None);
                         state.slots[root].value.share();

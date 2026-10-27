@@ -38,6 +38,11 @@ impl Content {
             .flat_map(|d| d.held.iter().copied())
             .collect()
     }
+    pub fn contains(&self, item: usize) -> bool {
+        self.0
+            .values()
+            .any(|dependency| dependency.held.contains(&item))
+    }
     pub fn expired(&self) -> BTreeSet<usize> {
         self.0
             .values()

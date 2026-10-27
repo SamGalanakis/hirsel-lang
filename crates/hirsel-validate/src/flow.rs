@@ -140,7 +140,7 @@ pub(super) struct State {
     borrow_only: BitRows<bool>,
     /// The roots whose related call result shares a local's content may
     /// hold, through every value transfer from that result (MODE-2).
-    borrowed_shares: Rows<BTreeSet<usize>>,
+    borrowed_shares: Rows<loan_content::Content>,
     /// Current content evidence, independent of the receiving storage contract.
     current_unique: BitRows<bool>,
     crossing_parts: Rows<crossing::Parts>,
@@ -273,8 +273,8 @@ impl State {
         self.nested_shared
             .or_since(&base.nested_shared, &other.nested_shared);
         self.borrowed_shares
-            .union_since(&base.borrowed_shares, &other.borrowed_shares, |a, b| {
-                a.extend(b)
+            .join_since(&base.borrowed_shares, &other.borrowed_shares, |a, b| {
+                a.join(b)
             });
         self.current_unique
             .and_since(&base.current_unique, &other.current_unique);
@@ -1211,7 +1211,7 @@ impl Model {
                 .with_copy_counter(Counter::ValidateCopiedRows),
             borrow_only: BitRows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            borrowed_shares: Rows::new(BTreeSet::new(), body.locals.len())
+            borrowed_shares: Rows::new(loan_content::Content::default(), body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             current_unique: BitRows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
@@ -2911,9 +2911,9 @@ impl Checker<'_> {
     }
     fn clear(&self, model: &Model, state: &mut State, place: PlaceId, mask: u8) {
         let access = &self.body.places[place.0 as usize];
-        state.content_loans[access.root.0 as usize].clear(
-            &super::flow_origins::EnvironmentField::path(&access.projection),
-        );
+        let path = super::flow_origins::EnvironmentField::path(&access.projection);
+        state.content_loans[access.root.0 as usize].clear(&path);
+        state.borrowed_shares[access.root.0 as usize].clear(&path);
         let index = model.mapping[place.0 as usize];
         for i in model.contents(index) {
             {
@@ -4246,7 +4246,13 @@ impl Checker<'_> {
         let new_loans = self.operand_loans(model, state, value);
         let old_loans = self.installed_loans(state, destination);
         let new_shares = self.operand_shares(state, value);
-        let old_shares = state.borrowed_shares[root].clone();
+        let old_shares = self.operand_shares(
+            state,
+            &Operand {
+                place: destination,
+                usage: UseKind::Take,
+            },
+        );
         let dependencies = new_loans.held();
         let sources = self.sources(model, state, value);
         if !owned
@@ -4348,7 +4354,7 @@ impl Checker<'_> {
         self.set_authority(model, state, displaced, old_authority);
         self.install_tags(model, state, displaced, old_tags);
         self.set_loan_content(model, state, displaced, &old_loans);
-        self.set_borrowed_shares(state, displaced, old_shares, true);
+        self.set_borrowed_shares(model, state, displaced, old_shares, true);
         self.set_sources(
             model,
             state,
@@ -4384,7 +4390,7 @@ impl Checker<'_> {
         self.set_authority(model, state, destination, new_authority);
         self.install_tags(model, state, destination, new_tags);
         self.set_loan_content(model, state, destination, &new_loans);
-        self.set_borrowed_shares(state, destination, new_shares, true);
+        self.set_borrowed_shares(model, state, destination, new_shares, true);
         self.set_sources(model, state, destination, sources);
         state.origins.identities[target] = incoming.origins.identities[source].clone();
         state.origins.owners[target] = incoming.origins.owners[source].clone();
@@ -4634,30 +4640,109 @@ impl Checker<'_> {
             _ => false,
         })
     }
-    /// The roots whose borrow-only shares an operand's counted content may hold.
-    fn operand_shares(&self, state: &State, operand: &Operand) -> BTreeSet<usize> {
+    /// Borrow-only shares follow the particular fields that retain them.
+    fn operand_shares(&self, state: &State, operand: &Operand) -> loan_content::Content {
         if !needs_release(self, self.place_type(operand.place), self.t) {
-            return BTreeSet::new();
+            return loan_content::Content::default();
         }
-        state.borrowed_shares[self.body.places[operand.place.0 as usize].root.0 as usize].clone()
+        let access = &self.body.places[operand.place.0 as usize];
+        state.borrowed_shares[access.root.0 as usize].project(
+            &super::flow_origins::EnvironmentField::path(&access.projection),
+        )
     }
-    /// Install `shares` in the place's root, replacing them on a whole write.
+    fn rvalue_shares(&self, model: &Model, state: &State, value: &Rvalue) -> loan_content::Content {
+        use super::flow_origins::EnvironmentField;
+        let mut shares = loan_content::Content::default();
+        if matches!(
+            value,
+            Rvalue::Unary {
+                op: hirsel_syntax::UnaryOp::Unique,
+                ..
+            }
+        ) {
+            return shares;
+        }
+        if let Rvalue::Construct {
+            constructor,
+            fields,
+            ..
+        } = value
+        {
+            for field in fields {
+                let key = match constructor {
+                    Constructor::Variant { variant, .. } => {
+                        EnvironmentField::Variant(*variant, field.field)
+                    }
+                    Constructor::Sequence | Constructor::Map | Constructor::Set => {
+                        EnvironmentField::Index
+                    }
+                    _ => EnvironmentField::Field(field.field),
+                };
+                shares.insert(
+                    &[key],
+                    &self.operand_shares(state, &field.value),
+                    &model.environment_paths,
+                );
+            }
+        } else {
+            for operand in typing::operands(value) {
+                shares.join(&self.operand_shares(state, operand));
+            }
+        }
+        shares
+    }
     fn set_borrowed_shares(
         &self,
+        model: &Model,
         state: &mut State,
         place: PlaceId,
-        shares: BTreeSet<usize>,
+        shares: loan_content::Content,
         whole: bool,
     ) {
         let access = &self.body.places[place.0 as usize];
-        let root = access.root.0 as usize;
-        if whole && access.projection.is_empty() {
-            if state.borrowed_shares[root] != shares {
-                state.borrowed_shares.set(root, shares);
-            }
-        } else if !shares.is_subset(&state.borrowed_shares[root]) {
-            state.borrowed_shares[root].extend(shares);
+        let path = super::flow_origins::EnvironmentField::path(&access.projection);
+        let installed = &mut state.borrowed_shares[access.root.0 as usize];
+        if whole {
+            installed.replace(&path, &shares, &model.environment_paths);
+        } else {
+            installed.insert(&path, &shares, &model.environment_paths);
         }
+    }
+    fn mark_borrowed_share(
+        &self,
+        model: &Model,
+        state: &mut State,
+        operand: &Operand,
+    ) -> BTreeSet<usize> {
+        let access = &self.body.places[operand.place.0 as usize];
+        let mut roots = BTreeSet::from([access.root.0 as usize]);
+        if !matches!(self.t.row(access.ty).kind, TypeKind::Function(_)) {
+            let mut source = operand.clone();
+            source.usage = UseKind::Borrow;
+            roots.extend(self.sources(model, state, &source));
+            roots.extend(
+                self.dependencies(model, state, &source)
+                    .into_iter()
+                    .map(|loan| self.body.places[model.loans[loan].1.0 as usize].root.0 as usize),
+            );
+        }
+        // A result carries only shares its operands introduce, not unrelated
+        // borrow-only shares that were already live before this call.
+        let restorable: Vec<_> = roots
+            .into_iter()
+            .filter(|&root| {
+                state.borrow_only[root] || !state.shared[root] && state.current_unique[root]
+            })
+            .collect();
+        self.mark_shared(model, state, operand);
+        let mut borrowed = BTreeSet::new();
+        for root in restorable {
+            if state.shared[root] {
+                state.borrow_only.set(root, true);
+                borrowed.insert(root);
+            }
+        }
+        borrowed
     }
     /// MODE-2: a root aliased only by related call results' shares is unique
     /// again once no live local holds one.
@@ -4675,7 +4760,7 @@ impl Checker<'_> {
                 .entries()
                 .into_iter()
                 .any(|(local, shares)| {
-                    shares.contains(&root)
+                    shares.contains(root)
                         && model
                             .contents(model.roots[local])
                             .any(|i| state.places[i] & LIVE != 0)
@@ -5451,6 +5536,7 @@ impl Checker<'_> {
                         );
                         (state.clone(), state.clone())
                     });
+                    let shares = self.rvalue_shares(model, state, rvalue);
                     let mut content_loans = self.rvalue_loans(model, state, rvalue);
                     let mut dependencies = content_loans.held();
                     let target = &self.body.places[destination.0 as usize];
@@ -5611,22 +5697,7 @@ impl Checker<'_> {
                     self.install_tags(model, state, *destination, tag_parts);
                     self.set_loan_content(model, state, *destination, &content_loans);
                     self.set_sources(model, state, *destination, sources);
-                    // A deep copy shares nothing it read (MODE-2).
-                    let shares = if matches!(
-                        rvalue,
-                        Rvalue::Unary {
-                            op: hirsel_syntax::UnaryOp::Unique,
-                            ..
-                        }
-                    ) {
-                        BTreeSet::new()
-                    } else {
-                        typing::operands(rvalue)
-                            .into_iter()
-                            .flat_map(|o| self.operand_shares(state, o))
-                            .collect()
-                    };
-                    self.set_borrowed_shares(state, *destination, shares, true);
+                    self.set_borrowed_shares(model, state, *destination, shares, true);
                     let root = self.body.places[destination.0 as usize].root.0 as usize;
                     if model.mutable_parameters[root] {
                         if let Rvalue::Use(operand) = rvalue {
@@ -5687,7 +5758,7 @@ impl Checker<'_> {
                     self.mode_transfer(state, self.place_type(*destination), value, report);
                     self.read(model, state, value, report);
                     self.reset_unique(state, *destination);
-                    self.set_borrowed_shares(state, *destination, shares, true);
+                    self.set_borrowed_shares(model, state, *destination, shares, true);
                     self.set_current_sendable(state, *destination, sendable);
                     self.install_crossing_parts(
                         state,
@@ -6015,7 +6086,7 @@ impl Checker<'_> {
                 // copied arguments can pass it a share.
                 let argument_shares: BTreeSet<usize> = arguments
                     .iter()
-                    .flat_map(|a| self.operand_shares(state, &a.value))
+                    .flat_map(|a| self.operand_shares(state, &a.value).held())
                     .collect();
                 let global_result = matches!(callee, Callee::Definition { .. })
                     && self
@@ -6025,7 +6096,7 @@ impl Checker<'_> {
                     arguments
                         .iter()
                         .filter(|a| matches!(a.value.usage, UseKind::Take | UseKind::Copy))
-                        .flat_map(|a| self.operand_shares(state, &a.value))
+                        .flat_map(|a| self.operand_shares(state, &a.value).held())
                         .collect()
                 } else {
                     argument_shares.clone()
@@ -6099,20 +6170,10 @@ impl Checker<'_> {
                             Callee::Definition { .. } => None,
                         });
                         for operand in result_arguments.iter().copied().chain(environment) {
-                            let restorable: Vec<bool> = (0..state.shared.len())
-                                .map(|r| {
-                                    state.borrow_only[r]
-                                        || !state.shared[r] && state.current_unique[r]
-                                })
-                                .collect();
-                            self.mark_shared(model, state, operand);
                             if matches!(callee, Callee::Definition { .. }) {
-                                for (r, restorable) in restorable.into_iter().enumerate() {
-                                    if restorable && state.shared[r] {
-                                        state.borrow_only.set(r, true);
-                                        borrowed.insert(r);
-                                    }
-                                }
+                                borrowed.extend(self.mark_borrowed_share(model, state, operand));
+                            } else {
+                                self.mark_shared(model, state, operand);
                             }
                             if matches!(callee, Callee::Indirect { value, .. } if value.place == operand.place)
                             {
@@ -6223,9 +6284,10 @@ impl Checker<'_> {
                             state.nested_shared.set(root, true);
                         }
                         self.set_borrowed_shares(
+                            model,
                             state,
                             a.value.place,
-                            argument_shares.clone(),
+                            loan_content::Content::whole(argument_shares.clone()),
                             false,
                         );
                     }
@@ -6499,7 +6561,13 @@ impl Checker<'_> {
                     sources
                 };
                 self.set_sources(model, state, destination, sources);
-                self.set_borrowed_shares(state, destination, borrowed, true);
+                self.set_borrowed_shares(
+                    model,
+                    state,
+                    destination,
+                    loan_content::Content::whole(borrowed),
+                    true,
+                );
                 let result_origins = super::flow_origins::remember(
                     self.t,
                     &self.scratch.origin_types[self.site.body.0 as usize],
@@ -6689,9 +6757,10 @@ impl Checker<'_> {
                             ))
                     })
                     .collect();
+                let returning_shares = self.operand_shares(state, value).held();
                 self.read(model, state, value, report);
                 // MODE-2: a result keeps the borrow-only shares it derives from.
-                *model.returning_shares.borrow_mut() = self.operand_shares(state, value);
+                *model.returning_shares.borrow_mut() = returning_shares;
                 self.cleanup(model, state, *cleanup, true, report, true);
                 model.returning_shares.borrow_mut().clear();
                 if model
