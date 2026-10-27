@@ -225,7 +225,8 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                         roots: seeds.clone(),
                     })
                     .unwrap();
-                let hirsel_driver::requests::CompileResult::NativeSources(expected) = &expected_output.result
+                let hirsel_driver::requests::CompileResult::NativeSources(expected) =
+                    &expected_output.result
                 else {
                     panic!("native source oracle returned another operation");
                 };
