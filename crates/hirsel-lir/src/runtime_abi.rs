@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 87;
+pub const ABI_VERSION: u32 = 90;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -617,6 +617,7 @@ pub enum RuntimeEntry {
     ReceiptArenaInventory,
     CpuAheadArm,
     CpuAheadEnter,
+    CpuAheadAlloc,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -688,7 +689,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 114] = [
+    pub const ALL: [RuntimeEntry; 115] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -801,6 +802,7 @@ impl RuntimeEntry {
         Self::CpuMapScoped,
         Self::CpuAheadArm,
         Self::CpuAheadEnter,
+        Self::CpuAheadAlloc,
         Self::ReceiptConstruct,
         Self::ReceiptArenaInventory,
     ];
@@ -1442,6 +1444,18 @@ impl RuntimeEntry {
                 VOID,
                 const { &[p("state", ptr(N::AheadPhysical, 1))] },
             ),
+            Self::CpuAheadAlloc => (
+                "hirsel_rt_v2_cpu_ahead_alloc",
+                ptr(N::Header, 1),
+                const {
+                    &[
+                        p("state", ptr(N::AheadPhysical, 1)),
+                        p("index", U32),
+                        p("extent", U64),
+                        p("align", U64),
+                    ]
+                },
+            ),
             Self::HostArm => (
                 "hirsel_rt_v2_host_arm",
                 VOID,
@@ -1783,4 +1797,5 @@ snapshot_enum!(RuntimeEntry {
     ReceiptArenaInventory,
     CpuAheadArm,
     CpuAheadEnter,
+    CpuAheadAlloc,
 });

@@ -15,6 +15,7 @@ pub(super) fn helper_identity() -> ContentHash {
             hirsel_rt::AHEAD_HELPERS,
             hirsel_rt::AHEAD_HOST_HELPERS,
             hirsel_rt::AHEAD_CPU_HELPERS,
+            hirsel_rt::AHEAD_CPU_ALLOCATION_HELPERS,
             hirsel_rt::AHEAD_SWITCH,
             hirsel_rt::DEPTH_HELPERS,
             hirsel_rt::DEPTH_LEAF_STACK_BYTES.to_le_bytes().as_slice(),

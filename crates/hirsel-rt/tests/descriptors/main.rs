@@ -340,6 +340,7 @@ const PHYSICAL_AHEAD_SERVICES: &[&str] = &[
 const IDLE_BUDGET_SERVICES: &[&str] = &[
     "tasks::ordered::engine::ahead_refill",
     "tasks::ordered::engine::host_segment_barrier",
+    "tasks::ordered::engine::ahead_allocation",
 ];
 
 fn budget_service_violations(graph: &graph::Graph) -> Vec<String> {

@@ -30,7 +30,14 @@ fn dispatch_hands_claimed_frames_to_their_own_activations() {
     assert!(graph.directly_calls(resume, native));
     assert!(graph.directly_calls(native, "tasks::role::enter"));
     for service in IDLE_BUDGET_SERVICES {
-        assert!(graph.directly_calls(native, service), "{service}");
+        let caller = if *service == "tasks::ordered::engine::ahead_allocation" {
+            let allocation = "tasks::ordered::ahead::cpu_allocation::serve";
+            assert!(graph.directly_calls(native, allocation));
+            allocation
+        } else {
+            native
+        };
+        assert!(graph.directly_calls(caller, service), "{service}");
     }
     // The idle loop takes no role: switching to it is still traversed.
     assert!(

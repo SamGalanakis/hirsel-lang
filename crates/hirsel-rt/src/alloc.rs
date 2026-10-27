@@ -2258,7 +2258,7 @@ pub(crate) unsafe fn allocate_heap(
     }
 }
 
-unsafe fn alloc_prepared(
+pub(crate) unsafe fn alloc_prepared(
     ctx: *mut TaskCtx,
     index: u32,
     extent: u64,
@@ -2323,6 +2323,12 @@ pub(crate) unsafe fn cpu_preflight(
         heap.cpu_allocation = Some(heap.meter.cpu.get().unwrap().reserve_heap(bytes)?);
     }
     Ok(())
+}
+
+/// A prepared idle-side CPU request obtained its backing. Return unused
+/// reservation capacity before the task can save or migrate again.
+pub(crate) unsafe fn cpu_allocation_done(ctx: *mut TaskCtx) {
+    unsafe { (*ctx).heap().cpu_allocation = None };
 }
 
 /// Reserve ordered speculative storage before borrowing a worker heap. The

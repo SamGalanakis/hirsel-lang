@@ -94,6 +94,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::CtxStats
         | R::Trim
         | R::Alloc
+        | R::CpuAheadAlloc
         | R::TaskSpawnAhead
         | R::CpuMapScoped
         | R::OrderedJoin

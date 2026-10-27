@@ -68,6 +68,7 @@ pub(crate) struct Native {
     continued: bool,
     pub(super) cpu: bool,
     pub(super) cpu_phase: u32,
+    pub(super) allocation: super::cpu_allocation::Request,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -313,6 +314,7 @@ impl Native {
             continued: false,
             cpu: certificate.cpu,
             cpu_phase: 0,
+            allocation: super::cpu_allocation::Request::new(),
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -477,6 +479,15 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                         } else {
                             i64::MAX
                         };
+                }
+            }
+            if !pause && (*native).allocation.pending() {
+                match super::cpu_allocation::serve(ctx, native) {
+                    Ok(ready) => pause = !ready,
+                    Err(stop) => {
+                        (*run).control.request_inside(stop);
+                        pause = true;
+                    }
                 }
             }
             if pause {

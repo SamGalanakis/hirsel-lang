@@ -2425,3 +2425,29 @@ pub(crate) fn host_segment_barrier(ctx: *mut TaskCtx) -> Stopped<bool> {
     fuel_in(ctx);
     Ok(true)
 }
+
+/// Idle-side allocation barrier. The request retains this successful logical
+/// admission across backing refusal, so retry never settles its charge twice.
+/// Allocating CPU certificates will replace this head-only admission with job
+/// settlement; until then an allocation still ends the private segment.
+pub(crate) fn ahead_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<bool> {
+    if !host_segment_barrier(ctx)? {
+        return Ok(false);
+    }
+    let memory = with_driver(ctx, |d| d.memory);
+    if memory {
+        let budgets = with_driver(ctx, |d| d.budgets);
+        let mut allocation = Stretch::new(budgets);
+        allocation
+            .alloc(bytes)
+            .expect("one allocation fits an envelope");
+        unsafe { (*ctx).ordered_charge_trace.allocation(bytes) };
+        if let Some(exact) = unsafe { (*ctx).ordered_charge_trace.take() } {
+            allocation.exact = exact;
+        }
+        settle_head(ctx, &allocation)?;
+        let level = with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled.level);
+        unsafe { (*ctx).heap_ref().meter.settled(level) };
+    }
+    Ok(true)
+}
