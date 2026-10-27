@@ -9,7 +9,7 @@ use super::*;
 /// layout facts measured when the body was lowered.
 #[derive(Clone)]
 struct Retained {
-    verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
+    verified: Option<StoredVerification>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
     definition_decode_layout: DefinitionDecodeLayout,
     constant_selection_bytes: u64,
@@ -22,6 +22,7 @@ struct Row {
     contents: Box<[(Domain, Arc<[u8]>)]>,
     lower: Option<Retained>,
     constant_decode_bytes: u64,
+    reads_decode_bytes: u64,
     execution: Option<hirsel_validate::ExecutionReceipt>,
     charge: u64,
 }
@@ -130,10 +131,17 @@ impl FrontLowerQueries {
                     definition_decode_layout: lower.definition_decode_layout,
                     constant_selection_bytes: lower.constant_selection_bytes,
                 }),
-                vec![
-                    (crate::NATIVE_ORIGINAL_BODY, lower.body),
-                    (LOWER_MATERIALIZED, lower.materialized),
-                ],
+                [
+                    Some((crate::NATIVE_ORIGINAL_BODY, lower.body)),
+                    Some((LOWER_MATERIALIZED, lower.materialized)),
+                    lower
+                        .verified
+                        .as_ref()
+                        .map(|stored| (LOWER_VERIFICATION, stored.metadata)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
             ),
             Ok(Value::Constant(..)) => (None, vec![]),
             Err(_) => return,
@@ -159,12 +167,6 @@ impl FrontLowerQueries {
             weight.add(bytes);
         }
         let mut charge = weight.bytes();
-        if let Some(verified) = lower.as_ref().and_then(|l| l.verified.as_ref()) {
-            let Some(bytes) = verified.retained_bytes() else {
-                return;
-            };
-            charge = charge.saturating_add(bytes);
-        }
         if let Some(receipt) = &outcome.execution {
             let Some(bytes) = receipt.retained_bytes() else {
                 return;
@@ -183,6 +185,7 @@ impl FrontLowerQueries {
                     Ok(Value::Constant(value)) => value.working_bytes(),
                     _ => 0,
                 },
+                reads_decode_bytes: outcome.reads_decode_bytes,
                 execution: outcome.execution.clone(),
                 charge,
             },
@@ -228,13 +231,14 @@ impl FrontLowerQueries {
                 body,
                 diagnostics,
                 dependencies: dependencies.into(),
+                archived_metadata: None,
                 verified: retained.verified,
                 acceptance: retained.acceptance,
                 materialized,
                 definition_decode_layout: retained.definition_decode_layout,
                 constant_selection_bytes: retained.constant_selection_bytes,
             };
-            (Value::Lower(lower), reads, depth, executed)
+            (Value::Lower(Box::new(lower)), reads, depth, executed)
         } else {
             if row.constant_decode_bytes > self.weight.scratch {
                 return None;
@@ -248,12 +252,13 @@ impl FrontLowerQueries {
             ) = self.records.decode(&self.anchors, &row.descriptor)?;
             let mut constants = Constants::new(value, substitutions);
             constants.set_working_bytes(row.constant_decode_bytes);
-            (Value::Constant(constants), reads, depth, executed)
+            (Value::Constant(Box::new(constants)), reads, depth, executed)
         };
         let (value, reads, depth, executed) = result;
         if reads.len() != row.reads.len() {
             return None;
         }
+        let reads_decode_bytes = row.reads_decode_bytes;
         let execution = row.execution.clone();
         let descriptor = row.descriptor.clone();
         drop(rows);
@@ -270,7 +275,8 @@ impl FrontLowerQueries {
             Outcome {
                 result: Ok(value),
                 reads,
-                depth,
+                reads_decode_bytes,
+                depth: depth.into(),
                 executed,
                 execution,
                 execution_subject: persistent::evaluation_subject(key, &descriptor),

@@ -306,7 +306,13 @@ impl GraphMeter {
                     .into_iter()
                     .collect();
             touched.extend(self.front.memo_snapshot().into_iter().map(|(key, _)| key));
-            touched.extend(self.lower.memo_snapshot().into_iter().map(|(key, _)| key));
+            touched.extend(
+                self.lower
+                    .memo_snapshot()
+                    .ok_or_else(unavailable)?
+                    .into_iter()
+                    .map(|(key, _)| key),
+            );
             work.touched_memos = touched.into_iter().collect();
         }
         work.store_adoptions = work
@@ -328,7 +334,7 @@ impl GraphMeter {
         let (stats, definitions) = self.ledger.definitions(definitions)?;
         let mut memos: BTreeMap<_, _> = self.memos.iter().cloned().collect();
         memos.extend(self.front.memo_snapshot());
-        memos.extend(self.lower.memo_snapshot());
+        memos.extend(self.lower.memo_snapshot().ok_or_else(unavailable)?);
         Ok(Arc::new(CompileInspection::new(
             stats,
             memos.into_iter().collect(),

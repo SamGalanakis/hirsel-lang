@@ -5,7 +5,9 @@ use super::*;
 mod carry;
 mod constants;
 mod dependencies;
+mod depth;
 mod evidence;
+mod reads;
 mod registration;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
@@ -48,6 +50,15 @@ const CONSTANT_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0007,
     schema: 3,
 };
+const LOWER_VERIFICATION: Domain = Domain {
+    kind: 0x4600_0033,
+    schema: 1,
+};
+#[derive(Clone)]
+struct StoredVerification {
+    authority: hirsel_validate::StoredDefinitionOutput,
+    metadata: Reference,
+}
 /// Physical producer work, including work before an eventual failure.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FrontLowerWork {
@@ -75,8 +86,8 @@ struct Input {
 }
 #[derive(Clone)]
 enum Value {
-    Lower(LowerProduct),
-    Constant(Constants),
+    Lower(Box<LowerProduct>),
+    Constant(Box<Constants>),
 }
 #[derive(Clone)]
 struct LowerProduct {
@@ -84,20 +95,58 @@ struct LowerProduct {
     body: Reference,
     diagnostics: Vec<Diagnostic>,
     dependencies: Dependencies,
-    verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
+    archived_metadata: Option<Box<reads::Archive>>,
+    verified: Option<StoredVerification>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
     materialized: Reference,
     definition_decode_layout: DefinitionDecodeLayout,
     constant_selection_bytes: u64,
 }
 impl LowerProduct {
+    fn verified(
+        &self,
+        owner: &FrontLowerQueries,
+    ) -> Option<Option<hirsel_validate::VerifiedDefinitionOutput>> {
+        let Some(stored) = &self.verified else {
+            return Some(None);
+        };
+        if stored.authority.decode_bytes() > owner.weight.scratch {
+            return None;
+        }
+        let cache = owner.store.verifier()?;
+        let bytes = owner.store.get_content(stored.metadata)?;
+        stored
+            .authority
+            .load(
+                &cache,
+                owner.snapshot.types(),
+                owner.snapshot.validation(&self.definition.path().0.package),
+                &bytes,
+                owner.weight.scratch,
+            )
+            .map(Some)
+    }
+    fn dependencies(&self, owner: &FrontLowerQueries) -> Option<Vec<SignatureDependency>> {
+        match &self.archived_metadata {
+            None => Some(self.dependencies.to_vec()),
+            Some(archive) => archive.dependencies(
+                &owner.records,
+                &owner.anchors,
+                &*owner.store,
+                owner.weight.scratch,
+            ),
+        }
+    }
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
         let bytes = owner.store.get_content(self.body)?;
         let definition: DefinitionRef = owner.records.decode(&owner.anchors, &bytes)?;
-        (definition.path == self.definition).then(|| QueryOutput {
+        if definition.path != self.definition {
+            return None;
+        }
+        Some(QueryOutput {
             value: definition,
             diagnostics: self.diagnostics.clone(),
-            dependencies: self.dependencies.to_vec(),
+            dependencies: self.dependencies(owner)?,
         })
     }
 }
@@ -105,33 +154,86 @@ impl LowerProduct {
 struct Outcome {
     result: Result<Value, QueryError>,
     reads: Reads,
-    depth: DepthEvidence<Span>,
+    reads_decode_bytes: u64,
+    depth: depth::Depth,
     executed: bool,
     execution: Option<hirsel_validate::ExecutionReceipt>,
     execution_subject: ContentHash,
 }
 impl Outcome {
+    fn archive(&self) -> Option<&reads::Archive> {
+        match &self.result {
+            Ok(Value::Lower(lower)) => lower.archived_metadata.as_deref(),
+            _ => None,
+        }
+    }
+    fn read_len(&self) -> usize {
+        self.archive()
+            .map_or_else(|| self.reads.len(), |archive| archive.len)
+    }
+    fn reads(&self, owner: &FrontLowerQueries) -> Option<Reads> {
+        match self.archive() {
+            None => Some(self.reads.clone()),
+            Some(archive) => archive.load(
+                &owner.records,
+                &owner.anchors,
+                &*owner.store,
+                owner.weight.scratch,
+            ),
+        }
+    }
+    fn archive_reads(&mut self, reference: Reference) {
+        let Ok(Value::Lower(lower)) = &mut self.result else {
+            return;
+        };
+        if self.reads_decode_bytes == 0 {
+            return;
+        }
+        let read_bytes = self
+            .reads
+            .allocations()
+            .map(|(_, bytes)| bytes)
+            .sum::<usize>();
+        let archive_bytes = size_of::<reads::Archive>() + 2 * size_of::<usize>();
+        // One descriptor owns both sequences; neither retained copy is useful
+        // once their joint archive is smaller. Decode still checks both counts.
+        if read_bytes.saturating_add(lower.dependencies.retained_bytes()) > archive_bytes {
+            lower.archived_metadata = Some(Box::new(reads::Archive {
+                reference,
+                decode_bytes: self.reads_decode_bytes,
+                len: self.reads.len(),
+                dependencies: lower.dependencies.len(),
+            }));
+            self.reads = Reads::empty();
+            lower.dependencies = Vec::new().into();
+        }
+    }
     fn retained_bytes(&self) -> Option<u64> {
         let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(size_of::<Self>() + 2 * size_of::<usize>());
         for (_, bytes) in self.reads.allocations() {
             weight.add(bytes);
         }
-        weight.add(std::mem::size_of_val(&*self.depth.first));
+        weight.add(self.depth.retained_bytes());
         match &self.result {
             Ok(Value::Lower(lower)) => {
+                weight.add(size_of::<LowerProduct>() + 2 * size_of::<usize>());
                 weight.add(
                     crate::memo::retained_lowering_output_bytes(&lower.diagnostics, &Vec::new())
                         .try_into()
                         .ok()?,
                 );
                 weight.add(lower.dependencies.retained_bytes());
-                if let Some(verified) = &lower.verified {
-                    weight.add(verified.retained_bytes()?.try_into().ok()?);
+                if lower.archived_metadata.is_some() {
+                    weight.add(size_of::<reads::Archive>() + 2 * size_of::<usize>());
                 }
-                // AcceptedArtifact and every other inline field belong to
-                // the typed B-tree row, charged by outcome_table_bytes.
+                // AcceptedArtifact and every other inline product field are
+                // included in the LowerProduct allocation above.
             }
-            Ok(Value::Constant(value)) => weight.add(value.retained_bytes().try_into().ok()?),
+            Ok(Value::Constant(value)) => {
+                weight.add(size_of::<Constants>() + 2 * size_of::<usize>());
+                weight.add(value.retained_bytes().try_into().ok()?);
+            }
             Err(error) => weight.add(
                 crate::memo::retained::retained_query_error_bytes(error)
                     .try_into()
@@ -179,7 +281,7 @@ fn outcome_table_bytes(rows: usize) -> u64 {
         return 0;
     }
     let mut weight = crate::NativeMetadataWeight::default();
-    weight.tree::<(u32, ContentHash), (Reference, Outcome, u64)>(rows);
+    weight.tree::<(u32, ContentHash), (Reference, Box<Outcome>, u64)>(rows);
     weight.bytes()
 }
 
@@ -230,7 +332,7 @@ pub struct FrontLowerQueries {
     anchors: crate::NativeRecordContext,
     records: crate::NativeRecords,
     store: Arc<dyn ResultStore>,
-    outcomes: Mutex<BTreeMap<(u32, ContentHash), (Reference, Outcome, u64)>>,
+    outcomes: Mutex<BTreeMap<(u32, ContentHash), (Reference, Box<Outcome>, u64)>>,
     carry: Mutex<Option<Arc<LowerCarry>>>,
     work: Mutex<BTreeMap<DefPath, FrontLowerWork>>,
     weight: MemoryWeight,
@@ -264,26 +366,23 @@ impl FrontLowerQueries {
         self._allowance.bytes() - *self.retention.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
+    pub fn memo_snapshot(&self) -> Option<Vec<(crate::memo::MemoKey, Arc<Reads>)>> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-        self.inputs
-            .iter()
-            .flat_map(|(path, input)| {
-                [
-                    (FRONT_LOWER_KIND, QueryKind::Lower, input.lower.0),
-                    (FRONT_EVALUATE_KIND, QueryKind::Evaluate, input.evaluate.0),
-                ]
-                .into_iter()
-                .filter_map(|(kind, phase, address)| {
-                    let (_, outcome, _) = outcomes.get(&(kind, address))?;
-                    Some((
+        let mut rows = Vec::new();
+        for (path, input) in &self.inputs {
+            for (kind, phase, address) in [
+                (FRONT_LOWER_KIND, QueryKind::Lower, input.lower.0),
+                (FRONT_EVALUATE_KIND, QueryKind::Evaluate, input.evaluate.0),
+            ] {
+                if let Some((_, outcome, _)) = outcomes.get(&(kind, address)) {
+                    rows.push((
                         crate::memo::MemoKey::new(phase, DefId::intern(path)),
-                        Arc::new(outcome.reads.clone()),
-                    ))
-                })
-                .collect::<Vec<_>>()
-            })
-            .collect()
+                        Arc::new(outcome.reads(self)?),
+                    ));
+                }
+            }
+        }
+        Some(rows)
     }
     /// Actual completed read evidence, with no producer or mutable-engine call.
     pub fn settled_reads(&self, path: &DefPath, phase: QueryKind) -> Option<Arc<Reads>> {
@@ -296,7 +395,7 @@ impl FrontLowerQueries {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&(id.kind, id.address.0))
-            .map(|(_, outcome, _)| Arc::new(outcome.reads.clone()))
+            .and_then(|(_, outcome, _)| outcome.reads(self).map(Arc::new))
     }
     pub(crate) fn selected_read_len(&self, id: QueryId, reference: Reference) -> Option<usize> {
         self.outcomes
@@ -304,7 +403,7 @@ impl FrontLowerQueries {
             .unwrap_or_else(|e| e.into_inner())
             .get(&(id.kind, id.address.0))
             .filter(|(selected, _, _)| *selected == reference)
-            .map(|(_, outcome, _)| outcome.reads.len())
+            .map(|(_, outcome, _)| outcome.read_len())
     }
     /// Exact settled descriptor, including failed Lower reads. This does not
     /// decode a body, invoke a producer or accept another query's reference.
@@ -314,7 +413,7 @@ impl FrontLowerQueries {
             .unwrap_or_else(|e| e.into_inner())
             .get(&(id.kind, id.address.0))
             .filter(|(selected, _, _)| *selected == reference)
-            .map(|(_, outcome, _)| Arc::new(outcome.reads.clone()))
+            .and_then(|(_, outcome, _)| outcome.reads(self).map(Arc::new))
     }
     pub fn work_snapshot(&self) -> Vec<(DefPath, FrontLowerWork)> {
         self.work
@@ -709,8 +808,8 @@ impl FrontLowerQueries {
             return None;
         };
         let lower = lower.clone();
-        let reads = outcome.reads.clone();
-        let depth = outcome.depth.clone();
+        let reads = outcome.reads(self)?;
+        let depth = outcome.depth.evidence();
         let execution = outcome.execution.clone();
         let execution_subject = outcome.execution_subject;
         drop(outcomes);
@@ -734,7 +833,7 @@ impl FrontLowerQueries {
             body: lower.body,
             implementation_revision: input.implementation,
             signature,
-            verified: lower.verified,
+            verified: lower.verified(self)?,
             materialized,
             owner: self.clone(),
         })
@@ -758,7 +857,7 @@ impl FrontLowerQueries {
             implementation_revision: self.inputs.get(path)?.implementation,
             signature: self.snapshot.signature(lower.definition)?.ok()?.fingerprint,
             body: lower.body,
-            verified: lower.verified,
+            verified: lower.verified(self)?,
         })
     }
     pub fn failure(&self, reference: Reference) -> Option<QueryError> {
@@ -780,7 +879,7 @@ impl FrontLowerQueries {
             .unwrap_or_else(|e| e.into_inner())
             .get(&(id.kind, id.address.0))
             .filter(|(r, _, _)| *r == reference)
-            .map(|(_, o, _)| o.clone())
+            .map(|(_, o, _)| o.as_ref().clone())
     }
     async fn run(
         self: Arc<Self>,
@@ -849,20 +948,50 @@ impl FrontLowerQueries {
             .as_ref()
             .ok()
             .and_then(|_| source.evidence.borrow().finish(&observed));
+        let mut reads_decode_bytes = 0;
         let bytes = match &mut result {
-            Ok(Value::Lower(lower)) => self.records.encode(
-                &self.anchors,
-                &(
-                    lower.definition,
-                    lower.body,
-                    &lower.diagnostics,
-                    &lower.dependencies,
-                    &lower.materialized,
-                    &observed,
-                    &depth,
-                    executed,
-                ),
-            ),
+            Ok(Value::Lower(lower)) => {
+                let mut weight = crate::NativeMetadataWeight::default();
+                weight.add(size_of::<reads::Descriptor>());
+                weight.add(
+                    crate::memo::retained_lowering_output_bytes(&lower.diagnostics, &Vec::new())
+                        .try_into()
+                        .map_err(|_| self.errors.resource)?,
+                );
+                weight.add(
+                    lower
+                        .dependencies
+                        .len()
+                        .checked_mul(size_of::<SignatureDependency>())
+                        .ok_or(self.errors.resource)?,
+                );
+                for (_, bytes) in observed.allocations() {
+                    weight.add(bytes);
+                }
+                weight.add(size_of_val(&*depth.first));
+                let (bytes, working) = self
+                    .records
+                    .encode_with_decode_bytes(
+                        &self.anchors,
+                        &(
+                            lower.definition,
+                            lower.body,
+                            &lower.diagnostics,
+                            &lower.dependencies,
+                            &lower.materialized,
+                            &observed,
+                            &depth,
+                            executed,
+                        ),
+                    )
+                    .ok_or(self.errors.resource)?;
+                reads_decode_bytes = weight
+                    .bytes()
+                    .checked_mul(2)
+                    .and_then(|n| n.checked_add(working))
+                    .ok_or(self.errors.resource)?;
+                Some(bytes)
+            }
             Ok(Value::Constant(value)) => {
                 value.encode(&self.records, &self.anchors, &observed, &depth, executed)
             }
@@ -888,7 +1017,8 @@ impl FrontLowerQueries {
         let outcome = Outcome {
             result,
             reads: observed,
-            depth,
+            reads_decode_bytes,
+            depth: depth.into(),
             executed,
             execution,
             execution_subject: persistent::evaluation_subject(key, &bytes),
@@ -931,6 +1061,7 @@ impl FrontLowerQueries {
         if let Ok(Value::Constant(value)) = &mut outcome.result {
             value.pack(record);
         }
+        outcome.archive_reads(record);
         let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -948,7 +1079,7 @@ impl FrontLowerQueries {
             .and_then(|n| n.checked_sub(charge))
             .and_then(|n| n.checked_sub(table_growth))
             .ok_or(self.errors.resource)?;
-        outcomes.insert(selected, (record, outcome, charge));
+        outcomes.insert(selected, (record, Box::new(outcome), charge));
         *retention = remaining;
         drop(outcomes);
         drop(retention);
@@ -1091,7 +1222,7 @@ impl FrontLowerQueries {
             if is_dictionary && !constants.iter().any(|(id, _)| *id == expression) {
                 constants.push((expression, value.clone()));
             }
-            return Ok(Value::Constant(Constants::new(value, constants)));
+            return Ok(Value::Constant(Box::new(Constants::new(value, constants))));
         }
         self.count(path, |work| work.lowerings += 1);
         let output = self.lowering.lower(
@@ -1139,13 +1270,25 @@ impl FrontLowerQueries {
             if let Some(evidence) = evidence
                 && let Some(cache) = self.store.verifier()
             {
-                verified = cache.definition_output_from_evidence(
-                    &definition,
-                    self.snapshot.types().clone(),
-                    self.snapshot.source_verification_policy(),
-                    self.snapshot.validation(&path.0.package),
-                    &evidence,
-                );
+                verified = cache
+                    .definition_output_from_evidence(
+                        &definition,
+                        self.snapshot.types().clone(),
+                        self.snapshot.source_verification_policy(),
+                        self.snapshot.validation(&path.0.package),
+                        &evidence,
+                    )
+                    .and_then(|output| {
+                        let (authority, bytes) = cache.compact_definition_output(&output)?;
+                        if bytes.len() as u64 > self.weight.scratch {
+                            return None;
+                        }
+                        let metadata = self.store.put_content(LOWER_VERIFICATION, &bytes)?;
+                        Some(StoredVerification {
+                            authority,
+                            metadata,
+                        })
+                    });
             }
         }
         if has_errors(&output.diagnostics) {
@@ -1187,17 +1330,18 @@ impl FrontLowerQueries {
         let mut dependencies = analyzed.dependencies.clone();
         dependencies.extend(output.dependencies);
         let constant_selection_bytes = constant_selection_bytes(&definition)?;
-        Ok(Value::Lower(LowerProduct {
+        Ok(Value::Lower(Box::new(LowerProduct {
             constant_selection_bytes,
             definition: definition.path,
             body,
             diagnostics: output.diagnostics,
             dependencies: dependencies.into(),
+            archived_metadata: None,
             verified,
             acceptance,
             materialized,
             definition_decode_layout,
-        }))
+        })))
     }
 }
 struct Factory(Arc<FrontLowerQueries>);
@@ -1307,7 +1451,11 @@ impl Source {
             .owner
             .selected(id, selected)
             .ok_or_else(|| self.refused(selected.err().unwrap_or(self.owner.errors.protocol)))?;
-        self.merge(&outcome.reads);
+        self.merge(
+            &outcome
+                .reads(&self.owner)
+                .ok_or_else(|| self.refused(self.owner.errors.resource))?,
+        );
         self.evidence
             .borrow_mut()
             .dependency(outcome.executed, outcome.execution.as_ref());
@@ -1317,12 +1465,13 @@ impl Source {
                 .accepted(lower.acceptance.clone());
         }
         let n = u32::from(self.framed);
+        let depth = outcome.depth.evidence();
         let overflow = if kind == FRONT_EVALUATE_KIND {
-            self.depth.borrow_mut().observe_frame(&outcome.depth, site);
-            outcome.depth.request(n, site).err()
+            self.depth.borrow_mut().observe_frame(&depth, site);
+            depth.request(n, site).err()
         } else {
-            self.depth.borrow_mut().observe_transparent(&outcome.depth);
-            outcome.depth.first[n.min(outcome.depth.limit()) as usize]
+            self.depth.borrow_mut().observe_transparent(&depth);
+            depth.first[n.min(depth.limit()) as usize]
         };
         if let Some(site) = overflow {
             return Err(self.overflow(site));
@@ -1368,13 +1517,13 @@ impl Source {
 impl s1::AsyncDependencySource for Source {
     async fn definition(&mut self, path: &DefPath) -> s1::DependencyProduct<DefinitionRef> {
         let result = match self.value(path, FRONT_LOWER_KIND, Span::default()).await {
-            Ok(Value::Lower(lower)) => {
-                self.execution_signatures(lower.dependencies.iter());
-                lower
-                    .decode(&self.owner)
-                    .map(|output| output.value)
-                    .ok_or(QueryError::NotImplemented)
-            }
+            Ok(Value::Lower(lower)) => match lower.decode(&self.owner) {
+                Some(output) => {
+                    self.execution_signatures(output.dependencies.iter());
+                    Ok(output.value)
+                }
+                None => Err(QueryError::NotImplemented),
+            },
             Err(e) => Err(e),
             _ => Err(QueryError::NotImplemented),
         };
@@ -1715,7 +1864,7 @@ mod retention_tests {
         let substitutions_bytes =
             substitutions.capacity() * std::mem::size_of::<(hirsel_syntax::ExprId, Materialized)>();
         let outcome = Outcome {
-            result: Ok(Value::Constant(Constants::new(
+            result: Ok(Value::Constant(Box::new(Constants::new(
                 Materialized {
                     root: hirsel_tir::ValueNode {
                         ty: hirsel_types::TypeId::DANGLING,
@@ -1723,22 +1872,27 @@ mod retention_tests {
                     },
                 },
                 substitutions,
-            ))),
+            )))),
             reads: Reads::from_vec(vec![(
                 ReadKey::Signature(DefId::intern(&DefPath::core(&"long".repeat(4096)))),
                 ContentHash::default(),
             )])
             .unwrap(),
-            depth: DepthEvidence::leaf(32),
+            reads_decode_bytes: 0,
+            depth: DepthEvidence::leaf(32).into(),
             executed: false,
             execution: None,
             execution_subject: ContentHash::default(),
         };
-        let expected = capacity
+        let expected = size_of::<Outcome>()
+            + 2 * size_of::<usize>()
+            + size_of::<Constants>()
+            + 2 * size_of::<usize>()
+            + capacity
             + substitutions_bytes
             + std::mem::size_of::<(ReadKey, ContentHash)>()
             + 2 * std::mem::size_of::<usize>()
-            + std::mem::size_of_val(&*outcome.depth.first);
+            + outcome.depth.retained_bytes();
         assert_eq!(outcome.retained_bytes(), Some(expected as u64));
         assert_eq!(outcome_table_bytes(0), 0);
         assert!(outcome_table_bytes(1) >= std::mem::size_of::<(Reference, Outcome, u64)>() as u64);

@@ -229,7 +229,7 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
                     .sum::<u64>(),
                 3
             );
-            let lower_rows = lower.memo_snapshot();
+            let lower_rows = lower.memo_snapshot().unwrap();
             assert!(
                 lower_rows.iter().any(
                     |(key, _)| key.def.path() == &program.entry && key.kind == QueryKind::Lower
