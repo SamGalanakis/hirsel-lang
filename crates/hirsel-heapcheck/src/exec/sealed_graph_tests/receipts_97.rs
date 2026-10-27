@@ -392,3 +392,78 @@ fn h_receipt_call_rejects_another_snapshot_before_taking_metadata() {
         .write_bytes(16, &11u64.to_le_bytes());
     m.bind_receipt_call(&mut f, &mut callee, &site).unwrap();
 }
+
+#[test]
+fn h_borrowed_receipt_entry_cannot_be_taken_or_retired_before_return() {
+    let (mut x, c, layout, result, site) = call_setup(false);
+    let ty = x.p.units[1].values[result.index()].ty;
+    x.p.units[1].values[result.index()].holding = Holding::Plain;
+    x.p.units[1].addresses.push(AddressInfo {
+        base: AddressBase::Slot(SlotId(0)),
+        source_place: None,
+        unchecked: vec![],
+        projection: PoolRange::EMPTY,
+        ty,
+    });
+    let address = AddressId(x.p.units[1].addresses.len() as u32 - 1);
+    let mut ops = NoOperations;
+    let mut m = Machine::new(&x.p, &c, &mut ops);
+    let (mut f, _) = prepare(&mut m, 100);
+    let ptr = nums(&mut m, false, x.payloads[1], &[11, 12], 1);
+    root(&mut m, &mut f, Val::Ptr(ptr));
+    m.seal_allocations.insert(
+        ptr.alloc,
+        (0, x.p.units[0].tables.source_anchors[0].clone()),
+    );
+    let control = snapshot(&mut m, &mut f, result);
+    let mut callee = m.frame(1, Role::Callee, None);
+    m.bind_receipt_call(&mut f, &mut callee, &site).unwrap();
+    let version = x.p.units[1]
+        .tables
+        .receipt_entry
+        .as_ref()
+        .unwrap()
+        .parameters[0]
+        .version;
+    let instruction = Inst::Read {
+        result,
+        address,
+        reaching: version,
+        mode: ReadMode::Take,
+    };
+    assert_eq!(
+        m.exec(&mut callee, &instruction).err().unwrap().kind,
+        V::WritePublished
+    );
+    assert_eq!(
+        m.exec(
+            &mut callee,
+            &Inst::StorageDead {
+                slot: SlotId(0),
+                if_live: false
+            }
+        )
+        .err()
+        .unwrap()
+        .kind,
+        V::BorrowExpired
+    );
+    assert_eq!(
+        m.exec(&mut callee, &Inst::StorageLive { slot: SlotId(0) })
+            .err()
+            .unwrap()
+            .kind,
+        V::BorrowExpired
+    );
+    m.check_receipt_cell(control, layout).unwrap();
+    m.exec(
+        &mut callee,
+        &Inst::Read {
+            result,
+            address,
+            reaching: version,
+            mode: ReadMode::Borrow,
+        },
+    )
+    .unwrap();
+}

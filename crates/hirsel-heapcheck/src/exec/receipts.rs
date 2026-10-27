@@ -361,9 +361,50 @@ impl<S: Stage> Machine<'_, S> {
                 None,
             );
             self.write_value_as(storage, layout, moved, !take)?;
+            self.ledger.get_mut(storage.alloc).published = !take;
             callee.slots[binding.slot.index()] = SlotStore::Own(storage);
             callee.versions[binding.slot.index()] = Some(binding.version);
             self.define_version(callee, binding.version)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_receipt_slot_lifetime(
+        &self,
+        f: &Frame,
+        slot: SlotId,
+        initializing: bool,
+    ) -> Checked<()> {
+        let unit = self.unit(f.unit);
+        let SlotKind::ReceiptParameter(source) = unit.slots[slot.index()].kind else {
+            return Ok(());
+        };
+        let mode = self.program.layouts.fn_abis[unit.header.abi.0 as usize]
+            .receipts
+            .as_ref()
+            .and_then(|contract| contract.parameters.iter().find(|p| p.source == source))
+            .ok_or_else(|| err(V::Malformed, "receipt slot lacks entry custody"))?
+            .mode;
+        if initializing || mode == hirsel_lir::sealed_payload_source::ReceiptMode::Borrow {
+            return fail(
+                V::BorrowExpired,
+                "receipt entry storage must survive to frame exit",
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn audit_receipts(&self) -> Checked<()> {
+        for &id in self.receipts.keys() {
+            let allocation = self.ledger.get(id);
+            if allocation.state != AllocState::Live
+                || !matches!(allocation.count, Some(Count::Finite(1..)))
+            {
+                return fail(
+                    V::CreditUnderflow,
+                    "private receipt control escaped its release protocol",
+                );
+            }
         }
         Ok(())
     }

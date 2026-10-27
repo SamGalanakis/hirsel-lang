@@ -4154,6 +4154,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
             }
             Inst::StorageLive { slot } => {
+                self.check_receipt_slot_lifetime(f, slot, true)?;
                 let info = u
                     .slots
                     .get(slot.index())
@@ -4184,6 +4185,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 SlotStore::Dead => return fail(V::Malformed, format!("{slot:?} is not live")),
                 SlotStore::Alias(_) => return fail(V::Malformed, "StorageDead of a capture slot"),
                 SlotStore::Own(ptr) => {
+                    self.check_receipt_slot_lifetime(f, slot, false)?;
                     self.end_slot(ptr, slot)?;
                     f.slots[slot.index()] = SlotStore::Dead;
                 }
@@ -10801,6 +10803,7 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     fn audit(&mut self) -> Checked<()> {
+        self.audit_receipts()?;
         self.ledger.audit_sealed_owners()?;
         self.holders.sync(&mut self.ledger);
         self.cross_check_holders()?;
