@@ -15,8 +15,10 @@ use runtime_calls::{resource_free_handle, runtime_call};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
-pub const ABI_VERSION: u32 = 92;
+pub const ABI_VERSION: u32 = 93;
 const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
+/// Incoming mutable parameter storage, resolved through an exact call relation.
+pub const MUTABLE_PARAMETER: u32 = u32::MAX - 1;
 
 /// Scalar diagnostic operands shared by the two native emitters. A location
 /// identifies shadow storage within a fresh dynamic frame, never a token.
@@ -174,7 +176,10 @@ impl LeafPlan {
                 // A program request keeps this relation and later proves it.
                 return Ok(());
             }
-            if kind == Kind::Alias && !super::check::call_alias(unit, &observation) {
+            if kind == Kind::Alias
+                && !super::check::call_alias(unit, &observation)
+                && !super::check::mutable_alias(unit, &observation)
+            {
                 if source_only {
                     // Preserve source observations for callable holders whose
                     // custody this native vocabulary cannot yet prove. Native
@@ -193,10 +198,11 @@ impl LeafPlan {
                             Kind::Move => 1,
                             Kind::Drop if carrier_move => 4,
                             Kind::Drop => 2,
+                            Kind::Alias if matches!(from, Location::Address(_)) => 6,
                             Kind::Alias => 3,
                         },
-                        token: location(unit, from, point)?,
-                        owner: location(unit, to, point)?,
+                        token: location(unit, layouts, from, point)?,
+                        owner: location(unit, layouts, to, point)?,
                         site,
                         layout,
                     }],
@@ -345,6 +351,32 @@ impl LeafPlan {
                         )?;
                     }
                     Inst::Store { address, value, .. } if owned(value) => {
+                        push(
+                            after,
+                            Kind::Move,
+                            Location::Value(value),
+                            Location::Address(address),
+                            layout(value),
+                        )?;
+                    }
+                    Inst::Replace {
+                        address,
+                        value,
+                        displaced,
+                        if_live: false,
+                        ..
+                    } if owned(value) => {
+                        let displaced_address = unit.addresses.iter().enumerate().find_map(|(index, info)|
+                            (info.base == AddressBase::Slot(displaced) && info.projection.len == 0)
+                                .then_some(AddressId(index as u32)))
+                            .ok_or("native ownership tracing: displaced storage has no checked whole address")?;
+                        push(
+                            after,
+                            Kind::Move,
+                            Location::Address(address),
+                            Location::Address(displaced_address),
+                            layout(value),
+                        )?;
                         push(
                             after,
                             Kind::Move,
@@ -558,11 +590,26 @@ impl LeafPlan {
                         .unwrap_or(&[])
                     {
                         match argument.value {
-                            ArgumentValue::Address { .. } => {
-                                return Err(format!(
-                                    "native ownership tracing: mutable or indirect call transport is not implemented in {} block {} parameter {}",
-                                    unit.header.definition, b.0, argument.parameter
-                                ));
+                            ArgumentValue::Address { address, .. } => {
+                                let layout =
+                                    unit.types[unit.addresses[address.index()].ty.index()].layout;
+                                if plain(layouts, layout, 0)
+                                    || resource_free_handle(layouts, layout)
+                                {
+                                    continue;
+                                }
+                                if argument.passing != hirsel_core_contract::Passing::Mut
+                                    || !matches!(call.callee, Callee::Direct(_))
+                                {
+                                    return Err("native ownership tracing: unsupported address call transport".into());
+                                }
+                                push(
+                                    Point::CallEntered(b),
+                                    Kind::Alias,
+                                    Location::Address(address),
+                                    Location::Parameter(argument.parameter),
+                                    layout,
+                                )?;
                             }
                             ArgumentValue::Value(value) if owned(value) => {
                                 if argument.passing != hirsel_core_contract::Passing::Take {
@@ -860,8 +907,8 @@ impl LeafPlan {
                     let native = NativeMarker {
                         id: marker.id,
                         kind: 2,
-                        token: location(body, token, point)?,
-                        owner: location(body, owner, point)?,
+                        token: location(body, layouts, token, point)?,
+                        owner: location(body, layouts, owner, point)?,
                         site: marker.site,
                         layout: at,
                     };
@@ -892,10 +939,11 @@ impl LeafPlan {
                         4
                     }
                     Kind::Drop => 2,
+                    Kind::Alias if matches!(marker.token, Location::Address(_)) => 6,
                     Kind::Alias => 3,
                 },
-                token: location(body, marker.token, observation.point)?,
-                owner: location(body, marker.owner, observation.point)?,
+                token: location(body, layouts, marker.token, observation.point)?,
+                owner: location(body, layouts, marker.owner, observation.point)?,
                 site: marker.site,
                 layout,
             };
@@ -1221,6 +1269,7 @@ fn call_targets(
 
 fn location<S>(
     unit: &LirUnit<S>,
+    layouts: &LayoutTable,
     location: Location,
     point: Point,
 ) -> Result<NativeLocation, String> {
@@ -1230,7 +1279,7 @@ fn location<S>(
             index: value.0,
         }),
         Location::Address(address) => {
-            let path = address_path(unit, address)?;
+            let path = address_path(unit, layouts, address)?;
             if path.fields.is_empty() {
                 Ok(path.root)
             } else {
@@ -1748,7 +1797,11 @@ pub struct NativePath {
     pub root: NativeLocation,
     pub fields: Vec<u32>,
 }
-fn address_path<S>(unit: &LirUnit<S>, mut address: AddressId) -> Result<NativePath, String> {
+fn address_path<S>(
+    unit: &LirUnit<S>,
+    layouts: &LayoutTable,
+    mut address: AddressId,
+) -> Result<NativePath, String> {
     let mut parts = Vec::new();
     for _ in 0..unit.addresses.len() {
         let info = unit
@@ -1778,6 +1831,20 @@ fn address_path<S>(unit: &LirUnit<S>, mut address: AddressId) -> Result<NativePa
                     .ok_or("ownership slot is absent")?
                     .kind
                 {
+                    SlotKind::Parameter(parameter)
+                        if layouts
+                            .fn_abis
+                            .get(unit.header.abi.0 as usize)
+                            .and_then(|abi| abi.parameters.get(parameter as usize))
+                            .is_some_and(|formal| {
+                                formal.convention == hirsel_core_contract::Passing::Mut
+                            }) =>
+                    {
+                        NativeLocation {
+                            kind: MUTABLE_PARAMETER,
+                            index: parameter,
+                        }
+                    }
                     SlotKind::Capture(capture) => NativeLocation {
                         kind: 6,
                         index: capture,
@@ -1802,12 +1869,13 @@ fn address_path<S>(unit: &LirUnit<S>, mut address: AddressId) -> Result<NativePa
 /// same checked unit used for emission. Plain locations have no extra path.
 pub fn projected_location<S>(
     unit: &LirUnit<S>,
+    layouts: &LayoutTable,
     location: NativeLocation,
 ) -> Result<Option<NativePath>, String> {
     if location.kind != 7 {
         return Ok(None);
     }
-    let path = address_path(unit, AddressId(location.index))?;
+    let path = address_path(unit, layouts, AddressId(location.index))?;
     if path.fields.is_empty() {
         return Err("ownership projected location has no fields".into());
     }

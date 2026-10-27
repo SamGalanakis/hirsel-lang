@@ -50,8 +50,8 @@ pub enum Kind {
     Create,
     Move,
     Drop,
-    /// Internal borrowed-call environment binding. This creates no holder,
-    /// transfers no credit and must never become a user lineage event.
+    /// Internal borrowed-call environment or mutable actual/formal binding.
+    /// This creates no holder, transfers no credit and is not a lineage event.
     Alias,
 }
 snapshot_enum!(Kind {

@@ -187,23 +187,25 @@ pub(crate) fn emit_relocated(
                 (u64::from(at.kind) << 32) | u64::from(at.index)
             };
             let projected = |at| -> Result<_, NativeError> {
-                Ok(
-                    hirsel_lir::ownership_trace::native::projected_location(body, at)
-                        .map_err(failed)?
-                        .map(
-                            |path| hirsel_run_schema::ownership_trace::native::LocationPath {
-                                root: location(path.root),
-                                fields: path.fields,
-                            },
-                        ),
+                Ok(hirsel_lir::ownership_trace::native::projected_location(
+                    body,
+                    inputs.layouts,
+                    at,
                 )
+                .map_err(failed)?
+                .map(|path| {
+                    hirsel_run_schema::ownership_trace::native::LocationPath {
+                        root: location(path.root),
+                        fields: path.fields,
+                    }
+                }))
             };
             let metadata = Metadata {
                 action: marker.kind,
                 empty_environment: plan
                     .empty_environment(body, inputs.layouts, marker.id)
                     .map_err(failed)?,
-                callee: if matches!(marker.kind, 3 | 5) {
+                callee: if matches!(marker.kind, 3 | 5 | 6) {
                     let row = original
                         .observations
                         .iter()

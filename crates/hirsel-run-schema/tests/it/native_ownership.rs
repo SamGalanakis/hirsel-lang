@@ -1721,3 +1721,128 @@ fn native_ownership_spawn_binds_actual_child_to_checked_capture_custody() {
     *unit = [7; 32];
     assert!(decode_local_calls(&wrong, [49; 32], &units, &calls, 100).is_err());
 }
+
+fn mutable_fixture() -> (Log, Units, LocalCalls) {
+    let (mut log, mut units) = fixture();
+    let slot = 1u64 << 32;
+    let parameter = u64::from(u32::MAX - 1) << 32;
+    let mut alias = units[&[7; 32]][&1].clone();
+    alias.action = 6;
+    alias.token = slot;
+    alias.owner = 2u64 << 32;
+    alias.callee = Some([8; 32]);
+    units.get_mut(&[7; 32]).unwrap().insert(6, alias);
+    let mut incoming = units[&[7; 32]][&1].clone();
+    incoming.token = parameter;
+    incoming.owner = 0;
+    let mut writeback = incoming.clone();
+    writeback.token = 0;
+    writeback.owner = parameter;
+    units.insert([8; 32], BTreeMap::from([(0, incoming), (1, writeback)]));
+    log.rows.splice(
+        3..3,
+        [
+            Row::Event {
+                task: 0,
+                frame: 1,
+                marker: 6,
+                action: 6,
+                token: slot,
+                owner: 2u64 << 32,
+                site: 42,
+                layout: 7,
+            },
+            Row::Enter {
+                task: 0,
+                frame: 2,
+                unit: [8; 32],
+            },
+            Row::Event {
+                task: 0,
+                frame: 2,
+                marker: 0,
+                action: 1,
+                token: parameter,
+                owner: 0,
+                site: 42,
+                layout: 7,
+            },
+            Row::Event {
+                task: 0,
+                frame: 2,
+                marker: 1,
+                action: 1,
+                token: 0,
+                owner: parameter,
+                site: 42,
+                layout: 7,
+            },
+            Row::Leave { task: 0, frame: 2 },
+        ],
+    );
+    log.row_count = log.rows.len() as u64;
+    (
+        log,
+        units,
+        BTreeMap::from([
+            ([7; 32], std::collections::BTreeSet::from([[8; 32]])),
+            ([8; 32], Default::default()),
+        ]),
+    )
+}
+
+#[test]
+fn native_mutable_call_uses_the_callers_storage_and_checks_actual_formal_and_frame() {
+    let (log, units, calls) = mutable_fixture();
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    let Action::Move { from, owner, .. } = &trace.events[2].action else {
+        panic!("missing actual take")
+    };
+    assert_eq!(
+        from.storage,
+        hirsel_run_schema::ownership_trace::Storage::Slot { frame: 1, slot: 0 }
+    );
+    assert_eq!(
+        owner.storage,
+        hirsel_run_schema::ownership_trace::Storage::Value { frame: 2, value: 0 }
+    );
+    for mutation in 0..5 {
+        let mut changed = log.clone();
+        match mutation {
+            0 => {
+                changed.rows.remove(3);
+            }
+            1 => {
+                changed.rows.insert(4, changed.rows[3]);
+            }
+            2 => {
+                let Row::Event { owner, .. } = &mut changed.rows[3] else {
+                    unreachable!()
+                };
+                *owner += 1;
+            }
+            3 => {
+                let Row::Enter { unit, .. } = &mut changed.rows[4] else {
+                    unreachable!()
+                };
+                *unit = [7; 32];
+            }
+            4 => {
+                changed.rows.remove(7);
+                changed.rows.remove(6);
+            }
+            _ => unreachable!(),
+        }
+        changed.row_count = changed.rows.len() as u64;
+        assert!(
+            decode_local_calls(&changed, [49; 32], &units, &calls, 100).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    assert!(decode_leaf(&log, [49; 32], &units, 100).is_err());
+}

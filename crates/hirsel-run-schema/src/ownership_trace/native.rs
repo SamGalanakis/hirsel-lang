@@ -7,7 +7,8 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
+const MUTABLE_PARAMETER: u64 = (u32::MAX - 1) as u64;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
@@ -172,6 +173,7 @@ fn projected_owner(
     frame: u64,
     parent: Option<u64>,
     environment: Option<&Owner>,
+    parameters: &BTreeMap<u32, Owner>,
     location: u64,
     path: Option<&LocationPath>,
 ) -> Result<Owner, Error> {
@@ -179,13 +181,13 @@ fn projected_owner(
         if path.is_some() {
             return Err(Error::InvalidLocation(location));
         }
-        return owner(task, frame, parent, environment, location);
+        return owner(task, frame, parent, environment, parameters, location);
     }
     let path = path.ok_or(Error::InvalidLocation(location))?;
-    if path.fields.is_empty() || !matches!(path.root >> 32, 1 | 6) {
+    if path.fields.is_empty() || !matches!(path.root >> 32, 1 | 6 | MUTABLE_PARAMETER) {
         return Err(Error::InvalidLocation(location));
     }
-    let mut at = owner(task, frame, parent, environment, path.root)?;
+    let mut at = owner(task, frame, parent, environment, parameters, path.root)?;
     at.path.extend(
         path.fields
             .iter()
@@ -199,8 +201,15 @@ fn owner(
     frame: u64,
     parent: Option<u64>,
     environment: Option<&Owner>,
+    parameters: &BTreeMap<u32, Owner>,
     location: u64,
 ) -> Result<Owner, Error> {
+    if location >> 32 == MUTABLE_PARAMETER {
+        return parameters
+            .get(&(location as u32))
+            .cloned()
+            .ok_or(Error::InvalidLocation(location));
+    }
     if location >> 32 == u64::from(u32::MAX) {
         return Ok(Owner {
             task: Some(task.clone()),
@@ -229,6 +238,7 @@ fn owner(
             frame,
             parent,
             environment,
+            parameters,
             location & u64::from(u32::MAX),
         )?;
         owner.path.push(super::Projection::Field {
@@ -334,6 +344,8 @@ fn decode(
         environment: Option<Owner>,
         pending: Option<(Owner, [u8; 32])>,
         cleanup: Option<(u32, Owner, Vec<(u32, u32, Owner)>)>,
+        parameters: BTreeMap<u32, Owner>,
+        mutable_call: BTreeMap<u32, (Owner, [u8; 32])>,
     }
     struct TaskIdentity {
         depth: u32,
@@ -596,17 +608,38 @@ fn decode(
                     }
                     _ => runtime_environment,
                 };
+                let parameters = if let Some(parent) = frames.last_mut() {
+                    if parent
+                        .mutable_call
+                        .values()
+                        .any(|(_, target)| *target != unit)
+                        || (!parent.mutable_call.is_empty() && !allowed)
+                    {
+                        return Err(Error::InvalidFrame(frame));
+                    }
+                    std::mem::take(&mut parent.mutable_call)
+                        .into_iter()
+                        .map(|(parameter, (owner, _))| (parameter, owner))
+                        .collect()
+                } else {
+                    BTreeMap::new()
+                };
                 frames.push(Frame {
                     id: frame,
                     unit,
                     environment,
                     pending: None,
                     cleanup: None,
+                    parameters,
+                    mutable_call: BTreeMap::new(),
                 });
             }
             Row::Leave { frame, .. } => {
                 if frames.pop().is_none_or(|current| {
-                    current.id != frame || current.pending.is_some() || current.cleanup.is_some()
+                    current.id != frame
+                        || current.pending.is_some()
+                        || current.cleanup.is_some()
+                        || !current.mutable_call.is_empty()
                 }) {
                     return Err(Error::InvalidFrame(frame));
                 }
@@ -632,6 +665,7 @@ fn decode(
                     frame,
                     parent,
                     current.environment.as_ref(),
+                    &current.parameters,
                     metadata.token,
                     metadata.token_path.as_ref(),
                 )?;
@@ -743,6 +777,7 @@ fn decode(
                         frame,
                         parent,
                         current.environment.as_ref(),
+                        &current.parameters,
                         target,
                         expected.owner_path.as_ref(),
                     )?;
@@ -768,6 +803,7 @@ fn decode(
                         frame,
                         parent,
                         current.environment.as_ref(),
+                        &current.parameters,
                         target,
                         expected.owner_path.as_ref(),
                     )?,
@@ -784,7 +820,8 @@ fn decode(
                 layout,
                 ..
             } => {
-                let Some(current) = frames.last() else {
+                let parent = frames.iter().rev().nth(1).map(|frame| frame.id);
+                let Some(current) = frames.last_mut() else {
                     return Err(Error::InvalidFrame(frame));
                 };
                 if current.id != frame {
@@ -831,7 +868,35 @@ fn decode(
                             member.value_type.as_str(),
                         )
                     };
-                let parent = frames.iter().rev().nth(1).map(|frame| frame.id);
+                if action == 6 {
+                    if calls.is_none() || recipient >> 32 != 2 || expected.empty_environment {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    let callee = expected.callee.ok_or(Error::InvalidMarker(marker))?;
+                    if !calls
+                        .and_then(|calls| calls.get(&current.unit))
+                        .is_some_and(|targets| targets.contains(&callee))
+                    {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    let actual = projected_owner(
+                        task,
+                        frame,
+                        parent,
+                        current.environment.as_ref(),
+                        &current.parameters,
+                        token,
+                        token_path,
+                    )?;
+                    if current
+                        .mutable_call
+                        .insert(recipient as u32, (actual, callee))
+                        .is_some()
+                    {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    continue;
+                }
                 let local = |location: u64| {
                     matches!(location >> 32, 0 | 1) || location >> 32 == u64::from(u32::MAX)
                 };
@@ -857,6 +922,7 @@ fn decode(
                         frame,
                         parent,
                         current.environment.as_ref(),
+                        &current.parameters,
                         token,
                         token_path,
                     )?;
@@ -865,6 +931,7 @@ fn decode(
                         frame,
                         parent,
                         current.environment.as_ref(),
+                        &current.parameters,
                         recipient,
                         owner_path,
                     )?;
@@ -921,6 +988,7 @@ fn decode(
                             frame,
                             parent,
                             current.environment.as_ref(),
+                            &current.parameters,
                             location,
                             path,
                         )?;
@@ -939,6 +1007,7 @@ fn decode(
                     frame,
                     parent,
                     current.environment.as_ref(),
+                    &current.parameters,
                     token,
                     token_path,
                 )?;
@@ -947,6 +1016,7 @@ fn decode(
                     frame,
                     parent,
                     current.environment.as_ref(),
+                    &current.parameters,
                     recipient,
                     owner_path,
                 )?;

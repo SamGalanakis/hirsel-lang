@@ -455,9 +455,32 @@ pub(super) fn call_alias<S: Stage>(unit: &LirUnit<S>, observation: &Observation)
     live && active && version.is_some() && borrowed == version
 }
 
+// C separately proves exclusive mutable access, types and initialized writeback.
+// This relation identifies the exact actual/formal pair, without moving credit.
+pub(super) fn mutable_alias<S>(unit: &LirUnit<S>, observation: &Observation) -> bool {
+    let Point::CallEntered(block) = observation.point else {
+        return false;
+    };
+    let (Location::Address(address), Location::Parameter(parameter)) =
+        (observation.marker.token, observation.marker.owner)
+    else {
+        return false;
+    };
+    let Some(Terminator::Call { call, .. }) = unit.terminators.get(block.index()) else {
+        return false;
+    };
+    let Some(call) = unit.tables.calls.get(call.index()) else {
+        return false;
+    };
+    matches!(call.callee, Callee::Direct(_)) && call.pretransfer_failure.is_none()
+        && call.arguments.get(&unit.pools.call_arguments).is_some_and(|arguments| arguments.iter().any(|argument|
+            argument.parameter == parameter && argument.passing == Passing::Mut
+                && matches!(argument.value, ArgumentValue::Address { address: actual, .. } if actual == address)))
+}
+
 fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<bool, Error> {
     if observation.marker.kind == Kind::Alias {
-        return Ok(call_alias(unit, observation));
+        return Ok(call_alias(unit, observation) || mutable_alias(unit, observation));
     }
     use Kind::{Create, Drop, Move};
     use Location::{Address, Capture, EnvironmentCapture, Field, Parameter, Return, Value};
@@ -570,6 +593,11 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
                 ) => moved(Address(address), Value(result)),
                 (Inst::Store { address, value, .. }, Moment::After) => {
                     moved(Value(value), Address(address))
+                }
+                (Inst::Replace { address, value, displaced, if_live: false, .. }, Moment::After) => {
+                    moved(Value(value), Address(address)) || matches!(tuple,
+                        (Move, Address(from), Address(to)) if from == address && unit.addresses.get(to.index()).is_some_and(|info|
+                            info.base == AddressBase::Slot(displaced) && info.projection.len == 0))
                 }
                 (
                     Inst::Recast { result, value } | Inst::Weaken { result, value },

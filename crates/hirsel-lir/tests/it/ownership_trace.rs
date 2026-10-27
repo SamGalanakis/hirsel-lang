@@ -3545,6 +3545,7 @@ fn ownership_trace_native_static_field_locations_keep_declaration_paths_and_refu
     assert_eq!(
         native::projected_location(
             unit.unit(),
+            &table,
             native::NativeLocation {
                 kind: 7,
                 index: address.0
@@ -3562,6 +3563,7 @@ fn ownership_trace_native_static_field_locations_keep_declaration_paths_and_refu
     assert!(
         native::projected_location(
             unit.unit(),
+            &table,
             native::NativeLocation {
                 kind: 7,
                 index: u32::MAX
@@ -3572,6 +3574,7 @@ fn ownership_trace_native_static_field_locations_keep_declaration_paths_and_refu
     assert!(
         native::projected_location(
             unit.unit(),
+            &table,
             native::NativeLocation {
                 kind: 1,
                 index: slot.0
@@ -3618,7 +3621,7 @@ fn ownership_trace_native_compound_completions_keep_original_marker_and_exact_ch
             assert_eq!(marker.kind, 2);
             assert_eq!(marker.site, row.marker.site);
             assert_eq!(marker.token, marker.owner);
-            let path = native::projected_location(after.unit(), marker.token)
+            let path = native::projected_location(after.unit(), &table, marker.token)
                 .unwrap()
                 .unwrap();
             paths.insert(path.fields);
@@ -4416,4 +4419,87 @@ fn ownership_source_variant_carriers_never_create_a_shell_resource() {
             "native variants still need their active-arm transport proof"
         );
     }
+}
+
+#[test]
+fn ownership_mutable_actual_formal_relation_survives_recipes_and_rejects_forgery() {
+    use hirsel_lir::stage::Value;
+    let mut t = Lir::<Value>::new(&[(Passing::Mut, l::RES)], None);
+    let slot = t.slot(l::RES, SlotKind::Parameter(0), ROOT);
+    let incoming = t.version_of(slot);
+    t.param(incoming);
+    let address = t.at(ENTRY, slot, &[], &[]);
+    let version = t.version_of(slot);
+    let normal = t.builder.block(BlockKind::Body, &[]);
+    let failure = t.builder.propagate();
+    t.call(
+        ENTRY,
+        &[(Passing::Mut, l::RES)],
+        None,
+        &[ArgumentValue::Address { address, version }],
+        (normal, &[]),
+        failure,
+    );
+    t.builder.ret(normal, None);
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    let plan = native::LeafPlan::prepare_value(&unit, &table).unwrap();
+    assert_eq!(plan.observations.len(), 1);
+    let alias = &plan.observations[0];
+    assert_eq!(alias.marker.kind, Kind::Alias);
+    assert_eq!(alias.marker.token, Location::Address(address));
+    assert_eq!(alias.marker.owner, Location::Parameter(0));
+    let mut forged = plan.clone();
+    forged.observations[0].marker.owner = Location::Parameter(1);
+    assert!(check(unit.unit(), &forged).is_err());
+    let empty = Plan::new(unit.unit(), vec![]);
+    assert_eq!(
+        check_transform(
+            unit.unit(),
+            &plan,
+            unit.unit(),
+            &empty,
+            Some(&recipe(&plan, &empty))
+        )
+        .unwrap_err(),
+        Error::MissingMarker(alias.marker.id)
+    );
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let placement = hirsel_rc::placement::Options::default();
+    let proofs = hirsel_rc::insert::Proofs::default();
+    let reuse = hirsel_rc::reuse::Options::default();
+    let finalizers = Default::default();
+    let output = hirsel_rc::observed::lower(
+        unit.into_raw(),
+        &plan,
+        &index,
+        &hirsel_rc::observed::Options {
+            placement: &placement,
+            proofs: &proofs,
+            elide: true,
+            reuse: &reuse,
+            finalizers: &finalizers,
+        },
+    )
+    .unwrap();
+    assert_eq!(output.recipes.len(), 10);
+    assert_eq!(
+        output.plan.observations[0].marker,
+        plan.observations[0].marker
+    );
+    let ready = checked_native_fixture(output.unit, &table);
+    let native = native::LeafPlan::from_relocated(&ready, &table, &output.plan).unwrap();
+    let physical: Vec<_> = native
+        .markers()
+        .filter(|marker| marker.id == alias.marker.id)
+        .collect();
+    assert_eq!(physical.len(), 1);
+    assert_eq!(physical[0].kind, 6);
+    assert_eq!(
+        physical[0].token,
+        native::NativeLocation {
+            kind: native::MUTABLE_PARAMETER,
+            index: 0
+        }
+    );
 }
