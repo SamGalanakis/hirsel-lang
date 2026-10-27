@@ -161,7 +161,9 @@ fn unique_empty_builder_29_nearest_twins_still_reject() {
                 let directory = tempfile::tempdir().unwrap();
                 let path = directory.path().join("main.hir");
                 std::fs::write(&path, source).unwrap();
-                let mut program = load_program(&path).unwrap();
+                let manifest = directory.path().join("hirsel.json");
+                crate::image_fixture::core_manifest(&path, &manifest);
+                let mut program = load_program(&manifest).unwrap();
                 let output = program.check(policy).unwrap();
                 let errors: Vec<_> = output
                     .diagnostics
