@@ -470,7 +470,7 @@ impl QueryEngine {
                 {
                     return None;
                 }
-                private_summary_value(&self.restored_private_summary(d)?)
+                private_summary_value(&self.restored_private_summary(d).unwrap_or_default())
             }
             ReadKey::DeclaredSignature(d) => {
                 let signature = self

@@ -21,11 +21,26 @@ impl QueryEngine {
         }
     }
 
-    pub(super) fn observe_private_summary(&self, id: DefId, observed: &mut Observed) {
-        if let Some(summary) = self.private_summaries.get(&id) {
+    pub(super) fn observe_private_summary(
+        &self,
+        signature: &hirsel_types::Signature,
+        observed: &mut Observed,
+    ) {
+        let id = signature.definition;
+        if self.private_summaries.contains_key(&id)
+            || signature.metadata.visibility == hirsel_syntax::Visibility::Private
+                && matches!(&signature.kind, SignatureKind::Function(f) if f.foreign.is_none())
+                && self
+                    .source_facts(id.path())
+                    .is_some_and(|facts| facts.body && !facts.constant)
+        {
+            // A declaration normalized without a Modes adapter still observes
+            // its conservative proof. It cannot be a wildcard cache variant
+            // after inference publishes a stronger result for the same header.
+            let summary = self.private_summaries.get(&id).cloned().unwrap_or_default();
             observed.merged.record(
                 crate::memo::ReadKey::PrivateSummary(id),
-                memos::private_summary_value(summary),
+                memos::private_summary_value(&summary),
             );
         }
     }
@@ -89,7 +104,7 @@ impl QueryEngine {
                                 observed.merged.record(*key, *value);
                             }
                         }
-                        self.observe_private_summary(id, &mut observed);
+                        self.observe_private_summary(&output.value, &mut observed);
                         let mut next = self.record(
                             entry.memo.key,
                             entry.memo.text,

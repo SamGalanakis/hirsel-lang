@@ -999,7 +999,7 @@ impl QueryEngine {
         let mut result = result;
         if let Ok(output) = &mut result {
             self.attach_private_summary(&mut output.value, &output.dependencies);
-            self.observe_private_summary(id, &mut observed);
+            self.observe_private_summary(&output.value, &mut observed);
         }
         let covered = result
             .as_ref()
