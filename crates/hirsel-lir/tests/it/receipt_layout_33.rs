@@ -113,10 +113,9 @@ fn receipt_layout_runtime_descriptor_uses_a_distinct_metadata_release_without_a_
     descriptor.check_finalizers(&table).unwrap();
 }
 #[test]
-fn receipt_layout_declaration_alone_cannot_enter_executable_c() {
+fn unused_receipt_layout_does_not_refuse_an_ordinary_unit() {
     use crate::support::{ENTRY, Lir};
     use hirsel_lir::stage::Value;
-    use hirsel_lir::validate::ViolationKind;
     for metadata in [false, true] {
         let mut t = Lir::<Value>::new(&[], None);
         t.builder.ret(ENTRY, None);
@@ -125,10 +124,6 @@ fn receipt_layout_declaration_alone_cannot_enter_executable_c() {
             t.table.layouts.push(table.layouts[id.0 as usize].clone());
         }
         let errors = t.check();
-        if metadata {
-            assert!(errors.iter().any(|e| matches!(e, ViolationKind::Schema(s) if s.contains("private receipt storage"))), "{errors:?}");
-        } else {
-            assert!(errors.is_empty(), "{errors:?}");
-        }
+        assert!(errors.is_empty(), "{errors:?}");
     }
 }

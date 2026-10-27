@@ -844,8 +844,8 @@ fn receipt_local_33_public_c_refuses_producer_before_complete_custody_proof() {
     let errors = checked_raw(unit.clone(), &table, &manifest, &declarations);
     assert!(
         errors.iter().any(
-            |e| matches!(&e.kind, hirsel_lir::validate::ViolationKind::Schema(text)
-        if text == "private receipt storage requires independent source and custody validation")
+            |e| matches!(&e.kind, hirsel_lir::validate::ViolationKind::Sealed(text)
+        if text == "payload receipt value differs from original source producer")
         ),
         "{errors:#?}"
     );

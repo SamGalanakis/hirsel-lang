@@ -790,3 +790,11 @@ Numeric field reads and `SeqLen` produce independent bits. A `mut` data entry
 cannot claim this read-only contract. `ScopedEntry` binds the contract of the
 `region.with` callback; complete qualification checks its actual body and entry
 identity. These contracts grant no receipt provenance or storage ownership.
+
+C validator revision 28 admits local `PayloadReceipt` producers through Rc and
+Reuse. It re-derives the original heap construction, ordered source operands,
+semantic types and same-snapshot child pairs, then checks affine metadata
+custody with the ordinary holder, slot, reaching-version and loan machinery.
+Metadata cannot enter a language aggregate, ordinary ABI or user operation.
+Entry, call, capture and task receipt transport still require their independent
+source and boundary proofs. Ready and both engines retain those refusals.

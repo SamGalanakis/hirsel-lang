@@ -47,9 +47,30 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
         }
         let source = &binding.recipe.source;
         if !matches!(origins[value.index()].as_slice(),
-            [PayloadProducer::Construct(actual) | PayloadProducer::Closure(actual) | PayloadProducer::Call(actual)] if actual == source)
+            [PayloadProducer::Construct(actual)] if actual == source)
         {
             reject("payload receipt value differs from original source producer");
+        }
+        // This local producer implements ordinary heap construction only.
+        // Calls, held environments and mutation need the boundary custody
+        // proof before their source recipe can authorize a fresh snapshot.
+        let constructors: Vec<_> = unit
+            .tables
+            .constructs
+            .iter()
+            .filter(|site| &unit.tables.source_anchors[site.anchor.index()] == source)
+            .collect();
+        let supported = matches!(
+            binding.recipe.operation,
+            PayloadOperation::Allocate {
+                destination: PayloadDestination::Heap
+            }
+        ) && matches!(constructors.as_slice(), [site]
+                if matches!(site.destination, DestinationClass::Heap | DestinationClass::Inferred)
+                    && site.fields.get(&unit.pools.fields).unwrap_or(&[]).iter()
+                        .map(|field| field.value).eq(binding.values.iter().copied()));
+        if !supported {
+            reject("payload receipt requires its ordered ordinary heap construction");
         }
         for (input, source) in inputs.iter().zip(&binding.recipe.inputs) {
             match input.receipt {

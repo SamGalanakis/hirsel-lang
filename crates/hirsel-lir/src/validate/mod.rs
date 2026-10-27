@@ -57,6 +57,7 @@ mod flow;
 mod holes;
 mod ownership;
 mod ready;
+mod receipt_custody;
 mod scoped_transport;
 mod sealed;
 mod sealed_payload;
@@ -681,19 +682,6 @@ fn check_with_context<S: Stage>(
             }];
         }
     }
-    if inputs
-        .layouts
-        .layouts
-        .iter()
-        .any(|layout| matches!(layout.kind, LayoutKind::PayloadReceipt { .. }))
-    {
-        return vec![Violation {
-            site: Site::UNIT,
-            kind: ViolationKind::Schema(
-                "private receipt storage requires independent source and custody validation".into(),
-            ),
-        }];
-    }
     let (_, abis) = crate::objects::references(unit);
     for id in abis {
         if let Some(abi) = inputs.layouts.fn_abis.get(id.0 as usize)
@@ -818,6 +806,7 @@ fn check_with_context<S: Stage>(
         }
         sealed::check(&cx, &facts, &mut report);
         sealed_payload::check(&cx, &mut report);
+        receipt_custody::check(&cx, &mut report);
         ownership::check(&cx, &facts, &mut report);
         holes::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);

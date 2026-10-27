@@ -13,17 +13,6 @@ pub(super) fn check<S: Stage>(
     report: &mut Report,
 ) {
     let unit = cx.unit;
-    if unit
-        .instructions
-        .iter()
-        .any(|inst| matches!(inst, Inst::PayloadReceipt { .. }))
-        || unit
-            .types
-            .iter()
-            .any(|ty| ty.repr == ValueRepr::PayloadReceipt)
-    {
-        report.add(Site::UNIT, K::Sealed("payload receipt producer requires verified metadata custody and source correspondence".into()));
-    }
     let expected = cx
         .operations
         .seal_events(&unit.header.definition, unit.header.instance);
