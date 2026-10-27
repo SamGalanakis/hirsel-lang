@@ -866,7 +866,8 @@ def _runtime_archives_impl(ctx):
                 # Rust's TSan pass emits cleanup landing pads with the C
                 # personality. Use compiler-rt's implementation, without
                 # bundling a second copy of every arithmetic builtin.
-                command.add("--member", cmd_args(llvm.project("lib/clang/23/lib/linux/libclang_rt.builtins-x86_64.a"), hidden = llvm), "gcc_personality_v0.c.o")
+                for member in ["gcc_personality_v0.c.o", "int_util.c.o"]:
+                    command.add("--member", cmd_args(llvm.project("lib/clang/23/lib/linux/libclang_rt.builtins-x86_64.a"), hidden = llvm), member)
             for obj in objects:
                 command.add("--object", obj)
             # Thin archives need their referenced objects as action inputs.
