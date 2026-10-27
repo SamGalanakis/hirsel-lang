@@ -40,7 +40,13 @@ impl Importer<'_> {
         }
         let mut inputs = Vec::new();
         for (field, original) in fields.iter().zip(&source.recipe.inputs) {
-            if !matches!(original.ty, hirsel_lir::operation::NativeType::Primitive(_)) {
+            let scalar = matches!(original.ty, hirsel_lir::operation::NativeType::Primitive(_));
+            let unit = matches!(&original.ty, hirsel_lir::operation::NativeType::Tuple(parts) if parts.is_empty())
+                && matches!(
+                    original.producer,
+                    PayloadProducer::Literal(PayloadLiteral::Unit)
+                );
+            if !scalar && !unit {
                 return unsupported("construction child needs paired original receipt custody");
             }
             inputs.push(ReceiptInput {

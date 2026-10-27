@@ -278,7 +278,7 @@ impl OperationDeclarations for OperationRegistry {
                     })
                 });
         if !selected {
-            return Err(LayoutError::Invalid("sealed source is not selected".into()));
+            return Err(LayoutError::Invalid("missing selected sealed source declarations".into()));
         }
         self.seal_descriptor(root, table, target)
     }

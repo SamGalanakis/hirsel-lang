@@ -148,17 +148,28 @@ pub fn boundary(
             TypeKind::Named {
                 definition,
                 arguments,
-            } if definition.path().is_core("Arena") && arguments.is_empty() => {
+            } if (definition.path().is_core("Arena") || definition.path().is_core("Test"))
+                && arguments.is_empty() =>
+            {
+                let (missing, changed) = if definition.path().is_core("Arena") {
+                    (
+                        "boundary Arena needs its original declaration",
+                        "boundary Arena declaration differs",
+                    )
+                } else {
+                    (
+                        "boundary Test needs its original declaration",
+                        "boundary Test declaration differs",
+                    )
+                };
                 let declaration = declarations(*definition)
                     .map_err(|error| SourceError::Type(format!("{error:?}")))?
-                    .ok_or(SourceError::Unsupported(
-                        "boundary Arena needs its original declaration",
-                    ))?;
+                    .ok_or(SourceError::Unsupported(missing))?;
                 if declaration.definition != *definition
                     || !matches!(&declaration.kind, SignatureKind::Type(ty) if ty.generics.is_empty()
                         && ty.representation.is_none() && !ty.resource && ty.capability == Some(CapabilityKind::Scoped))
                 {
-                    return Err(SourceError::Malformed("boundary Arena declaration differs"));
+                    return Err(SourceError::Malformed(changed));
                 }
                 return ClosedStorageProfile {
                     schema: ClosedStorageProfile::SCHEMA,

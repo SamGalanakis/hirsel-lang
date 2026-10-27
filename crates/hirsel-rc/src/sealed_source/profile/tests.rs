@@ -436,3 +436,49 @@ fn boundary_nested_region_variants_keep_callable_profiles_without_payload_admiss
         .is_err()
     );
 }
+
+#[test]
+fn test_capability_has_a_boundary_profile_but_remains_refused_as_sealed_contents() {
+    let types = TypeInterner::new(None);
+    let definition = DefId::intern(&DefPath::core("Test"));
+    let root = types.intern(Type::with_kind(TypeKind::Named {
+        definition,
+        arguments: vec![].into(),
+    }));
+    let mut declaration = signature(definition, None, false, false);
+    let SignatureKind::Type(ty) = &mut Arc::make_mut(&mut declaration).kind else {
+        unreachable!()
+    };
+    ty.capability = Some(CapabilityKind::Scoped);
+    let accepted = boundary(
+        &types,
+        root,
+        &mut |_| Ok(Some(declaration.clone())),
+        &mut |_| panic!("Test has no held code"),
+    )
+    .unwrap();
+    assert_eq!(accepted.root, closed_storage_type(&types, root).unwrap());
+    assert!(accepted.functions.is_empty());
+    assert!(
+        derive(
+            &types,
+            root,
+            &mut |_| Ok(Some(declaration.clone())),
+            &mut |_| Ok(vec![])
+        )
+        .is_err()
+    );
+    let SignatureKind::Type(ty) = &mut Arc::make_mut(&mut declaration).kind else {
+        unreachable!()
+    };
+    ty.capability = Some(CapabilityKind::Global);
+    assert_eq!(
+        boundary(
+            &types,
+            root,
+            &mut |_| Ok(Some(declaration.clone())),
+            &mut |_| Ok(vec![])
+        ),
+        Err(SourceError::Malformed("boundary Test declaration differs"))
+    );
+}

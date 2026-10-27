@@ -500,6 +500,7 @@ pub(crate) fn checkpoint<S: Stage>(
 
 /// Lower one imported unit through placement, RC, reuse and Ready. Production
 /// validates Ready once; harnesses use the identical passes with stage checkpoints.
+#[cfg(test)]
 pub(crate) fn lower_unit(
     unit: LirUnit<hirsel_lir::stage::Value>,
     id: hirsel_rc::instance::InstanceId,
@@ -712,7 +713,7 @@ fn build_program_source(
     })
     .map_err(|e| NativeError::new(StageName::Import, e))?;
     let operations = lowered.operation_registry(program);
-    let entries = lowered
+    let guard_roots = lowered
         .unit_origins
         .iter()
         .enumerate()
@@ -721,7 +722,7 @@ fn build_program_source(
                 .then_some(index)
         })
         .collect::<Vec<_>>();
-    let guard_demand = hirsel_rc::seal_demand::Demand::analyze(&lowered.units, &entries)
+    let guard_demand = hirsel_rc::seal_demand::Demand::analyze(&lowered.units, &guard_roots)
         .map_err(|e| NativeError::new(StageName::Import, e))?;
     let guards = lowered
         .units

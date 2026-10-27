@@ -51,3 +51,69 @@ pub(in crate::native) fn capture(
         receipts,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heap_witness_imports_each_original_and_library_body() {
+        hirsel_engine::with_compiler_stack(|| {
+            let source = include_str!("../../../../../conformance/MEM/MEM-4-sealed-heap-run.hir");
+            let mut loaded =
+                crate::load_program_source(std::path::Path::new("sealed-heap.hir"), Some(source))
+                    .unwrap();
+            loaded.check_for_execution().unwrap();
+            let input = loaded.engine.export_native_input().unwrap();
+            let validated = loaded.engine.import_native_input(input).unwrap();
+            let program = crate::native::adapt::program(&validated);
+            let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+            let owners = hirsel_rc::library::owners(&program.types, &program.signatures)
+                .over(&program.owners);
+            let mut layouts = LayoutBuilder::new(&target, &owners);
+            layouts.prepare_native_controls();
+            let mut instances = hirsel_rc::instance::expand(&program, &mut layouts).unwrap();
+            let sources = capture(
+                validated.original_reader(),
+                &program,
+                &mut instances,
+                &mut layouts,
+            )
+            .unwrap();
+            let mut index = 0;
+            let mut failures = Vec::new();
+            while index < instances.len() {
+                let id = hirsel_rc::instance::InstanceId(index as u32);
+                index += 1;
+                let key = (
+                    instances.view(id).key.definition().clone(),
+                    instances.view(id).key.digest(),
+                );
+                if let Some(expected) = sources.expectations.get(&key) {
+                    instances.bind_payload_sources(id, expected.payloads().to_vec());
+                }
+                match hirsel_rc::import::import_instance(
+                    &program,
+                    &mut instances,
+                    id,
+                    None,
+                    &mut layouts,
+                ) {
+                    Ok(imported) => {
+                        for request in imported.required {
+                            hirsel_rc::library::instantiate(&mut layouts, &mut instances, request)
+                                .unwrap();
+                        }
+                    }
+                    Err(error) => failures.push(format!(
+                        "body {} {:?}: {error}",
+                        instances.view(id).key.body(),
+                        key.0
+                    )),
+                }
+            }
+            assert!(index > 3, "original and library bodies executed");
+            assert!(failures.is_empty(), "{}", failures.join("\n"));
+        });
+    }
+}
