@@ -1,5 +1,6 @@
 //! Immutable launch facts from the admitted source semantic closure.
 use super::*;
+mod content;
 mod proof_export;
 use hirsel_run_schema::{CallForm, CalleeFacts, CodeReach, ProgramRevision};
 pub use proof_export::{
@@ -214,7 +215,10 @@ impl QueryFactory for Factory {
         let mut retention = self.0.retention.lock().unwrap_or_else(|e| e.into_inner());
         let bytes = FrontRunQueries::output_bytes(self.0.weight).ok_or(self.0.errors.resource)?;
         if completed.is_none() {
-            *retention = retention.checked_sub(bytes).ok_or(self.0.errors.resource)?;
+            *retention = retention.checked_sub(bytes).ok_or_else(|| {
+                eprintln!("RUN FACTORY grant={bytes} remaining={retention}");
+                self.0.errors.resource
+            })?;
         }
         drop(retention);
         Ok(Box::new(Task {
@@ -237,8 +241,8 @@ struct Task {
     root: DefPath,
     checked: bool,
     pending: Vec<DefPath>,
-    nodes: BTreeMap<DefPath, hirsel_run_schema::ProgramNode>,
-    contents: BTreeMap<DefPath, DefinitionContent>,
+    nodes: BTreeMap<DefPath, content::Node>,
+    contents: BTreeMap<DefPath, content::Content>,
     uses: BTreeMap<DefPath, BTreeSet<DefPath>>,
     waiting: Option<QueryId>,
     terminal: Option<Result<ProductRef, Reference>>,
@@ -347,13 +351,22 @@ impl Task {
                                 .filter(|p| !self.nodes.contains_key(*p))
                                 .cloned(),
                         );
-                        let semantic = node.dependencies.iter().collect::<BTreeSet<_>>();
+                        let semantic: BTreeSet<_> =
+                            node.dependencies.iter().map(|id| id.path()).collect();
                         let semantic_dependencies = dependencies
                             .into_iter()
-                            .filter(|p| semantic.contains(&p.to_string()))
+                            .filter(|p| semantic.contains(&p))
                             .collect();
                         self.nodes.insert(path.clone(), node);
-                        self.contents.insert(path.clone(), content);
+                        self.contents.insert(
+                            path.clone(),
+                            match content::Content::new(&self.queries, content) {
+                                Ok(content) => content,
+                                Err(error) => {
+                                    return Poll::Ready(Err(self.queries.failure_record(error)));
+                                }
+                            },
+                        );
                         self.uses.insert(path, semantic_dependencies);
                     }
                 }
@@ -363,6 +376,13 @@ impl Task {
                     .graph_bytes()
                     .is_none_or(|bytes| bytes > self.queries.weight.retained)
                 {
+                    eprintln!(
+                        "RUN GRAPH bytes={:?} retained={} nodes={} contents={}",
+                        self.graph_bytes(),
+                        self.queries.weight.retained,
+                        self.nodes.len(),
+                        self.contents.len()
+                    );
                     return Poll::Ready(Err(self.queries.errors.resource));
                 }
             }
@@ -391,16 +411,7 @@ impl Task {
         &mut self,
         cx: &mut dyn QueryContext,
         path: &DefPath,
-    ) -> Poll<
-        Result<
-            (
-                hirsel_run_schema::ProgramNode,
-                DefinitionContent,
-                BTreeSet<DefPath>,
-            ),
-            Reference,
-        >,
-    > {
+    ) -> Poll<Result<(content::Node, DefinitionContent, BTreeSet<DefPath>), Reference>> {
         let queries = self.queries.clone();
         let Some(input) = queries.inputs.get(path) else {
             return Poll::Ready(Err(queries.failure_record(operational(format!(
@@ -596,42 +607,27 @@ impl Task {
             hirsel_proof_export::references(queries.lower.signatures().types(), &content);
         let mut all_dependencies = dependencies.clone();
         all_dependencies.extend(references);
-        let mut spelled: Vec<_> = dependencies.iter().map(ToString::to_string).collect();
-        spelled.push("$hirsel/runtime@1".into());
-        Poll::Ready(Ok((
-            hirsel_run_schema::ProgramNode {
-                identity: path.to_string(),
-                content: source_content,
-                dependencies: spelled,
-            },
-            content,
-            all_dependencies,
-        )))
+        let node = match content::Node::new(&queries, source_content, &dependencies) {
+            Ok(node) => node,
+            Err(error) => return Poll::Ready(Err(queries.failure_record(error))),
+        };
+        Poll::Ready(Ok((node, content, all_dependencies)))
     }
     fn graph_bytes(&self) -> Option<u64> {
-        let bodies = self.contents.values().try_fold(0u64, |n, content| {
-            let bytes = match content {
-                DefinitionContent::Body { tir: Some(tir), .. } => {
-                    hirsel_types::with_table_collection(|| bincode::serialized_size(tir))
-                        .0
-                        .ok()?
-                }
-                _ => 0,
-            };
-            n.checked_add(bytes)
-        })?;
-        self.nodes.values().try_fold(bodies, |n, node| {
-            let n = n
-                .checked_add(node.identity.len() as u64)?
-                .checked_add(256)?;
-            let n = node
-                .content
-                .iter()
-                .try_fold(n, |n, c| n.checked_add(c.len() as u64))?;
-            node.dependencies
-                .iter()
-                .try_fold(n, |n, d| n.checked_add(d.len() as u64))
-        })
+        let mut metadata = crate::NativeMetadataWeight::default();
+        metadata.tree::<DefPath, content::Content>(self.contents.len());
+        for (path, content) in &self.contents {
+            metadata.path(path);
+            content.weight(&mut metadata);
+        }
+        let bodies = metadata.bytes();
+        let mut nodes = crate::NativeMetadataWeight::default();
+        nodes.tree::<DefPath, content::Node>(self.nodes.len());
+        for (path, node) in &self.nodes {
+            nodes.path(path);
+            node.weight(&mut nodes);
+        }
+        bodies.checked_add(nodes.bytes())
     }
     fn program(&self, root: &DefPath) -> Result<SemanticProgram, QueryError> {
         self.program_from(vec![root.clone()])
@@ -656,11 +652,11 @@ impl Task {
             }
         }
         let mut nodes = vec![super::program_revision::runtime_node()];
-        nodes.extend(
-            definitions
-                .iter()
-                .filter_map(|p| self.nodes.get(p).cloned()),
-        );
+        for path in &definitions {
+            if let Some(node) = self.nodes.get(path) {
+                nodes.push(node.program(&self.queries, path)?);
+            }
+        }
         Ok(SemanticProgram {
             nodes,
             uses: definitions
@@ -671,9 +667,24 @@ impl Task {
         })
     }
     fn complete(&self) -> Result<ProductRef, QueryError> {
+        eprintln!(
+            "RUN COMPLETE graph={:?} nodes={}",
+            self.graph_bytes(),
+            self.nodes.len()
+        );
         let queries = &self.queries;
         let snapshot = queries.lower.signatures();
-        let hashes = hirsel_proof_export::definition_hashes(snapshot.types(), &self.contents)
+        let referenced = self
+            .contents
+            .iter()
+            .map(|(path, content)| (path.clone(), content.references()))
+            .collect();
+        let hashes =
+            hirsel_proof_export::definition_hashes_loading(snapshot.types(), &referenced, |path| {
+                self.contents[path]
+                    .load(queries, path, queries.weight.scratch)
+                    .map_err(|error| format!("{error:?}"))
+            })
             .map_err(operational)?;
         let unsafe_operations: BTreeSet<_> = hirsel_types::core_roles::intrinsic_roles()
             .into_iter()
@@ -723,11 +734,15 @@ impl Task {
         let program = self.program(&self.root)?;
         let mut callees = BTreeMap::new();
         for path in &program.definitions {
-            let Some(DefinitionContent::Body { tir: Some(tir), .. }) = self.contents.get(path)
-            else {
+            let Some(content) = self.contents.get(path).filter(|content| content.has_body()) else {
                 continue;
             };
-            for site in hirsel_proof_export::call_sites(tir, &hashes)
+            let DefinitionContent::Body { tir: Some(tir), .. } =
+                content.load(queries, path, queries.weight.scratch)?
+            else {
+                return Err(operational("Run content body disappeared"));
+            };
+            for site in hirsel_proof_export::call_sites(&tir, &hashes)
                 .map_err(|p| operational(format!("call outside Run closure: {p}")))?
             {
                 if matches!(site.kind, hirsel_proof_export::CallSiteKind::Reference(_))
