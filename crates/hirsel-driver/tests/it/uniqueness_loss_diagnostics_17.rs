@@ -222,7 +222,11 @@ fn uniqueness_loss_diagnostics_17_loop_branch_and_handback() {
             2
         );
         let inferred = checked(HANDBACK);
-        assert!(inferred.diagnostics.is_empty(), "{:?}", inferred.diagnostics);
+        assert!(
+            inferred.diagnostics.is_empty(),
+            "{:?}",
+            inferred.diagnostics
+        );
         let public_handback = HANDBACK.replacen("fn edit", "pub fn edit", 1);
         rejected(
             &public_handback,
