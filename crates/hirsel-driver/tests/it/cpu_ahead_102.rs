@@ -23,6 +23,14 @@ fn ready(source: &str) -> native::ReadyProgram {
 }
 
 fn ready_with_regions(source: &str, regions: bool) -> native::ReadyProgram {
+    ready_with_specialization(source, regions, true)
+}
+
+fn ready_with_specialization(
+    source: &str,
+    regions: bool,
+    specialize: bool,
+) -> native::ReadyProgram {
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
     let file = engine.sources.add("cpu.hir", source.to_owned()).unwrap();
     let output = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -31,6 +39,7 @@ fn ready_with_regions(source: &str, regions: bool) -> native::ReadyProgram {
     let validated = engine.import_native_input(input).unwrap();
     let mut options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
     options.regions = regions;
+    options.scoped_specialization = specialize;
     native::build(&validated, &options).unwrap()
 }
 
@@ -611,5 +620,196 @@ fn canonical_caller_keeps_an_ordinary_call_to_a_cpu_mapper() {
                 "{backend:?}: canonical caller selected a CPU-only alternate"
             );
         }
+    });
+}
+
+#[test]
+fn cpu_saved_summary_checks_live_result_ordinal_and_retained_owner_on_both_emitters() {
+    use hirsel_lir::ahead::validate_cpu_workers;
+    with_compiler_stack(|| {
+        for mode in 0..4 {
+            let owned = matches!(mode, 1 | 2);
+            let source = if mode == 2 {
+                SOURCE.replace(
+                    "fn() -> List[u64] uses {} { [1u64, 2u64, 3u64, 4u64] }",
+                    "fn() -> List[unique List[u64]] uses {} { [[1u64], [2u64], [3u64], [4u64]] }")
+                    .replace("fn(take job: u64) -> u64 uses {} { job + 7u64 }",
+                        "fn(take job: unique List[u64]) -> unique List[u64] uses {} { take job }")
+                    .replace("[8u64, 9u64, 10u64, 11u64]", "[[1u64], [2u64], [3u64], [4u64]]")
+            } else if owned {
+                SOURCE
+                    .replace(
+                        "fn(take job: u64) -> u64 uses {} { job + 7u64 }",
+                        "fn(take job: u64) -> unique List[u64] uses {} { [job + 7u64] }",
+                    )
+                    .replace(
+                        "[8u64, 9u64, 10u64, 11u64]",
+                        "[[8u64], [9u64], [10u64], [11u64]]",
+                    )
+            } else {
+                SOURCE.replace(
+                    "job + 7u64",
+                    "fn(x: u64) -> u64 uses {} { let xs = [x]; xs[0] + 7u64 }(job)",
+                )
+            };
+            let program = ready_with_specialization(&source, false, mode != 3);
+            let plan = native::ahead_plan(&program);
+            let (&id, root) = plan
+                .roots
+                .iter()
+                .find(|(_, root)| root.cpu.as_ref().is_some_and(|cpu| cpu.mapper.is_some()))
+                .unwrap_or_else(|| panic!("mode {mode}: {:?}", plan.refusals));
+            let cpu = root.cpu.as_ref().unwrap();
+            let summary = cpu.summary.as_ref().unwrap();
+            assert_eq!(summary.retained, owned);
+            if mode == 2 {
+                assert!(cpu.mapper.as_ref().unwrap().allocations.is_empty());
+                assert_eq!(root.handoff_bytes(64), 80);
+            }
+            assert_eq!(summary.call, cpu.binding.worker.mapper);
+            assert_eq!(summary.ordinal, cpu.binding.worker.ordinal);
+            if !owned {
+                assert!(
+                    cpu.mapper.as_ref().unwrap().graph.bodies.len() >= 2,
+                    "the allocating helper must remain a real Ready call"
+                );
+            }
+            let all: Vec<_> = program.units.iter().collect();
+            assert!(validate_cpu_workers(
+                &all,
+                &program.table,
+                &program.target,
+                &plan,
+                program.fuel
+            ));
+            for field in 0..7 {
+                let mut forged = plan.clone();
+                let cpu = forged.roots.get_mut(&id).unwrap().cpu.as_mut().unwrap();
+                let summary = cpu.summary.as_mut().unwrap();
+                match field {
+                    0 => summary.call = cpu.binding.worker.finish,
+                    1 => summary.value = hirsel_lir::ir::ValueId(u32::MAX),
+                    2 => summary.layout = cpu.binding.worker.environment,
+                    3 => summary.bytes += 1,
+                    4 => summary.ordinal = cpu.binding.worker.live,
+                    5 => summary.retained = !summary.retained,
+                    _ => cpu.summary = None,
+                }
+                assert!(
+                    !validate_cpu_workers(
+                        &all,
+                        &program.table,
+                        &program.target,
+                        &forged,
+                        program.fuel
+                    ),
+                    "forged summary field {field}"
+                );
+            }
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+                let objects = native::emit_backend_objects(
+                    &program,
+                    backend,
+                    hirsel_lir::emission::OptLevel::Default,
+                    native::Partition::Whole,
+                    false,
+                    None,
+                )
+                .unwrap();
+                native::check_ahead_objects(&program, &objects).unwrap();
+                assert!(objects.iter().any(|object| {
+                    object
+                        .imports
+                        .iter()
+                        .any(|symbol| symbol.name == "hirsel_rt_v2_cpu_ahead_publish")
+                }));
+                for object in objects.iter().filter(|object| {
+                    object.ahead.as_ref().is_some_and(|evidence| {
+                        hirsel_syntax::ContentHash::of_bytes(&object.bytes) == evidence.object
+                    })
+                }) {
+                    for helper in root
+                        .cpu
+                        .as_ref()
+                        .unwrap()
+                        .mapper
+                        .as_ref()
+                        .unwrap()
+                        .graph
+                        .bodies
+                        .keys()
+                    {
+                        let symbol = &plan.symbols[helper];
+                        let ordinary =
+                            hirsel_lir::emission::symbol_name(&symbol.definition, Some(helper));
+                        assert!(
+                            !object.imports.iter().any(|symbol| symbol.name == ordinary),
+                            "{backend:?} private helper retained its ordinary code word: {ordinary}"
+                        );
+                    }
+                }
+                let evidence = objects
+                    .iter()
+                    .find_map(|object| object.ahead.as_ref())
+                    .unwrap();
+                assert_eq!(root.graph.bodies.len(), if owned { 2 } else { 3 });
+                let frames: std::collections::BTreeMap<_, _> =
+                    evidence.frames.iter().copied().collect();
+                // This fixture is one worker -> mapper -> optional helper chain.
+                // Every real caller frame and the naked handoff must fit together.
+                let expected = 16 + 80 + root.graph.bodies.keys().map(|id| frames[id]).sum::<u64>();
+                assert!(
+                    evidence.bounds.contains(&(id, expected)),
+                    "{backend:?} helper frame composition: expected {expected}, bounds {:?}",
+                    evidence.bounds
+                );
+                assert!(
+                    native::continuation::ahead_certificates(&program, &objects)
+                        .iter()
+                        .any(|certificate| certificate.root == id)
+                );
+            }
+            assert!(program.units.iter().all(|unit| {
+                unit.unit()
+                    .tables
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .all(|(index, _)| {
+                        plan.cpu_start(unit.unit(), hirsel_lir::ir::CallId(index as u32))
+                            .is_none()
+                    })
+            }));
+        }
+        let captured = SOURCE.replace(
+            "job + 7u64",
+            "{ let ys = [job]; fn() -> u64 uses {} { ys[0] + 7u64 }() }",
+        );
+        let captured = ready_with_specialization(&captured, false, false);
+        assert!(
+            !native::ahead_plan(&captured)
+                .roots
+                .values()
+                .any(|root| root.cpu.is_some()),
+            "a captured owner still needs its own environment handoff"
+        );
+        let nested = SOURCE
+            .replace(
+                "fn(take job: u64) -> u64 uses {} { job + 7u64 }",
+                "fn(take job: u64) -> unique List[List[u64]] uses {} { [[job + 7u64]] }",
+            )
+            .replace(
+                "[8u64, 9u64, 10u64, 11u64]",
+                "[[[8u64]], [[9u64]], [[10u64]], [[11u64]]]",
+            );
+        let program = ready_with_regions(&nested, false);
+        let plan = native::ahead_plan(&program);
+        assert!(
+            plan.refusals
+                .values()
+                .any(|reason| reason == "CPU summary needs a complete retained-owner recipe"),
+            "{:?}",
+            plan.refusals
+        );
     });
 }

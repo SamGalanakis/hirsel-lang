@@ -321,22 +321,34 @@ fn body_custody(u: &LirUnit<Ready>, table: &LayoutTable) -> bool {
     }) {
         return false;
     }
-    if u.values
-        .iter()
-        .map(|v| v.ty)
-        .chain(u.slots.iter().map(|s| s.ty))
-        .any(|id| {
-            let ty = &u.types[id.index()];
-            !matches!(
-                ty.repr,
-                ValueRepr::Unit
-                    | ValueRepr::Scalar(_)
-                    | ValueRepr::Aggregate
-                    | ValueRepr::Block
-                    | ValueRepr::InitMask { .. }
-            ) || !data(ty.layout)
-        })
-    {
+    let local_callable = |ty: &LirType| {
+        ty.repr == ValueRepr::Callable
+            && matches!(
+                table.layout(ty.layout).map(|layout| &layout.kind),
+                Some(LayoutKind::Callable { .. })
+            )
+    };
+    let owned = |ty: &LirType| {
+        matches!(
+            ty.repr,
+            ValueRepr::Unit
+                | ValueRepr::Scalar(_)
+                | ValueRepr::Aggregate
+                | ValueRepr::Block
+                | ValueRepr::InitMask { .. }
+        ) && data(ty.layout)
+    };
+    if u.values.iter().enumerate().any(|(index, value)| {
+        let ty = &u.types[value.ty.index()];
+        if local_callable(ty) {
+            super::plan::known_code(u, ValueId(index as u32), &[], false).is_none()
+        } else {
+            !owned(ty)
+        }
+    }) || u.slots.iter().any(|slot| {
+        let ty = &u.types[slot.ty.index()];
+        !owned(ty) && !local_callable(ty)
+    }) {
         return false;
     }
     let abi = &table.fn_abis[u.header.abi.0 as usize];
@@ -379,15 +391,25 @@ fn direct_call(
     {
         return None;
     }
-    let symbol = match call.callee {
-        Callee::Direct(s) | Callee::Bound { code: s, .. } => &u.tables.symbols[s.index()],
+    let (id, definition) = match call.callee {
+        Callee::Direct(symbol) | Callee::Bound { code: symbol, .. } => {
+            let symbol = &u.tables.symbols[symbol.index()];
+            (symbol.instance?, Some(&symbol.definition))
+        }
+        Callee::Indirect(value) => (super::plan::known_code(u, value, &[], false)?, None),
         _ => return None,
     };
-    let id = symbol.instance?;
+    if let Callee::Bound { closure, .. } = call.callee
+        && super::plan::known_code(u, closure, &[], false) != Some(id)
+    {
+        return None;
+    }
     let reached = units.get(&id)?;
     let expected = table.fn_abis.get(call.abi.0 as usize)?;
     let actual = table.fn_abis.get(reached.header.abi.0 as usize)?;
-    (reached.header.definition == symbol.definition && expected == actual).then_some(id)
+    (definition.is_none_or(|definition| *definition == reached.header.definition)
+        && expected == actual)
+        .then_some(id)
 }
 
 enum Action {
@@ -457,6 +479,20 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
             } else {
                 return None;
             }
+        }
+        Inst::Closure { closure, .. } => {
+            let site = u.tables.closures.get(closure.index())?;
+            // An empty environment uses the existing immortal image, allocates
+            // no storage and carries no borrowed or counted capture across save.
+            if site.code.is_none()
+                || site.receipts.is_some()
+                || !site.captures.get(&u.pools.captures)?.is_empty()
+                || table.layout(site.environment)?.size != SizeSpec::Fixed(0)
+                || !scalar_image(table, site.environment)
+            {
+                return None;
+            }
+            Action::Private
         }
         // Growth, regional placement, reuse and implicit deep copies need
         // their own handoff recipes. Never treat them as ordinary allocation.

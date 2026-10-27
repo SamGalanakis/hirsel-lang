@@ -2262,7 +2262,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     .unit()
                     .ahead
                     .filter(|_| self.em.inputs.unit().alternate)
-                    .and_then(|plan| plan.cpu_mapper(unit.header.instance, call))
+                    .and_then(|plan| plan.cpu_callee(unit, call))
                     .cloned();
                 let name = symbol.map(|symbol| {
                     let name = hirsel_lir::ahead::alternate_name(
@@ -2642,6 +2642,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             };
             self.define(result, value)?;
         }
+        self.cpu_publish(call)?;
         self.ownership_call(call, true)?;
         self.jump(normal)
     }

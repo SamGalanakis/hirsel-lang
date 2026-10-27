@@ -39,15 +39,16 @@ pub struct RootPlan {
     pub cpu: Option<CpuWorkerGraph>,
 }
 impl RootPlan {
-    /// CpuAheadAlloc pushes one saved register and a return address before
-    /// the fixed 64-byte naked handoff. No allocator frame stays on this stack.
+    /// CPU allocation and summary calls add a saved register and return
+    /// address to the fixed 64-byte handoff. No Rust service frame is saved.
     pub fn handoff_bytes(&self, ordinary: u64) -> u64 {
-        if self
-            .cpu
-            .as_ref()
-            .and_then(|cpu| cpu.mapper.as_ref())
-            .is_some_and(|mapper| !mapper.allocations.is_empty())
-        {
+        if self.cpu.as_ref().is_some_and(|cpu| {
+            cpu.summary.is_some()
+                || cpu
+                    .mapper
+                    .as_ref()
+                    .is_some_and(|mapper| !mapper.allocations.is_empty())
+        }) {
             ordinary.max(80)
         } else {
             ordinary
@@ -897,6 +898,29 @@ impl AheadPlan {
             .values()
             .filter_map(|r| r.cpu.as_ref()?.mapper.as_ref())
             .any(|mapper| mapper.allocations.contains_key(&(id, instruction)))
+    }
+    /// Route a known local callable only along the independently checked CPU
+    /// graph edge. Ordinary callers retain their ordinary code entry.
+    pub fn cpu_callee(&self, unit: &LirUnit<Ready>, call: CallId) -> Option<&Symbol> {
+        if let Some(symbol) = self.cpu_mapper(unit.header.instance, call) {
+            return Some(symbol);
+        }
+        let Callee::Indirect(value) = unit.tables.calls.get(call.index())?.callee else {
+            return None;
+        };
+        let callee = known_code(unit, value, &[], false)?;
+        self.cpu_private_edge(unit.header.instance, callee)
+            .then(|| self.symbols.get(&callee))
+            .flatten()
+    }
+    pub fn cpu_private_edge(&self, caller: ContentHash, callee: ContentHash) -> bool {
+        self.roots.values().any(|root| {
+            root.cpu
+                .as_ref()
+                .and_then(|cpu| cpu.mapper.as_ref())
+                .and_then(|mapper| mapper.graph.bodies.get(&caller))
+                .is_some_and(|body| body.calls.contains(&callee))
+        })
     }
     pub fn cpu_mapper(&self, unit: ContentHash, call: CallId) -> Option<&Symbol> {
         let cpu = self.roots.get(&unit)?.cpu.as_ref()?;

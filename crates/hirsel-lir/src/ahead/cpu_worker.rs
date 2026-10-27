@@ -75,6 +75,46 @@ pub struct CpuWorkerGraph {
     pub shared_payload: LayoutId,
     pub spine: Spine,
     pub mapper: Option<CpuMapperGraph>,
+    pub summary: Option<CpuSummary>,
+}
+
+/// A borrowed image of the successful mapper result. The original SSA result
+/// remains its sole holder while the naked publication call saves this frame.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CpuSummary {
+    pub call: CallId,
+    pub value: ValueId,
+    pub layout: LayoutId,
+    pub bytes: u64,
+    pub ordinal: SlotId,
+    pub retained: bool,
+}
+
+fn summary_layout(table: &LayoutTable, id: LayoutId) -> Option<(u64, bool)> {
+    let layout = table.layout(id)?;
+    let SizeSpec::Fixed(bytes) = layout.size else {
+        return None;
+    };
+    if bytes > MAX_IMAGE_BYTES || layout.align > 16 {
+        return None;
+    }
+    let retained = match layout.kind {
+        LayoutKind::Block { payload } | LayoutKind::Box { payload }
+            if table.layout(payload)?.scan.is_empty() =>
+        {
+            true
+        }
+        _ if scalar_image(table, id) => false,
+        _ => return None,
+    };
+    Some((bytes, retained))
+}
+
+impl AheadPlan {
+    pub fn cpu_summary(&self, id: ContentHash, call: CallId) -> Option<&CpuSummary> {
+        let summary = self.roots.get(&id)?.cpu.as_ref()?.summary.as_ref()?;
+        (summary.call == call).then_some(summary)
+    }
 }
 
 /// Known mapper code at direct calls of the selected typed map instances.
@@ -183,6 +223,27 @@ pub fn validate_cpu_workers(
                 .source
                 .is_none_or(|layout| !scalar_image(table, layout))
         {
+            return false;
+        }
+        let expected_summary = if cpu.mapper.is_some() {
+            let Some((bytes, retained)) = summary_layout(table, protocol.result_layout) else {
+                return false;
+            };
+            let Some(value) = worker.unit().tables.calls[protocol.mapper.index()].result else {
+                return false;
+            };
+            Some(CpuSummary {
+                call: protocol.mapper,
+                value,
+                layout: protocol.result_layout,
+                bytes,
+                ordinal: protocol.ordinal,
+                retained,
+            })
+        } else {
+            None
+        };
+        if cpu.summary != expected_summary {
             return false;
         }
         let callback = cpu.binding.callback.instance.unwrap();
@@ -474,6 +535,20 @@ pub(super) fn propose(
     if instructions + u.instructions.len() + u.terminators.len() > MAX_INSTRUCTIONS {
         return Err(no("oversize CPU worker graph"));
     }
+    let summary = if mapper.is_some() {
+        let (bytes, retained) = summary_layout(table, protocol.result_layout)
+            .ok_or_else(|| no("CPU summary needs a complete retained-owner recipe"))?;
+        Some(CpuSummary {
+            call: protocol.mapper,
+            value: u.tables.calls[protocol.mapper.index()].result.unwrap(),
+            layout: protocol.result_layout,
+            bytes,
+            ordinal: protocol.ordinal,
+            retained,
+        })
+    } else {
+        None
+    };
     let spine = spine(u, &protocol);
     let wrapper = table.layout(protocol.environment).unwrap();
     let LayoutKind::Shared {
@@ -518,7 +593,7 @@ pub(super) fn propose(
         "hirsel.ahead.cpu-worker.v1",
         [
             graph.identity.0.as_slice(),
-            format!("{binding:?}{spine:?}{recipe:?}").as_bytes(),
+            format!("{binding:?}{spine:?}{recipe:?}{summary:?}").as_bytes(),
         ],
     );
     Ok(RootPlan {
@@ -530,6 +605,7 @@ pub(super) fn propose(
             shared_payload,
             spine,
             mapper,
+            summary,
         }),
     })
 }

@@ -140,7 +140,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let Some(symbol) = unit.tables.symbols.get(c.symbol.index()) else {
                     return self.invalid("closure code outside the symbol table");
                 };
-                let name = symbol_name(&symbol.definition, symbol.instance.as_ref());
+                let name = if self.inputs.alternate
+                    && self.inputs.ahead.is_some_and(|plan| {
+                        symbol.instance.is_some_and(|callee| {
+                            plan.cpu_private_edge(unit.header.instance, callee)
+                        })
+                    }) {
+                    hirsel_lir::ahead::alternate_name(&symbol.definition, symbol.instance.unwrap())
+                } else {
+                    symbol_name(&symbol.definition, symbol.instance.as_ref())
+                };
                 let abi = fn_abi(self.inputs.layouts, c.abi, self.definition())?;
                 self.import_function(&name, &symbol.definition, Some(abi_digest(abi)));
                 // A bound call may name this same entry later in the unit. Declare

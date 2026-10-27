@@ -230,3 +230,91 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(true)
     }
 }
+
+impl<'m, 'a> FnEmitter<'m, 'a> {
+    /// Publish only the successful mapper result, before any instruction can
+    /// move or release it. The image and retained table borrow that SSA owner.
+    pub(super) fn cpu_publish(&mut self, call: CallId) -> Emitted {
+        if !self.inputs.alternate {
+            return Ok(());
+        }
+        let Some(summary) = self
+            .inputs
+            .ahead
+            .and_then(|plan| plan.cpu_summary(self.unit.header.instance, call))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let state = self.ahead_state.ok_or_else(|| CodegenError::Invalid {
+            definition: self.definition().clone(),
+            what: "CPU summary without its physical state".into(),
+        })?;
+        let image = self.stack(summary.layout)?;
+        self.store(
+            self.value_shape(summary.value)?,
+            self.get(summary.value)?,
+            image,
+        );
+        let ordinal = self.slots[summary.ordinal.index()].ok_or_else(|| CodegenError::Invalid {
+            definition: self.definition().clone(),
+            what: "CPU summary without its ordinal capture".into(),
+        })?;
+        let ordinal = self.load(Shape::Scalar(ScalarKind::U64), ordinal);
+        let record = self
+            .prologue
+            .alloca(self.module.array_type(self.module.int_type(8), 48), 8);
+        let i32t = self.module.int_type(32);
+        for (offset, value, align) in [
+            (0, self.module.const_int(i32t, 1), 4),
+            (4, self.module.const_zero(i32t), 4),
+            (8, ordinal, 8),
+            (16, image.ptr, 8),
+            (24, self.const_u64(summary.bytes), 8),
+            (32, self.descriptor(summary.layout)?, 4),
+            (
+                36,
+                self.module.const_int(i32t, u128::from(summary.retained)),
+                4,
+            ),
+            // A retained Block/Box is a single pointer image. Its payload has
+            // no child references, as independently checked by the CPU plan.
+            (
+                40,
+                if summary.retained {
+                    image.ptr
+                } else {
+                    self.module.const_zero(self.module.ptr_type())
+                },
+                8,
+            ),
+        ] {
+            self.builder.store(
+                value,
+                self.builder.offset(record, self.const_u64(offset)),
+                align,
+            );
+        }
+        self.ahead_flush();
+        let publish = self.runtime(RuntimeEntry::CpuAheadPublish)?;
+        let status = self.builder.call(publish, &[state, record]);
+        self.ahead_reload();
+        let accepted = self.builder.icmp(
+            IntPredicate::Eq,
+            status,
+            self.module.const_zero(self.module.int_type(8)),
+        );
+        let next = self.module.append_block(self.function);
+        let invalid = self.module.append_block(self.function);
+        self.builder.cond_br(accepted, next, invalid);
+        self.builder.position(invalid);
+        let trap = self
+            .module
+            .intrinsic("llvm.trap", &[])
+            .or_else(|error| self.invalid(error))?;
+        self.builder.call(trap, &[]);
+        self.builder.unreachable();
+        self.builder.position(next);
+        Ok(())
+    }
+}

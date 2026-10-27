@@ -11,12 +11,13 @@ pub(super) fn helper_identity() -> ContentHash {
     // otherwise identical native code. AheadPlan additionally binds every body,
     // layout, target, fuel choice and capture recipe used by these helpers.
     ContentHash::of_parts(
-        "hirsel.ahead.helpers.v5",
+        "hirsel.ahead.helpers.v6",
         [
             hirsel_rt::AHEAD_HELPERS,
             hirsel_rt::AHEAD_HOST_HELPERS,
             hirsel_rt::AHEAD_CPU_HELPERS,
             hirsel_rt::AHEAD_CPU_ALLOCATION_HELPERS,
+            hirsel_rt::AHEAD_CPU_HANDOFF_HELPERS,
             hirsel_rt::AHEAD_SWITCH,
             hirsel_rt::DEPTH_HELPERS,
             hirsel_rt::DEPTH_LEAF_STACK_BYTES.to_le_bytes().as_slice(),

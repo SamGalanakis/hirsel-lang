@@ -431,3 +431,65 @@ impl FnEmitter<'_, '_, '_> {
         Ok(true)
     }
 }
+
+impl FnEmitter<'_, '_, '_> {
+    /// Borrow the live mapper result into a saved ABI image on success only.
+    pub(crate) fn cpu_publish(&mut self, call: hirsel_lir::ir::CallId) -> Emitted {
+        if !self.em.inputs.unit().alternate {
+            return Ok(());
+        }
+        let Some(summary) = self
+            .em
+            .inputs
+            .unit()
+            .ahead
+            .and_then(|plan| plan.cpu_summary(self.unit.header.instance, call))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let Some(state) = self.ahead_state else {
+            return self.invalid("CPU summary without its physical state");
+        };
+        let image = self.stack(summary.layout)?;
+        let shape = self.value_shape(summary.value)?;
+        let value = self.get(summary.value)?;
+        self.store(shape, value, image)?;
+        let Some(ordinal) = self.slots[summary.ordinal.index()] else {
+            return self.invalid("CPU summary without its ordinal capture");
+        };
+        let ordinal = self.load_ty(types::I64, ordinal.ptr, 0);
+        let (record, _) = self.stack_bytes(48, 8);
+        let version = self.b.ins().iconst(types::I32, 1);
+        let pending = self.b.ins().iconst(types::I32, 0);
+        let bytes = self.u64c(summary.bytes);
+        let descriptor = self.descriptor_value(summary.layout)?;
+        let count = self.b.ins().iconst(types::I32, i64::from(summary.retained));
+        let retained = if summary.retained {
+            image.ptr
+        } else {
+            self.u64c(0)
+        };
+        for (offset, value) in [
+            (0, version),
+            (4, pending),
+            (8, ordinal),
+            (16, image.ptr),
+            (24, bytes),
+            (32, descriptor),
+            (36, count),
+            (40, retained),
+        ] {
+            self.store_at(value, record, offset);
+        }
+        self.ahead_flush();
+        let status = self.rt1(
+            hirsel_lir::runtime_abi::RuntimeEntry::CpuAheadPublish,
+            &[state, record],
+        )?;
+        self.ahead_reload();
+        let refused = self.b.ins().icmp_imm(IntCC::NotEqual, status, 0);
+        self.b.ins().trapnz(refused, crate::function::TRAP);
+        Ok(())
+    }
+}
