@@ -71,22 +71,27 @@ fn lower_with_checks(
 ) -> Result<Lowered, String> {
     let unit = checked(unit, inputs)?;
     let table = index.table();
-    let (unit, plan, placement) = placement::place_observed(unit, table, options.placement, input)?;
+    let (unit, plan, placement) = placement::place_observed(unit, table, options.placement, input)
+        .map_err(|error| format!("ownership placement: {error}"))?;
     let unit = checked(unit, inputs)?;
     let mut recipes = vec![placement];
-    let (unit, plan, insertion) = insert::insert_observed(unit, table, options.proofs, &plan)?;
+    let (unit, plan, insertion) = insert::insert_observed(unit, table, options.proofs, &plan)
+        .map_err(|error| format!("ownership RC insertion: {error}"))?;
     recipes.extend(insertion);
     let (unit, plan, elision) = if options.elide {
-        elide::elide_observed(unit, table, &plan)?
+        elide::elide_observed(unit, table, &plan)
+            .map_err(|error| format!("ownership elision: {error}"))?
     } else {
         crate::observation::identity(&unit, &plan, unit.clone())?
     };
     let unit = checked(unit, inputs)?;
     recipes.push(elision);
-    let (unit, plan, reuse) = reuse::reuse_observed(unit, options.reuse, index, &plan)?;
+    let (unit, plan, reuse) = reuse::reuse_observed(unit, options.reuse, index, &plan)
+        .map_err(|error| format!("ownership reuse: {error}"))?;
     let unit = checked(unit, inputs)?;
     recipes.extend(reuse);
-    let (unit, plan, ready) = ready::ready_observed(unit, options.finalizers, index, &plan)?;
+    let (unit, plan, ready) = ready::ready_observed(unit, options.finalizers, index, &plan)
+        .map_err(|error| format!("ownership Ready lowering: {error}"))?;
     recipes.extend(ready);
     Ok(Lowered {
         unit,

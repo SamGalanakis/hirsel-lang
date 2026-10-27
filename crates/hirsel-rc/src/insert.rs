@@ -201,8 +201,8 @@ pub fn lower_value_copies_observed(
 }
 
 /// Each RC subpass supplies and checks a recipe, including unchanged subpasses.
-/// Detach/release rewrites currently admit only surviving marker coordinates;
-/// unsupported transports fail rather than replacing the input observations.
+/// Detach rewrites retain coordinates. Releases report their instruction edits
+/// and editor compaction; unsupported transports refuse the original plan.
 pub fn insert_observed(
     unit: LirUnit<Placed>,
     table: &LayoutTable,
@@ -221,8 +221,22 @@ pub fn insert_observed(
     let unit = copy_on_write(unit, table, proofs).map_err(|error| error.to_string())?;
     let (unit, plan, detach) = crate::observation::identity(&before, &plan, unit)?;
     let before = unit.clone();
-    let unit = release_at_last_use(unit, table).map_err(|error| error.to_string())?;
-    let (unit, plan, releases) = crate::observation::identity(&before, &plan, unit)?;
+    let (editor, origins) =
+        release_at_last_use_with::<true>(unit, table).map_err(|error| error.to_string())?;
+    for block in &origins.cloned {
+        if plan.observations.iter().any(|row| {
+            use hirsel_lir::ownership_trace::Point;
+            matches!(row.point,
+                Point::Instruction { block: b, .. } | Point::ReleaseDrop { block: b, .. }
+                | Point::CallEntered(b) | Point::CallReturned(b) | Point::Return(b)
+                if b == *block)
+        }) {
+            return Err(format!(
+                "ownership trace: cloned observed cleanup {block:?} needs a transport recipe"
+            ));
+        }
+    }
+    let (unit, plan, releases) = crate::observation::finish(&before, &plan, editor, &origins.rows)?;
     Ok((unit, plan, vec![copies, detach, releases]))
 }
 
@@ -1161,6 +1175,15 @@ impl<S: Stage> Editor<S> {
     /// roots with no projection check nothing, so an entry preparation
     /// dominates every use.
     pub fn whole(&mut self, facts: &mut Facts, slot: SlotId) -> AddressId {
+        self.whole_reporting(facts, slot, |_, _| {})
+    }
+
+    fn whole_reporting(
+        &mut self,
+        facts: &mut Facts,
+        slot: SlotId,
+        inserted: impl FnOnce(usize, usize),
+    ) -> AddressId {
         for (a, info) in self.unit.addresses.iter().enumerate() {
             let id = AddressId(a as u32);
             if info.base == AddressBase::Slot(slot)
@@ -1230,6 +1253,7 @@ impl<S: Stage> Editor<S> {
                 failure,
             },
         );
+        inserted(entry, at);
         id
     }
 
@@ -3115,6 +3139,7 @@ fn split_cleanups(
     lay: Lay<'_>,
     facts: &Facts,
     eligible: impl Fn(SlotId) -> bool,
+    mut cloned: impl FnMut(BlockId),
 ) {
     let n = ed.unit.blocks.len();
     let cleanup =
@@ -3228,7 +3253,12 @@ fn split_cleanups(
             }
         }
         for (k, (_, members)) in groups.into_iter().enumerate() {
-            let target = if k == 0 { b } else { clone_cleanup(ed, b) };
+            let target = if k == 0 {
+                b
+            } else {
+                cloned(b);
+                clone_cleanup(ed, b)
+            };
             let mut states = Vec::with_capacity(members.len());
             for (e, state) in members {
                 ed.unit.tables.edges[e.index()].target = target;
@@ -3319,10 +3349,56 @@ struct Point {
     slot: SlotId,
 }
 
+struct ReleaseOrigins<const TRACK: bool> {
+    rows: Vec<Vec<Option<u32>>>,
+    cloned: Vec<BlockId>,
+}
+impl<const TRACK: bool> ReleaseOrigins<TRACK> {
+    fn new(unit: &LirUnit<Rc>) -> Self {
+        Self {
+            rows: if TRACK {
+                unit.blocks
+                    .iter()
+                    .map(|block| (0..block.instructions.len).map(Some).collect())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            cloned: Vec::new(),
+        }
+    }
+    fn insert(&mut self, block: usize, at: usize, count: usize) {
+        if TRACK {
+            self.rows[block].splice(at..at, std::iter::repeat_n(None, count));
+        }
+    }
+    fn remove(&mut self, block: usize, at: usize) {
+        if TRACK {
+            self.rows[block].remove(at);
+        }
+    }
+    fn complete(&mut self, ed: &Editor<Rc>) {
+        if TRACK {
+            self.rows.resize_with(ed.code.len(), Vec::new);
+            for (origins, code) in self.rows.iter_mut().zip(&ed.code) {
+                origins.resize(code.len(), None);
+            }
+        }
+    }
+}
+
 fn release_at_last_use(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit<Rc>, PassError> {
+    let (editor, _) = release_at_last_use_with::<false>(unit, table)?;
+    Ok(editor.finish())
+}
+
+fn release_at_last_use_with<const TRACK: bool>(
+    unit: LirUnit<Rc>,
+    table: &LayoutTable,
+) -> Result<(Editor<Rc>, ReleaseOrigins<TRACK>), PassError> {
     let mut excluded = BTreeSet::new();
     loop {
-        let lost = match release_pass(unit.clone(), table, &excluded)? {
+        let lost = match release_pass::<TRACK>(unit.clone(), table, &excluded)? {
             Ok(result) => return Ok(result),
             Err(lost) => lost,
         };
@@ -3340,11 +3416,12 @@ fn release_at_last_use(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit
 
 /// One attempt: the unit, or the slots whose early release could not stand
 /// (no expressible failure cleanup, or an anchor left undischarged).
-fn release_pass(
+fn release_pass<const TRACK: bool>(
     unit: LirUnit<Rc>,
     table: &LayoutTable,
     excluded: &BTreeSet<SlotId>,
-) -> Result<Result<LirUnit<Rc>, BTreeSet<SlotId>>, PassError> {
+) -> Result<Result<(Editor<Rc>, ReleaseOrigins<TRACK>), BTreeSet<SlotId>>, PassError> {
+    let mut origins = ReleaseOrigins::<TRACK>::new(&unit);
     let lay = Lay(table);
     let mut facts = Facts::new(&unit, table);
     let mut ed = Editor::new(unit);
@@ -3352,7 +3429,9 @@ fn release_pass(
     // block, which must happen before any position is recorded.
     for s in 0..ed.unit.slots.len() {
         if owns_type(&ed.unit, lay, ed.unit.slots[s].ty) {
-            ed.whole(&mut facts, SlotId(s as u32));
+            ed.whole_reporting(&mut facts, SlotId(s as u32), |b, at| {
+                origins.insert(b, at, 1)
+            });
         }
     }
     let ok = eligible(&ed.unit, lay, &facts);
@@ -3450,7 +3529,7 @@ fn release_pass(
         let Some(&anchor) = anchors_of.get(&p.slot).and_then(|a| a.first()) else {
             continue;
         };
-        let address = ed.whole(&mut facts, p.slot);
+        let address = ed.whole_reporting(&mut facts, p.slot, |b, at| origins.insert(b, at, 1));
         // A silent owner dying at a join is discharged on its incoming
         // edges, before their different moved sets lose their correlation.
         // Keep the transport after cleanup so no joined value is read early.
@@ -3484,6 +3563,7 @@ fn release_pass(
             }
             continue;
         }
+        origins.insert(p.block.index(), p.index, 1);
         ed.code[p.block.index()].insert(
             p.index,
             Inst::Drop {
@@ -3498,7 +3578,12 @@ fn release_pass(
     // A version join of content an early release ended on some incoming
     // path names nothing any more: the join goes.
     prune_phis(&mut ed, lay, &mut facts);
-    split_cleanups(&mut ed, lay, &facts, eligible);
+    split_cleanups(&mut ed, lay, &facts, eligible, |block| {
+        if TRACK {
+            origins.cloned.push(block);
+        }
+    });
+    origins.complete(&ed);
 
     // 2. Settle every drop of an eligible slot by the state it now sees.
     let states = {
@@ -3572,6 +3657,7 @@ fn release_pass(
         match settle {
             Settle::Delete => {
                 code.remove(i);
+                origins.remove(b.index(), i);
                 for r in releases.iter_mut().filter(|r| r.0 == b && r.1 > i) {
                     r.1 -= 1;
                 }
@@ -3588,6 +3674,9 @@ fn release_pass(
                 }
             }
             Settle::Release(version) => {
+                // The semantic Drop is replaced, so it has no surviving origin.
+                origins.remove(b.index(), i);
+                origins.insert(b.index(), i, 2);
                 let (slot, _) = facts.slot_of(address).expect("slot drop");
                 let Some(reaching) = version else {
                     return Err(PassError::Malformed(format!(
@@ -3717,7 +3806,8 @@ fn release_pass(
         return Ok(Err(lost));
     }
     let _ = superseded;
-    Ok(Ok(ed.finish()))
+    origins.complete(&ed);
+    Ok(Ok((ed, origins)))
 }
 
 #[derive(Clone, Copy, Debug)]

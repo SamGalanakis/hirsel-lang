@@ -4606,3 +4606,96 @@ fn ownership_resource_selection_ignores_data_release_but_refuses_hidden_resource
         "a counted block can hide Resource descendants"
     );
 }
+
+#[test]
+fn ownership_trace_release_relocates_resource_drops_after_silent_cleanup_is_removed() {
+    use hirsel_lir::stage::Placed;
+    use support::Undo;
+    let mut t = Lir::<Placed>::new(&[(Passing::Take, l::RES), (Passing::Take, l::BLK)], None);
+    let resource = t.slot(l::RES, SlotKind::Parameter(0), ROOT);
+    let data = t.slot(l::BLK, SlotKind::Parameter(1), ROOT);
+    let resource_version = t.version_of(resource);
+    let data_version = t.version_of(data);
+    t.param(resource_version);
+    t.param(data_version);
+    let undo = [Undo::Drop(data), Undo::Drop(resource)];
+    t.at(ENTRY, resource, &[], &undo);
+    let data_address = t.at(ENTRY, data, &[], &undo);
+    let taken = t.read(ENTRY, data_address, data_version, ReadMode::Take, None);
+    t.store(ENTRY, data_address, taken, data);
+    let exit = t.cleanup_exit(&[Undo::Drop(data), Undo::Drop(resource)], None);
+    t.builder.jump(ENTRY, exit, &[]);
+    let (before, table, _) = t.finish();
+    let before = checked_native_fixture(before, &table).into_raw();
+    let code = before.blocks[exit.index()]
+        .instructions
+        .get(&before.instructions)
+        .unwrap();
+    let (index, address, anchor) = code
+        .iter()
+        .enumerate()
+        .find_map(|(index, inst)| {
+            if let Inst::Drop {
+                address, anchor, ..
+            } = *inst
+                && before.addresses[address.index()].base == AddressBase::Slot(resource)
+            {
+                Some((index as u32, address, anchor))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let input = Plan::new(
+        &before,
+        vec![Observation {
+            point: Point::Instruction {
+                block: exit,
+                index,
+                moment: Moment::Before,
+            },
+            marker: ObserveOwnership {
+                id: MarkerId(71),
+                site: before.tables.cleanup_anchors[anchor.index()].site,
+                kind: Kind::Drop,
+                token: Location::Address(address),
+                owner: Location::Address(address),
+            },
+        }],
+    );
+    let ordinary = hirsel_rc::insert::insert(before.clone(), &table, &Default::default()).unwrap();
+    let (after, output, recipes) =
+        hirsel_rc::insert::insert_observed(before.clone(), &table, &Default::default(), &input)
+            .unwrap();
+    let after = checked_native_fixture(after, &table).into_raw();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(recipes.len(), 3);
+    assert_ne!(input.observations[0].point, output.observations[0].point);
+    assert_eq!(input.observations[0].marker, output.observations[0].marker);
+    check_transform(
+        &before,
+        &input,
+        &after,
+        &output,
+        Some(&recipe(&input, &output)),
+    )
+    .unwrap();
+    let mut stale = output.clone();
+    stale.observations[0].point = input.observations[0].point;
+    assert!(check(&after, &stale).is_err());
+    let missing = Plan::new(&after, vec![]);
+    assert_eq!(
+        check_transform(
+            &before,
+            &input,
+            &after,
+            &missing,
+            Some(&recipe(&input, &missing))
+        )
+        .unwrap_err(),
+        Error::MissingMarker(MarkerId(71))
+    );
+}
