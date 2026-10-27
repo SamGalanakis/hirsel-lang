@@ -24,6 +24,11 @@ pub(super) fn helper_identity() -> ContentHash {
             } else {
                 &[]
             },
+            if hirsel_llvm::NATIVE_TSAN || hirsel_cranelift::NATIVE_TSAN {
+                hirsel_core_contract::tsan::CONTRACT
+            } else {
+                &[]
+            },
             hirsel_rt::DEPTH_HELPERS,
             hirsel_rt::DEPTH_LEAF_STACK_BYTES.to_le_bytes().as_slice(),
         ],

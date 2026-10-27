@@ -1,7 +1,8 @@
 load("@prelude//rust:rust_toolchain.bzl", "PanicRuntime", "RustSanitizer", "RustToolchainInfo")
 
 def _rust(ctx):
-    if ctx.attrs.sanitizer and not any(["/lib/libcore-" in p and p.endswith(".rlib") for p in ctx.attrs.srcs]):
+    core_prefix = "lib/rustlib/{}/lib/libcore-".format(ctx.attrs.target_triple)
+    if ctx.attrs.sanitizer and not any([p.startswith(core_prefix) and p.endswith(".rlib") for p in ctx.attrs.srcs]):
         fail("ThreadSanitizer needs its instrumented std: run python3 tools/buck2/prepare_tsan.py")
     tree = ctx.actions.copied_dir("rust", ctx.attrs.srcs)
     return [

@@ -6,6 +6,9 @@
 /// itself executes on idle and contributes no bytes to the private stack.
 pub const PRIVATE_STACK_BYTES: u64 = 16;
 
+/// The callback inventory and bridge ABI are part of diagnostic helper identity.
+pub const CONTRACT: &[u8] = include_bytes!("tsan.rs");
+
 /// One inventory for emission, independent certification and runtime thunks.
 #[macro_export]
 macro_rules! tsan_callbacks {
