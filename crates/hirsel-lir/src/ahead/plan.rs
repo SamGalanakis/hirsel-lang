@@ -868,6 +868,17 @@ fn code_values_inner(
 }
 
 impl AheadPlan {
+    /// Sharing an emitted body does not add a private edge to another root.
+    pub fn has_private_edge(&self, caller: ContentHash, callee: ContentHash) -> bool {
+        self.roots.values().any(|root| {
+            root.graph.bodies.contains_key(&callee)
+                && root
+                    .graph
+                    .bodies
+                    .get(&caller)
+                    .is_some_and(|body| body.calls.contains(&callee))
+        })
+    }
     pub fn host_spine(&self, id: ContentHash) -> Option<&Spine> {
         self.roots
             .values()

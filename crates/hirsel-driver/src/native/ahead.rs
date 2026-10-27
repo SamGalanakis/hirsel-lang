@@ -143,7 +143,7 @@ pub(in crate::native) fn unknown_machine_calls(
                         let symbol = &u.tables.symbols[symbol.index()];
                         if symbol
                             .instance
-                            .is_none_or(|id| !plan.bodies.contains_key(&id))
+                            .is_none_or(|id| !plan.has_private_edge(u.header.instance, id))
                         {
                             prefix_functions.insert(hirsel_lir::emission::symbol_name(
                                 &symbol.definition,

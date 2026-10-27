@@ -305,7 +305,35 @@ pub fn validate_cpu_workers(
             return false;
         }
     }
-    true
+    // CPU allocation helpers require the bound CPU Native record. A second
+    // root cannot make them ordinary private callees by borrowing their frames.
+    let mut cpu_only: BTreeSet<_> = plan
+        .roots
+        .iter()
+        .filter_map(|(id, root)| root.cpu.as_ref().map(|_| *id))
+        .collect();
+    for root in plan.roots.values().filter_map(|root| root.cpu.as_ref()) {
+        if let Some(mapper) = &root.mapper {
+            cpu_only.extend(mapper.allocations.keys().map(|(id, _)| *id));
+        }
+    }
+    loop {
+        let before = cpu_only.len();
+        for root in plan.roots.values().filter(|root| root.cpu.is_some()) {
+            for (id, body) in &root.graph.bodies {
+                if body.calls.iter().any(|callee| cpu_only.contains(callee)) {
+                    cpu_only.insert(*id);
+                }
+            }
+        }
+        if cpu_only.len() == before {
+            break;
+        }
+    }
+    !plan
+        .roots
+        .values()
+        .any(|root| root.cpu.is_none() && root.graph.bodies.keys().any(|id| cpu_only.contains(id)))
 }
 
 fn spine(u: &LirUnit<Ready>, protocol: &CpuWorkerProtocol) -> Spine {

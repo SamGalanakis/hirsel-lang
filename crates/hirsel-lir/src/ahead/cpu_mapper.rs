@@ -308,6 +308,9 @@ fn mutable_capture(u: &LirUnit<Ready>, address: AddressId) -> bool {
 fn body_custody(u: &LirUnit<Ready>, table: &LayoutTable) -> bool {
     let data = |layout| {
         cpu_owned_layout(table, layout)
+            && table
+                .layout(layout)
+                .is_some_and(|layout| layout.align <= 16)
             && matches!(
         table.layout(layout).map(|l| &l.size), Some(SizeSpec::Fixed(n)) if *n <= MAX_IMAGE_BYTES)
     };

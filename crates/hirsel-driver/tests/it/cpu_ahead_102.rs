@@ -422,3 +422,194 @@ fn cpu_allocating_mapper_graph_binds_heap_handoffs_cleanup_and_both_final_frames
         assert_eq!(root.handoff_bytes(64), 80);
     });
 }
+
+#[test]
+fn canonical_caller_keeps_an_ordinary_call_to_a_cpu_mapper() {
+    use hirsel_lir::{ahead::*, emission::*, ir::*};
+    use std::collections::{BTreeMap, BTreeSet};
+    with_compiler_stack(|| {
+        let source = SOURCE
+            .replace("  let outcome =", "  let probe = fn(take job: u64) -> u64 uses {} { let xs = [job]; xs[0] + 7u64 }(1u64)\n  failure.check(probe == 8u64, Bounds())\n  let outcome =")
+            .replace("fn(take job: u64) -> u64 uses {} { job + 7u64 }", "fn(take job: u64) -> u64 uses {} { let xs = [job]; xs[0] + 7u64 }");
+        let mut program = ready_with_regions(&source, false);
+        let initial = native::ahead_plan(&program);
+        let binding = &initial
+            .roots
+            .values()
+            .find(|root| root.cpu.as_ref().is_some_and(|cpu| cpu.mapper.is_some()))
+            .unwrap()
+            .cpu
+            .as_ref()
+            .unwrap()
+            .binding;
+        let caller_id = binding.caller;
+        let mapper_id = binding.callback.instance.unwrap();
+        let index = program
+            .units
+            .iter()
+            .position(|u| u.unit().header.instance == caller_id)
+            .unwrap();
+        let mut caller = program.units[index].clone().into_raw();
+        let call = caller
+            .tables
+            .calls
+            .iter()
+            .position(|call| call.callee.value().is_some())
+            .unwrap();
+        let closure = caller.tables.calls[call].callee.value().unwrap();
+        let code = SymbolId(caller.tables.symbols.len() as u32);
+        caller.tables.symbols.push(binding.callback.clone());
+        // Refine the identical local probe to the mapper's compatible named
+        // body, retaining strict C admission before testing physical routing.
+        caller.tables.calls[call].callee = Callee::Bound { code, closure };
+        let inputs = hirsel_lir::validate::Inputs {
+            target: &program.target,
+            layouts: &program.table,
+            manifest: &program.manifest,
+            operations: &program.operations,
+            discharge: Some(&program.discharged),
+            memo: Default::default(),
+        };
+        program.units[index] = hirsel_lir::validate::validate_ready(caller, &inputs).unwrap();
+        let mut plan = native::ahead_plan(&program);
+        let cpu_root = plan
+            .roots
+            .values()
+            .find(|root| root.cpu.as_ref().is_some_and(|cpu| cpu.mapper.is_some()))
+            .unwrap()
+            .clone();
+        let caller = program.units[index].unit();
+        // A fully canonical adapter has no private frame edges. The same
+        // callee still needs a CPU alternate for the other root in this plan.
+        let body = ScalarBody {
+            body: caller.digest(),
+            calls: BTreeSet::new(),
+            fuel_points: hirsel_lir::fuel::fuel_points(caller),
+        };
+        let graph = ScalarGraph {
+            root: caller_id,
+            bodies: BTreeMap::from([(caller_id, body.clone())]),
+            identity: hirsel_syntax::ContentHash::of_bytes(b"canonical adapter"),
+        };
+        let spine = Spine {
+            private_instructions: vec![false; caller.instructions.len()],
+            scalar_calls: BTreeSet::new(),
+            reached_calls: BTreeSet::new(),
+            suspended: BTreeMap::new(),
+            barriers: (0..caller.instructions.len()).collect(),
+            deferred_releases: BTreeMap::new(),
+        };
+        plan.bodies.insert(caller_id, body);
+        plan.roots.insert(
+            caller_id,
+            RootPlan {
+                graph: graph.clone(),
+                recipe: cpu_root.recipe.clone(),
+                host: Some(HostReturnGraph {
+                    graph,
+                    spines: BTreeMap::from([(caller_id, spine)]),
+                    reads: BTreeMap::new(),
+                }),
+                cpu: None,
+            },
+        );
+        let all: Vec<_> = program.units.iter().collect();
+        assert!(validate_cpu_workers(
+            &all,
+            &program.table,
+            &program.target,
+            &plan,
+            program.fuel
+        ));
+        let mut bad = plan.clone();
+        let host = bad.roots.get_mut(&caller_id).unwrap();
+        host.graph
+            .bodies
+            .get_mut(&caller_id)
+            .unwrap()
+            .calls
+            .insert(mapper_id);
+        host.graph.bodies.extend(
+            cpu_root
+                .cpu
+                .as_ref()
+                .unwrap()
+                .mapper
+                .as_ref()
+                .unwrap()
+                .graph
+                .bodies
+                .clone(),
+        );
+        assert!(
+            !validate_cpu_workers(&all, &program.table, &program.target, &bad, program.fuel),
+            "a non-CPU frame graph cannot borrow CPU allocation frames"
+        );
+        let full_plan = plan.clone();
+        let cpu_units: Vec<_> = program
+            .units
+            .iter()
+            .filter(|u| {
+                full_plan.bodies.contains_key(&u.unit().header.instance)
+                    && u.unit().header.instance != caller_id
+            })
+            .collect();
+        plan.roots.retain(|id, _| *id == caller_id);
+        let caller_units = vec![&program.units[index]];
+        let empty = BTreeSet::new();
+        let inputs = EmitInputs {
+            ahead: Some(&plan),
+            continuation: None,
+            alternate: true,
+            index: None,
+            input: &program.input,
+            target: &program.target,
+            layouts: &program.table,
+            keys: &program.keys,
+            manifest: &program.manifest,
+            statics: &program.statics,
+            inline_instances: &empty,
+            available_externally: &empty,
+            callbacks: !program.callbacks.is_empty(),
+            tracking: program.tracking(),
+            foreign: &program.foreign_dispatch,
+            opt: OptLevel::Default,
+            measurement: false,
+            fuel: program.fuel,
+            verify_backend: true,
+        };
+        let symbol = &plan.symbols[&mapper_id];
+        let ordinary = symbol_name(&symbol.definition, Some(&mapper_id));
+        let alternate = alternate_name(&symbol.definition, mapper_id);
+        let cpu_inputs = EmitInputs {
+            ahead: Some(&full_plan),
+            ..inputs.clone()
+        };
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let (cpu, caller) = match backend {
+                native::Backend::Llvm => (
+                    hirsel_llvm::emit_ahead_object(&cpu_units, &cpu_inputs)
+                        .unwrap()
+                        .0,
+                    hirsel_llvm::emit_ahead_object(&caller_units, &inputs)
+                        .unwrap()
+                        .0,
+                ),
+                native::Backend::Cranelift => (
+                    hirsel_cranelift::emit_ahead_object(&cpu_units, &cpu_inputs)
+                        .unwrap()
+                        .0,
+                    hirsel_cranelift::emit_ahead_object(&caller_units, &inputs)
+                        .unwrap()
+                        .0,
+                ),
+            };
+            assert!(cpu.exports.iter().any(|s| s.name == alternate));
+            assert!(caller.imports.iter().any(|s| s.name == ordinary));
+            assert!(
+                !caller.imports.iter().any(|s| s.name == alternate),
+                "{backend:?}: canonical caller selected a CPU-only alternate"
+            );
+        }
+    });
+}

@@ -461,13 +461,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         anchor: SourceAnchorId,
     ) -> Emitted<Value<'m>> {
         let descriptor = self.descriptor(layout)?;
-        let instruction =
-            self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1;
         if self.inputs.alternate
-            && self
-                .inputs
-                .ahead
-                .is_some_and(|plan| plan.cpu_allocation(self.unit.header.instance, instruction))
+            && self.inputs.ahead.is_some_and(|plan| {
+                let instruction =
+                    self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1;
+                plan.cpu_allocation(self.unit.header.instance, instruction)
+            })
         {
             let state = self.ahead_state.ok_or_else(|| CodegenError::Invalid {
                 definition: self.definition().clone(),

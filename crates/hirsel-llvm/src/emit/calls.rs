@@ -288,7 +288,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             if !self
                 .inputs
                 .ahead
-                .is_some_and(|p| p.bodies.contains_key(&id))
+                .is_some_and(|p| p.has_private_edge(self.unit.header.instance, id))
             {
                 if self
                     .inputs
