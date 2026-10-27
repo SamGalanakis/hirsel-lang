@@ -139,7 +139,11 @@ fn generated_ps9_headers_require_the_admitted_registration_view() {
         let hirsel_driver::requests::CompileResult::ExportTir(text) = &output.result else {
             panic!("wrong export operation")
         };
-        assert!(text.contains("generated_headers@1/main"), "{text}");
-        assert!(text.contains("generated_headers@1/make"), "{text}");
+        let verifier = COMPILER.load_program(&manifest).unwrap();
+        let imported = verifier.engine.import_tir(text).unwrap();
+        assert!(imported.definition(&output.entry).is_some());
+        let mut make = output.entry.clone();
+        make.0.name = "make".into();
+        assert!(imported.definition(&make).is_some());
     });
 }
