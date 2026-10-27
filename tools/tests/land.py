@@ -254,7 +254,7 @@ if pathlib.Path('lane-0.txt').exists() and not pathlib.Path('lane-1.txt').exists
         [line] = [line for line in output.splitlines() if line.startswith('land: landed ') and ' led by ' in line]
         return line.rsplit(': ', 1)[1].split()
 
-    def batch_lanes(self, count, edits=None, old=(), red=None):
+    def batch_lanes(self, count, edits=None, old=(), red=None, hold_build=False):
         """`count` worktrees with one commit each, queued in lane order behind a live ticket this test holds.
 
         Lanes in `old` are queued as an older tools/land queues them: a ticket
@@ -275,6 +275,19 @@ if pathlib.Path('lane-0.txt').exists() and not pathlib.Path('lane-1.txt').exists
                               "with (root / 'builds').open('a') as log:\n"
                               "    log.write(f'{started} {time.time()}\\n')\n")
             self.git(self.lane, 'commit', '-qam', f'red {red}')
+        if hold_build:
+            with (self.lane / 'tools/buck2/event_logs.py').open('a') as out:
+                out.write("""
+if not (root / 'release-build').exists():
+    import time
+    (root / 'holding-build').touch()
+    deadline = time.monotonic() + 20
+    while not (root / 'release-build').exists():
+        if time.monotonic() > deadline:
+            raise SystemExit('build holder timed out')
+        time.sleep(.02)
+""")
+            self.git(self.lane, 'commit', '-qam', 'hold first build')
         # The fake checks are main's; only each lane's own commit is queued.
         hook = self.origin / 'hooks/pre-receive'
         hook.rename(hook.with_name('held'))
@@ -444,7 +457,7 @@ if not marker.exists():
         for i in (1, 2):
             self.assertEqual(self.subjects(self.landed(outputs[i])), [f'lane {i}'])
 
-    def batch_with_main_moves(self, moves):
+    def batch_with_main_moves(self, moves, newcomer=False, retire=None, ledger_member=1):
         """Move the real remote after each green batch, immediately before its push."""
         (self.lane / 'tools/known-failures.tsv').write_text('base-row\n')
         (self.lane / '.gitattributes').write_text('tools/known-failures.tsv merge=hirsel\n')
@@ -452,10 +465,19 @@ if not marker.exists():
         self.git(self.lane, 'add', '-A')
         self.git(self.lane, 'commit', '-qm', 'ledger and source')
         checks, lanes, lands, holder = self.batch_lanes(
-            3, edits={1: ('tools/known-failures.tsv', 'base-row\nlane-row\n')})
+            3, edits={ledger_member: ('tools/known-failures.tsv', 'base-row\nlane-row\n')},
+            hold_build=newcomer)
         # This test permits inherited passes; the stage records below prove
         # exactly which trees ran checks. Other tests retain the strict hook.
         (self.origin / 'hooks/pre-receive').write_text('#!/bin/sh\nexit 0\n')
+        received = self.origin / 'hooks/post-receive'
+        received.write_text('''#!/usr/bin/env python3
+import os, pathlib, sys
+with (pathlib.Path(os.environ['FAKE_CHECKS']) / 'received').open('a') as out:
+    for line in sys.stdin:
+        out.write(line.split()[1] + '\\n')
+''')
+        received.chmod(0o755)
         hook = self.lane / '.git/hooks/pre-push'
         hook.write_text('''#!/usr/bin/env python3
 import os, pathlib, subprocess
@@ -478,14 +500,81 @@ for i, commits in enumerate(moves):
     git('push', '-q', 'origin', 'HEAD:main')
     break
 ''')
+        if retire is not None:
+            with hook.open('a') as out:
+                out.write('''import time
+if not (root / 'release-retry').exists():
+    (root / 'holding-retry').touch()
+    deadline = time.monotonic() + 20
+    while not (root / 'release-retry').exists():
+        if time.monotonic() > deadline:
+            raise SystemExit('retry holder timed out')
+        time.sleep(.02)
+''')
         hook.chmod(0o755)
         holder.unlink()
-        outputs = [self.finish_land(land) for land in lands]
-        self.assertEqual(self.main_log()[:3], ['lane 2', 'lane 1', 'lane 0'])
+        if newcomer:
+            self.wait_for(lambda: (checks / 'holding-build').exists())
+            lane = self.top / 'newcomer'
+            self.git(self.lane, 'worktree', 'add', '-qb', 'newcomer', str(lane),
+                     self.git(lanes[1], 'rev-parse', 'HEAD^').strip())
+            (lane / 'newcomer.txt').write_text('newcomer\n')
+            self.git(lane, 'add', 'newcomer.txt')
+            self.git(lane, 'commit', '-qm', 'newcomer')
+            lanes.append(lane)
+            lands.append(self.start_land(lane))
+            self.wait_for(lambda: len(self.queued()) == 4)
+            (checks / 'release-build').touch()
+        if retire is not None:
+            self.wait_for(lambda: (checks / 'holding-retry').exists())
+            lands[retire][0].kill()
+            lands[retire][0].wait(timeout=10)
+            (checks / 'release-retry').touch()
+        outputs = {i: self.finish_land(land) for i, land in enumerate(lands) if i != retire}
+        expected = (['newcomer'] if newcomer else []) + [f'lane {i}' for i in (2, 1, 0) if i != retire]
+        self.assertEqual(self.main_log()[:len(expected)], expected)
         for i in (1, 2):
-            self.assertEqual(self.subjects(self.landed(outputs[i])), [f'lane {i}'])
+            if i != retire:
+                self.assertEqual(self.subjects(self.landed(outputs[i])), [f'lane {i}'])
         self.assertEqual(self.queued(), [])
         return checks, outputs[0]
+
+    def test_a_checked_prefix_can_reuse_checks_when_only_a_ledger_tail_left(self):
+        checks, output = self.batch_with_main_moves([
+            [('tools/known-failures.tsv', 'base-row\nmain-row\n')],
+        ], retire=2, ledger_member=2)
+        self.assertIn('reuses all passed checks', output)
+        self.assertEqual(len(list(checks.glob('*/build'))), 1)
+
+    def test_a_checked_prefix_rechecks_when_a_source_tail_left(self):
+        checks, output = self.batch_with_main_moves([
+            [('tools/known-failures.tsv', 'base-row\nmain-row\n')],
+        ], retire=2)
+        self.assertNotIn('reuses all passed checks', output)
+        self.assertEqual(len(list(checks.glob('*/build'))), 2)
+
+    def test_a_hole_in_the_checked_group_rechecks_even_when_only_ledger_rows_differ(self):
+        checks, output = self.batch_with_main_moves([
+            [('tools/known-failures.tsv', 'base-row\nmain-row\n')],
+        ], retire=1)
+        self.assertNotIn('reuses all passed checks', output)
+        self.assertEqual(len(list(checks.glob('*/build'))), 2)
+
+    def test_row_only_move_lands_the_checked_batch_while_a_newcomer_waits_for_its_own_checks(self):
+        checks, output = self.batch_with_main_moves([
+            [('tools/known-failures.tsv', 'base-row\nmain-row\n')],
+        ], newcomer=True)
+        self.assertEqual(output.count('pass  workspace build'), 1, output)
+        self.assertIn('main moved only by known-failures rows', output)
+        self.assertNotIn('pass  ', output[output.index('main moved during the checks'):], output)
+        received = (checks / 'received').read_text().splitlines()
+        # The ledger writer, the checked cohort, then the independently checked newcomer.
+        self.assertEqual(len(received), 3, received)
+        self.assertEqual(self.subjects(received), ['main move', 'lane 2', 'newcomer'])
+        self.assertNotIn('newcomer', self.git(self.origin, 'log', '--format=%s', received[1]).splitlines())
+        for stage in ('build', 'clippy', 'fmt'):
+            self.assertEqual((checks / received[2] / stage).read_text(), received[1])
+        self.assertEqual(len(list(checks.glob('*/build'))), 2)
 
     def test_row_only_main_moves_rebase_a_passed_batch_without_any_checks(self):
         checks, output = self.batch_with_main_moves([
@@ -897,6 +986,25 @@ if not marker.exists():
 
 
 class RetryChecks(unittest.TestCase):
+    def test_a_live_ticket_must_still_name_the_checked_head(self):
+        module = runpy.run_path(str(ROOT / 'tools/land'))
+        queue_type = module['LandQueue']
+        with tempfile.TemporaryDirectory() as directory:
+            queue = queue_type.__new__(queue_type)
+            queue.directory = Path(directory)
+            record = dict(pid=os.getpid(), process_start=queue.process(os.getpid()),
+                          heartbeat=time.time(), head='checked')
+            member = module['Member']('1', 'lane', 'checked', record.copy())
+            ticket = queue.directory / member.ticket
+            for head, expected in (('checked', [member]), ('changed', []), (None, [member])):
+                with self.subTest(head=head):
+                    if head is None:
+                        record.pop('head')  # Older waiting tools/land records have no head.
+                    else:
+                        record['head'] = head
+                    ticket.write_text(json.dumps(record))
+                    self.assertEqual(queue.live([member]), expected)
+
     def test_pid_reuse_is_dead_even_with_a_recent_heartbeat(self):
         queue = runpy.run_path(str(ROOT / 'tools/land'))['LandQueue']
         record = dict(pid=os.getpid(), process_start=('previous boot', '0'), heartbeat=time.time())

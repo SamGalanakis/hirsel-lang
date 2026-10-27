@@ -65,8 +65,12 @@ build-file generation, so the batch head needs no shell Rust setup.
 
 When every new main commit touches only `tools/known-failures.tsv`, a
 previously passed batch rebases and pushes without running any check again,
-including the fast screen. The same tickets and submitted heads must remain
-in the batch, and the rebase and worktree must be clean. The normal union
+including the fast screen. The checked tickets with unchanged submitted heads
+and live queue ownership finish first; newcomers wait for their own batch.
+If tickets leave or change heads, reuse requires the remaining group to be
+a prefix of the checked group, and its rebased tree to differ from the checked
+tree only in ledger rows. Otherwise the remaining group is checked again.
+The rebase and worktree must be clean. The normal union
 merge preserves both sides' ledger rows. History is inspected commit by
 commit: a source edit followed by its revert still requires checks.
 
@@ -281,7 +285,9 @@ conflict in the middle ticket leaves only that ticket; a conflict with a
 red ticket ahead stays queued and lands next; a dead lane's ticket is dropped; a batch that
 loses a push race is checked again and lands whole; a passed batch rebases
 over repeated row-only main moves with zero further checks and unions the
-rows; source moves (including an edit and revert) still re-check; and a ticket queued
+rows, even with newcomers queued during its check; newcomers get their own
+checks. Departed tickets require a recheck unless the surviving prefix differs
+only in ledger rows. Source moves (including an edit and revert) still re-check; and a ticket queued
 by an older land is batched and later finds nothing to land.
 Further cases cover
 22 rejected attempts, a red retry in each aggregate, worktree/HEAD edits,

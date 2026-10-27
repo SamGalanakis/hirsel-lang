@@ -327,7 +327,8 @@ class LandQueue:
                     record = json.loads((self.directory / member.ticket).read_text())
                 except (OSError, ValueError):
                     continue
-                if self.owned(member, record) and not self.stale(record) and 'result' not in record:
+                if (self.owned(member, record) and not self.stale(record) and 'result' not in record
+                        and record.get('head', member.head) == member.head):
                     alive.append(member)
             return alive
 
@@ -852,19 +853,27 @@ class Batch:
         """
         for slot in self.slots:
             slot.cancelled.clear()
-        submitted = {member.ticket: member.head for member in members}
-        if previous and previous[3] == submitted and row_only_move(previous[0], self.main):
-            tree, applied = self.apply(self.main, members)
-            group = [member for member, _ in applied]
-            left = [member for member in group if member is not self.own]
-            if ({member.ticket: member.head for member in group} == submitted
-                    and set(self.queue.live(left)) == set(left)):
-                if not unchanged(tree):
-                    raise Refusal('the worktree changed after rebase; refusing to push')
-                say('main moved only by known-failures rows; clean rebase reuses all passed checks')
-                self.proof = (self.main, tree, previous[2], submitted)
-                self.publish(tree, applied)
-                return self.pushed
+        if previous and row_only_move(previous[0], self.main):
+            # Finish the checked cohort. New arrivals get their own batch;
+            # they must neither invalidate this pass nor inherit it.
+            left = [member for member in members if member is not self.own]
+            live = set(self.queue.live(left)) | {self.own}
+            members = [member for member in members if member in live
+                       and previous[3].get(member.ticket) == member.head]
+            submitted = {member.ticket: member.head for member in members}
+            if submitted and list(submitted.items()) == list(previous[3].items())[:len(submitted)]:
+                tree, applied = self.apply(self.main, members)
+                members = [member for member, _ in applied]
+                left = [member for member in members if member is not self.own]
+                if ({member.ticket: member.head for member in members} == submitted
+                        and set(self.queue.live(left)) == set(left)
+                        and changed_paths(previous[1], tree) <= {'tools/known-failures.tsv'}):
+                    if not unchanged(tree):
+                        raise Refusal('the worktree changed after rebase; refusing to push')
+                    say('main moved only by known-failures rows; clean rebase reuses all passed checks')
+                    self.proof = (self.main, tree, previous[2], submitted)
+                    self.publish(tree, applied)
+                    return self.pushed
         members = self.screen(self.main, members, self.slots[0])
         pending = [(members, previous)] if members else []
         free, running, bisecting = list(self.slots), {}, False
