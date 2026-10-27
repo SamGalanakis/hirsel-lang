@@ -12,6 +12,7 @@
 
 use crate::sync::{Arc, AtomicU32, AtomicU64, Cell, Ordering};
 use std::marker::PhantomData;
+use std::sync::OnceLock;
 
 /// The production capacity (Tokio: 256). Models instantiate four slots.
 pub const CAPACITY: usize = 256;
@@ -19,7 +20,7 @@ pub const CAPACITY: usize = 256;
 struct Inner<T, const N: usize> {
     head: AtomicU64,
     tail: AtomicU32,
-    buffer: Box<[Cell<Option<T>>]>,
+    buffer: OnceLock<Box<[Cell<Option<T>>]>>,
 }
 
 /// One producer/owner. It may move between threads, but cannot be shared.
@@ -45,7 +46,7 @@ pub fn local<T, const N: usize>() -> (Local<T, N>, Steal<T, N>) {
     let inner = Arc::new(Inner {
         head: AtomicU64::new(0),
         tail: AtomicU32::new(0),
-        buffer: (0..N).map(|_| Cell::new(None)).collect(),
+        buffer: OnceLock::new(),
     });
     (
         Local {
@@ -68,7 +69,10 @@ impl<T, const N: usize> Inner<T, N> {
     /// stealer retains its reservation until every read is finished.
     unsafe fn take(&self, index: u32) -> T {
         // SAFETY: caller contract.
-        unsafe { self.buffer[index as usize & (N - 1)].with_mut(|slot| slot.take().unwrap()) }
+        unsafe {
+            self.buffer.get().expect("published queue storage")[index as usize & (N - 1)]
+                .with_mut(|slot| slot.take().unwrap())
+        }
     }
 
     /// # Safety
@@ -76,19 +80,31 @@ impl<T, const N: usize> Inner<T, N> {
     unsafe fn put(&self, index: u32, task: T) {
         // SAFETY: caller contract.
         unsafe {
-            self.buffer[index as usize & (N - 1)].with_mut(|slot| {
-                assert!(slot.is_none());
-                *slot = Some(task);
-            })
+            self.buffer.get().expect("published queue storage")[index as usize & (N - 1)].with_mut(
+                |slot| {
+                    assert!(slot.is_none());
+                    *slot = Some(task);
+                },
+            )
         }
     }
 }
 
 impl<T, const N: usize> Local<T, N> {
+    /// Back this owner's ring before entering an allocation-free scheduler role.
+    /// Thieves touch it only after acquiring the first published tail, so an
+    /// unused queue needs no ring. The sole producer initializes it once.
+    pub fn prepare(&mut self) {
+        self.inner
+            .buffer
+            .get_or_init(|| (0..N).map(|_| Cell::new(None)).collect());
+    }
+
     /// Push one task. On overflow return the newest half plus this task for
     /// injection; on a concurrent steal return just this task. Publish and
     /// notify the injection batch before allowing the worker to sleep.
     pub fn push(&mut self, task: T) -> Vec<T> {
+        self.prepare();
         loop {
             let head = self.inner.head.load(Ordering::Acquire);
             let (steal, real) = unpack(head);
@@ -232,6 +248,23 @@ impl<T, const N: usize> Steal<T, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unused_rings_remain_unbacked_and_preparation_is_idempotent() {
+        crate::sync::model(|| {
+            let (mut local, thief) = local::<u32, 4>();
+            assert!(local.inner.buffer.get().is_none());
+            assert!(thief.steal_half().is_empty());
+            assert!(local.inner.buffer.get().is_none());
+            local.prepare();
+            let storage = local.inner.buffer.get().unwrap().as_ptr();
+            local.prepare();
+            assert_eq!(local.inner.buffer.get().unwrap().as_ptr(), storage);
+            assert!(local.push(7).is_empty());
+            assert_eq!(thief.steal_half(), [7]);
+            assert!(local.drain().is_empty());
+        });
+    }
 
     #[test]
     fn logical_indices_wrap_without_losing_the_reserved_steal_range() {

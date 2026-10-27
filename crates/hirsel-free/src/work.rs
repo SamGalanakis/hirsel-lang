@@ -161,6 +161,11 @@ impl<T> Ready<T> {
 }
 
 impl<T> Worker<T> {
+    /// Prepare ring storage on the idle owner, before scheduler roles can push.
+    pub fn prepare(&mut self) {
+        self.local.prepare();
+    }
+
     /// An immediate wake uses the LIFO slot; a voluntary yield goes to FIFO.
     pub fn push(&mut self, shared: &Ready<T>, task: T, yielded: bool) {
         shared.count(1);

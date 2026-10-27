@@ -999,10 +999,11 @@ pub(super) fn next(execs: &Execs, exec: &Exec) -> Option<Saved> {
         return None;
     }
     let dispatch = execs.dispatch.get()?;
-    let mut local = exec
-        .ready
-        .take()
-        .or_else(|| dispatch.locals.lock().unwrap().pop())?;
+    let mut local = exec.ready.take().or_else(|| {
+        let mut local = dispatch.locals.lock().unwrap().pop()?;
+        local.prepare();
+        Some(local)
+    })?;
     let mut saved = if dispatch.queued.load(Ordering::SeqCst) != 0 {
         local.next(&dispatch.ready).map(chain)
     } else {
