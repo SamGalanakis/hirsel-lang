@@ -1852,9 +1852,6 @@ fn ordinary_parse_heads_restore_names_and_signatures_without_syntax_or_type_tabl
             p.0.name = name.into();
             p
         };
-        // S5 private facts are a distinct input to the stored signature.
-        // Seed that product before isolating heads-only restoration.
-        writer.signature_snapshot();
         let expected = writer
             .item_signature(&path("value"))
             .unwrap()

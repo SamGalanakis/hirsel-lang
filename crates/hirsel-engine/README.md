@@ -689,7 +689,12 @@ A normalized private signature reads the settled `PrivateSummary` output,
 so a body edit with the same inferred proof preserves the header and its
 subscribers. A changed proof updates the signature before the next immutable
 snapshot is published. Persisted reads append the private-summary kind after
-all existing tags.
+all existing tags. Ordinary declaration queries publish their conservative
+headers immediately. Inference delays only its own provisional publications,
+then verifies each result against the stored variant for the settled proof.
+When a restored header needs a different proof, the engine restores or
+recomputes the complete signature product before persisting it; a header-only
+projection never overwrites syntax-backed auxiliary products.
 
 The `MemoGraph` keeps each memo's record and the reverse index `ReadKey →
 subscribers`. Indexing a file diffs each affected definition's inputs (body,

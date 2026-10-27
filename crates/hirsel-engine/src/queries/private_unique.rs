@@ -88,6 +88,15 @@ impl QueryEngine {
                     {
                         continue;
                     }
+                    if entry.products.signature_persisted {
+                        // A restored header can omit syntax-backed auxiliary
+                        // products. Restore or recompute the complete product
+                        // under the new proof instead of rewriting that projection.
+                        self.signatures.remove(&id);
+                        self.private_signature_publications.insert(id);
+                        changed.push(id.path().clone());
+                        continue;
+                    }
                     let mut output = (*output).clone();
                     let mut signature = (*output.value).clone();
                     signature.metadata.inferred_unique = summary.clone();

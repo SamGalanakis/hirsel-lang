@@ -432,6 +432,14 @@ impl QueryEngine {
                     for id in std::mem::take(&mut self.private_signature_publications) {
                         self.signature_query_id(id)?;
                         if let Some(entry) = self.signatures.get(&id).cloned() {
+                            if self.verify_store == crate::store::VerifyStore::Recompute {
+                                // A conservative declaration and its settled
+                                // proof have different observed inputs. Select
+                                // the oracle variant in the completed universe.
+                                self.pending_store_checks
+                                    .remove(&(id, QueryKind::Signature));
+                                self.load_signature(id.path());
+                            }
                             self.store_signature(id.path(), &entry)?;
                         }
                         self.private_signature_publications.remove(&id);

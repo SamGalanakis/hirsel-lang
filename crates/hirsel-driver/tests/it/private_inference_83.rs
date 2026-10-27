@@ -432,3 +432,66 @@ fn failed_private_inference_cannot_reuse_a_successful_signature_snapshot() {
         );
     });
 }
+
+#[test]
+fn conservative_headers_and_settled_proofs_have_distinct_verified_cache_inputs() {
+    with_compiler_stack(|| {
+        let source = "fn value()->String{\"fresh\"}\n";
+        let store = Arc::new(MemStore::default());
+        let context = default_context();
+        let mut value = entry_path(&context);
+        value.0.name = "value".into();
+        let mut adapters = compiler_adapters();
+        adapters.modes = None;
+        let mut declaration =
+            QueryEngine::new(default_environment(), adapters).with_result_store(store.clone());
+        let file = declaration
+            .sources
+            .add("proof-inputs.hir", source.into())
+            .unwrap();
+        declaration.parse_file(file, &context).unwrap();
+        assert!(
+            declaration
+                .item_signature(&value)
+                .unwrap()
+                .value
+                .metadata
+                .inferred_unique
+                .results
+                .is_empty()
+        );
+
+        let budget = ProcessBudget::new(256 << 20);
+        let mut checked = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone())
+            .with_verify_store(store::VerifyStore::Recompute);
+        let file = checked
+            .sources
+            .add("proof-inputs.hir", source.into())
+            .unwrap();
+        checked.parse_file(file, &context).unwrap();
+        let reservation = checked
+            .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+            .unwrap();
+        drop(reservation);
+        assert_eq!(budget.reserved(), 0);
+        let proof = checked.item_signature(&value).unwrap().value;
+        assert!(!proof.metadata.inferred_unique.results.is_empty());
+
+        let mut adapters = compiler_adapters();
+        adapters.signature = None;
+        adapters.modes = None;
+        let mut restored =
+            QueryEngine::new(default_environment(), adapters).with_result_store(store);
+        let file = restored
+            .sources
+            .add("proof-inputs.hir", source.into())
+            .unwrap();
+        restored.parse_file(file, &context).unwrap();
+        assert_eq!(
+            restored.item_signature(&value).unwrap().value.fingerprint,
+            proof.fingerprint
+        );
+        assert_eq!(restored.recompute_count(&value, QueryKind::Signature), 0);
+    });
+}
