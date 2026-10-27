@@ -636,6 +636,24 @@ impl Adapter for SimIo {
     fn cancellable(&self, token: u64) -> bool {
         self.waits.rows_of(token).is_none_or(|row| !row.committed)
     }
+    fn cpu_summary(&mut self, summary: &CpuSummary) -> Result<(), AdapterError> {
+        summary
+            .validate()
+            .map_err(|_| AdapterError::InvalidCompletion)?;
+        match self.tape.get(self.position)? {
+            Some(Event {
+                request: Request::CpuSummary(recorded),
+                completion: Completion::Ready,
+                fault: None,
+                resources: None,
+            }) if recorded == summary => {
+                self.position += 1;
+                Ok(())
+            }
+            Some(_) => Err(AdapterError::ReplayMismatch(self.position)),
+            None => Err(AdapterError::MissingInput(self.position)),
+        }
+    }
     fn cpu_control(
         &mut self,
         width: u32,

@@ -306,6 +306,9 @@ impl Adapter for HomeAdapter {
         self.with(|adapter| adapter.cancellable(_token))
     }
 
+    fn cpu_summary(&mut self, summary: &crate::io::CpuSummary) -> Result<(), AdapterError> {
+        self.with(|adapter| adapter.cpu_summary(summary))
+    }
     fn cpu_control(
         &mut self,
         width: u32,

@@ -484,6 +484,28 @@ fn placement_header_is_diagnostic_validated_and_not_replayed() {
     }
 }
 
+fn settled_cpu_summary() -> hirsel_rt::io::CpuSummary {
+    use hirsel_rt::io::{CpuPiece, CpuSummary};
+    CpuSummary {
+        version: 1,
+        retirement: 0,
+        ordinal: 1,
+        descriptor: 0,
+        value_bytes: 8,
+        retained_count: 0,
+        pieces: vec![CpuPiece {
+            credit: 0,
+            fuel: 3,
+            net: 16,
+            envelope: vec![(2, 16)],
+        }],
+        level: 24,
+        limit: 1024,
+        fuel: 97,
+        stop: None,
+    }
+}
+
 #[test]
 fn binary_frames_preserve_arbitrary_bytes_and_reject_every_torn_event() {
     use hirsel_rt::tape_binary::{Tape, Writer};
@@ -501,6 +523,12 @@ fn binary_frames_preserve_arbitrary_bytes_and_reject_every_torn_event() {
                 bytes: vec![0, 255, 128, b'\n'],
             },
             completion: Completion::Unit(Ok(())),
+            fault: None,
+            resources: None,
+        },
+        Event {
+            request: Request::CpuSummary(settled_cpu_summary()),
+            completion: Completion::Ready,
             fault: None,
             resources: None,
         },
@@ -523,7 +551,11 @@ fn binary_frames_preserve_arbitrary_bytes_and_reject_every_torn_event() {
     );
     let mut replay = SimIo::from_binary(record.tree, tape);
     for event in events {
-        assert_eq!(replay.call(event.request).unwrap(), event.completion);
+        if let Request::CpuSummary(summary) = event.request {
+            replay.cpu_summary(&summary).unwrap();
+        } else {
+            assert_eq!(replay.call(event.request).unwrap(), event.completion);
+        }
     }
     replay.finish().unwrap();
     for end in 0..bytes.len() {
@@ -592,5 +624,45 @@ fn bound_scripted_world_refuses_physical_capacity_even_with_consistent_arithmeti
             .unwrap_err()
             .to_string()
             .contains("scripted world cannot claim physical capacity")
+    );
+}
+
+#[test]
+fn cpu_summary_replay_checks_all_fields_and_never_consumes_a_mismatch() {
+    let summary = settled_cpu_summary();
+    let mut live = RealIo::grant(scratch("cpu-summary").path()).unwrap();
+    live.cpu_summary(&summary).unwrap();
+    let mut record = header();
+    record.events = live.tape().to_vec();
+    let decoded = crate::support::tape::recording(&record);
+    assert_eq!(decoded, record);
+    let mut replay = SimIo::new(decoded.tree, decoded.events);
+    for change in [
+        (|s: &mut hirsel_rt::io::CpuSummary| s.version += 1) as fn(&mut hirsel_rt::io::CpuSummary),
+        |s| s.retirement += 1,
+        |s| s.ordinal += 1,
+        |s| s.descriptor += 1,
+        |s| s.value_bytes += 1,
+        |s| s.retained_count += 1,
+        |s| s.pieces[0].fuel += 1,
+        |s| s.pieces[0].net += 1,
+        |s| s.pieces[0].envelope[0].1 += 1,
+        |s| s.level += 1,
+        |s| s.limit += 1,
+        |s| s.fuel += 1,
+        |s| s.stop = Some(hirsel_run_schema::BudgetKind::Fuel),
+    ] {
+        let mut changed = summary.clone();
+        change(&mut changed);
+        assert!(matches!(
+            replay.cpu_summary(&changed),
+            Err(AdapterError::ReplayMismatch(0) | AdapterError::InvalidCompletion)
+        ));
+    }
+    replay.cpu_summary(&summary).unwrap();
+    replay.finish().unwrap();
+    assert_eq!(
+        replay.cpu_summary(&summary),
+        Err(AdapterError::MissingInput(1))
     );
 }

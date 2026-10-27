@@ -17,8 +17,15 @@ pub(super) struct Batch {
     publisher: Option<TaskId>,
     owners: BTreeMap<TaskId, usize>,
     jobs: Jobs,
+    retirement: u64,
     pending: BTreeMap<TaskId, (u32, u64)>,
     summaries: BTreeMap<TaskId, *mut super::ahead::cpu_handoff::Summary>,
+}
+
+pub(super) struct RetiredSummary {
+    pub charges: Stretch,
+    pub result: Result<(), hirsel_run_schema::BudgetKind>,
+    pub record: crate::io::CpuSummary,
 }
 
 impl Batch {
@@ -32,6 +39,7 @@ impl Batch {
             publisher: None,
             owners: BTreeMap::new(),
             jobs,
+            retirement: 0,
             pending: BTreeMap::new(),
             summaries: BTreeMap::new(),
         }
@@ -111,7 +119,7 @@ impl Batch {
         &mut self,
         task: TaskId,
         state: &mut Settled,
-    ) -> Option<(Stretch, Result<(), hirsel_run_schema::BudgetKind>)> {
+    ) -> Option<RetiredSummary> {
         let &summary = self.summaries.get(&task)?;
         let (charges, result) = self.jobs.retire_published_at(self.owners[&task], state);
         if result.is_ok() {
@@ -120,7 +128,31 @@ impl Batch {
             // Only its logical head retires it, before returning to that frame.
             unsafe { (*summary).phase = super::ahead::cpu_handoff::SUMMARY_RETIRED };
         }
-        Some((charges, result.map_err(|stop| stop.kind)))
+        let settled = self.jobs.settled();
+        let record = crate::io::CpuSummary {
+            version: 1,
+            retirement: self.retirement,
+            ordinal: self.owners[&task] as u64,
+            // SAFETY: the mapper's saved frame still owns the borrowed record.
+            // Do not record its addresses or potentially padded value carrier.
+            descriptor: unsafe { (*summary).descriptor },
+            value_bytes: unsafe { (*summary).value_bytes },
+            retained_count: unsafe { (*summary).retained_count },
+            pieces: crate::io::CpuSummary::pieces(&charges),
+            level: settled.level,
+            limit: settled.limit,
+            fuel: settled.fuel,
+            stop: result.as_ref().err().map(|stop| stop.kind),
+        };
+        self.retirement = self
+            .retirement
+            .checked_add(1)
+            .expect("CPU retirement overflow");
+        Some(RetiredSummary {
+            charges,
+            result: result.map_err(|stop| stop.kind),
+            record,
+        })
     }
 
     pub(super) fn settle(
@@ -164,6 +196,21 @@ pub(super) fn finish_job(ctx: *mut TaskCtx) -> Stopped<()> {
         ledger.blocks.lock().unwrap().disown(owner);
     }
     Ok(())
+}
+
+/// The head has settled this prefix. No driver, saved-frame or adapter borrow
+/// crosses the home bridge, and physical retries never enter this function.
+pub(super) fn record_summary(ctx: *mut TaskCtx, summary: &crate::io::CpuSummary) -> Stopped<()> {
+    if unsafe { (*ctx).io_data() }.is_null() {
+        return Ok(());
+    }
+    let mut result = Ok(());
+    unsafe {
+        crate::pool::call_home(ctx, &mut || {
+            result = crate::io::Binding::get(ctx).adapter.cpu_summary(summary);
+        })
+    }?;
+    result.map_err(Stop::refusal)
 }
 
 fn receipt(
@@ -563,7 +610,14 @@ mod tests {
                 Some(Ok(()))
             );
             assert_eq!(summary.phase, SUMMARY_PUBLISHED);
-            let (_, result) = batch.retire_summary(9, &mut state).unwrap();
+            let RetiredSummary { result, record, .. } =
+                batch.retire_summary(9, &mut state).unwrap();
+            assert_eq!(record.ordinal, 1);
+            assert_eq!(record.retirement, 0);
+            assert_eq!(record.level, 60);
+            assert_eq!(record.fuel, 19);
+            assert_eq!(record.stop, None);
+            record.validate().unwrap();
             assert_eq!(result, Ok(()));
             assert_eq!(summary.phase, SUMMARY_RETIRED);
             assert_eq!(
@@ -601,6 +655,84 @@ mod tests {
                 }
             );
             assert!(batch.owners.is_empty());
+        }
+    }
+
+    #[test]
+    fn retired_summary_tape_follows_job_order_and_preserves_selected_budget_stops() {
+        use super::super::ahead::cpu_handoff::*;
+        use crate::budget::stretch::{Budgets, Event as Charge, summarise};
+        use crate::io::{CpuSummary, Event};
+        use hirsel_run_schema::BudgetKind;
+        for (limit, fuel, stop) in [(64, 20, BudgetKind::Memory), (128, 1, BudgetKind::Fuel)] {
+            let mut state = Settled {
+                level: 0,
+                limit,
+                fuel,
+            };
+            let mut batch = Batch::new(&grant(128), 4, 2, state);
+            let budgets = Budgets {
+                fuel: true,
+                memory: true,
+            };
+            let mut summaries = [0, 1].map(|ordinal| Summary {
+                version: VERSION,
+                phase: SUMMARY_PUBLISHED,
+                ordinal,
+                value: std::ptr::null(),
+                value_bytes: 0,
+                descriptor: 0,
+                retained_count: 0,
+                retained: std::ptr::null(),
+            });
+            batch.claim(7, 4, 0);
+            batch.claim(9, 4, 1);
+            // The younger physical publication must leave the tape untouched.
+            batch.publish(
+                9,
+                summarise(budgets, &[Charge::Fuel, Charge::Alloc(48)]).unwrap(),
+                &raw mut summaries[1],
+            );
+            batch.publish(
+                7,
+                summarise(budgets, &[Charge::Fuel, Charge::Alloc(32)]).unwrap(),
+                &raw mut summaries[0],
+            );
+            assert_eq!(state.level, 0);
+            let first = batch.retire_summary(7, &mut state).unwrap();
+            assert_eq!(first.result, Ok(()));
+            assert_eq!((first.record.ordinal, first.record.retirement), (0, 0));
+            assert_eq!(
+                batch.settle(7, &Stretch::new(budgets), &mut state, true),
+                Some(Ok(()))
+            );
+            let second = batch.retire_summary(9, &mut state).unwrap();
+            assert_eq!(second.result, Err(stop));
+            assert_eq!((second.record.ordinal, second.record.retirement), (1, 1));
+            assert_eq!(second.record.stop, Some(stop));
+            assert_eq!(
+                summaries[1].phase, SUMMARY_PUBLISHED,
+                "a stopped mapper never resumes"
+            );
+            let records: [CpuSummary; 2] = [first.record, second.record];
+            let events = records
+                .iter()
+                .map(|record| Event {
+                    request: Request::CpuSummary(record.clone()),
+                    completion: Completion::Ready,
+                    fault: None,
+                    resources: None,
+                })
+                .collect();
+            let mut replay = SimIo::new(Tree::default(), events);
+            assert_eq!(
+                replay.cpu_summary(&records[1]),
+                Err(AdapterError::ReplayMismatch(0))
+            );
+            for record in records {
+                replay.cpu_summary(&record).unwrap();
+            }
+            replay.finish().unwrap();
         }
     }
 

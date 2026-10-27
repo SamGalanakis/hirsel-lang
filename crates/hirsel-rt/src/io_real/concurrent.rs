@@ -60,6 +60,9 @@ impl ConcurrentIo {
             before_path: None,
         }
     }
+    pub(crate) fn cpu_summary(&self, summary: &CpuSummary) -> Result<(), AdapterError> {
+        self.core.lock().unwrap().cpu_summary(summary)
+    }
     pub(crate) fn cpu_control(
         &self,
         width: u32,
@@ -147,6 +150,7 @@ impl ConcurrentIo {
             Request::Ready { .. }
                 | Request::Schedule { .. }
                 | Request::CpuControl { .. }
+                | Request::CpuSummary(_)
                 | Request::ProcessTime { .. }
                 | Request::ProcessSettle { .. }
         ) {
@@ -340,6 +344,7 @@ impl ConcurrentAdapter for ConcurrentIo {
             Request::Ready { .. }
                 | Request::Schedule { .. }
                 | Request::CpuControl { .. }
+                | Request::CpuSummary(_)
                 | Request::ProcessTime { .. }
                 | Request::ProcessSettle { .. }
         ) {

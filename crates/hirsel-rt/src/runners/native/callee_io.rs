@@ -100,6 +100,9 @@ impl Adapter for CalleeIo {
     fn cancellable(&self, token: u64) -> bool {
         self.io.borrow().cancellable(token)
     }
+    fn cpu_summary(&mut self, summary: &crate::io::CpuSummary) -> Result<(), AdapterError> {
+        self.io.borrow_mut().cpu_summary(summary)
+    }
     fn cpu_control(
         &mut self,
         width: u32,

@@ -240,6 +240,7 @@ pub(crate) fn request_kind(request: &crate::io::Request) -> &'static str {
         Request::Ready { .. } => "Ready",
         Request::Schedule { .. } => "Schedule",
         Request::CpuControl { .. } => "CpuControl",
+        Request::CpuSummary(_) => "CpuSummary",
         Request::ProcessTime { .. } => "ProcessTime",
         Request::ProcessSettle { .. } => "ProcessSettle",
     }

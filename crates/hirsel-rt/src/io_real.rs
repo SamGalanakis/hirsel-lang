@@ -632,6 +632,7 @@ impl<S: Streams> RealCore<S> {
                 Request::Ready { .. }
                     | Request::Schedule { .. }
                     | Request::CpuControl { .. }
+                    | Request::CpuSummary(_)
                     | Request::ProcessTime { .. }
                     | Request::ProcessSettle { .. }
             ) {
@@ -1302,6 +1303,17 @@ impl<S: Streams> Adapter for RealCore<S> {
         self.cooperative
             .as_ref()
             .is_none_or(|(readiness, _)| readiness.cancellable(token))
+    }
+    fn cpu_summary(&mut self, summary: &CpuSummary) -> Result<(), AdapterError> {
+        summary
+            .validate()
+            .map_err(|_| AdapterError::InvalidCompletion)?;
+        self.record(Event {
+            request: Request::CpuSummary(summary.clone()),
+            completion: Completion::Ready,
+            fault: None,
+            resources: None,
+        })
     }
     fn cpu_control(
         &mut self,

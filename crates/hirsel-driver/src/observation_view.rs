@@ -122,7 +122,10 @@ impl View {
                     text.split_once(" -> ").ok_or("event has no completion")?;
                 let origin = if matches!(
                     event.request,
-                    Request::Ready { .. } | Request::Schedule { .. } | Request::CpuControl { .. }
+                    Request::Ready { .. }
+                        | Request::Schedule { .. }
+                        | Request::CpuControl { .. }
+                        | Request::CpuSummary(_)
                 ) {
                     "core"
                 } else {

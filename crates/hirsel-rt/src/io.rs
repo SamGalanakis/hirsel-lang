@@ -1,4 +1,7 @@
 //! Typed request/completion protocol. Expected I/O errors are data, never language failures.
+mod cpu_summary;
+pub use cpu_summary::{CpuPiece, CpuSummary};
+
 use crate::handles::{Grant, Handles};
 use crate::net::is_net_request;
 pub use crate::net::{
@@ -646,6 +649,8 @@ pub enum Request {
         count: u64,
         choice: u64,
     },
+    /// A settled native CPU prefix, recorded only at its serial retirement.
+    CpuSummary(CpuSummary),
     /// Scoped CPU admission/drain receipt, not a capability request.
     CpuControl {
         width: u32,
@@ -1695,6 +1700,7 @@ impl State {
             R::Ready { .. }
             | R::Schedule { .. }
             | R::CpuControl { .. }
+            | R::CpuSummary(_)
             | R::ProcessTime { .. }
             | R::ProcessSettle { .. } => Err(AdapterError::InvalidCompletion),
             R::MonotonicClock { io } | R::WallClock { io } => {
@@ -2670,6 +2676,10 @@ pub trait Adapter {
         value: Option<u32>,
     ) -> Result<Option<u32>, AdapterError> {
         Ok(value)
+    }
+    /// Record or check a settled CPU prefix. Replay consumes only an exact match.
+    fn cpu_summary(&mut self, _summary: &CpuSummary) -> Result<(), AdapterError> {
+        Ok(())
     }
     /// A seeded scheduler's choice among runnable candidates; replay supplies the recorded choice.
     fn schedule(&mut self, _count: u64, choice: u64) -> Result<u64, AdapterError> {

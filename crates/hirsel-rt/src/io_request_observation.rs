@@ -241,6 +241,7 @@ pub(crate) fn project<A>(
         R::Ready { .. }
         | R::Schedule { .. }
         | R::CpuControl { .. }
+        | R::CpuSummary(_)
         | R::ProcessTime { .. }
         | R::ProcessSettle { .. } => {
             return Err("request needs a dedicated scheduling projection");

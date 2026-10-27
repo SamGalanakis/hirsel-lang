@@ -129,6 +129,12 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
             count,
             outcome,
         } => format!("cpu_control {width} {action} {count} {outcome}"),
+        Request::CpuSummary(summary) => {
+            use crate::tape_wire::Wire;
+            let mut bytes = Vec::new();
+            summary.encode(&mut bytes);
+            format!("cpu_summary {}", hex(&bytes))
+        }
         Request::ProcessTime { from, to } => format!("process_time {from} {to}"),
         Request::ProcessSettle { canceled } => format!(
             "process_settle {}",
@@ -579,6 +585,7 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             from: number(from)?,
             to: number(to)?,
         },
+        ["cpu_summary", record] => Request::CpuSummary(crate::tape_wire::decode(&bytes(record)?)?),
         ["cpu_control", width, action, count, outcome] => Request::CpuControl {
             width: width.parse().map_err(|_| "invalid CPU width")?,
             action: action.parse().map_err(|_| "invalid CPU action")?,

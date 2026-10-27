@@ -291,7 +291,13 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
         let state = &mut driver.frontier.as_mut().unwrap().settled;
         driver.cpu_batch.as_mut()?.retire_summary(task, state)
     });
-    if let Some((charges, result)) = published {
+    if let Some(super::cpu::RetiredSummary {
+        charges,
+        result,
+        record,
+    }) = published
+    {
+        super::cpu::record_summary(ctx, &record)?;
         super::events::charges::partial(ctx, current(ctx), &charges, result);
         result.map_err(Stop::BudgetExceeded)?;
     }

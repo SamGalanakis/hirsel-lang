@@ -430,7 +430,8 @@ wire_enum!(crate::io::Request {
     116 => RunnerPoll{ key, cancel },
     117 => ProcessTime{ from, to },
     118 => ProcessSettle{ canceled },
-    119 => CpuControl{ width, action, count, outcome }
+    119 => CpuControl{ width, action, count, outcome },
+    120 => CpuSummary(v0)
 } retired { 60 => "retired eager read_dir recording; re-record with streaming file.read_dir", 59 => "retired Request::Walk recording; re-record with streaming file.walk" });
 
 wire_enum!(crate::io::ClockError {
@@ -1103,3 +1104,59 @@ wire_enum!(crate::io::FileInput {
     1 => Size(v0),
     2 => Bytes(v0)
 });
+
+fn cpu_bounded<T: Wire>(input: &mut Decode<'_>, limit: usize) -> Result<Vec<T>, String> {
+    let n = usize::decode(input)?;
+    if n > limit {
+        return Err("settled CPU summary exceeds its bound".into());
+    }
+    T::decode_many(input, n)
+}
+impl Wire for crate::io::CpuPiece {
+    fn encode(&self, out: &mut Vec<u8>) {
+        self.credit.encode(out);
+        self.fuel.encode(out);
+        self.net.encode(out);
+        self.envelope.encode(out);
+    }
+    fn decode(input: &mut Decode<'_>) -> Result<Self, String> {
+        Ok(Self {
+            credit: Wire::decode(input)?,
+            fuel: Wire::decode(input)?,
+            net: Wire::decode(input)?,
+            envelope: cpu_bounded(input, crate::budget::stretch::ENVELOPE_MAX)?,
+        })
+    }
+}
+impl Wire for crate::io::CpuSummary {
+    fn encode(&self, out: &mut Vec<u8>) {
+        self.version.encode(out);
+        self.retirement.encode(out);
+        self.ordinal.encode(out);
+        self.descriptor.encode(out);
+        self.value_bytes.encode(out);
+        self.retained_count.encode(out);
+        self.pieces.encode(out);
+        self.level.encode(out);
+        self.limit.encode(out);
+        self.fuel.encode(out);
+        self.stop.encode(out);
+    }
+    fn decode(input: &mut Decode<'_>) -> Result<Self, String> {
+        let summary = Self {
+            version: Wire::decode(input)?,
+            retirement: Wire::decode(input)?,
+            ordinal: Wire::decode(input)?,
+            descriptor: Wire::decode(input)?,
+            value_bytes: Wire::decode(input)?,
+            retained_count: Wire::decode(input)?,
+            pieces: cpu_bounded(input, crate::budget::stretch::PIECES_MAX)?,
+            level: Wire::decode(input)?,
+            limit: Wire::decode(input)?,
+            fuel: Wire::decode(input)?,
+            stop: Wire::decode(input)?,
+        };
+        summary.validate()?;
+        Ok(summary)
+    }
+}

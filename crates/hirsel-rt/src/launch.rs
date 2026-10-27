@@ -100,6 +100,9 @@ struct OrderedHome {
 }
 
 impl Adapter for OrderedHome {
+    fn cpu_summary(&mut self, summary: &crate::io::CpuSummary) -> Result<(), AdapterError> {
+        self.io.cpu_summary(summary)
+    }
     fn cpu_control(
         &mut self,
         width: u32,
@@ -275,6 +278,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     }
     fn cancellable(&self, token: u64) -> bool {
         self.0.borrow().cancellable(token)
+    }
+    fn cpu_summary(&mut self, summary: &crate::io::CpuSummary) -> Result<(), AdapterError> {
+        self.0.borrow_mut().cpu_summary(summary)
     }
     fn cpu_control(
         &mut self,
