@@ -117,10 +117,10 @@ pub fn run_path_native_backend_with_trace_events(
     crate::session::with_session(path, verify, |session| {
         // Source launch facts and native roots select exactly the same frozen
         // observations. Do not poll disk between binding and native selection.
-        let facts = session.request(crate::requests::CompileOperation::Tir {
+        let selected_facts = session.request(crate::requests::CompileOperation::Tir {
             definition: definition.clone(),
         })?;
-        let crate::requests::CompileResult::Tir(facts) = &facts.result else {
+        let crate::requests::CompileResult::Tir(facts) = &selected_facts.result else {
             return Err(ToolError::Runtime(
                 "native launch facts returned another operation".into(),
             ));
@@ -140,6 +140,10 @@ pub fn run_path_native_backend_with_trace_events(
             &facts.revision,
             facts.code.clone(),
         )?;
+        let revision = facts.revision.digest();
+        // Binding owns the compact launch record. Release the completed TIR
+        // closure before the native request admits its own source graph.
+        drop(selected_facts);
         let run = match &bound {
             crate::BoundHostRun::Live(bound) => bound.run(),
             crate::BoundHostRun::Replay { run, .. } => run,
@@ -165,7 +169,7 @@ pub fn run_path_native_backend_with_trace_events(
             crate::requests::CompileResult::Native(input) => {
                 // The launch was bound before compilation against these exact
                 // observations; the compiler cannot substitute another revision.
-                if input.revision.digest() != facts.revision.digest() {
+                if input.revision.digest() != revision {
                     return Err(ToolError::Runtime(
                         "native launch revision changed during selection".into(),
                     ));

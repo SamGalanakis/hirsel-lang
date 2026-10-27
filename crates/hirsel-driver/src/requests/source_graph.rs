@@ -40,8 +40,8 @@ impl CheckedReceipt {
         if let Some(products) = self.products.get() {
             return Ok(products.clone());
         }
-        let refused = |error: hirsel_engine::QueryError| {
-            ToolError::Runtime(format!("checked products: {error:?}"))
+        let refused = |stage: &str, error: hirsel_engine::QueryError| {
+            ToolError::Runtime(format!("checked products {stage}: {error:?}"))
         };
         let mut pool = self
             .allowance
@@ -57,15 +57,15 @@ impl CheckedReceipt {
         // Each stage is sized before it allocates. Scope, input, type capture
         // and construction are released with `built`; the receipt keeps only
         // its output text and read maps charged.
-        let scope = check.completed_scope_bytes(product).map_err(refused)?;
+        let scope = check.completed_scope_bytes(product).map_err(|error| refused("scope sizing", error))?;
         let scope = Arc::new(
             check
                 .completed_scope(product, stage(scope, "scope")?)
-                .map_err(refused)?,
+                .map_err(|error| refused("scope capture", error))?,
         );
         let input = scope
             .checked_product_input_bytes(&self.headers, entry)
-            .map_err(refused)?;
+            .map_err(|error| refused("original input sizing", error))?;
         let input = std::rc::Rc::new(
             scope
                 .checked_product_input_with_allowance(
@@ -73,23 +73,23 @@ impl CheckedReceipt {
                     entry,
                     stage(input, "input")?,
                 )
-                .map_err(refused)?,
+                .map_err(|error| refused("original input capture", error))?,
         );
-        let capture = input.type_capture_bytes().map_err(refused)?;
+        let capture = input.type_capture_bytes().map_err(|error| refused("type capture sizing", error))?;
         let prepared = input
             .capture_types_with_allowance(stage(capture, "type capture")?)
-            .map_err(refused)?;
+            .map_err(|error| refused("type capture", error))?;
         // Construction moves the uniquely owned originals and their grants
         // into the export rather than admitting a second payload copy.
-        let build = prepared.owned_build_bytes().map_err(refused)?;
+        let build = prepared.owned_build_bytes().map_err(|error| refused("construction sizing", error))?;
         let built = prepared
             .build_owned_with_allowance(stage(build, "construction")?)
-            .map_err(refused)?;
-        let output = stage(built.output_bytes().map_err(refused)?, "output")?;
-        let receipt = stage(built.checked_products_bytes().map_err(refused)?, "receipt")?;
+            .map_err(|error| refused("construction", error))?;
+        let output = stage(built.output_bytes().map_err(|error| refused("output sizing", error))?, "output")?;
+        let receipt = stage(built.checked_products_bytes().map_err(|error| refused("receipt sizing", error))?, "receipt")?;
         let products = built
             .checked_products_with_allowances(output, receipt)
-            .map_err(refused)?;
+            .map_err(|error| refused("receipt publication", error))?;
         drop(built);
         *self
             .allowance
