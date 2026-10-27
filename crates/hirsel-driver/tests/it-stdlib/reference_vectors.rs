@@ -1,4 +1,5 @@
 //! Shared, bounded-source batches of ordinary Hirsel assertions, without a step budget.
+use crate::source_std::load_program_source;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use std::{fmt::Write, path::Path};

@@ -3,6 +3,51 @@ use crate::source_std;
 use hirsel_engine::*;
 use hirsel_syntax::{ItemPath, PackageId};
 
+fn source_replacements_check_current_roots_without_sharing_mutable_requests() {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.hir");
+        std::fs::write(&main, "pub fn main() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("main.hir.json"),
+            r#"{
+            "schema":1,"package":{"name":"fixture","version":"1"},
+            "entry":{"module":[],"name":"main"},
+            "sources":[{"path":"main.hir","module":[]}],"dependencies":[]
+        }"#,
+        )
+        .unwrap();
+        let mut accepted =
+            source_std::load_program_source(&main, Some("pub fn main() { let value = 1u64 }\n"))
+                .unwrap();
+        accepted.check_for_execution().unwrap();
+        let mut fresh =
+            hirsel_driver::load_program_source(&main, Some("pub fn main() { let value = 1u64 }\n"))
+                .unwrap();
+        fresh.check_for_execution().unwrap();
+        assert_eq!(
+            accepted
+                .engine
+                .semantic_program_revision(&accepted.entry)
+                .unwrap(),
+            fresh
+                .engine
+                .semantic_program_revision(&fresh.entry)
+                .unwrap(),
+        );
+        let mut rejected =
+            source_std::load_program_source(&main, Some("pub fn main() { missing }\n")).unwrap();
+        assert!(rejected.check_for_execution().is_err());
+        accepted.check_for_execution().unwrap();
+        let mut original = source_std::load_program_source(&main, None).unwrap();
+        original.check_for_execution().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&main).unwrap(),
+            "pub fn main() {}\n"
+        );
+    });
+}
+
 #[test]
 #[ignore = "full gate"]
 fn full_gate_shared_std_fixture_reuses_bodies_modes_and_lowering() {
@@ -109,4 +154,5 @@ fn shared_fixture_keys_limits_lowering_and_source_revision() {
         .unwrap();
         assert!(source_std::engine_for(&main, LoweringPolicy::Reachable, defaults).is_ok());
     });
+    source_replacements_check_current_roots_without_sharing_mutable_requests();
 }

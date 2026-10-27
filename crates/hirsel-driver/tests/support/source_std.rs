@@ -1,6 +1,7 @@
 // Tests select the same ordinary package graph as applications.
 use hirsel_engine::{
-    CheckCompletion, CheckOutput, CompileConfig, ComptimeLimits, LoweringPolicy, QueryEngine,
+    CheckCompletion, CheckOutput, CompileConfig, ComptimeLimits, LoadedProgram, LoweringPolicy,
+    QueryEngine, ToolError,
     loader_inputs::{CaptureInputs, FrozenInputs, InputLimits},
     store::MemStore,
 };
@@ -43,6 +44,40 @@ pub fn engine_for(
     lowering: LoweringPolicy,
     limits: ComptimeLimits,
 ) -> Result<QueryEngine, CheckOutput> {
+    program_for(path, lowering, limits).map(|(program, _)| program.engine)
+}
+
+#[allow(dead_code)] // The other integration binary uses only engine fixtures.
+pub fn load_program_source(
+    path: &Path,
+    replacement: Option<&str>,
+) -> Result<LoadedProgram, ToolError> {
+    let (mut program, captured) =
+        program_for(path, LoweringPolicy::Reachable, ComptimeLimits::default()).map_err(
+            |output| ToolError::Query {
+                error: hirsel_types::QueryError::Diagnostics(output.diagnostics),
+                phase: None,
+                sources: output.sources,
+            },
+        )?;
+    let primary = std::fs::canonicalize(path)?;
+    let source = match replacement {
+        Some(source) => source.to_owned(),
+        None => String::from_utf8(
+            hirsel_engine::loader_inputs::LoaderInputs::read(&captured, &primary)?.to_vec(),
+        )
+        .map_err(|error| ToolError::Runtime(error.to_string()))?,
+    };
+    assert!(program.replace_source(&primary, source)?);
+    program.parse_sources()?;
+    Ok(program)
+}
+
+fn program_for(
+    path: &Path,
+    lowering: LoweringPolicy,
+    limits: ComptimeLimits,
+) -> Result<(LoadedProgram, FrozenInputs), CheckOutput> {
     let capture = CaptureInputs::new(InputLimits {
         bytes: 64 << 20,
         operations: 100_000,
@@ -50,8 +85,8 @@ pub fn engine_for(
     hirsel_driver::COMPILER
         .load_program_inputs(path, &capture, false)
         .unwrap();
-    let inputs = capture
-        .freeze()
+    let captured = capture.freeze();
+    let inputs = captured
         .replace_sources(
             &[(
                 std::fs::canonicalize(path).unwrap(),
@@ -96,8 +131,9 @@ pub fn engine_for(
         }
         checked.push(Checked { key, store });
     }
+    drop(checked);
     // Each caller owns a fresh source map, memo graph and coordinator. Only
     // content-addressed immutable products cross requests, through the ordinary
     // engine store. Later lowerings publish there for subsequent callers too.
-    Ok(program.engine)
+    Ok((program, captured))
 }

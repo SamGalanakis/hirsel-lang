@@ -1,5 +1,6 @@
 //! Vectors ported before implementation from Rust coretests/tests/net/{parser,
 //! ip_addr,socket_addr}.rs (f6c1107f), and Zig Io/net/HostName.zig (bff490a2).
+use crate::source_std::load_program_source;
 use hirsel_driver::*;
 use hirsel_engine::*;
 

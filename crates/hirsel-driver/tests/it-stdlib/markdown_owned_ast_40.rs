@@ -1,4 +1,5 @@
 //! Exact cumulative parser admission and unchanged CommonMark AST/rendering.
+use crate::source_std::load_program_source;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use std::path::Path;

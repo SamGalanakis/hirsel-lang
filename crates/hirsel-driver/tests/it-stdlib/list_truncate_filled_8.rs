@@ -1,4 +1,5 @@
 //! Rust Vec::truncate/from_elem vectors and physical allocation controls.
+use crate::source_std::load_program_source;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use std::path::{Path, PathBuf};

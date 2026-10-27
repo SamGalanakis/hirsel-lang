@@ -1,4 +1,5 @@
 //! Frozen Go strict-reader expectations; csv-core corroborates common valid chunks.
+use crate::source_std::load_program_source;
 use hirsel_driver::{native, *};
 use hirsel_engine::*;
 use serde_json::Value;

@@ -1,5 +1,6 @@
 //! Relative intervals through helper returns, independent of UTF-8 construction.
 //! oracle.tsv: pinned Rust/Go boundary vector shapes; see NOTICES.md.
+use crate::source_std::load_program_source;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use sha2::{Digest, Sha256};
