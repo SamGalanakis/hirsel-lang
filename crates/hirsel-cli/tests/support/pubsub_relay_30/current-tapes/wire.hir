@@ -1,0 +1,212 @@
+// Header/body structure: tokio-util length_delimited.rs:504-568, ce685ee6.
+// MIT, Copyright (c) Tokio contributors. See README.md for license and deviations.
+pub const MAX_FRAME: u64 = 2048
+
+pub const MAX_REQUESTS: u64 = 64
+
+pub type InputError = FrameLimit | EmptyFrame | TruncatedHeader | TruncatedBody | Utf8 | Json | Shape | TextLimit | ResponseMismatch | Usage
+
+pub type Phase = Header | Body(u64)
+
+pub type Decoder {
+  phase: Phase,
+  data: List[u8],
+}
+
+pub fn decoder() -> Decoder uses {} {
+  Decoder(phase: Header(), data: [])
+}
+
+pub fn remaining(state: Decoder) -> u64 uses {} {
+  match state.phase {
+    Header() => 4 - list.len(state.data),
+    Body(length) => length - list.len(state.data),
+  }
+}
+
+// One byte transition makes packet boundaries irrelevant. Length is checked
+// before allocating/accumulating any body. A completed frame resets the header.
+pub fn push(mut state: Decoder, byte: u8) -> Result[Option[Bytes], InputError] uses {} {
+  list.push(mut state.data, byte)
+  match state.phase {
+    Header() => {
+      if list.len(state.data) == 4 {
+        let header = bytes.from_list(unique state.data)
+        let Ok(word) = binary.read_u32(header, 0, BigEndian()) else {
+          return Error(TruncatedHeader())
+        }
+        let length: u64 = int.widen(word)
+        if length > MAX_FRAME {
+          return Error(FrameLimit())
+        }
+        if length == 0 {
+          return Error(EmptyFrame())
+        }
+        state.data = []
+        state.phase = Body(length)
+      }
+      Ok(None())
+    },
+    Body(length) => {
+      if list.len(state.data) == length {
+        let payload = replace(mut state.data, [])
+        state.phase = Header()
+        return Ok(Some(bytes.from_list(take payload)))
+      }
+      Ok(None())
+    },
+  }
+}
+
+pub fn finish(state: Decoder) -> Result[(), InputError] uses {} {
+  match state.phase {
+    Header() => if list.len(state.data) == 0 {
+      Ok(())
+    } else {
+      Error(TruncatedHeader())
+    },
+    Body(_) => Error(TruncatedBody()),
+  }
+}
+
+pub fn frame(payload: Bytes) -> Result[Bytes, InputError] uses {} {
+  let length = bytes.len(payload)
+  if length > MAX_FRAME {
+    return Error(FrameLimit())
+  }
+  if length == 0 {
+    return Error(EmptyFrame())
+  }
+  let mut output: List[u8] = []
+  binary.append_u32(int.narrow(length), BigEndian(), mut output)
+  bytes.append(mut output, payload)
+  Ok(bytes.from_list(take output))
+}
+
+pub type Command = Subscribe(String) | Unsubscribe(String) | Publish(String, String) | Stop
+
+pub type Message = Subscribed(String) | Unsubscribed(String) | Queued(u64, u64) | Delivery(
+  u64,
+  String,
+  String
+) | Refused(String) | Stopping
+
+pub type Error = Input(InputError) | Network(NetError)
+
+fn field(object: json.Value, key: String) -> Result[String, InputError] uses {} {
+  let Some(member) = json_access.member(object, key) else {
+    return Error(Shape())
+  }
+  let Some(value) = json_access.as_text(member) else {
+    return Error(Shape())
+  }
+  Ok(unique value)
+}
+
+pub fn topic_valid(value: String) -> bool uses {} {
+  string.byte_len(value) > 0 && string.byte_len(value) <= 64
+}
+
+pub fn command(payload: Bytes) -> Result[Command, InputError] uses {} {
+  if bytes.len(payload) > MAX_FRAME {
+    return Error(FrameLimit())
+  }
+  let Ok(text_value) = string.from_bytes(unique payload) else {
+    return Error(Utf8())
+  }
+  let Ok(parsed) = json.parse(take text_value) else {
+    return Error(Json())
+  }
+  let Some(members) = json_access.as_object(parsed) else {
+    return Error(Shape())
+  }
+  let operation = field(parsed, "op")?
+  if operation == "stop" && map.len(members) == 1 {
+    return Ok(Stop())
+  }
+  let topic = field(parsed, "topic")?
+  if !topic_valid(topic) {
+    return Error(TextLimit())
+  }
+  if operation == "publish" && map.len(members) == 3 {
+    let data = field(parsed, "data")?
+    // Worst-case JSON escaping still fits the 2048-byte delivery frame.
+    if string.byte_len(data) > 192 {
+      return Error(TextLimit())
+    }
+    return Ok(Publish(take topic, take data))
+  }
+  if map.len(members) != 2 {
+    return Error(Shape())
+  }
+  if operation == "subscribe" {
+    return Ok(Subscribe(take topic))
+  }
+  if operation == "unsubscribe" {
+    return Ok(Unsubscribe(take topic))
+  }
+  Error(Shape())
+}
+
+pub fn encode(reply: Message) -> Bytes uses {} {
+  let mut output: List[u8] = []
+  match reply {
+    Subscribed(topic) | Unsubscribed(topic) => {
+      let op = match reply {
+        Subscribed(_) => "subscribed",
+        _ => "unsubscribed",
+      }
+      text.append(mut output, f"{{\"op\":\"{op}\",\"topic\":")
+      json.write_text_into(topic, mut output)
+      text.append(mut output, "}")
+    },
+    Queued(sequence, count) => text.append(
+      mut output,
+      f"{{\"op\":\"queued\",\"seq\":{sequence},\"subscribers\":{count}}}"
+    ),
+    Delivery(sequence, topic, data) => {
+      text.append(mut output, f"{{\"op\":\"delivery\",\"seq\":{sequence},\"topic\":")
+      json.write_text_into(topic, mut output)
+      text.append(mut output, ",\"data\":")
+      json.write_text_into(data, mut output)
+      text.append(mut output, "}")
+    },
+    Refused(reason) => {
+      text.append(mut output, "{\"op\":\"refused\",\"reason\":")
+      json.write_text_into(reason, mut output)
+      text.append(mut output, "}")
+    },
+    Stopping() => text.append(mut output, "{\"op\":\"stopping\"}"),
+  }
+  bytes.from_list(take output)
+}
+
+// The decoder asks for exactly the remaining header/body bytes. No over-read,
+// and the advertised length is checked before the first body read/allocation.
+pub fn receive(n: Net, mut reader: ReadHalf of n) -> Result[Option[Bytes], Error] {
+  let mut state = decoder()
+  while true {
+    let mut chunk: List[u8] = []
+    let count = read_half.read(n, mut reader, mut chunk, remaining(state))?
+    if count == 0 {
+      finish(state)?
+      return Ok(None())
+    }
+    for byte in chunk {
+      if let Some(payload) = push(mut state, byte)? {
+        return Ok(Some(take payload))
+      }
+    }
+  }
+  Ok(None())
+}
+
+pub fn send(n: Net, mut writer: WriteHalf of n, reply: Message) -> Result[(), Error] {
+  let packet = frame(encode(reply))?
+  write_half.write_all(n, mut writer, packet)?
+  Ok(())
+}
+
+pub fn owned(value: String) -> unique String uses {} {
+  unique value
+}

@@ -708,6 +708,7 @@ fn toy_analyzer_31_host_tapes_checked_replay_and_controls() {
         let mut count = 0;
         for directory in directories.split(',').map(PathBuf::from) {
             let path = directory.join("hirsel.json");
+            let mut program = hirsel_driver::load_program(&path).unwrap();
             let mut tapes: Vec<_> = fs::read_dir(&directory)
                 .unwrap()
                 .map(|p| p.unwrap().path())
@@ -724,6 +725,7 @@ fn toy_analyzer_31_host_tapes_checked_replay_and_controls() {
                 source.replace("(\"schema\", number(1))", "(\"schema\", number(2))"),
             )
             .unwrap();
+            let mut source_program = hirsel_driver::load_program(&changed_path).unwrap();
             let mut source_control_done = false;
             for tape in tapes {
                 let name = tape.file_stem().unwrap().to_str().unwrap();
@@ -739,11 +741,16 @@ fn toy_analyzer_31_host_tapes_checked_replay_and_controls() {
                 let original = fs::read(&tape).unwrap();
                 let record = hirsel_rt::launch::parse_recording_bytes(&original).unwrap();
                 if !source_control_done {
-                    for replay in [
-                        hirsel_driver::replay_observations,
-                        hirsel_driver::replay_observations_checked,
-                    ] {
-                        assert!(replay(&changed_path, &tape, Some(1_000_000)).is_err());
+                    for checked in [false, true] {
+                        assert!(
+                            hirsel_driver::replay_loaded_observations(
+                                &mut source_program,
+                                &tape,
+                                Some(1_000_000),
+                                checked,
+                            )
+                            .is_err()
+                        );
                     }
                     source_control_done = true;
                 }
@@ -758,9 +765,20 @@ fn toy_analyzer_31_host_tapes_checked_replay_and_controls() {
                 };
                 assert!(!directory.join("input/a.toy").exists());
                 assert!(!directory.join("input/b.toy").exists());
-                let a = hirsel_driver::replay_observations(&path, &tape, Some(1_000_000)).unwrap();
-                let b = hirsel_driver::replay_observations_checked(&path, &tape, Some(1_000_000))
-                    .unwrap();
+                let a = hirsel_driver::replay_loaded_observations(
+                    &mut program,
+                    &tape,
+                    Some(1_000_000),
+                    false,
+                )
+                .unwrap();
+                let b = hirsel_driver::replay_loaded_observations(
+                    &mut program,
+                    &tape,
+                    Some(1_000_000),
+                    true,
+                )
+                .unwrap();
                 assert_eq!(a, b, "{name}: exact checked replay including event order");
                 assert_eq!(a.output, expected);
                 assert_eq!(a.exit_code, Some(code));
@@ -815,16 +833,21 @@ fn toy_analyzer_31_host_tapes_checked_replay_and_controls() {
                     assert!(record.events.iter().any(|e|matches!(e.request,hirsel_rt::io::Request::Close{handle:h} if h==handle)),"canceled source was not closed");
                     assert!(a.effects.iter().any(|e|matches!(&e.effect,hirsel_interp::observation::Effect::CapabilityConsumed(c) if c.operation=="task.cancel_all")),"cancellation was not observed");
                 }
-                for replay in [
-                    hirsel_driver::replay_observations,
-                    hirsel_driver::replay_observations_checked,
-                ] {
+                for checked in [false, true] {
+                    let mut replay = |tape: &Path| {
+                        hirsel_driver::replay_loaded_observations(
+                            &mut program,
+                            tape,
+                            Some(1_000_000),
+                            checked,
+                        )
+                    };
                     let mut extra = record.clone();
                     extra.events.push(record.events[0].clone());
                     let bad = directory.join(format!("tampered-{name}.tape"));
                     fs::write(&bad, hirsel_rt::launch::render_recording(&extra).unwrap()).unwrap();
                     assert!(
-                        replay(&path, &bad, Some(1_000_000))
+                        replay(&bad)
                             .unwrap_err()
                             .to_string()
                             .contains("UnconsumedInput")
@@ -835,7 +858,7 @@ fn toy_analyzer_31_host_tapes_checked_replay_and_controls() {
                     }
                     fs::write(&bad, hirsel_rt::launch::render_recording(&changed).unwrap())
                         .unwrap();
-                    assert!(replay(&path, &bad, Some(1_000_000)).is_err());
+                    assert!(replay(&bad).is_err());
                     let mut changed_config = record.clone();
                     changed_config.arguments.push("changed-config".into());
                     fs::write(
@@ -843,7 +866,7 @@ fn toy_analyzer_31_host_tapes_checked_replay_and_controls() {
                         hirsel_rt::launch::render_recording(&changed_config).unwrap(),
                     )
                     .unwrap();
-                    assert!(replay(&path, &bad, Some(1_000_000)).is_err());
+                    assert!(replay(&bad).is_err());
                 }
                 // Cross-backend replay with real providers absent. Native own-backend replays
                 // were completed by the launch script and are not repeated here.

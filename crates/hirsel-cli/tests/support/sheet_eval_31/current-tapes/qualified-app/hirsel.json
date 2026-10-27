@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sheet",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "formula.hir",
+      "module": [
+        "formula"
+      ]
+    },
+    {
+      "path": "cells.hir",
+      "module": [
+        "cells"
+      ]
+    },
+    {
+      "path": "graph.hir",
+      "module": [
+        "graph"
+      ]
+    },
+    {
+      "path": "evaluate.hir",
+      "module": [
+        "evaluate"
+      ]
+    },
+    {
+      "path": "store.hir",
+      "module": [
+        "store"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../../../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

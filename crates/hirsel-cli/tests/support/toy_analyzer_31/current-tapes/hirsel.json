@@ -1,0 +1,57 @@
+{
+  "dependencies": [
+    {
+      "expose": [],
+      "manifest": "../../../../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      }
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "package": {
+    "name": "toyanalyze",
+    "version": "0"
+  },
+  "schema": 1,
+  "sources": [
+    {
+      "module": [],
+      "path": "main.hir"
+    },
+    {
+      "module": [
+        "syntax"
+      ],
+      "path": "syntax.hir"
+    },
+    {
+      "module": [
+        "symbols"
+      ],
+      "path": "symbols.hir"
+    },
+    {
+      "module": [
+        "analyze"
+      ],
+      "path": "analyze.hir"
+    },
+    {
+      "module": [
+        "incremental"
+      ],
+      "path": "incremental.hir"
+    },
+    {
+      "module": [
+        "report"
+      ],
+      "path": "report.hir"
+    }
+  ]
+}

@@ -1,0 +1,250 @@
+// One outstanding request per worker bounds core's unbounded channels to four
+// owned requests and four replies. A worker cannot read again until its reply
+// has been written; no polling, shared mutable queue, or unbounded retention.
+pub type Envelope[T] {
+  value: T,
+  reply: Sender[unique Bytes],
+}
+
+pub type Event = Request(Envelope[Shared[record.Command]]) | Stopped | Done
+
+fn worker(tasks: Tasks, n: Net, take stream: Stream of n, take sender: Sender[Event]) {
+  let mut connected = take stream
+  let mut tx = take sender
+  let _ = net.set_read_timeout(n, mut connected, Nanos(2000000000u64))
+  let _ = net.set_write_timeout(n, mut connected, Nanos(2000000000u64))
+  for request in 0u64..512u64 {
+    let payload = match record.receive(n, mut connected) {
+      Ok(Some(value)) => take value,
+      _ => break,
+    }
+    let command = match record.command(payload) {
+      Ok(value) => take value,
+      Error(error) => {
+        let framed = match record.wire(record.refusal(error)) {
+          Ok(value) => take value,
+          Error(_) => break,
+        }
+        let _ = net.write_all(n, mut connected, framed)
+        continue
+      },
+    }
+    let stop = match command {
+      Stop() => true,
+      _ => false,
+    }
+    let (reply_tx, reply_rx): (Sender[unique Bytes], Receiver[unique Bytes]) = channel.open(
+      tasks
+    )
+    let packet: Envelope[Shared[record.Command]] = Envelope(
+      value: shared.freeze(take command),
+      reply: take reply_tx
+    )
+    if let Error(_) = channel.send(tasks, mut tx, Request(take packet)) {
+      break
+    }
+    let mut rx = take reply_rx
+    let response = match channel.receive(tasks, mut rx) {
+      Ok(value) => take value,
+      Error(_) => break,
+    }
+    let framed = match record.wire(response) {
+      Ok(value) => take value,
+      Error(_) => break,
+    }
+    if let Error(_) = net.write_all(n, mut connected, framed) {
+      break
+    }
+    if stop {
+      let _ = channel.send(tasks, mut tx, Stopped())
+      break
+    }
+  }
+}
+
+fn accept_loop(
+  tasks: Tasks,
+  n: Net,
+  take listener: Listener of n,
+  take sender: Sender[Event]
+) {
+  task.scope(
+    tasks,
+    fn(scope: Scope) {
+      let mut listening = take listener
+      let mut children: TaskSet[()] of scope = task.set(scope)
+      let mut tx = take sender
+      for client in 0u64..4u64 {
+        let stream = match net.accept(n, mut listening) {
+          Ok((value, _)) => take value,
+          Error(_) => break,
+        }
+        let worker_tx = sender.dup(tasks, tx)
+        task.add(
+          scope,
+          mut children,
+          task.async(
+            scope,
+            fn() {
+              worker(tasks, n, take stream, take worker_tx)
+            }
+          )
+        )
+      }
+      while let Some(index) = task.await_any(scope, children) {
+        task.await_at(scope, mut children, index)
+      }
+      task.cancel_all(scope, take children)
+      let _ = channel.send(tasks, mut tx, Done())
+    }
+  )
+}
+
+pub fn deadline(clock: MonotonicClock, milliseconds: u64) -> Result[
+  Deadline,
+  record.Error
+] {
+  let now = clock.monotonic(clock)?
+  let Some(until) = instant.checked_add(clock, now, milliseconds * 1000000) else {
+    return Error(Limit("clock"))
+  }
+  Ok(Deadline(clock: clock, at: until))
+}
+
+fn execute(
+  tasks: Tasks,
+  d: Dir,
+  clock: MonotonicClock,
+  mut loaded: unique log.Loaded,
+  command: record.Command,
+  lease: u64
+) -> Result[unique Bytes, record.Error] {
+  match command {
+    Checkpoint() => {
+      snapshot.checkpoint(tasks, d, mut loaded)?
+      return Ok(b"{\"checkpointed\":true}")
+    },
+    Stop() => return Ok(b"{\"stopped\":true}"),
+    _ => (),
+  }
+  let now = instant.ticks(clock.monotonic(clock)?)
+  let Some(_) = int.checked_add(now, lease) else {
+    return Error(Limit("clock"))
+  }
+  let decision = groups.plan(loaded.state, command, now)?
+  let (event, reply) = groups.unpack(take decision)
+  if let Some(change) = event {
+    log.append(d, mut loaded, change, now, lease)?
+  }
+  Ok(take reply)
+}
+
+fn owner(
+  tasks: Tasks,
+  d: Dir,
+  clock: MonotonicClock,
+  mut loaded: unique log.Loaded,
+  mut rx: Receiver[Event],
+  lease: u64
+) -> Result[(), record.Error] {
+  while true {
+    let event = match channel.receive(tasks, mut rx) {
+      Ok(value) => take value,
+      Error(_) => break,
+    }
+    match take event {
+      Done() | Stopped() => break,
+      Request(packet) => {
+        let (frozen, response) = unpack(take packet)
+        let command = shared.with(
+          frozen,
+          fn(value: record.Command) -> unique record.Command uses {} {
+            unique value
+          }
+        )
+        let stop = match command {
+          Stop() => true,
+          _ => false,
+        }
+        let reply = match execute(tasks, d, clock, mut loaded, command, lease) {
+          Ok(value) => take value,
+          Error(Input(name)) => record.refusal(Input(take name)),
+          Error(Limit(name)) => record.refusal(Limit(take name)),
+          Error(other) => return Error(take other),
+        }
+        let mut tx = take response
+        let _ = channel.send(tasks, mut tx, take reply)
+        if stop {
+          while true {
+            match channel.receive(tasks, mut rx) {
+              Ok(Stopped()) | Ok(Done()) | Error(_) => return Ok(()),
+              _ => (),
+            }
+          }
+        }
+      },
+    }
+  }
+  Ok(())
+}
+
+fn unpack(take packet: Envelope[Shared[record.Command]]) -> (
+  Shared[record.Command],
+  Sender[unique Bytes]
+) uses {} {
+  let Envelope(value: value, reply: reply) = take packet
+  (take value, take reply)
+}
+
+pub fn serve(
+  tasks: Tasks,
+  d: Dir,
+  n: Net,
+  clock: MonotonicClock,
+  socket: Path,
+  milliseconds: u64,
+  lease: u64,
+  output: Stdout
+) -> Result[(), record.Error] {
+  let outcome = task.scope_until(
+    tasks,
+    deadline(clock, milliseconds)?,
+    fn(scope: Scope) -> Result[(), record.Error] {
+      // Recovery is cancelable, including a genuinely parked file provider. The
+      // startup marker also supplies an AfterWrite gate for readiness fixtures.
+      let loader: Task[unique Result[unique log.Loaded, record.Error]] of scope = task.async(
+        scope,
+        fn() -> unique Result[unique log.Loaded, record.Error] {
+          unique log.load(d)
+        }
+      )
+      let _ = file.metadata(d, path.of("queue.log"))
+      let _ = file.metadata(d, path.of("queue.log"))
+      file.write_bytes(d, path.of("starting"), b"workqueue")?
+      let mut loaded = take task.await(scope, take loader)?
+      let listener = net.unix_listen(n, socket)?
+      let (tx, rx): (Sender[Event], Receiver[Event]) = channel.open(tasks)
+      let accepting = task.async(
+        scope,
+        fn() {
+          accept_loop(tasks, n, take listener, take tx)
+        }
+      )
+      out.print(output, "{\"ready\":true}\n")?
+      let mut receiver = take rx
+      let answer = owner(tasks, d, clock, mut loaded, mut receiver, lease)
+      // Explicit stop/error/deadline closes admissions and joins every worker.
+      // A worker's final success reply must finish before canceling its scope;
+      // the sender handoff alone does not prove the socket write completed.
+      task.cancel(scope, accepting)
+      task.await(scope, take accepting)
+      take answer
+    }
+  )
+  match take outcome {
+    Finished(value) => take value?,
+    Expired(_) => (),
+  }
+  out.print(output, "{\"joined\":true}\n")?
+  Ok(())
+}

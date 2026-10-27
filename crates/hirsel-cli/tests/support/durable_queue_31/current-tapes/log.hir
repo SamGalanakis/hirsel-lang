@@ -1,0 +1,133 @@
+pub type Loaded {
+  state: groups.State,
+  records: u64,
+  size: u64,
+}
+
+pub fn empty() -> unique Loaded uses {} {
+  Loaded(state: groups.empty(), records: 0, size: 8)
+}
+
+// Bounded exact interval: caller validates size before reading or allocating.
+pub fn read(d: Dir, mut f: File of d, size: u64) -> Result[unique Bytes, record.Error] {
+  if size > record.MAX_FRAME {
+    return Error(Limit("read"))
+  }
+  let mut data: List[u8] = []
+  while list.len(data) < size {
+    let count = file.read(d, mut f, mut data, size - list.len(data))?
+    if count == 0 {
+      break
+    }
+  }
+  Ok(bytes.from_list(take data))
+}
+
+// Atomic replacement alone is publication, not durability. Synchronizing the
+// reopened inode also covers its directory chain (core file.sync contract).
+pub fn publish(d: Dir, data: Bytes) -> Result[(), record.Error] {
+  if bytes.len(data) > record.MAX_LOG {
+    return Error(Limit("log_bytes"))
+  }
+  let mut replacement = file.create_atomic(d, path.of("queue.log"))?
+  file.write_all(d, mut replacement, data)?
+  file.commit(d, take replacement)?
+  let mut reopened = file.open_append(d, path.of("queue.log"))?
+  file.sync(d, mut reopened)?
+  Ok(())
+}
+
+fn scan(d: Dir, mut opened: File of d, size: u64) -> Result[unique Loaded, record.Error] {
+  let mut loaded = empty()
+  let magic = read(d, mut opened, 8)?
+  if bytes.len(magic) < 8 {
+    // A crash before the first durable creation cannot have acknowledged work.
+    if magic != bytes.slice(record.MAGIC, 0, bytes.len(magic)) {
+      return Error(Corrupt(0))
+    }
+    publish(d, record.MAGIC)?
+    return Ok(take loaded)
+  }
+  if magic != record.MAGIC {
+    return Error(Corrupt(0))
+  }
+  let mut prefix: List[u8] = []
+  bytes.append(mut prefix, magic)
+  let mut offset = 8u64
+  while offset < size {
+    let raw = read(d, mut opened, 7)?
+    if bytes.len(raw) < 7 {
+      break
+    }
+    let header = record.header(raw, offset)?
+    if loaded.records >= record.MAX_RECORDS {
+      return Error(Limit("log_records"))
+    }
+    let payload = read(d, mut opened, header.length)?
+    if bytes.len(payload) != header.length {
+      break
+    }
+    if record.checksum(payload) != header.checksum {
+      return Error(Corrupt(offset))
+    }
+    let event = record.decode(payload, offset)?
+    match groups.apply(mut loaded.state, event) {
+      Ok(()) => (),
+      Error(_) => return Error(Corrupt(offset)),
+    }
+    bytes.append(mut prefix, raw)
+    bytes.append(mut prefix, payload)
+    offset += 7 + header.length
+    loaded.records += 1
+  }
+  loaded.size = offset
+  if offset != size {
+    // No append may follow a torn tail. Replace with its verified prefix first;
+    // a crash sees either equivalent recoverable old data or the synced prefix.
+    publish(d, bytes.from_list(take prefix))?
+  }
+  Ok(take loaded)
+}
+
+pub fn load(d: Dir) -> Result[unique Loaded, record.Error] {
+  let size = match file.size(d, path.of("queue.log")) {
+    Ok(n) => n,
+    Error(NotFound()) => {
+      publish(d, record.MAGIC)?
+      return Ok(empty())
+    },
+    Error(e) => return Error(Files(e)),
+  }
+  if size > record.MAX_LOG {
+    return Error(Limit("log_bytes"))
+  }
+  let mut opened = file.open(d, path.of("queue.log"))?
+  scan(d, mut opened, size)
+}
+
+// No cached writer survives checkpoint replacement. Any write/sync error is
+// fatal to this service: a possibly committed event is resolved only by restart.
+@preserves_unique(loaded)
+pub fn append(
+  d: Dir,
+  mut loaded: unique Loaded,
+  event: record.Event,
+  now: u64,
+  lease: u64
+) -> Result[(), record.Error] {
+  let frame = record.frame(record.encode(event))
+  if loaded.records >= record.MAX_RECORDS {
+    return Error(Limit("log_records"))
+  }
+  if bytes.len(frame) > record.MAX_LOG - loaded.size {
+    return Error(Limit("log_bytes"))
+  }
+  let mut opened = file.open_append(d, path.of("queue.log"))?
+  file.append(d, mut opened, frame)?
+  file.sync(d, mut opened)?
+  groups.apply(mut loaded.state, event)?
+  groups.activate(mut loaded.state, event, now, lease)?
+  loaded.records += 1
+  loaded.size += bytes.len(frame)
+  Ok(())
+}

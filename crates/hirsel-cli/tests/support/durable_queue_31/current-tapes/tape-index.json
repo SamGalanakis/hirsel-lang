@@ -1,0 +1,110 @@
+[
+  {
+    "id": "cranelift-w1-cancel",
+    "tape": "cranelift-w1-cancel/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "cranelift-w1-domain",
+    "tape": "cranelift-w1-domain/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "cranelift-w1-success",
+    "tape": "cranelift-w1-success/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "cranelift-w2-cancel",
+    "tape": "cranelift-w2-cancel/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "cranelift-w2-domain",
+    "tape": "cranelift-w2-domain/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "cranelift-w2-success",
+    "tape": "cranelift-w2-success/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "cranelift-w4-cancel",
+    "tape": "cranelift-w4-cancel/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "cranelift-w4-domain",
+    "tape": "cranelift-w4-domain/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "cranelift-w4-success",
+    "tape": "cranelift-w4-success/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w1-cancel",
+    "tape": "llvm-w1-cancel/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w1-domain",
+    "tape": "llvm-w1-domain/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w1-success",
+    "tape": "llvm-w1-success/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w2-cancel",
+    "tape": "llvm-w2-cancel/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w2-domain",
+    "tape": "llvm-w2-domain/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w2-success",
+    "tape": "llvm-w2-success/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w4-cancel",
+    "tape": "llvm-w4-cancel/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w4-domain",
+    "tape": "llvm-w4-domain/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  },
+  {
+    "id": "llvm-w4-success",
+    "tape": "llvm-w4-success/original.tape",
+    "stdout": "{\"ready\":true}\n{\"joined\":true}\n",
+    "exit": 0
+  }
+]

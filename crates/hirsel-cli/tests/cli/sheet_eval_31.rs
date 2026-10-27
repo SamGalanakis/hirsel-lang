@@ -766,6 +766,7 @@ fn sheet_eval_31_production_host_replay() {
             std::env::var_os("SHEET_EVAL_31_PRODUCTION").expect("production evidence root"),
         );
         let path = evidence.join("qualified-app/hirsel.json");
+        let mut program = hirsel_driver::load_program(&path).unwrap();
         let fresh = std::env::var_os("SHEET_EVAL_31_FRESH_CANCEL").is_some();
         let mut rows = vec![];
         let mut incomplete = vec![];
@@ -791,11 +792,12 @@ fn sheet_eval_31_production_host_replay() {
             for checked in if fresh { vec![false, true] } else { vec![true] } {
                 let engine = if checked { "checked-h" } else { "reference" };
                 eprintln!("SHEET_STARTED production/{id}/{engine}");
-                let attempt = if checked {
-                    hirsel_driver::replay_observations_checked(&path, &tape, Some(1_000_000))
-                } else {
-                    hirsel_driver::replay_observations(&path, &tape, Some(1_000_000))
-                };
+                let attempt = hirsel_driver::replay_loaded_observations(
+                    &mut program,
+                    &tape,
+                    Some(1_000_000),
+                    checked,
+                );
                 let row = match attempt {
                     Ok(observed) => {
                         assert_eq!(observed.output, expected);
@@ -1140,15 +1142,17 @@ fn sheet_eval_31_real_output_error_replay() {
     hirsel_engine::with_compiler_stack(|| {
         let root = PathBuf::from(std::env::var_os("SHEET_EVAL_31_PRODUCTION").expect("evidence"));
         let path = root.join("qualified-app/hirsel.json");
+        let mut program = hirsel_driver::load_program(&path).unwrap();
         for recorder in ["llvm", "cranelift"] {
             let tape = root.join(format!("output-fault-{recorder}/recording"));
             let bytes = fs::read(&tape).unwrap();
             for checked in [false, true] {
-                let observed = if checked {
-                    hirsel_driver::replay_observations_checked(&path, &tape, Some(1_000_000))
-                } else {
-                    hirsel_driver::replay_observations(&path, &tape, Some(1_000_000))
-                }
+                let observed = hirsel_driver::replay_loaded_observations(
+                    &mut program,
+                    &tape,
+                    Some(1_000_000),
+                    checked,
+                )
                 .unwrap();
                 assert!(observed.output.is_empty() && observed.failures.is_empty());
                 assert_eq!(observed.exit_code, Some(3));

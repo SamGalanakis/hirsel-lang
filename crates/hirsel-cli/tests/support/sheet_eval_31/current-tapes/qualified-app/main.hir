@@ -1,0 +1,361 @@
+const HELP: String = "sheet [--jobs 1..4] [--interruptible] -|FILE\nCommands: set A1 = EXPR; clear A1; show [A1]; recalc; save FILE; load FILE; quit\nOne command per line. Files are relative to the work grant. No prompt or TTY required.\n"
+
+type Settings {
+  jobs: u64,
+  interruptible: bool,
+  input: String,
+}
+
+fn settings(args: Args) -> Result[unique Settings, store.Problem] uses {args} {
+  let mut jobs = 1u64
+  let mut interruptible = false
+  let mut input = "-"
+  let mut got_input = false
+  let mut i = 0u64
+  while i < arg.len(args) {
+    let Ok(word) = arg.text(args, i) else {
+      return Error(Invalid("usage"))
+    }
+    if word == "--jobs" {
+      i += 1
+      let Ok(raw) = arg.text(args, i) else {
+        return Error(Invalid("usage"))
+      }
+      let Ok(count) = u64.parse(raw) else {
+        return Error(Invalid("jobs"))
+      }
+      if count == 0 || count > 4 {
+        return Error(Refused("jobs_limit"))
+      }
+      jobs = count
+    } else if word == "--interruptible" {
+      interruptible = true
+    } else {
+      if got_input {
+        return Error(Invalid("usage"))
+      }
+      got_input = true
+      input = unique word
+    }
+    i += 1
+  }
+  Ok(Settings(jobs: jobs, interruptible: interruptible, input: take input))
+}
+
+fn stop(error: evaluate.Stop) -> store.Problem uses {} {
+  match error {
+    Canceled() => Refused("canceled"),
+    Jobs() => Refused("jobs_limit"),
+  }
+}
+
+fn address(text: String) -> Result[u64, store.Problem] uses {} {
+  match formula.address(string.trim(text)) {
+    Some(id) => Ok(id),
+    None() => Error(Invalid("address")),
+  }
+}
+
+// Return true for quit, false for continue. Output errors end the session.
+fn command(
+  tasks: Tasks,
+  work: Dir,
+  output: Stdout,
+  mut book: cells.Workbook,
+  take line: String,
+  jobs: u64,
+  mut status: u8
+) -> Result[bool, store.Problem] {
+  let text = string.trim(line)
+  if text == "" {
+    return Ok(false)
+  }
+  if text == "quit" {
+    return Ok(true)
+  }
+  if string.starts_with(text, "set ") {
+    let Some((left, right)) = string.split_once(line, "=") else {
+      return Error(Invalid("set"))
+    }
+    let words = string.split_ascii_whitespace(copy left)
+    if list.len(words) != 2 || words[0] != "set" {
+      return Error(Invalid("set"))
+    }
+    let id = address(words[1])?
+    let raw = string.as_bytes(right)
+    let begin = if bytes.len(raw) > 0 && raw[0] == 32 {
+      1u64
+    } else {
+      0u64
+    }
+    let Ok(source) = string.from_bytes(copy bytes.slice(raw, begin, bytes.len(raw))) else {
+      return Error(Invalid("utf8"))
+    }
+    if string.trim(source) == "" {
+      return Error(Invalid("set"))
+    }
+    if let Error(limit) = cells.edit(mut book, id, unique source) {
+      return Error(Refused(formula.refusal_text(limit)))
+    }
+  } else if string.starts_with(text, "clear ") {
+    let Some((_, label)) = string.split_once(text, " ") else {
+      return Error(Invalid("clear"))
+    }
+    let id = address(label)?
+    let _ = cells.edit(mut book, id, "")
+  } else if text == "show" || string.starts_with(text, "show ") {
+    let selected: Option[u64] = if text == "show" {
+      None()
+    } else {
+      let Some((_, label)) = string.split_once(text, " ") else {
+        return Error(Invalid("show"))
+      }
+      Some(address(label)?)
+    }
+    let _ = evaluate.refresh(tasks, mut book, jobs) ? stop
+    let (encoded, failed) = store.render(book, selected)
+    if failed && status == 0 {
+      status = 1
+    }
+    out.print(output, encoded) ? output_problem
+    return Ok(false)
+  } else if text == "recalc" {
+    let count = evaluate.refresh(tasks, mut book, jobs) ? stop
+    out.print(output, f"RECALC {count}\n") ? output_problem
+    return Ok(false)
+  } else if string.starts_with(text, "save ") {
+    let Some((_, name)) = string.split_once(text, " ") else {
+      return Error(Invalid("save"))
+    }
+    store.save(work, string.trim(name), book)?
+  } else if string.starts_with(text, "load ") {
+    let Some((_, name)) = string.split_once(text, " ") else {
+      return Error(Invalid("load"))
+    }
+    let mut incoming = store.decode(store.read(work, string.trim(name))?)?
+    let _ = evaluate.refresh(tasks, mut incoming, jobs) ? stop
+    book = take incoming
+  } else {
+    return Error(Invalid("command"))
+  }
+  out.print(output, "OK\n") ? output_problem
+  Ok(false)
+}
+
+fn output_problem(error: OutputError) -> store.Problem uses {} {
+  Refused("output")
+}
+
+fn report(output: Stdout, problem: store.Problem, mut status: u8) -> bool {
+  let (kind, code): (String, u8) = match problem {
+    Invalid(kind) => (unique kind, 1u8),
+    Refused(kind) => (unique kind, 3u8),
+  }
+  if code > status {
+    status = code
+  }
+  if kind == "output" {
+    return false
+  }
+  match out.print(output, f"error: {kind}\n") {
+    Ok(()) => true,
+    Error(_) => {
+      status = 3
+      false
+    },
+  }
+}
+
+// A bounded streaming line reader leaves the following line unread. No unbounded
+// std read_line allocation occurs before checking the command admission limit.
+fn next_line(stream: Stdin) -> Result[Option[String], store.Problem] {
+  let mut buffer: List[u8] = []
+  let mut eof = false
+  while true {
+    let mut byte: List[u8] = []
+    let Ok(count) = stdin.read(stream, mut byte, 1) else {
+      return Error(Refused("input"))
+    }
+    if count == 0 {
+      eof = true
+      break
+    }
+    if byte[0] == 10 {
+      break
+    }
+    if list.len(buffer) == 512 {
+      return Error(Refused("line_limit"))
+    }
+    list.push(mut buffer, byte[0])
+  }
+  if eof && list.len(buffer) == 0 {
+    return Ok(None())
+  }
+  match string.from_bytes(bytes.from_list(take buffer)) {
+    Ok(s) => Ok(Some(take s)),
+    Error(_) => Error(Invalid("utf8")),
+  }
+}
+
+fn session(rt: Io, take config: unique Settings) -> std@1/process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return std@1/process.exit_code(3u8)
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return std@1/process.exit_code(3u8)
+  }
+  let Ok(work) = io.dir(rt, path.of("work")) else {
+    return std@1/process.exit_code(3u8)
+  }
+  let mut status = 0u8
+  let mut book = cells.empty()
+  if config.input == "-" {
+    let Ok(stream) = io.stdin(rt) else {
+      return std@1/process.exit_code(3u8)
+    }
+    let mut count = 0u64
+    while true {
+      if count == 128 {
+        let mut probe: List[u8] = []
+        match stdin.read(stream, mut probe, 1) {
+          Ok(0) => (),
+          Ok(_) => {
+            let _ = report(output, Refused("command_limit"), mut status)
+          },
+          Error(_) => {
+            status = 3
+          },
+        }
+        break
+      }
+      let line = match next_line(stream) {
+        Ok(Some(s)) => take s,
+        Ok(None()) => break,
+        Error(e) => {
+          let _ = report(output, e, mut status)
+          break
+        },
+      }
+      count += 1
+      match command(tasks, work, output, mut book, take line, config.jobs, mut status) {
+        Ok(true) => break,
+        Ok(false) => (),
+        Error(e) => {
+          if !report(output, e, mut status) {
+            break
+          }
+        },
+      }
+    }
+  } else {
+    let source = match store.read(work, config.input) {
+      Ok(s) => take s,
+      Error(e) => {
+        let _ = report(output, e, mut status)
+        return std@1/process.exit_code(status)
+      },
+    }
+    // Scan before split: at most 128 lines and 512 bytes per line are allocated.
+    let data = string.as_bytes(source)
+    let mut count = 0u64
+    let mut start = 0u64
+    for end in 0u64..bytes.len(data) + 1 {
+      if end < bytes.len(data) && data[end] != 10 {
+        continue
+      }
+      if end == bytes.len(data) && end == start {
+        break
+      }
+      if count == 128 || end - start > 512 {
+        let kind = if count == 128 {
+          "command_limit"
+        } else {
+          "line_limit"
+        }
+        let _ = report(output, Refused(kind), mut status)
+        break
+      }
+      count += 1
+      let Ok(line) = string.from_bytes(copy bytes.slice(data, start, end)) else {
+        let _ = report(output, Invalid("utf8"), mut status)
+        break
+      }
+      start = end + 1
+      match command(tasks, work, output, mut book, take line, config.jobs, mut status) {
+        Ok(true) => break,
+        Ok(false) => (),
+        Error(e) => {
+          if !report(output, e, mut status) {
+            break
+          }
+        },
+      }
+    }
+  }
+  std@1/process.exit_code(status)
+}
+
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return std@1/process.exit_code(3u8)
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        return match out.print(output, HELP) {
+          Ok(()) => std@1/process.SUCCESS,
+          Error(_) => std@1/process.exit_code(3u8),
+        }
+      }
+    }
+  }
+  let config = match settings(args) {
+    Ok(value) => take value,
+    Error(e) => {
+      let mut status = 0u8
+      let _ = report(output, e, mut status)
+      return std@1/process.exit_code(status)
+    },
+  }
+  if !config.interruptible {
+    return session(rt, take config)
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return std@1/process.exit_code(3u8)
+  }
+  let Ok(signals) = io.signals(rt) else {
+    return std@1/process.exit_code(3u8)
+  }
+  let (winner, code) = task.scope(
+    tasks,
+    fn(s: Scope) -> (u64, std@1/process.ExitCode) {
+      let mut members: TaskSet[std@1/process.ExitCode] of s = task.set(s)
+      task.add(
+        s,
+        mut members,
+        task.async(
+          s,
+          fn() -> std@1/process.ExitCode {
+            session(rt, take config)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut members,
+        task.async(
+          s,
+          fn() -> std@1/process.ExitCode {
+            let _ = signal.wait(signals, [Interrupt()])
+            std@1/process.exit_code(3u8)
+          }
+        )
+      )
+      task.select(s, take members)
+    }
+  )
+  if winner == 1 {
+    let _ = out.print(output, "error: canceled\n")
+  }
+  code
+}

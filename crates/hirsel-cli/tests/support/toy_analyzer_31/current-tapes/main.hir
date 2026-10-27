@@ -1,0 +1,441 @@
+const HELP: String = "toyanalyze [--ready] check MANIFEST JOBS [CACHE]\ntoyanalyze [--ready] session MANIFEST JOBS SESSION [CACHE]\nInput paths are relative to input; optional cache is relative to output.\nExit 0 clean, 1 toy diagnostics, 2 refusal/I/O, 3 stdout unavailable.\n"
+
+// Read at most cap+1, preserving source size refusal under changing host files.
+fn read(d: Dir, name: String, cap: u64) -> Result[unique Bytes, u64] {
+  let Ok(size) = file.size(d, path.of(name)) else {
+    return Error(1)
+  }
+  if size > cap {
+    return Error(2)
+  }
+  let mut Ok(handle) = file.open(d, path.of(name)) else {
+    return Error(1)
+  }
+  let mut data: List[u8] = []
+  while true {
+    let remaining = cap - list.len(data)
+    let count = if remaining < 1024 {
+      remaining + 1
+    } else {
+      1024u64
+    }
+    let Ok(n) = file.read(d, mut handle, mut data, count) else {
+      return Error(1)
+    }
+    if n > remaining {
+      return Error(2)
+    }
+    if n == 0 {
+      break
+    }
+  }
+  Ok(unique bytes.from_list(take data))
+}
+
+fn json_data(take data: Bytes) -> Result[json.Value, String] uses {} {
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error("json")
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error("json")
+  }
+  Ok(take value)
+}
+
+fn field(value: json.Value, key: String) -> Result[String, String] uses {} {
+  let Some(Text(text)) = json_access.member(value, key) else {
+    return Error("shape")
+  }
+  Ok(unique text)
+}
+
+fn safe_path(name: String) -> bool uses {} {
+  let data = string.as_bytes(name)
+  if bytes.len(data) == 0 || bytes.len(data) > 128 {
+    return false
+  }
+  // A deliberately small portable relative-path alphabet, no traversal aliases.
+  if data[0] == 47u8 || string.contains(name, "..") {
+    return false
+  }
+  for c in data {
+    if !ascii.is_alnum(c) && c != 95u8 && c != 45u8 && c != 46u8 && c != 47u8 {
+      return false
+    }
+  }
+  true
+}
+
+fn decode_manifest(value: json.Value) -> Result[List[incremental.Decl], String] uses {} {
+  let Some(items_value) = json_access.member(value, "modules") else {
+    return Error("shape")
+  }
+  let Some(items) = json_access.as_array(items_value) else {
+    return Error("shape")
+  }
+  if list.len(items) > 16 {
+    return Error("modules")
+  }
+  let mut declarations: List[incremental.Decl] = []
+  for item in items {
+    let name = field(item, "name")?
+    let path = field(item, "path")?
+    if !syntax.identifier(name) || !safe_path(path) {
+      return Error("declaration")
+    }
+    for earlier in declarations {
+      if earlier.name == name || earlier.path == path {
+        return Error("duplicate_module")
+      }
+    }
+    list.push(mut declarations, incremental.Decl(name: take name, path: take path))
+  }
+  Ok(take declarations)
+}
+
+fn file_error(code: u64) -> String uses {} {
+  if code == 2 {
+    "input_bytes"
+  } else {
+    "file"
+  }
+}
+
+fn syntax_error(error: syntax.Refusal) -> String uses {} {
+  match error {
+    Limit(code) => unique code,
+  }
+}
+
+fn syntax_code(error: syntax.Refusal) -> u64 uses {} {
+  match error {
+    Limit(code) => if code == "bindings" {
+      3u64
+    } else {
+      4u64
+    },
+  }
+}
+
+fn worker_error(code: u64) -> String uses {} {
+  if code == 3 {
+    "bindings"
+  } else if code == 4 {
+    "ast_depth"
+  } else {
+    file_error(code)
+  }
+}
+
+fn load(
+  tasks: Tasks,
+  d: Dir,
+  take declarations: List[incremental.Decl],
+  jobs: u64,
+  ready: Option[(Dir, Path)]
+) -> Result[incremental.State, String] {
+  let inputs = shared.freeze(unique declarations)
+  let mut state = incremental.State(modules: [])
+  let mut start = 0u64
+  while start < list.len(declarations) {
+    let first = start
+    let end = if start + jobs < list.len(declarations) {
+      start + jobs
+    } else {
+      list.len(declarations)
+    }
+    let loaded = task.scope(
+      tasks,
+      fn(s: Scope) -> Result[List[Shared[incremental.Module]], u64] {
+        let mut set: TaskSet[Result[Shared[incremental.Module], u64]] of s = task.set(s)
+        for slot in first..end {
+          let index = slot
+          task.add(
+            s,
+            mut set,
+            task.async(
+              s,
+              fn() -> Result[Shared[incremental.Module], u64] {
+                shared.with(
+                  inputs,
+                  fn(items: List[incremental.Decl]) -> Result[
+                    Shared[incremental.Module],
+                    u64
+                  ] {
+                    let data = read(d, items[index].path, syntax.SOURCE_BYTES)?
+                    let item = incremental.make(unique items[index], data) ? syntax_code
+                    Ok(shared.freeze(unique item))
+                  }
+                )
+              }
+            )
+          )
+        }
+        if first == 0 {
+          if let Some((ready_dir, ready_path)) = ready {
+            let admitted = shared.with(
+              inputs,
+              fn(items: List[incremental.Decl]) -> Result[(), u64] {
+                for index in first..end {
+                  let Ok(info) = file.metadata(d, path.of(items[index].path)) else {
+                    return Error(1)
+                  }
+                  if info.kind != Regular() {
+                    return Error(1)
+                  }
+                  let Ok(size) = file.size(d, path.of(items[index].path)) else {
+                    return Error(1)
+                  }
+                  if size > syntax.SOURCE_BYTES {
+                    return Error(2)
+                  }
+                }
+                Ok(())
+              }
+            )
+            if let Error(code) = admitted {
+              task.cancel_all(s, take set)
+              return Error(code)
+            }
+            if let Error(_) = file.write_bytes(ready_dir, ready_path, b"ready") {
+              task.cancel_all(s, take set)
+              return Error(1)
+            }
+          }
+        }
+        task.all(s, take set)
+      }
+    ) ? worker_error
+    for slot in 0u64..list.len(loaded) {
+      let item = shared.with(
+        loaded[slot],
+        fn(value: incremental.Module) -> incremental.Module {
+          unique value
+        }
+      )
+      list.push(mut state.modules, take item)
+    }
+    start = end
+  }
+  Ok(take state)
+}
+
+fn print_check(output: Stdout, tasks: Tasks, mut state: incremental.State, jobs: u64) -> Result[
+  u8,
+  String
+] {
+  let checked = incremental.check(tasks, mut state, jobs)
+  let text = report.check(checked, state)
+  let Ok(()) = out.print(output, f"{text}\n") else {
+    return Error("output")
+  }
+  Ok(
+    if checked.total == 0 {
+      0u8
+    } else {
+      1u8
+    }
+  )
+}
+
+fn validate_commands(state: incremental.State, commands: List[json.Value]) -> Result[
+  (),
+  String
+] uses {} {
+  let mut edits = 0u64
+  // Validate the entire session before applying its first replacement.
+  for command in commands {
+    if let Some(replacement) = json_access.member(command, "replace") {
+      edits += 1
+      if edits > 32 {
+        return Error("edits")
+      }
+      let name = field(replacement, "module")?
+      let source = field(replacement, "source")?
+      if incremental.find(state, name) == None() {
+        return Error("edit_module")
+      }
+      if string.byte_len(source) > syntax.SOURCE_BYTES {
+        return Error("source_bytes")
+      }
+    } else if json_access.member(command, "check") != Some(Bool(true)) {
+      return Error("command")
+    }
+  }
+  Ok(())
+}
+
+fn session(
+  output: Stdout,
+  tasks: Tasks,
+  mut state: incremental.State,
+  jobs: u64,
+  value: json.Value,
+  mut exit: u8
+) -> Result[(), String] {
+  let Some(commands_value) = json_access.member(value, "commands") else {
+    return Error("shape")
+  }
+  let Some(commands) = json_access.as_array(commands_value) else {
+    return Error("shape")
+  }
+  if list.len(commands) > 65 {
+    return Error("commands")
+  }
+  validate_commands(state, commands)?
+  for command in commands {
+    if let Some(replacement) = json_access.member(command, "replace") {
+      let name = field(replacement, "module")?
+      let source = field(replacement, "source")?
+      let Some(index) = incremental.find(state, name) else {
+        return Error("edit_module")
+      }
+      match incremental.replace_source(mut state, index, string.as_bytes(source)) {
+        Ok(()) => {},
+        Error(problem) => {
+          return Error(syntax_error(problem))
+        },
+      }
+    } else {
+      exit = print_check(output, tasks, mut state, jobs)?
+    }
+  }
+  Ok(())
+}
+
+fn execute(rt: Io, args: Args, output: Stdout) -> Result[u8, String] {
+  let mut base = 0u64
+  if arg.text(args, 0) == Ok("--ready") {
+    let Ok(input) = io.stdin(rt) else {
+      return Error("stdin")
+    }
+    let Ok(()) = out.print(output, "ready\n") else {
+      return Error("output")
+    }
+    let mut bytes: List[u8] = []
+    let Ok(1u64) = stdin.read(input, mut bytes, 1) else {
+      return Error("stdin")
+    }
+    base = 1
+  }
+  let Ok(mode) = arg.text(args, base) else {
+    return Error("usage")
+  }
+  let width = if mode == "session" {
+    4u64
+  } else if mode == "check" {
+    3u64
+  } else {
+    return Error("usage")
+  }
+  let count = arg.len(args) - base
+  if count < width || count > width + 1 {
+    return Error("usage")
+  }
+  let Ok(manifest) = arg.text(args, base + 1) else {
+    return Error("usage")
+  }
+  let Ok(jobs_text) = arg.text(args, base + 2) else {
+    return Error("usage")
+  }
+  let jobs = if jobs_text == "1" {
+    1u64
+  } else if jobs_text == "2" {
+    2u64
+  } else if jobs_text == "3" {
+    3u64
+  } else if jobs_text == "4" {
+    4u64
+  } else {
+    return Error("jobs")
+  }
+  if !safe_path(manifest) {
+    return Error("path")
+  }
+  let Ok(d) = io.dir(rt, path.of("input")) else {
+    return Error("file")
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error("tasks")
+  }
+  let manifest_value = json_data(read(d, manifest, 8192) ? file_error)?
+  let declared = decode_manifest(manifest_value)?
+  let mut ready: Option[(Dir, Path)] = None()
+  if let Some(value) = json_access.member(manifest_value, "ready") {
+    let Text(name) = value else {
+      return Error("shape")
+    }
+    if !safe_path(name) {
+      return Error("path")
+    }
+    let Ok(ready_dir) = io.dir(rt, path.of("output")) else {
+      return Error("file")
+    }
+    ready = Some((ready_dir, path.of(name)))
+  }
+  let mut state = load(tasks, d, take declared, jobs, ready)?
+  let mut exit = print_check(output, tasks, mut state, jobs)?
+  if mode == "session" {
+    let Ok(name) = arg.text(args, base + 3) else {
+      return Error("usage")
+    }
+    if !safe_path(name) {
+      return Error("path")
+    }
+    let value = json_data(read(d, name, 300000) ? file_error)?
+    session(output, tasks, mut state, jobs, value, mut exit)?
+  }
+  if count == width + 1 {
+    let Ok(name) = arg.text(args, base + width) else {
+      return Error("usage")
+    }
+    if !safe_path(name) {
+      return Error("path")
+    }
+    let Ok(cache_dir) = io.dir(rt, path.of("output")) else {
+      return Error("cache")
+    }
+    match read(cache_dir, name, 300000) {
+      Ok(data) => {
+        if !report.validate_cache(json_data(take data)?) {
+          return Error("cache")
+        }
+      },
+      Error(_) => {
+        // Only absence permits a new cache, never a denied or oversized read.
+        if file.size(cache_dir, path.of(name)) != Error(NotFound()) {
+          return Error("cache")
+        }
+      },
+    }
+    let text = report.cache(state)
+    let mut Ok(file) = file.create_atomic(cache_dir, path.of(name)) else {
+      return Error("cache")
+    }
+    let Ok(()) = file.write_all(cache_dir, mut file, string.as_bytes(text)) else {
+      return Error("cache")
+    }
+    let Ok(()) = file.commit(cache_dir, take file) else {
+      return Error("cache")
+    }
+  }
+  Ok(exit)
+}
+
+pub fn main(rt: Io, args: Args) -> process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return process.exit_code(3u8)
+  }
+  if arg.text(args, 0) == Ok("--help") {
+    let _ = out.print(output, HELP)
+    return process.SUCCESS
+  }
+  match execute(rt, args, output) {
+    Ok(code) => process.exit_code(code),
+    Error(code) => {
+      let text = report.error(code)
+      let _ = out.print(output, f"{text}\n")
+      process.exit_code(2u8)
+    },
+  }
+}

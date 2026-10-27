@@ -1,0 +1,2 @@
+ready
+{"diagnostics":[{"module":"a","code":"undefined","start":6,"end":7}],"total":1,"analyzed":["a"],"reused":[]}

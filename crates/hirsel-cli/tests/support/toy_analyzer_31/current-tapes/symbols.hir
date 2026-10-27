@@ -1,0 +1,101 @@
+// Resolver.java:320-406, Crafting Interpreters 4a840f70, MIT.
+// Declare -> resolve initializer -> define; a stack's nearest declaration wins.
+pub type Type = Int | Bool | Unknown
+
+pub type Symbol {
+  name: String,
+  kind: Type,
+}
+
+pub type Local {
+  symbol: Symbol,
+  depth: u64,
+  defined: bool,
+}
+
+pub type Environment {
+  locals: List[Local],
+  imports: List[Symbol],
+  depth: u64,
+}
+
+pub type Lookup = Found(Type) | SelfRead | Missing
+
+pub fn empty(take imports: List[Symbol]) -> Environment uses {} {
+  Environment(locals: [], imports: take imports, depth: 0)
+}
+
+pub fn scoped[S, R](
+  mut scope_env: Environment,
+  mut state: S,
+  body: fn(mut current: Environment, mut context: S) -> R uses {}
+) -> R uses {} {
+  let count = list.len(scope_env.locals)
+  scope_env.depth += 1
+  let value = body(mut scope_env, mut state)
+  list.truncate(mut scope_env.locals, count)
+  scope_env.depth -= 1
+  take value
+}
+
+pub fn declare(mut scope_env: Environment, name: String) -> (u64, bool) uses {} {
+  let mut duplicate = false
+  for binding in scope_env.locals {
+    if binding.depth == scope_env.depth && binding.symbol.name == name {
+      duplicate = true
+    }
+  }
+  let index = list.len(scope_env.locals)
+  list.push(
+    mut scope_env.locals,
+    Local(
+      symbol: Symbol(name: unique name, kind: Unknown()),
+      depth: scope_env.depth,
+      defined: false
+    )
+  )
+  (index, duplicate)
+}
+
+pub fn define(mut scope_env: Environment, index: u64, kind: Type) -> () uses {} {
+  scope_env.locals[index].symbol.kind = kind
+  scope_env.locals[index].defined = true
+}
+
+pub fn lookup(scope_env: Environment, name: String) -> Lookup uses {} {
+  let mut i = list.len(scope_env.locals)
+  while i > 0 {
+    i -= 1
+    let binding = scope_env.locals[i]
+    if binding.symbol.name == name {
+      if !binding.defined {
+        return SelfRead()
+      }
+      return Found(binding.symbol.kind)
+    }
+  }
+  for symbol in scope_env.imports {
+    if symbol.name == name {
+      return Found(symbol.kind)
+    }
+  }
+  Missing()
+}
+
+pub fn exports(scope_env: Environment) -> List[Symbol] uses {} {
+  let mut items: List[Symbol] = []
+  for binding in scope_env.locals {
+    if binding.depth == 0 {
+      list.push(mut items, unique binding.symbol)
+    }
+  }
+  take items
+}
+
+pub fn type_name(kind: Type) -> String uses {} {
+  match kind {
+    Int() => "int",
+    Bool() => "bool",
+    Unknown() => "unknown",
+  }
+}

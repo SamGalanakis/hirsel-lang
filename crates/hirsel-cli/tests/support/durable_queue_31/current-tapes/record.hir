@@ -1,0 +1,271 @@
+// LevelDB bb74ef73 db/log_writer.cc:34-105: type+payload masked CRC32C,
+// little-endian length, append header then payload. BSD-3; LICENSE.leveldb.
+// Private FULL-only stream, no 32KiB blocks or fragmented records (README).
+pub const MAGIC: Bytes = b"WQ31\x01\x00\x00\x00"
+
+pub const MAX_FRAME: u64 = 8192
+
+pub const MAX_LOG: u64 = 524288
+
+pub const MAX_RECORDS: u64 = 512
+
+pub type Error = Input(String) | Limit(String) | Corrupt(u64) | Files(FileError) | Network(
+  NetError
+) | Grant(GrantError) | Output(OutputError) | Clock(ClockError) | Arguments(ArgError) | Canceled(
+  CancelError
+)
+
+pub type Event = Message(u64, String) | Group(u64) | Delivery(u64, u64, u64, u64, bool)
+
+pub type Command = Enqueue(String) | Group(u64) | Claim(u64, u64) | Ack(u64, u64, u64) | Pending(
+  u64
+) | Reclaim(u64, u64, u64) | Checkpoint | Stop
+
+pub type Header {
+  checksum: u32,
+  length: u64,
+}
+
+pub fn checksum(payload: Bytes) -> u32 uses {} {
+  let mut crc = crc32c.new()
+  crc32c.update(mut crc, b"\x01")
+  crc32c.update(mut crc, payload)
+  let raw = crc32c.finish(take crc)
+  int.wrapping_add(raw >> 15 | raw << 17, 0xa282ead8u32)
+}
+
+pub fn encode(event: Event) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  match event {
+    Message(id, data) => {
+      list.push(mut out, 1u8)
+      binary.append_u64(id, LittleEndian(), mut out)
+      binary.append_u16(int.narrow(string.byte_len(data)), LittleEndian(), mut out)
+      bytes.append(mut out, string.as_bytes(data))
+    },
+    Group(group) => {
+      list.push(mut out, 2u8)
+      list.push(mut out, int.narrow(group))
+    },
+    Delivery(group, id, consumer, token, acked) => {
+      list.push(mut out, 3u8)
+      list.push(mut out, int.narrow(group))
+      binary.append_u64(id, LittleEndian(), mut out)
+      list.push(mut out, int.narrow(consumer))
+      binary.append_u64(token, LittleEndian(), mut out)
+      list.push(
+        mut out,
+        if acked {
+          1u8
+        } else {
+          0u8
+        }
+      )
+    },
+  }
+  bytes.from_list(take out)
+}
+
+pub fn decode(payload: Bytes, offset: u64) -> Result[unique Event, Error] uses {} {
+  let size = bytes.len(payload)
+  if size == 0 {
+    return Error(Corrupt(offset))
+  }
+  if payload[0] == 1u8 && size >= 11 {
+    let Ok(id) = binary.read_u64(payload, 1, LittleEndian()) else {
+      return Error(Corrupt(offset))
+    }
+    let Ok(word) = binary.read_u16(payload, 9, LittleEndian()) else {
+      return Error(Corrupt(offset))
+    }
+    let length: u64 = int.widen(word)
+    if length > 1024 || size != 11 + length {
+      return Error(Corrupt(offset))
+    }
+    let Ok(data) = string.from_bytes(unique bytes.slice(payload, 11, size)) else {
+      return Error(Corrupt(offset))
+    }
+    return Ok(Message(id, take data))
+  }
+  if payload[0] == 2u8 && size == 2 {
+    return Ok(Group(int.widen(payload[1])))
+  }
+  if payload[0] == 3u8 && size == 20 {
+    let Ok(id) = binary.read_u64(payload, 2, LittleEndian()) else {
+      return Error(Corrupt(offset))
+    }
+    let Ok(token) = binary.read_u64(payload, 11, LittleEndian()) else {
+      return Error(Corrupt(offset))
+    }
+    if payload[19] > 1u8 {
+      return Error(Corrupt(offset))
+    }
+    return Ok(
+      Delivery(
+        int.widen(payload[1]),
+        id,
+        int.widen(payload[10]),
+        token,
+        payload[19] == 1u8
+      )
+    )
+  }
+  Error(Corrupt(offset))
+}
+
+pub fn header(data: Bytes, offset: u64) -> Result[Header, Error] uses {} {
+  if bytes.len(data) != 7 {
+    return Error(Corrupt(offset))
+  }
+  let Ok(crc) = binary.read_u32(data, 0, LittleEndian()) else {
+    return Error(Corrupt(offset))
+  }
+  let Ok(word) = binary.read_u16(data, 4, LittleEndian()) else {
+    return Error(Corrupt(offset))
+  }
+  let length: u64 = int.widen(word)
+  if data[6] != 1u8 || length == 0 || length > 1035 {
+    return Error(Corrupt(offset))
+  }
+  Ok(Header(checksum: crc, length: length))
+}
+
+pub fn frame(payload: Bytes) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  binary.append_u32(checksum(payload), LittleEndian(), mut out)
+  binary.append_u16(int.narrow(bytes.len(payload)), LittleEndian(), mut out)
+  list.push(mut out, 1u8)
+  bytes.append(mut out, payload)
+  bytes.from_list(take out)
+}
+
+fn field(value: json.Value, key: String) -> Result[unique String, Error] uses {} {
+  let Some(member) = json_access.member(value, key) else {
+    return Error(Input("shape"))
+  }
+  let Some(text) = json_access.as_text(member) else {
+    return Error(Input("shape"))
+  }
+  Ok(unique text)
+}
+
+fn number(value: json.Value, key: String) -> Result[u64, Error] uses {} {
+  let Some(member) = json_access.member(value, key) else {
+    return Error(Input("shape"))
+  }
+  let Some(text) = json_access.number_text(member) else {
+    return Error(Input("shape"))
+  }
+  match u64.parse(text) {
+    Ok(n) => Ok(n),
+    Error(_) => Error(Input("number")),
+  }
+}
+
+pub fn command(payload: Bytes) -> Result[unique Command, Error] uses {} {
+  if bytes.len(payload) > MAX_FRAME {
+    return Error(Limit("frame"))
+  }
+  let Ok(text) = string.from_bytes(unique payload) else {
+    return Error(Input("utf8"))
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Input("json"))
+  }
+  let Some(fields) = json_access.as_object(value) else {
+    return Error(Input("shape"))
+  }
+  let op = field(value, "op")?
+  let count = map.len(fields)
+  if op == "stop" && count == 1 {
+    return Ok(Stop())
+  }
+  if op == "checkpoint" && count == 1 {
+    return Ok(Checkpoint())
+  }
+  if op == "enqueue" && count == 2 {
+    let data = field(value, "data")?
+    if string.byte_len(data) > 1024 {
+      return Error(Limit("payload"))
+    }
+    return Ok(Enqueue(take data))
+  }
+  let group = number(value, "group")?
+  if group >= 2 {
+    return Error(Limit("groups"))
+  }
+  if op == "group" && count == 2 {
+    return Ok(Group(group))
+  }
+  if op == "pending" && count == 2 {
+    return Ok(Pending(group))
+  }
+  if op == "ack" && count == 4 {
+    return Ok(Ack(group, number(value, "id")?, number(value, "token")?))
+  }
+  let consumer = number(value, "consumer")?
+  if consumer >= 4 {
+    return Error(Limit("consumers"))
+  }
+  if op == "claim" && count == 3 {
+    return Ok(Claim(group, consumer))
+  }
+  if op == "reclaim" && count == 4 {
+    return Ok(Reclaim(group, number(value, "id")?, consumer))
+  }
+  Error(Input("shape"))
+}
+
+pub fn wire(payload: Bytes) -> Result[unique Bytes, Error] uses {} {
+  let size = bytes.len(payload)
+  if size == 0 || size > MAX_FRAME {
+    return Error(Limit("frame"))
+  }
+  let mut out: List[u8] = []
+  binary.append_u32(int.narrow(size), BigEndian(), mut out)
+  bytes.append(mut out, payload)
+  Ok(bytes.from_list(take out))
+}
+
+// Same localrpc length-prefix recipe; request exact remaining extents, never
+// overread a following command. Validate header before the first body read.
+pub fn receive(n: Net, mut stream: Stream of n) -> Result[Option[unique Bytes], Error] {
+  let mut data: List[u8] = []
+  while list.len(data) < 4 {
+    let count = net.read(n, mut stream, mut data, 4 - list.len(data))?
+    if count == 0 {
+      if list.len(data) == 0 {
+        return Ok(None())
+      }
+      return Error(Input("short_header"))
+    }
+  }
+  let raw = bytes.from_list(take data)
+  let Ok(word) = binary.read_u32(raw, 0, BigEndian()) else {
+    return Error(Input("header"))
+  }
+  let size: u64 = int.widen(word)
+  if size == 0 || size > MAX_FRAME {
+    return Error(Limit("frame"))
+  }
+  let mut body: List[u8] = []
+  while list.len(body) < size {
+    let count = net.read(n, mut stream, mut body, size - list.len(body))?
+    if count == 0 {
+      return Error(Input("short_body"))
+    }
+  }
+  Ok(Some(bytes.from_list(take body)))
+}
+
+pub fn refusal(error: Error) -> unique Bytes uses {} {
+  let name = match error {
+    Input(text) | Limit(text) => unique text,
+    _ => "io",
+  }
+  let mut out: List[u8] = []
+  text.append(mut out, "{\"error\":")
+  json.write_text_into(name, mut out)
+  text.append(mut out, "}")
+  bytes.from_list(take out)
+}

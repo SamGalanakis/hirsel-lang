@@ -1,0 +1,277 @@
+// tinyexpr 7ab30db4 tinyexpr.c:730-770 (zlib): term/sum precedence loops.
+// Integer, bounded grammar; see REFERENCES.md for deliberate deviations.
+pub const MAX_FORMULA: u64 = 256
+
+pub const MAX_DEPTH: u64 = 16
+
+pub type Fault = Syntax | Overflow | DivZero | Cycle | Dependency
+
+pub type Refusal = FormulaLimit | DepthLimit | EdgeLimit | CommandLimit | BytesLimit | JobsLimit
+
+pub type ParseError = Cell(Fault) | Bound(Refusal)
+
+pub type Expr = Literal(i64) | Reference(u64) | Sum(u64, u64) | Binary(
+  u8,
+  box Expr,
+  box Expr
+) | Negate(box Expr)
+
+type Token = Digits(String) | Address(u64) | SumWord | Symbol(u8) | End
+
+type Node {
+  tree: box Expr,
+  height: u64,
+}
+
+type Parser {
+  tokens: List[Token],
+  pos: u64,
+}
+
+pub fn address(name: String) -> Option[u64] uses {} {
+  let data = string.as_bytes(name)
+  let n = bytes.len(data)
+  if n < 2 || n > 3 || data[0] < 65 || data[0] > 80 || data[1] < 49 || data[1] > 57 {
+    return None()
+  }
+  let mut row: u64 = int.widen(data[1] - 48)
+  if n == 3 {
+    if data[2] < 48 || data[2] > 57 {
+      return None()
+    }
+    row = row * 10 + int.widen(data[2] - 48)
+  }
+  if row > 16 {
+    return None()
+  }
+  let col: u64 = int.widen(data[0] - 65)
+  Some((row - 1) * 16 + col)
+}
+
+pub fn coordinate(id: u64) -> String uses {} {
+  let mut buf: List[u8] = []
+  let col: u8 = int.narrow(id % 16)
+  list.push(mut buf, 65u8 + col)
+  u64.format_into(id / 16 + 1, mut buf)
+  match text.finish(take buf) {
+    Ok(s) => take s,
+    Error(_) => "?",
+  }
+}
+
+fn spelling(data: Bytes, start: u64, end: u64) -> String uses {} {
+  match string.from_bytes(unique bytes.slice(data, start, end)) {
+    Ok(s) => take s,
+    Error(_) => "",
+  }
+}
+
+fn tokenize(source: String) -> Result[List[Token], ParseError] uses {} {
+  if string.byte_len(source) > MAX_FORMULA {
+    return Error(Bound(FormulaLimit()))
+  }
+  let data = string.as_bytes(source)
+  let mut tokens: List[Token] = []
+  let mut pos = 0u64
+  while pos < bytes.len(data) {
+    let c = data[pos]
+    if c == 32 || c == 9 {
+      pos += 1
+      continue
+    }
+    let start = pos
+    if c >= 48 && c <= 57 {
+      while pos < bytes.len(data) && data[pos] >= 48 && data[pos] <= 57 {
+        pos += 1
+      }
+      list.push(mut tokens, Digits(spelling(data, start, pos)))
+    } else if c >= 65 && c <= 90 {
+      while pos < bytes.len(data) && (data[pos] >= 65 && data[pos] <= 90 || data[pos] >= 48 && data[pos] <= 57) {
+        pos += 1
+      }
+      let word = spelling(data, start, pos)
+      if word == "SUM" {
+        list.push(mut tokens, SumWord())
+      } else {
+        let Some(id) = address(word) else {
+          return Error(Cell(Syntax()))
+        }
+        list.push(mut tokens, Address(id))
+      }
+    } else if c == 43 || c == 45 || c == 42 || c == 47 || c == 40 || c == 41 || c == 58 {
+      list.push(mut tokens, Symbol(c))
+      pos += 1
+    } else {
+      return Error(Cell(Syntax()))
+    }
+  }
+  list.push(mut tokens, End())
+  Ok(take tokens)
+}
+
+fn symbol(p: Parser, c: u8) -> bool uses {} {
+  match p.tokens[p.pos] {
+    Symbol(v) => v == c,
+    _ => false,
+  }
+}
+
+fn expect(mut p: Parser, c: u8) -> Result[(), ParseError] uses {} {
+  if !symbol(p, c) {
+    return Error(Cell(Syntax()))
+  }
+  p.pos += 1
+  Ok(())
+}
+
+fn node(take tree: box Expr, height: u64) -> Result[Node, ParseError] uses {} {
+  if height > MAX_DEPTH {
+    return Error(Bound(DepthLimit()))
+  }
+  Ok(Node(tree: take tree, height: height))
+}
+
+fn primary(mut p: Parser, depth: u64) -> Result[Node, ParseError] uses {} {
+  if depth > MAX_DEPTH {
+    return Error(Bound(DepthLimit()))
+  }
+  if symbol(p, 43) || symbol(p, 45) {
+    let negative = symbol(p, 45)
+    p.pos += 1
+    // Parse a signed literal as a whole so MIN is accepted without an overflowing positive intermediate.
+    if let Digits(digits) = p.tokens[p.pos] {
+      let word = if negative {
+        f"-{digits}"
+      } else {
+        unique digits
+      }
+      let Ok(value) = i64.parse(word) else {
+        return Error(Cell(Overflow()))
+      }
+      p.pos += 1
+      return node(box Literal(value), 1)
+    }
+    let child = primary(mut p, depth + 1)?
+    if !negative {
+      return Ok(take child)
+    }
+    let Node(tree: tree, height: height) = take child
+    return node(box Negate(take tree), height + 1)
+  }
+  if symbol(p, 40) {
+    p.pos += 1
+    let child = sum(mut p, depth + 1)?
+    expect(mut p, 41)?
+    return Ok(take child)
+  }
+  match p.tokens[p.pos] {
+    Digits(digits) => {
+      let Ok(value) = i64.parse(digits) else {
+        return Error(Cell(Overflow()))
+      }
+      p.pos += 1
+      node(box Literal(value), 1)
+    },
+    Address(id) => {
+      p.pos += 1
+      node(box Reference(id), 1)
+    },
+    SumWord() => {
+      p.pos += 1
+      expect(mut p, 40)?
+      let Address(first) = p.tokens[p.pos] else {
+        return Error(Cell(Syntax()))
+      }
+      p.pos += 1
+      expect(mut p, 58)?
+      let Address(last) = p.tokens[p.pos] else {
+        return Error(Cell(Syntax()))
+      }
+      p.pos += 1
+      expect(mut p, 41)?
+      if first / 16 > last / 16 || first % 16 > last % 16 {
+        return Error(Cell(Syntax()))
+      }
+      // Both endpoints admitted to 16x16 before a product or expansion.
+      let rows = last / 16 - first / 16 + 1
+      let cols = last % 16 - first % 16 + 1
+      if rows > 256 / cols {
+        return Error(Bound(EdgeLimit()))
+      }
+      node(box Sum(first, last), 1)
+    },
+    _ => Error(Cell(Syntax())),
+  }
+}
+
+fn combine(take left: Node, op: u8, take right: Node) -> Result[Node, ParseError] uses {} {
+  let Node(tree: a, height: ha) = take left
+  let Node(tree: b, height: hb) = take right
+  let height = if ha > hb {
+    ha + 1
+  } else {
+    hb + 1
+  }
+  node(box Binary(op, take a, take b), height)
+}
+
+fn term(mut p: Parser, depth: u64) -> Result[Node, ParseError] uses {} {
+  let mut left = primary(mut p, depth)?
+  while symbol(p, 42) || symbol(p, 47) {
+    let op = if symbol(p, 42) {
+      42u8
+    } else {
+      47u8
+    }
+    p.pos += 1
+    let right = primary(mut p, depth)?
+    left = combine(take left, op, take right)?
+  }
+  Ok(take left)
+}
+
+fn sum(mut p: Parser, depth: u64) -> Result[Node, ParseError] uses {} {
+  let mut left = term(mut p, depth)?
+  while symbol(p, 43) || symbol(p, 45) {
+    let op = if symbol(p, 43) {
+      43u8
+    } else {
+      45u8
+    }
+    p.pos += 1
+    let right = term(mut p, depth)?
+    left = combine(take left, op, take right)?
+  }
+  Ok(take left)
+}
+
+pub fn parse(source: String) -> Result[box Expr, ParseError] uses {} {
+  let mut p = Parser(tokens: tokenize(source)?, pos: 0)
+  let built = sum(mut p, 0)?
+  if p.pos + 1 != list.len(p.tokens) {
+    return Error(Cell(Syntax()))
+  }
+  let Node(tree: tree, height: _) = take built
+  Ok(take tree)
+}
+
+pub fn fault_text(error: Fault) -> String uses {} {
+  match error {
+    Syntax() => "SYNTAX",
+    Overflow() => "OVERFLOW",
+    DivZero() => "DIV_ZERO",
+    Cycle() => "CYCLE",
+    Dependency() => "DEPENDENCY",
+  }
+}
+
+pub fn refusal_text(error: Refusal) -> String uses {} {
+  match error {
+    FormulaLimit() => "formula_limit",
+    DepthLimit() => "depth_limit",
+    EdgeLimit() => "edge_limit",
+    CommandLimit() => "command_limit",
+    BytesLimit() => "bytes_limit",
+    JobsLimit() => "jobs_limit",
+  }
+}

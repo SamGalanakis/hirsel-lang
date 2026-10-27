@@ -184,7 +184,7 @@ pub fn decode(take data: Bytes) -> Result[Manifest, model.InvalidInput] uses {} 
     if list.len(values) > 32 - list.len(cases) {
       return Error(model.invalid("cases"))
     }
-    list.push(mut suites, unique id)
+    list.push(mut suites, unique copy id)
     for value in values {
       let decoded = decode_case(list.len(cases), value, id)
       let item = match model.into_value(take decoded) {

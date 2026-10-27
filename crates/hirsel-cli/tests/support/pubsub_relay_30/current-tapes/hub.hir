@@ -1,0 +1,444 @@
+// Fanout/lifetime vectors: Tokio ce685ee, sync/broadcast.rs:1-68,
+// tests/sync_broadcast.rs:98-150 (MIT; LICENSE-TOKIO). Unlike broadcast's
+// overwrite policy, reserve before commit and explicitly report loss on close.
+pub type Event = Connected(
+  u64,
+  Sender[flow.Envelope[wire.Message]],
+  Mutex[client.Status]
+) | Request(u64, flow.Envelope[wire.Command]) | Tick(flow.Credit) | AcceptDone
+
+pub type Endpoint {
+  outgoing: Sender[flow.Envelope[wire.Message]],
+  state: Mutex[client.Status],
+  topics: List[unique String],
+  reported: bool,
+}
+
+pub type Admission {
+  publisher: u64,
+  topic: String,
+  data: String,
+  targets: List[u64],
+  permits: List[unique flow.Credit],
+  started: u64,
+}
+
+pub type Error = Network(NetError) | Timing(shutdown.Error) | Output(OutputError)
+
+fn subscribed(endpoint: Endpoint, topic: String) -> bool uses {} {
+  for existing in endpoint.topics {
+    if existing == topic {
+      return true
+    }
+  }
+  false
+}
+
+fn topic_count(endpoints: List[Endpoint]) -> u64 uses {} {
+  let mut names: List[String] = []
+  for endpoint in endpoints {
+    for topic in endpoint.topics {
+      let mut found = false
+      for name in names {
+        if name == topic {
+          found = true
+        }
+      }
+      if !found {
+        list.push(mut names, wire.owned(topic))
+      }
+    }
+  }
+  list.len(names)
+}
+
+fn reply(
+  tasks: Tasks,
+  log: Mutex[flow.Ledger],
+  mut endpoint: Endpoint,
+  id: u64,
+  take value: unique wire.Message
+) {
+  // One extra control slot per connection. Refuse a peer that fails to drain
+  // replies instead of growing the unbounded core channel.
+  if let Some(permit) = flow.reserve(tasks, log, 16 + id, 1) {
+    let packet = flow.wrap(take permit, take value)
+    let _ = channel.send(tasks, mut endpoint.outgoing, take packet)
+  } else {
+    client.close(tasks, endpoint.state, SlowReader())
+  }
+}
+
+fn accept_loop(
+  tasks: Tasks,
+  n: Net,
+  clock: MonotonicClock,
+  log: Mutex[flow.Ledger],
+  take listener: Listener of n,
+  take events: Sender[Event]
+) {
+  task.scope(
+    tasks,
+    fn(scope: Scope) {
+      let mut accepting = take listener
+      let mut outgoing = take events
+      let mut children: TaskSet[()] of scope = task.set(scope)
+      // This is a lifetime bound, not a rolling connection pool: IDs never reuse.
+      for id in 0u64..8u64 {
+        let connected = match net.accept(n, mut accepting) {
+          Ok((stream, _)) => take stream,
+          Error(_) => break,
+        }
+        let state = client.status(tasks)
+        let (tx, rx): (
+          Sender[flow.Envelope[wire.Message]],
+          Receiver[flow.Envelope[wire.Message]]
+        ) = channel.open(tasks)
+        let _ = channel.send(tasks, mut outgoing, Connected(id, take tx, copy state))
+        let command_tx = sender.dup(tasks, outgoing)
+        task.add(
+          scope,
+          mut children,
+          task.async(
+            scope,
+            fn() {
+              client.run(
+                tasks,
+                n,
+                clock,
+                id,
+                log,
+                state,
+                take connected,
+                take command_tx,
+                take rx
+              )
+            }
+          )
+        )
+      }
+      flow.discard(take accepting)
+      let _ = channel.send(tasks, mut outgoing, AcceptDone())
+      while let Some(index) = task.await_any(scope, children) {
+        task.await_at(scope, mut children, index)
+      }
+      task.cancel_all(scope, take children)
+    }
+  )
+}
+
+fn timer(
+  tasks: Tasks,
+  clock: MonotonicClock,
+  log: Mutex[flow.Ledger],
+  take events: Sender[Event]
+) {
+  let mut outgoing = take events
+  while true {
+    if let Error(_) = time.sleep(clock, time.Duration(nanoseconds: 10000000)) {
+      break
+    }
+    // One timer event can be outstanding; its owned credit acknowledges dequeue.
+    if let Some(permit) = flow.reserve(tasks, log, 24, 1) {
+      let _ = channel.send(tasks, mut outgoing, Tick(take permit))
+    }
+  }
+}
+
+// Retry only the oldest staged publish. Reserve in stable client-ID order;
+// later requests cannot overtake it. Disconnect and unsubscribe remove targets
+// and return their partial permits before another reservation is attempted.
+fn progress(
+  tasks: Tasks,
+  clock: MonotonicClock,
+  log: Mutex[flow.Ledger],
+  mut endpoints: List[Endpoint],
+  mut waiting: unique List[unique Admission],
+  mut admitted: u64,
+  output: Stdout
+) -> Result[(), Error] {
+  if list.len(waiting) == 0 {
+    return Ok(())
+  }
+  let mut current = list.remove(mut waiting, 0)
+  let now = shutdown.ticks(clock)?
+  let mut valid = client.alive(tasks, endpoints[current.publisher].state)
+  for target in current.targets {
+    if !client.alive(tasks, endpoints[target].state) || !subscribed(
+      endpoints[target],
+      current.topic
+    ) {
+      valid = false
+    }
+  }
+  if !valid {
+    reply(
+      tasks,
+      log,
+      mut endpoints[current.publisher],
+      current.publisher,
+      Refused("disconnected")
+    )
+    return Ok(())
+  }
+  let mut reserved = list.len(current.permits)
+  while reserved < list.len(current.targets) {
+    let id = current.targets[reserved]
+    if let Some(permit) = flow.reserve(tasks, log, id, 4) {
+      list.push(mut current.permits, take permit)
+      reserved += 1
+    } else {
+      break
+    }
+  }
+  if reserved != list.len(current.targets) {
+    if now - current.started >= 2000000000 {
+      let blocked = current.targets[reserved]
+      client.close(tasks, endpoints[blocked].state, SlowReader())
+      reply(
+        tasks,
+        log,
+        mut endpoints[current.publisher],
+        current.publisher,
+        Refused("slow_reader")
+      )
+    } else {
+      // Preserve FIFO without retaining a view into the mutable list.
+      let suffix = replace(mut waiting, [])
+      list.push(mut waiting, take current)
+      for item in take suffix {
+        list.push(mut waiting, take item)
+      }
+    }
+    return Ok(())
+  }
+  admitted += 1
+  flow.admitted(tasks, log)
+  let sequence = admitted
+  let count = list.len(current.targets)
+  let mut index = 0u64
+  let credits = replace(mut current.permits, [])
+  for owned in take credits {
+    let id = current.targets[index]
+    let mut permit = take owned
+    flow.commit(mut permit)
+    let value: unique wire.Message = Delivery(
+      sequence,
+      wire.owned(current.topic),
+      wire.owned(current.data)
+    )
+    let packet = flow.wrap(take permit, take value)
+    enqueue(tasks, mut endpoints[id], take packet)
+    index += 1
+  }
+  reply(
+    tasks,
+    log,
+    mut endpoints[current.publisher],
+    current.publisher,
+    Queued(sequence, count)
+  )
+  out.print(output, f"{{\"admitted\":{sequence},\"queued\":{count}}}\n")?
+  Ok(())
+}
+
+fn dispatch(
+  tasks: Tasks,
+  clock: MonotonicClock,
+  log: Mutex[flow.Ledger],
+  mut inbox: Receiver[Event],
+  max_publish: u64,
+  jobs: u64,
+  output: Stdout
+) -> Result[String, Error] {
+  let mut endpoints: List[Endpoint] = []
+  let mut waiting: unique List[unique Admission] = []
+  let mut accepting = true
+  let mut count = 0u64
+  let mut stopped = false
+  while true {
+    let event = match channel.receive(tasks, mut inbox) {
+      Ok(value) => take value,
+      Error(_) => return Ok("deadline"),
+    }
+    match take event {
+      Connected(id, outgoing, state) => {
+        failure.check(id == list.len(endpoints) && id < 8, Arithmetic())
+        list.push(
+          mut endpoints,
+          Endpoint(outgoing: take outgoing, state: state, topics: [], reported: false)
+        )
+      },
+      Tick(_) => {},
+      AcceptDone() => {
+        accepting = false
+      },
+      Request(id, packet) => {
+        let (permit, frozen) = flow.unpack(take packet)
+        let incoming = shared.with(
+          frozen,
+          fn(value: wire.Command) -> unique wire.Command uses {} {
+            unique value
+          }
+        )
+        if id < list.len(endpoints) && client.alive(tasks, endpoints[id].state) {
+          match take incoming {
+            Subscribe(topic) => {
+              if !subscribed(endpoints[id], topic) {
+                let mut exists = false
+                for endpoint in endpoints {
+                  if subscribed(endpoint, topic) {
+                    exists = true
+                  }
+                }
+                if !exists && topic_count(endpoints) >= 8 || list.len(
+                  endpoints[id].topics
+                ) >= 8 {
+                  reply(tasks, log, mut endpoints[id], id, Refused("topic_limit"))
+                } else {
+                  list.push(mut endpoints[id].topics, wire.owned(topic))
+                  reply(
+                    tasks,
+                    log,
+                    mut endpoints[id],
+                    id,
+                    Subscribed(wire.owned(topic))
+                  )
+                }
+              } else {
+                reply(tasks, log, mut endpoints[id], id, Subscribed(wire.owned(topic)))
+              }
+            },
+            Unsubscribe(topic) => {
+              let mut kept: List[unique String] = []
+              for existing in endpoints[id].topics {
+                if existing != topic {
+                  list.push(mut kept, wire.owned(existing))
+                }
+              }
+              endpoints[id].topics = take kept
+              reply(tasks, log, mut endpoints[id], id, Unsubscribed(wire.owned(topic)))
+            },
+            Publish(topic, data) => {
+              if list.len(waiting) >= jobs || count + list.len(waiting) >= max_publish || stopped {
+                reply(tasks, log, mut endpoints[id], id, Refused("admission_limit"))
+              } else {
+                let mut targets: List[u64] = []
+                for candidate in 0u64..list.len(endpoints) {
+                  if client.alive(tasks, endpoints[candidate].state) && subscribed(
+                    endpoints[candidate],
+                    topic
+                  ) {
+                    list.push(mut targets, candidate)
+                  }
+                }
+                list.push(
+                  mut waiting,
+                  Admission(
+                    publisher: id,
+                    topic: take topic,
+                    data: take data,
+                    targets: take targets,
+                    permits: [],
+                    started: shutdown.ticks(clock)?
+                  )
+                )
+              }
+            },
+            Stop() => {
+              reply(tasks, log, mut endpoints[id], id, Stopping())
+              stopped = true
+            },
+          }
+        }
+      },
+    }
+    progress(tasks, clock, log, mut endpoints, mut waiting, mut count, output)?
+    for id in 0u64..list.len(endpoints) {
+      if !endpoints[id].reported && !client.alive(tasks, endpoints[id].state) {
+        endpoints[id].reported = true
+        let reason = shutdown.name(client.reason(tasks, endpoints[id].state))
+        out.print(output, f"{{\"disconnected_client\":{id},\"reason\":\"{reason}\"}}\n")?
+      }
+    }
+    if (stopped || count >= max_publish) && list.len(waiting) == 0 && flow.drained(
+      tasks,
+      log
+    ) {
+      if stopped {
+        return Ok("stop")
+      }
+      return Ok("admission_limit")
+    }
+    if !accepting && list.len(waiting) == 0 {
+      let mut live = false
+      for endpoint in endpoints {
+        if client.alive(tasks, endpoint.state) {
+          live = true
+        }
+      }
+      if !live {
+        return Ok("eof")
+      }
+    }
+  }
+  Ok("stop")
+}
+
+pub fn serve(
+  tasks: Tasks,
+  n: Net,
+  clock: MonotonicClock,
+  socket: Path,
+  maximum: u64,
+  milliseconds: u64,
+  jobs: u64,
+  output: Stdout
+) -> Result[(), Error] {
+  let listener = net.unix_listen(n, socket)?
+  let deadline = shutdown.deadline(clock, milliseconds)?
+  let log = flow.ledger(tasks)
+  let outcome = task.scope_until(
+    tasks,
+    deadline,
+    fn(scope: Scope) -> Result[String, Error] {
+      let (tx, rx): (Sender[Event], Receiver[Event]) = channel.open(tasks)
+      let timer_tx = sender.dup(tasks, tx)
+      let accepting = task.async(
+        scope,
+        fn() {
+          accept_loop(tasks, n, clock, log, take listener, take tx)
+        }
+      )
+      let ticking = task.async(
+        scope,
+        fn() {
+          timer(tasks, clock, log, take timer_tx)
+        }
+      )
+      out.print(output, "{\"listening\":true}\n")?
+      let mut inbox = take rx
+      let answer = dispatch(tasks, clock, log, mut inbox, maximum, jobs, output)
+      task.cancel(scope, accepting)
+      task.cancel(scope, ticking)
+      task.await(scope, take accepting)
+      task.await(scope, take ticking)
+      take answer
+    }
+  )
+  let cause = match take outcome {
+    Finished(value) => take value?,
+    Expired(_) => "deadline",
+  }
+  let stats = flow.snapshot(tasks, log)
+  shutdown.report(tasks, log, output, stats.admissions, cause)?
+  Ok(())
+}
+
+fn enqueue(
+  tasks: Tasks,
+  mut endpoint: Endpoint,
+  take packet: flow.Envelope[wire.Message]
+) {
+  let _ = channel.send(tasks, mut endpoint.outgoing, take packet)
+}

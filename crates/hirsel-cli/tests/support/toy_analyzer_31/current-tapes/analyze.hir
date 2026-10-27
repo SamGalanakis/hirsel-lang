@@ -1,0 +1,131 @@
+pub type Diagnostic {
+  module: String,
+  code: String,
+  start: u64,
+  end: u64,
+}
+
+pub type Summary {
+  exports: List[symbols.Symbol],
+  diagnostics: List[Diagnostic],
+  total: u64,
+}
+
+pub fn diagnostic(module: String, code: String, at: syntax.Span) -> Diagnostic uses {} {
+  Diagnostic(module: unique module, code: unique code, start: at.start, end: at.end)
+}
+
+pub fn add(mut summary: Summary, take item: Diagnostic) -> () uses {} {
+  summary.total += 1
+  if list.len(summary.diagnostics) < 128 {
+    list.push(mut summary.diagnostics, take item)
+  }
+}
+
+fn infer(
+  tree: syntax.Tree,
+  index: u64,
+  scope_env: symbols.Environment,
+  module: String,
+  mut output: Summary
+) -> symbols.Type uses {} {
+  let node = tree.nodes[index].item
+  match node.value {
+    Integer() => Int(),
+    Boolean() => Bool(),
+    Name(name) => match symbols.lookup(scope_env, name) {
+      Found(kind) => kind,
+      SelfRead() => {
+        add(mut output, diagnostic(module, "self_initializer", node.span))
+        Unknown()
+      },
+      Missing() => {
+        add(mut output, diagnostic(module, "undefined", node.span))
+        Unknown()
+      },
+    },
+    Binary(op, a, b) => {
+      let left = infer(tree, a, scope_env, module, mut output)
+      let right = infer(tree, b, scope_env, module, mut output)
+      if left == Unknown() || right == Unknown() {
+        return Unknown()
+      }
+      let equality = op == "==" || op == "!="
+      if left != right || !equality && left != Int() {
+        add(mut output, diagnostic(module, "type_mismatch", node.span))
+        return Unknown()
+      }
+      if op == "+" || op == "-" || op == "*" || op == "/" {
+        Int()
+      } else {
+        Bool()
+      }
+    },
+  }
+}
+
+fn statements(
+  tree: syntax.Tree,
+  start: u64,
+  end: u64,
+  mut scope_env: symbols.Environment,
+  module: String,
+  mut output: Summary
+) -> () uses {} {
+  let mut i = start
+  while i < end {
+    let statement = tree.statements[i]
+    match statement.value {
+      Bind(binding, expression) => {
+        let (slot, duplicate) = symbols.declare(mut scope_env, binding.value)
+        if duplicate {
+          add(mut output, diagnostic(module, "duplicate", binding.span))
+        }
+        let kind = infer(tree, expression, scope_env, module, mut output)
+        symbols.define(mut scope_env, slot, kind)
+      },
+      Enter() => {
+        let first = i + 1
+        let mut last = first
+        let mut depth = 1u64
+        while last < end {
+          match tree.statements[last].value {
+            Enter() => {
+              depth += 1
+            },
+            Leave() => {
+              depth -= 1
+            },
+            _ => {},
+          }
+          if depth == 0 {
+            break
+          }
+          last += 1
+        }
+        symbols.scoped(
+          mut scope_env,
+          mut output,
+          fn(mut current: symbols.Environment, mut diagnostics: Summary) -> () uses {} {
+            statements(tree, first, last, mut current, module, mut diagnostics)
+          }
+        )
+        i = last
+      },
+      _ => {},
+    }
+    i += 1
+  }
+}
+
+pub fn check_module(tree: syntax.Tree, name: String, take imports: List[symbols.Symbol]) -> Summary uses {} {
+  let mut output = Summary(exports: [], diagnostics: [], total: 0)
+  for problem in tree.problems {
+    add(mut output, diagnostic(name, problem.value, problem.span))
+  }
+  output.total = tree.problem_count
+  let mut scope_env = symbols.empty(take imports)
+  statements(tree, 0, list.len(tree.statements), mut scope_env, name, mut output)
+  output.exports = symbols.exports(scope_env)
+  take output
+}

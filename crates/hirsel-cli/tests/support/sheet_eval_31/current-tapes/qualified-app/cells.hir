@@ -1,0 +1,73 @@
+// Source and computed cells share identity/replace semantics, with different payloads.
+pub const COUNT: u64 = 256
+
+pub type Cell[T] {
+  id: u64,
+  value: T,
+}
+
+pub type Workbook {
+  sources: List[Cell[String]],
+  expressions: List[Result[box formula.Expr, formula.Fault]],
+  values: List[Cell[Result[i64, formula.Fault]]],
+  edges: List[toposort.Edge],
+  dirty: List[bool],
+}
+
+pub fn cell[T](id: u64, take value: T) -> Cell[T] uses {} {
+  Cell(id: id, value: take value)
+}
+
+pub fn replace_value[T](mut slot: Cell[T], take value: T) -> T uses {} {
+  replace(mut slot.value, take value)
+}
+
+pub fn empty() -> Workbook uses {} {
+  let mut sources: List[Cell[String]] = []
+  let mut expressions: List[Result[box formula.Expr, formula.Fault]] = []
+  let mut values: List[Cell[Result[i64, formula.Fault]]] = []
+  let mut dirty: List[bool] = []
+  for id in 0u64..COUNT {
+    list.push(mut sources, cell(id, ""))
+    let zero: Result[box formula.Expr, formula.Fault] = Ok(box Literal(0))
+    list.push(mut expressions, take zero)
+    let value: Result[i64, formula.Fault] = Ok(0)
+    list.push(mut values, cell(id, take value))
+    list.push(mut dirty, false)
+  }
+  Workbook(
+    sources: take sources,
+    expressions: take expressions,
+    values: take values,
+    edges: [],
+    dirty: take dirty
+  )
+}
+
+// Parse/edge admission finishes before any mutation of the old workbook.
+// A malformed expression is durable typed cell state, while a bound refuses the edit.
+pub fn edit(mut book: Workbook, id: u64, take source: String) -> Result[
+  (),
+  formula.Refusal
+] uses {} {
+  let expression: Result[box formula.Expr, formula.Fault] = if source == "" {
+    Ok(box Literal(0))
+  } else {
+    match formula.parse(source) {
+      Ok(tree) => Ok(take tree),
+      Error(Cell(problem)) => Error(problem),
+      Error(Bound(limit)) => return Error(limit),
+    }
+  }
+  let dependencies = match expression {
+    Ok(tree) => graph.dependencies(tree),
+    Error(_) => [],
+  }
+  let edges = graph.rewire(book.edges, id, dependencies)?
+  let _ = replace_value(mut book.sources[id], take source)
+  // Replaced recursive nodes are taken and dropped; read-only evaluation never takes them.
+  let old = replace(mut book.expressions[id], take expression)
+  book.edges = take edges
+  graph.invalidate(book.edges, mut book.dirty, id)
+  Ok(())
+}

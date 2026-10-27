@@ -629,10 +629,10 @@ fn durable_queue_31_crash_cuts() {
 #[test]
 #[ignore = "consume already recorded workqueue tapes via DURABLE_QUEUE_31_TAPES; no live effects"]
 fn durable_queue_31_existing_tapes_and_refusal_controls() {
-    use hirsel_driver::{replay_observations, replay_observations_checked};
     with_compiler_stack(|| {
         let root = PathBuf::from(std::env::var_os("DURABLE_QUEUE_31_TAPES").unwrap());
         let manifest = root.join("hirsel.json");
+        let mut program = hirsel_driver::load_program(&manifest).unwrap();
         let selected: Vec<Value> =
             serde_json::from_slice(&fs::read(root.join("tape-index.json")).unwrap()).unwrap();
         let controls = root.join("controls");
@@ -644,25 +644,19 @@ fn durable_queue_31_existing_tapes_and_refusal_controls() {
             let tape = root.join(case["tape"].as_str().unwrap());
             let bytes = fs::read(&tape).unwrap();
             let record = hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap();
-            for (engine, replay) in [
-                (
-                    "reference",
-                    replay_observations
-                        as fn(
-                            &Path,
-                            &Path,
-                            Option<u64>,
-                        )
-                            -> Result<hirsel_interp::observation::Observable, ToolError>,
-                ),
-                ("checked-h", replay_observations_checked),
-            ] {
+            for (engine, checked) in [("reference", false), ("checked-h", true)] {
                 if std::env::var("DURABLE_QUEUE_31_REPLAY_ENGINE")
                     .is_ok_and(|selected| selected != engine)
                 {
                     continue;
                 }
-                let observed = replay(&manifest, &tape, Some(30_000_000)).unwrap();
+                let observed = hirsel_driver::replay_loaded_observations(
+                    &mut program,
+                    &tape,
+                    Some(30_000_000),
+                    checked,
+                )
+                .unwrap();
                 fs::write(
                     controls.join(format!("{}-{engine}.receipt", case["id"].as_str().unwrap())),
                     format!("{observed:#?}"),
@@ -704,19 +698,7 @@ fn durable_queue_31_existing_tapes_and_refusal_controls() {
             )
             .unwrap();
             let mut completed_controls = Vec::new();
-            for (engine, replay) in [
-                (
-                    "reference",
-                    replay_observations
-                        as fn(
-                            &Path,
-                            &Path,
-                            Option<u64>,
-                        )
-                            -> Result<hirsel_interp::observation::Observable, ToolError>,
-                ),
-                ("checked-h", replay_observations_checked),
-            ] {
+            for (engine, checked) in [("reference", false), ("checked-h", true)] {
                 if std::env::var("DURABLE_QUEUE_31_CONTROL_CELLS").is_ok_and(|cells| {
                     !cells
                         .split(',')
@@ -725,7 +707,13 @@ fn durable_queue_31_existing_tapes_and_refusal_controls() {
                     continue;
                 }
                 assert!(
-                    replay(&manifest, &path, Some(30_000_000)).is_err(),
+                    hirsel_driver::replay_loaded_observations(
+                        &mut program,
+                        &path,
+                        Some(30_000_000),
+                        checked
+                    )
+                    .is_err(),
                     "{kind} accepted"
                 );
                 completed_controls.push(engine);

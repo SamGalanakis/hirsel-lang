@@ -1,0 +1,107 @@
+// CPython 010bebbf Lib/graphlib.py:86-136 (PSF-2.0): ready layers,
+// done/release and blocked remainder. The shipped std owns Kahn cycle detection.
+fn add(mut ids: List[u64], id: u64) -> () uses {} {
+  for prior in ids {
+    if prior == id {
+      return ()
+    }
+  }
+  list.push(mut ids, id)
+}
+
+fn collect(tree: box formula.Expr, mut ids: List[u64]) -> () uses {} {
+  match tree {
+    Literal(_) => (),
+    Reference(id) => add(mut ids, id),
+    Sum(first, last) => {
+      // Parser admitted endpoints and rectangle product before constructing Sum.
+      for row in first / 16..last / 16 + 1 {
+        for col in first % 16..last % 16 + 1 {
+          add(mut ids, row * 16 + col)
+        }
+      }
+    },
+    Negate(child) => collect(child, mut ids),
+    Binary(_, left, right) => {
+      collect(left, mut ids)
+      collect(right, mut ids)
+    },
+  }
+}
+
+pub fn dependencies(tree: box formula.Expr) -> List[u64] uses {} {
+  let mut ids: List[u64] = []
+  collect(tree, mut ids)
+  take ids
+}
+
+pub fn rewire(edges: List[toposort.Edge], id: u64, prerequisites: List[u64]) -> Result[
+  List[toposort.Edge],
+  formula.Refusal
+] uses {} {
+  let mut retained = 0u64
+  for edge in edges {
+    if edge.to != id {
+      retained += 1
+    }
+  }
+  if list.len(prerequisites) > 4096 - retained {
+    return Error(EdgeLimit())
+  }
+  let mut changed: List[toposort.Edge] = []
+  for edge in edges {
+    if edge.to != id {
+      list.push(mut changed, copy edge)
+    }
+  }
+  for dependency in prerequisites {
+    list.push(mut changed, toposort.Edge(from: dependency, to: id))
+  }
+  Ok(take changed)
+}
+
+// Monotone fixed point over <=256 vertices. Removed incoming edges cannot remove
+// a path from the edited cell to a dependent; rewiring first is therefore safe.
+pub fn invalidate(edges: List[toposort.Edge], mut dirty: List[bool], id: u64) -> () uses {} {
+  dirty[id] = true
+  for _ in 0u64..cells.COUNT {
+    let mut changed = false
+    for edge in edges {
+      if dirty[edge.from] && !dirty[edge.to] {
+        dirty[edge.to] = true
+        changed = true
+      }
+    }
+    if !changed {
+      break
+    }
+  }
+}
+
+pub fn ready(edges: List[toposort.Edge], pending: List[bool]) -> List[u64] uses {} {
+  let mut layer: List[u64] = []
+  for id in 0u64..cells.COUNT {
+    if !pending[id] {
+      continue
+    }
+    let mut waiting = false
+    for edge in edges {
+      if edge.to == id && pending[edge.from] {
+        waiting = true
+        break
+      }
+    }
+    if !waiting {
+      list.push(mut layer, id)
+    }
+  }
+  take layer
+}
+
+pub fn blocked(edges: List[toposort.Edge]) -> List[u64] uses {} {
+  match toposort.order(cells.COUNT, edges, cells.COUNT, 4096) {
+    Ok(_) => [],
+    Error(Blocked(ids)) => take ids,
+    _ => [],
+  }
+}

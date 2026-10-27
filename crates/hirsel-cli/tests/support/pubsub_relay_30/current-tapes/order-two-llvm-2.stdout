@@ -1,0 +1,4 @@
+{"listening":true}
+{"admitted":1,"queued":1}
+{"admitted":2,"queued":1}
+{"joined":true,"admitted":2,"queued":2,"written":2,"disconnected":0,"credits_held":0,"reserved":10,"returned":10,"peak_queue":1,"reason":"stop"}

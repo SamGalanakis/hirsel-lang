@@ -1,0 +1,195 @@
+pub const MAX_BYTES: u64 = 65536
+
+pub type Problem = Invalid(String) | Refused(String)
+
+pub fn relative(name: String) -> bool uses {} {
+  if name == "" || string.byte_len(name) > 128 || string.starts_with(name, "/") || string.contains(
+    name,
+    "\\"
+  ) {
+    return false
+  }
+  for part in string.split(unique name, "/") {
+    if part == "" || part == "." || part == ".." {
+      return false
+    }
+  }
+  !string.contains(name, "\u{0}")
+}
+
+pub fn read(d: Dir, name: String) -> Result[unique String, Problem] {
+  if !relative(name) {
+    return Error(Invalid("path"))
+  }
+  let mut handle = file.open(d, path.of(name)) ? file_problem
+  let raw = match file.read_all_bounded(d, mut handle, MAX_BYTES) {
+    Ok(data) => take data,
+    Error(Limit()) => return Error(Refused("bytes_limit")),
+    Error(File(problem)) => return Error(file_problem(problem)),
+  }
+  match string.from_bytes(take raw) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(Invalid("utf8")),
+  }
+}
+
+fn file_problem(error: FileError) -> Problem uses {} {
+  match error {
+    Canceled(_) => Refused("canceled"),
+    _ => Refused("file"),
+  }
+}
+
+pub fn decode(take source: String) -> Result[cells.Workbook, Problem] uses {} {
+  if string.byte_len(source) > MAX_BYTES {
+    return Error(Refused("bytes_limit"))
+  }
+  let Ok(value) = json.parse(take source) else {
+    return Error(Invalid("workbook_json"))
+  }
+  let Some(object) = json_access.as_object(value) else {
+    return Error(Invalid("workbook_schema"))
+  }
+  if map.len(object) != 2 {
+    return Error(Invalid("workbook_schema"))
+  }
+  let Some(version) = json_access.member(value, "version") else {
+    return Error(Invalid("workbook_schema"))
+  }
+  if !match version {
+    Number(n) => n == "1",
+    _ => false,
+  } {
+    return Error(Invalid("workbook_version"))
+  }
+  let Some(entries) = json_access.member(value, "cells") else {
+    return Error(Invalid("workbook_schema"))
+  }
+  let Some(rows) = json_access.as_array(entries) else {
+    return Error(Invalid("workbook_schema"))
+  }
+  if list.len(rows) > cells.COUNT {
+    return Error(Refused("cell_limit"))
+  }
+  let mut book = cells.empty()
+  let mut seen: Set[u64] = set.empty()
+  for row in rows {
+    let Some(fields) = json_access.as_object(row) else {
+      return Error(Invalid("cell_schema"))
+    }
+    if map.len(fields) != 2 {
+      return Error(Invalid("cell_schema"))
+    }
+    let Some(label) = json_access.member(row, "name") else {
+      return Error(Invalid("cell_schema"))
+    }
+    let Some(name) = json_access.as_text(label) else {
+      return Error(Invalid("cell_schema"))
+    }
+    let Some(id) = formula.address(name) else {
+      return Error(Invalid("address"))
+    }
+    if set.contains(seen, id) {
+      return Error(Invalid("duplicate_cell"))
+    }
+    let _ = set.insert(mut seen, id)
+    let Some(raw) = json_access.member(row, "formula") else {
+      return Error(Invalid("cell_schema"))
+    }
+    let Some(text) = json_access.as_text(raw) else {
+      return Error(Invalid("cell_schema"))
+    }
+    if let Error(limit) = cells.edit(mut book, id, unique text) {
+      return Error(Refused(formula.refusal_text(limit)))
+    }
+  }
+  Ok(take book)
+}
+
+pub fn encode(book: cells.Workbook) -> Result[String, Problem] uses {} {
+  let mut buffer: List[u8] = []
+  text.append(mut buffer, "{\"version\":1,\"cells\":[")
+  let mut first = true
+  for slot in book.sources {
+    if slot.value == "" {
+      continue
+    }
+    let mut row: Map[String, json.Value] = map.empty()
+    map.insert(mut row, "name", Text(formula.coordinate(slot.id)))
+    map.insert(mut row, "formula", Text(unique slot.value))
+    let Ok(encoded) = json.stringify(Object(take row)) else {
+      return Error(Invalid("encode"))
+    }
+    let width = string.byte_len(encoded) + if first {
+      0u64
+    } else {
+      1u64
+    }
+    // Reserve closing ]}\n before appending a serialized row.
+    if width > MAX_BYTES - list.len(buffer) - 3 {
+      return Error(Refused("bytes_limit"))
+    }
+    if !first {
+      text.append(mut buffer, ",")
+    }
+    text.append(mut buffer, encoded)
+    first = false
+  }
+  text.append(mut buffer, "]}\n")
+  match text.finish(take buffer) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(Invalid("encode")),
+  }
+}
+
+pub fn save(d: Dir, name: String, book: cells.Workbook) -> Result[(), Problem] {
+  if !relative(name) {
+    return Error(Invalid("path"))
+  }
+  let encoded = encode(book)?
+  let mut destination = file.create_atomic(d, path.of(name)) ? file_problem
+  file.write_all(d, mut destination, string.as_bytes(encoded)) ? file_problem
+  file.commit(d, take destination) ? file_problem
+  Ok(())
+}
+
+fn append(slot: cells.Cell[Result[i64, formula.Fault]], mut buffer: List[u8]) -> bool uses {} {
+  text.append(mut buffer, formula.coordinate(slot.id))
+  text.append(mut buffer, " = ")
+  let failed = match slot.value {
+    Ok(value) => {
+      i64.format_into(value, mut buffer)
+      false
+    },
+    Error(problem) => {
+      text.append(mut buffer, f"#{formula.fault_text(problem)}")
+      true
+    },
+  }
+  text.append(mut buffer, "\n")
+  failed
+}
+
+pub fn render(book: cells.Workbook, selected: Option[u64]) -> (String, bool) uses {} {
+  let mut buffer: List[u8] = []
+  let mut failed = false
+  match selected {
+    Some(id) => {
+      failed = append(book.values[id], mut buffer)
+    },
+    None() => {
+      for id in 0u64..cells.COUNT {
+        if book.sources[id].value != "" {
+          if append(book.values[id], mut buffer) {
+            failed = true
+          }
+        }
+      }
+    },
+  }
+  let encoded = match text.finish(take buffer) {
+    Ok(s) => take s,
+    Error(_) => "",
+  }
+  (take encoded, failed)
+}

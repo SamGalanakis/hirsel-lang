@@ -1,0 +1,249 @@
+pub type Status {
+  alive: bool,
+  reason: shutdown.Reason,
+}
+
+pub type Error = Network(NetError) | Wire(wire.Error) | Wait(WaitError)
+
+pub fn status(tasks: Tasks) -> Mutex[Status] {
+  mutex.create(tasks, Status(alive: true, reason: Shutdown()))
+}
+
+pub fn alive(tasks: Tasks, state: Mutex[Status]) -> bool {
+  mutex.with(
+    tasks,
+    state,
+    fn(mut value: unique Status) -> bool uses {} {
+      value.alive
+    }
+  )
+}
+
+pub fn close(tasks: Tasks, state: Mutex[Status], cause: shutdown.Reason) {
+  mutex.with(
+    tasks,
+    state,
+    fn(mut value: unique Status) uses {} {
+      if value.alive {
+        value.alive = false
+        value.reason = cause
+      }
+    }
+  )
+}
+
+pub fn reason(tasks: Tasks, state: Mutex[Status]) -> shutdown.Reason {
+  mutex.with(
+    tasks,
+    state,
+    fn(mut value: unique Status) -> shutdown.Reason uses {} {
+      copy value.reason
+    }
+  )
+}
+
+fn pause(clock: MonotonicClock) -> bool {
+  match time.sleep(clock, time.Duration(nanoseconds: 1000000)) {
+    Ok(()) => true,
+    Error(_) => false,
+  }
+}
+
+fn read_loop(
+  tasks: Tasks,
+  n: Net,
+  clock: MonotonicClock,
+  id: u64,
+  log: Mutex[flow.Ledger],
+  state: Mutex[Status],
+  take half: ReadHalf of n,
+  take events: Sender[hub.Event]
+) {
+  let mut reader = take half
+  let mut outgoing = take events
+  while alive(tasks, state) {
+    let payload = match wire.receive(n, mut reader) {
+      Ok(Some(value)) => take value,
+      Ok(None()) => {
+        close(tasks, state, Eof())
+        break
+      },
+      Error(problem) => {
+        close(tasks, state, shutdown.read_reason(problem))
+        break
+      },
+    }
+    let incoming = match wire.command(payload) {
+      Ok(value) => take value,
+      Error(_) => {
+        close(tasks, state, Protocol())
+        break
+      },
+    }
+    // One outstanding command per connection. A second bounded frame may be
+    // decoded locally; it cannot enter the mailbox until the credit returns.
+    let mut sent = false
+    while alive(tasks, state) && !sent {
+      if let Some(permit) = flow.reserve(tasks, log, 8 + id, 1) {
+        let packet = flow.wrap(take permit, unique incoming)
+        let _ = channel.send(tasks, mut outgoing, Request(id, take packet))
+        sent = true
+      } else if !pause(clock) {
+        close(tasks, state, Canceled())
+        break
+      }
+    }
+  }
+  read_half.close(n, take reader)
+}
+
+fn write_loop(
+  tasks: Tasks,
+  n: Net,
+  id: u64,
+  state: Mutex[Status],
+  take half: WriteHalf of n,
+  mut inbox: Receiver[flow.Envelope[wire.Message]]
+) {
+  let mut writer = take half
+  while alive(tasks, state) {
+    let packet = match channel.receive(tasks, mut inbox) {
+      Ok(value) => take value,
+      Error(_) => {
+        close(tasks, state, Canceled())
+        break
+      },
+    }
+    let (owned, value) = flow.unpack(take packet)
+    let mut permit = take owned
+    let reply = shared.with(
+      value,
+      fn(message: wire.Message) -> unique wire.Message uses {} {
+        unique message
+      }
+    )
+    match wire.send(n, mut writer, reply) {
+      Ok(()) => {
+        if permit.delivery {
+          flow.written(mut permit)
+        }
+      },
+      Error(problem) => {
+        close(tasks, state, shutdown.write_reason(problem))
+        break
+      },
+    }
+  }
+  write_half.close(n, take writer)
+}
+
+pub fn run(
+  tasks: Tasks,
+  n: Net,
+  clock: MonotonicClock,
+  id: u64,
+  log: Mutex[flow.Ledger],
+  state: Mutex[Status],
+  take connected: Stream of n,
+  take events: Sender[hub.Event],
+  take inbox: Receiver[flow.Envelope[wire.Message]]
+) {
+  let owned_log = copy log
+  let owned_state = copy state
+  let mut stream = take connected
+  let _ = net.set_write_timeout(n, mut stream, Nanos(2000000000u64))
+  task.scope(
+    tasks,
+    fn(scope: Scope) {
+      connection_scope(
+        scope,
+        tasks,
+        n,
+        clock,
+        id,
+        owned_log,
+        owned_state,
+        take stream,
+        take events,
+        take inbox
+      )
+    }
+  )
+}
+
+fn connection_scope(
+  scope: Scope,
+  tasks: Tasks,
+  n: Net,
+  clock: MonotonicClock,
+  id: u64,
+  log: Mutex[flow.Ledger],
+  state: Mutex[Status],
+  take owned_stream: Stream of n,
+  take owned_events: Sender[hub.Event],
+  take owned_inbox: Receiver[flow.Envelope[wire.Message]]
+) {
+  let (read_end, write_end) = net.split(n, take owned_stream)
+  let reading = task.async(
+    scope,
+    fn() {
+      read_loop(tasks, n, clock, id, log, state, take read_end, take owned_events)
+    }
+  )
+  let writing = task.async(
+    scope,
+    fn() {
+      let mut receiver = take owned_inbox
+      write_loop(tasks, n, id, state, take write_end, mut receiver)
+    }
+  )
+  let begun = shutdown.ticks(clock)
+  let start_tick = match take begun {
+    Ok(value) => value,
+    Error(_) => 0u64,
+  }
+  while alive(tasks, state) {
+    let current_tick = shutdown.ticks(clock)
+    if let Ok(now) = take current_tick {
+      if now - start_tick >= 2000000000 {
+        client.close(tasks, state, ReadTimeout())
+        break
+      }
+    }
+    if !pause(clock) {
+      close(tasks, state, Canceled())
+      break
+    }
+  }
+  task.cancel(scope, reading)
+  task.cancel(scope, writing)
+  task.await(scope, take reading)
+  task.await(scope, take writing)
+}
+
+pub fn call(
+  n: Net,
+  clock: MonotonicClock,
+  tasks: Tasks,
+  socket: Path,
+  payload: Bytes,
+  count: u64,
+  output: Stdout
+) -> Result[(), wire.Error] {
+  let mut stream = net.unix_connect(n, socket)?
+  net.set_read_timeout(n, mut stream, Nanos(2000000000u64))?
+  net.set_write_timeout(n, mut stream, Nanos(2000000000u64))?
+  net.write_all(n, mut stream, wire.frame(payload)?)?
+  let (owned_read, owned_write) = net.split(n, take stream)
+  let mut reader = take owned_read
+  let mut writer = take owned_write
+  for i in 0u64..count {
+    let Some(reply) = wire.receive(n, mut reader)? else {
+      return Error(Input(TruncatedBody()))
+    }
+    let _ = out.write(output, reply)
+    let _ = out.print(output, "\n")
+  }
+  write_half.shutdown(n, mut writer)?
+  Ok(())
+}

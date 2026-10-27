@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "workqueue",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "record.hir",
+      "module": [
+        "record"
+      ]
+    },
+    {
+      "path": "log.hir",
+      "module": [
+        "log"
+      ]
+    },
+    {
+      "path": "groups.hir",
+      "module": [
+        "groups"
+      ]
+    },
+    {
+      "path": "dispatch.hir",
+      "module": [
+        "dispatch"
+      ]
+    },
+    {
+      "path": "snapshot.hir",
+      "module": [
+        "snapshot"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}
