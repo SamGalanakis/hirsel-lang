@@ -30,6 +30,7 @@ pub struct Library {
     pub(super) signals: super::signals::Signals,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
+    pub(super) cpu_certified: bool,
     pub(super) cpu_waits: std::collections::BTreeMap<u64, super::cpu::Batch>,
     pub(super) cpu_active: std::collections::BTreeSet<u64>,
     pub(super) next_shared: u64,
@@ -115,6 +116,7 @@ impl Library {
             next_callback: 0,
             cpu_active: Default::default(),
             cpu_waits: Default::default(),
+            cpu_certified: false,
             next_shared: 0,
             drop_failure: None,
             runners: Default::default(),
@@ -1537,6 +1539,9 @@ impl Operations for Library {
         } else {
             self.tasks.child_path(id)
         }
+    }
+    fn cpu_mapper_certified(&mut self, certified: bool) {
+        self.cpu_certified = certified;
     }
     fn take_tasks(&mut self) -> Vec<crate::TaskStart> {
         self.tasks.take_starts()

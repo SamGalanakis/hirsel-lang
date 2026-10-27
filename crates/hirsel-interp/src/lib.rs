@@ -10,6 +10,7 @@ pub mod checked;
 mod code;
 mod constants;
 pub mod conversion;
+mod cpu_mapper;
 mod depth;
 mod eval;
 pub mod exit_report;
@@ -464,6 +465,8 @@ operation_boundary! {
     fn take_drop_failure(&mut self) -> Option<(String, String)> {
         None
     }
+    /// Independent scalar TIR graph evidence for the immediately following CPU call.
+    fn cpu_mapper_certified(&mut self, _certified: bool) {}
     fn take_tasks(&mut self) -> Vec<TaskStart> {
         vec![]
     }

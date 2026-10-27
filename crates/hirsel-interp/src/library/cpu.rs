@@ -46,6 +46,11 @@ impl Batch {
             .as_ref()
             .map_or(0, Value::logical_bytes)
             .saturating_add(self.results.iter().map(Value::logical_bytes).sum::<u64>())
+            .saturating_add(
+                self.outcome
+                    .as_ref()
+                    .map_or(0, crate::resources::result_bytes),
+            )
             .saturating_add(self.released.iter().map(Value::logical_bytes).sum::<u64>())
     }
     pub(super) fn release(mut self) -> Vec<Value> {
@@ -83,14 +88,14 @@ impl Library {
             return Ok(Err(park));
         }
         let live = match action {
-            0 => {
+            0 | 4 => {
                 if !matches!(width, 1 | 4 | 8 | 16) {
                     1
                 } else if self.simulation.config.cpu.is_none() {
                     2
                 } else if self.cpu_active.contains(&self.tasks.current) {
                     5
-                } else if !self.simulation.config.tasks_free {
+                } else if !self.simulation.config.tasks_free && action != 4 {
                     11
                 } else if let Some(cause) = self.tasks.canceled() {
                     16 + cause
@@ -128,7 +133,7 @@ impl Library {
                 .map_err(|e| invalid(format!("free-mode {e}")))?,
             None => live,
         };
-        if action == 0 && status == 0 {
+        if matches!(action, 0 | 4) && status == 0 {
             self.cpu_active.insert(self.tasks.current);
         }
         if action == 1 {
@@ -149,10 +154,11 @@ impl Library {
     ) -> Result<OperationResult, Error> {
         self.simulation.id(arg(call.arguments, 0)?, "Tasks")?;
         let width = int(arg(call.arguments, 1)?)?.bits() as u32;
-        let status = match self.cpu_control(width, 0, 0, context)? {
-            Ok(status) => status,
-            Err(park) => return Ok(park),
-        };
+        let status =
+            match self.cpu_control(width, if self.cpu_certified { 4 } else { 0 }, 0, context)? {
+                Ok(status) => status,
+                Err(park) => return Ok(park),
+            };
         if status != 0 {
             return Ok(refused(status));
         }

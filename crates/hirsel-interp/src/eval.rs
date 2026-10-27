@@ -1194,6 +1194,17 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                 abandon_operation(frame, state)?;
                                 continue;
                             }
+                            if reference.definition.is_core("cpu.map_scoped") {
+                                let certified = crate::cpu_mapper::certified(
+                                    provider,
+                                    &runtime.types,
+                                    arguments
+                                        .get(3)
+                                        .ok_or_else(|| invalid("CPU mapper argument"))?,
+                                )
+                                .await?;
+                                operations.cpu_mapper_certified(certified);
+                            }
                             let operation = operations.resolve(&reference.definition);
                             if let Some(result) = match operation {
                                 None => None,
@@ -3008,6 +3019,17 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                 immediate: operations.immediate(id),
                             })
                         }) {
+                            if path.is_core("cpu.map_scoped") {
+                                let certified = crate::cpu_mapper::certified(
+                                    provider,
+                                    &runtime.types,
+                                    arguments
+                                        .get(3)
+                                        .ok_or_else(|| invalid("CPU mapper argument"))?,
+                                )
+                                .await?;
+                                operations.cpu_mapper_certified(certified);
+                            }
                             operations.call_resolved(
                                 operation.id,
                                 OperationCall {
