@@ -322,8 +322,10 @@ mod tests {
         .unwrap();
         assert!(Arc::ptr_eq(&request.verifier().unwrap(), &verifier));
         let before = request.retained_bytes();
-        assert!(request.put_content(domain(), b"selected provider").is_none());
-        assert_eq!(request.retained_bytes(), before);
+        let reference = request.put_content(domain(), b"selected provider").unwrap();
+        assert!(request.retained_bytes() > before);
+        drop(selected.take());
+        assert_eq!(&*request.get_content(reference).unwrap(), b"selected provider");
         drop(request);
         let request = RequestStore::with_scratch(
             selected.clone(),
