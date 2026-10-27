@@ -597,6 +597,27 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         anchor: SourceAnchorId,
     ) -> Emitted<Value> {
         let descriptor = self.descriptor_value(layout)?;
+        let instruction = self.instruction_index;
+        if self.em.inputs.unit().alternate
+            && self
+                .em
+                .inputs
+                .unit()
+                .ahead
+                .is_some_and(|plan| plan.cpu_allocation(self.unit.header.instance, instruction))
+        {
+            let Some(state) = self.ahead_state else {
+                return self.invalid("CPU allocation without its physical state");
+            };
+            self.ahead_flush();
+            let align = self.u64c(u64::from(align));
+            let block = self.rt1(
+                RuntimeEntry::CpuAheadAlloc,
+                &[state, descriptor, extent, align],
+            )?;
+            self.ahead_reload();
+            return Ok(block);
+        }
         let anchor = self.anchor_code(anchor)?;
         let align = self.u64c(u64::from(align));
         let heap = self.b.ins().iconst(types::I8, DomainTag::Heap as i64);

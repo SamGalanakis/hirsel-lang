@@ -19,17 +19,100 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 "#;
 
 fn ready(source: &str) -> native::ReadyProgram {
+    ready_with_regions(source, true)
+}
+
+fn ready_with_regions(source: &str, regions: bool) -> native::ReadyProgram {
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
     let file = engine.sources.add("cpu.hir", source.to_owned()).unwrap();
     let output = check_progress(&mut engine, file, &default_context()).unwrap();
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     let input = engine.export_native_input().unwrap();
     let validated = engine.import_native_input(input).unwrap();
-    native::build(
-        &validated,
-        &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
-    )
-    .unwrap()
+    let mut options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
+    options.regions = regions;
+    native::build(&validated, &options).unwrap()
+}
+
+#[test]
+fn cpu_worker_custody_accepts_owned_inputs_and_results_without_admitting_allocation() {
+    with_compiler_stack(|| {
+        let source = SOURCE
+            .replace(
+                "fn() -> List[u64] uses {} { [1u64, 2u64, 3u64, 4u64] }",
+                "fn() -> List[unique List[u64]] uses {} { [[1u64], [2u64], [3u64], [4u64]] }",
+            )
+            .replace(
+                "fn(take job: u64) -> u64 uses {} { job + 7u64 }",
+                "fn(take job: unique List[u64]) -> unique List[u64] uses {} { [job[0] + 7u64] }",
+            )
+            .replace(
+                "[8u64, 9u64, 10u64, 11u64]",
+                "[[8u64], [9u64], [10u64], [11u64]]",
+            );
+        let program = ready(&source);
+        let worker = program
+            .units
+            .iter()
+            .find(|u| u.unit().header.definition.is_core("$native.cpu_worker"))
+            .unwrap();
+        let protocol = CpuWorkerProtocol::derive(worker, &program.table).unwrap();
+        assert!(protocol.check(worker, &program.table));
+        for layout in [protocol.job_layout, protocol.result_layout] {
+            assert!(hirsel_lir::ahead::cpu_owned_layout(&program.table, layout));
+            assert!(!hirsel_lir::ahead::scalar_image(&program.table, layout));
+        }
+        let plan = native::ahead_plan(&program);
+        assert_eq!(plan.cpu_workers.get(&protocol.worker), Some(&protocol));
+        assert!(
+            plan.roots
+                .get(&protocol.worker)
+                .is_some_and(|root| root.cpu.as_ref().is_some_and(|cpu| cpu.mapper.is_some())),
+            "{:?}",
+            plan.refusals
+        );
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let objects = native::emit_backend_objects(
+                &program,
+                backend,
+                hirsel_lir::emission::OptLevel::Default,
+                native::Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+            native::check_ahead_objects(&program, &objects).unwrap();
+            assert!(
+                native::continuation::ahead_certificates(&program, &objects)
+                    .iter()
+                    .any(|certificate| certificate.root == protocol.worker)
+            );
+        }
+        assert!(
+            program.units.iter().all(|u| u
+                .unit()
+                .tables
+                .calls
+                .iter()
+                .enumerate()
+                .all(|(i, _)| plan
+                    .cpu_start(u.unit(), hirsel_lir::ir::CallId(i as u32))
+                    .is_none())),
+            "allocating custody does not authorize admission"
+        );
+        let mut forged = protocol.clone();
+        forged.result = forged.jobs;
+        assert!(
+            !forged.check(worker, &program.table),
+            "input custody is not result custody"
+        );
+        let mut forged = protocol.clone();
+        forged.job_layout = forged.environment;
+        assert!(
+            !forged.check(worker, &program.table),
+            "a callback environment is not a movable job"
+        );
+    });
 }
 
 #[test]
@@ -225,5 +308,117 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
             }
             assert!(!bad.check(worker, &program.table), "changed field {field}");
         }
+    });
+}
+
+#[test]
+fn cpu_allocating_mapper_graph_binds_heap_handoffs_cleanup_and_both_final_frames() {
+    with_compiler_stack(|| {
+        let source = SOURCE.replace("job + 7u64", "{ let xs = [job]; xs[0] + 7u64 }");
+        let regional = ready(&source);
+        assert!(
+            !native::ahead_plan(&regional)
+                .roots
+                .values()
+                .any(|root| root.cpu.is_some()),
+            "a region allocation still needs its own handoff"
+        );
+        let program = ready_with_regions(&source, false);
+        let plan = native::ahead_plan(&program);
+        let (root_id, root) = plan
+            .roots
+            .iter()
+            .find(|(_, root)| root.cpu.as_ref().is_some_and(|cpu| cpu.mapper.is_some()))
+            .unwrap_or_else(|| panic!("{:?}", plan.refusals));
+        let mapper = root.cpu.as_ref().unwrap().mapper.as_ref().unwrap();
+        assert!(!mapper.allocations.is_empty());
+        assert!(!mapper.cleanup.is_empty());
+        let units: Vec<_> = program.units.iter().collect();
+        assert!(hirsel_lir::ahead::validate_cpu_mapper_graph(
+            &units,
+            &program.table,
+            &program.target,
+            mapper,
+            program.fuel,
+            mapper.helpers
+        ));
+        assert!(hirsel_lir::ahead::validate_cpu_workers(
+            &units,
+            &program.table,
+            &program.target,
+            &plan,
+            program.fuel
+        ));
+        for field in 0..5 {
+            let mut forged = mapper.clone();
+            match field {
+                0 => forged.allocations.clear(),
+                1 => forged.cleanup.clear(),
+                2 => {
+                    forged
+                        .graph
+                        .bodies
+                        .get_mut(&forged.graph.root)
+                        .unwrap()
+                        .calls
+                        .insert(hirsel_syntax::ContentHash::of_bytes(b"missing callee"));
+                }
+                3 => forged
+                    .spines
+                    .values_mut()
+                    .find(|s| !s.barriers.is_empty())
+                    .unwrap()
+                    .barriers
+                    .clear(),
+                _ => forged.helpers = hirsel_syntax::ContentHash::of_bytes(b"wrong helpers"),
+            }
+            assert!(
+                !hirsel_lir::ahead::validate_cpu_mapper_graph(
+                    &units,
+                    &program.table,
+                    &program.target,
+                    &forged,
+                    program.fuel,
+                    mapper.helpers
+                ),
+                "forged field {field}"
+            );
+        }
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let objects = native::emit_backend_objects(
+                &program,
+                backend,
+                hirsel_lir::emission::OptLevel::Default,
+                native::Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+            native::check_ahead_objects(&program, &objects).unwrap();
+            assert!(
+                objects.iter().any(|o| o
+                    .imports
+                    .iter()
+                    .any(|s| s.name == "hirsel_rt_v2_cpu_ahead_alloc")),
+                "{backend:?} allocation bypassed its handoff"
+            );
+            let evidence = objects.iter().find_map(|o| o.ahead.as_ref()).unwrap();
+            assert!(
+                evidence
+                    .bounds
+                    .iter()
+                    .any(|(id, n)| id == root_id && *n > 80)
+            );
+            let certificates = native::continuation::ahead_certificates(&program, &objects);
+            assert!(certificates.iter().any(|c| c.root == *root_id));
+            let mut forged = objects.clone();
+            for object in &mut forged {
+                if let Some(evidence) = &mut object.ahead {
+                    evidence.frames.pop();
+                }
+            }
+            assert!(native::check_ahead_objects(&program, &forged).is_err());
+        }
+        assert_eq!(root.handoff_bytes(64), 80);
     });
 }

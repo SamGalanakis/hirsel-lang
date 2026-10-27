@@ -11,11 +11,13 @@ use crate::ir::*;
 use crate::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpec, TargetSpec};
 use crate::stage::{Ready, ValidatedUnit};
 
+mod cpu_mapper;
 mod cpu_worker;
 mod host_return;
 mod plan;
+pub use cpu_mapper::{CpuMapperGraph, cpu_mapper_graph, validate_cpu_mapper_graph};
 pub use cpu_worker::{
-    CpuMapperBinding, CpuWorkerGraph, CpuWorkerProtocol, cpu_mapper_candidates,
+    CpuMapperBinding, CpuWorkerGraph, CpuWorkerProtocol, cpu_mapper_candidates, cpu_owned_layout,
     validate_cpu_workers,
 };
 pub use host_return::{HostReturnGraph, ReadContinuation, Spine, read_metadata_name};

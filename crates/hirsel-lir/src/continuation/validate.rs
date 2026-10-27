@@ -1465,7 +1465,12 @@ impl AheadCertificate {
         }
         let [startup, getter, handoff, depth] = self.helpers;
         let bound = crate::ahead::stack_bound_with_depth(
-            &r.graph, &frames, startup, getter, handoff, depth,
+            &r.graph,
+            &frames,
+            startup,
+            getter,
+            r.handoff_bytes(handoff),
+            depth,
         )
         .ok_or("frame bound")?;
         if bound != u64::from(self.max_stack_bytes)

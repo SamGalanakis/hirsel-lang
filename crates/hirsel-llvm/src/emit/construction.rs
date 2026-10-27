@@ -461,6 +461,27 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         anchor: SourceAnchorId,
     ) -> Emitted<Value<'m>> {
         let descriptor = self.descriptor(layout)?;
+        let instruction =
+            self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1;
+        if self.inputs.alternate
+            && self
+                .inputs
+                .ahead
+                .is_some_and(|plan| plan.cpu_allocation(self.unit.header.instance, instruction))
+        {
+            let state = self.ahead_state.ok_or_else(|| CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "CPU allocation without its physical state".into(),
+            })?;
+            self.ahead_flush();
+            let helper = self.runtime(RuntimeEntry::CpuAheadAlloc)?;
+            let block = self.builder.call(
+                helper,
+                &[state, descriptor, extent, self.const_u64(u64::from(align))],
+            );
+            self.ahead_reload();
+            return Ok(block);
+        }
         let alloc = self.runtime(RuntimeEntry::Alloc)?;
         let anchor = self.anchor_code(anchor)?;
         let i8_ty = self.module.int_type(8);

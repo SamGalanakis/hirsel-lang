@@ -38,6 +38,22 @@ pub struct RootPlan {
     pub host: Option<HostReturnGraph>,
     pub cpu: Option<CpuWorkerGraph>,
 }
+impl RootPlan {
+    /// CpuAheadAlloc pushes one saved register and a return address before
+    /// the fixed 64-byte naked handoff. No allocator frame stays on this stack.
+    pub fn handoff_bytes(&self, ordinary: u64) -> u64 {
+        if self
+            .cpu
+            .as_ref()
+            .and_then(|cpu| cpu.mapper.as_ref())
+            .is_some_and(|mapper| !mapper.allocations.is_empty())
+        {
+            ordinary.max(80)
+        } else {
+            ordinary
+        }
+    }
+}
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AheadPlan {
     pub roots: BTreeMap<ContentHash, RootPlan>,
@@ -858,6 +874,18 @@ impl AheadPlan {
             .filter_map(|r| r.host.as_ref())
             .find_map(|h| h.spines.get(&id))
             .or_else(|| self.roots.get(&id)?.cpu.as_ref().map(|cpu| &cpu.spine))
+            .or_else(|| {
+                self.roots
+                    .values()
+                    .filter_map(|r| r.cpu.as_ref()?.mapper.as_ref())
+                    .find_map(|mapper| mapper.spines.get(&id))
+            })
+    }
+    pub fn cpu_allocation(&self, id: ContentHash, instruction: usize) -> bool {
+        self.roots
+            .values()
+            .filter_map(|r| r.cpu.as_ref()?.mapper.as_ref())
+            .any(|mapper| mapper.allocations.contains_key(&(id, instruction)))
     }
     pub fn cpu_mapper(&self, unit: ContentHash, call: CallId) -> Option<&Symbol> {
         let cpu = self.roots.get(&unit)?.cpu.as_ref()?;

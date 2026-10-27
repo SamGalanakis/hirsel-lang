@@ -1,14 +1,78 @@
 //! CPU worker proposals bind the Shared mapper loan and direct owned job
-//! separately from scalar spawn wrappers. Only a proved scalar mapper segment
-//! runs privately; worker allocation, publication and cleanup remain barriers.
+//! separately from scalar spawn wrappers. Owning inputs and results are proved
+//! independently of whether the mapper graph can run privately.
 use super::*;
 use hirsel_core_contract::Passing;
+
+/// Data whose counted blocks can move with one job. This is a custody check,
+/// not permission to execute allocation, growth or cleanup on a private stack.
+/// Strict C supplies the credits and loans; no resource, runtime handle, raw
+/// pointer or separately shared root can hide in this data graph.
+pub fn cpu_owned_layout(table: &LayoutTable, id: LayoutId) -> bool {
+    fn visit(
+        table: &LayoutTable,
+        id: LayoutId,
+        active: &mut BTreeSet<LayoutId>,
+        checked: &mut BTreeSet<LayoutId>,
+    ) -> bool {
+        if checked.contains(&id) {
+            return true;
+        }
+        if !active.insert(id) {
+            return false;
+        }
+        let valid = table.layout(id).is_some_and(|layout| {
+            layout.finalizer.is_none()
+                && match layout.kind {
+                    LayoutKind::Unit => true,
+                    LayoutKind::Scalar(kind) => matches!(
+                        kind,
+                        ScalarKind::Bool
+                            | ScalarKind::U8
+                            | ScalarKind::U16
+                            | ScalarKind::U32
+                            | ScalarKind::U64
+                            | ScalarKind::I8
+                            | ScalarKind::I16
+                            | ScalarKind::I32
+                            | ScalarKind::I64
+                    ),
+                    LayoutKind::Aggregate | LayoutKind::Variant => {
+                        layout
+                            .fields
+                            .iter()
+                            .all(|f| visit(table, f.layout, active, checked))
+                            && layout
+                                .tag
+                                .iter()
+                                .flat_map(|tag| &tag.variants)
+                                .flat_map(|variant| &variant.fields)
+                                .all(|f| visit(table, f.layout, active, checked))
+                    }
+                    LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
+                        visit(table, payload, active, checked)
+                    }
+                    LayoutKind::Inline { element, .. }
+                    | LayoutKind::Sequence { element }
+                    | LayoutKind::Slice { element } => visit(table, element, active, checked),
+                    _ => false,
+                }
+        });
+        active.remove(&id);
+        if valid {
+            checked.insert(id);
+        }
+        valid
+    }
+    visit(table, id, &mut BTreeSet::new(), &mut BTreeSet::new())
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CpuWorkerGraph {
     pub binding: CpuMapperBinding,
     pub shared_payload: LayoutId,
     pub spine: Spine,
+    pub mapper: Option<CpuMapperGraph>,
 }
 
 /// Known mapper code at direct calls of the selected typed map instances.
@@ -75,8 +139,12 @@ impl AheadPlan {
         }
         self.roots.iter().find_map(|(id, root)| {
             let cpu = root.cpu.as_ref()?;
-            (cpu.binding.map == unit.header.instance && cpu.binding.map_digest == unit.digest())
-                .then_some(*id)
+            // Allocating graphs remain behind the typed refusal until the
+            // runtime implements summary custody, withdrawal and replay.
+            (cpu.mapper.is_none()
+                && cpu.binding.map == unit.header.instance
+                && cpu.binding.map_digest == unit.digest())
+            .then_some(*id)
         })
     }
 }
@@ -179,10 +247,20 @@ pub fn validate_cpu_workers(
         {
             return false;
         }
-        let Ok(mut graph) =
-            scalar_graph(units, table, target, callback, fuel, ContentHash::default())
-        else {
-            return false;
+        let mut graph = if let Some(mapper) = &cpu.mapper {
+            if mapper.graph.root != callback
+                || !validate_cpu_mapper_graph(units, table, target, mapper, fuel, mapper.helpers)
+            {
+                return false;
+            }
+            mapper.graph.clone()
+        } else {
+            let Ok(graph) =
+                scalar_graph(units, table, target, callback, fuel, ContentHash::default())
+            else {
+                return false;
+            };
+            graph
         };
         if graph
             .bodies
@@ -343,7 +421,13 @@ pub(super) fn propose(
     {
         return Err(no("non-inert CPU mapper captures"));
     }
-    let mut graph = scalar_graph(units, table, target, source, fuel, helpers)?;
+    let (mut graph, mapper) = match scalar_graph(units, table, target, source, fuel, helpers) {
+        Ok(graph) => (graph, None),
+        Err(_) => {
+            let mapper = cpu_mapper_graph(units, table, target, source, fuel, helpers)?;
+            (mapper.graph.clone(), Some(mapper))
+        }
+    };
     if graph.bodies.len() >= MAX_UNITS
         || graph
             .bodies
@@ -415,6 +499,7 @@ pub(super) fn propose(
             binding,
             shared_payload,
             spine,
+            mapper,
         }),
     })
 }
@@ -706,7 +791,7 @@ impl CpuWorkerProtocol {
             return None;
         }
         let job_layout = wrapper.fields[1].layout;
-        if !scalar_image(table, job_layout) {
+        if !cpu_owned_layout(table, job_layout) {
             return None;
         }
         let mut mapper_calls =
@@ -753,6 +838,9 @@ impl CpuWorkerProtocol {
             return None;
         };
         let result_layout = abi.result.as_ref()?.layout;
+        if !cpu_owned_layout(table, result_layout) {
+            return None;
+        }
         let mapped = mapper.result?;
         let mut taken_jobs = unit.instructions.iter().filter_map(|inst| match *inst {
             Inst::Read {

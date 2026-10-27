@@ -95,7 +95,7 @@ pub(super) fn objects_with_plan(
                 &frames,
                 startup,
                 getter,
-                handoff,
+                root.handoff_bytes(handoff),
                 depth,
             )
             .map(|n| (*id, n))
@@ -352,7 +352,7 @@ pub(super) fn check_objects_with_plan(
                         &frames,
                         16,
                         8,
-                        64,
+                        root.handoff_bytes(64),
                         hirsel_rt::DEPTH_LEAF_STACK_BYTES,
                     )
                     .map(|n| (*id, n))
