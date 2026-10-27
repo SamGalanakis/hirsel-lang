@@ -732,3 +732,11 @@ source-only `ReceiptSource` declaration, with separate original and aware
 instance identities, the observed source/revision, contract and typed port
 profiles. Structural consistency does not establish a current source/V
 observation or authorize receipt entry, call, capture or task execution.
+
+Demanded nongeneric closure requests can bind their source-only identity to a
+native lexical instance only after reconstructing the exact original closure
+assignment, callable convention, complete capture layouts, movable mask and
+scoped environment digest. A mismatched environment cannot replace that proof.
+Source recipes retain the original native lexical key when their selected unit
+uses a distinct aware key. This producer binding does not admit capture receipt
+transport or supply the current C declaration/replay proof.

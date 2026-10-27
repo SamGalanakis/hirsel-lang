@@ -551,6 +551,131 @@ impl Instances {
         self.receipt_sources.get(&id)
     }
 
+    /// Match source-only closure identity to its independently reconstructed native
+    /// convention and environment. Nothing here grants executable C custody.
+    pub fn receipt_lexical_matches(
+        &self,
+        id: InstanceId,
+        request: &crate::sealed_source::contract::registry::Request,
+        layouts: &mut LayoutBuilder<'_>,
+    ) -> Result<bool, InstanceError> {
+        if self.lexical_key(id) == request.ordinary_key() {
+            return Ok(true);
+        }
+        let InstanceRole::Closure { parent } = self.roles[id.index()] else {
+            return Ok(false);
+        };
+        let entry = request.declaration().entry();
+        let crate::sealed_source::SourceEntryKind::Closure { producer, .. } = entry.kind() else {
+            return Ok(false);
+        };
+        let actuals = &self.actuals[id.index()];
+        if !actuals.arguments.is_empty() || !actuals.outer.is_empty() {
+            return Err(InstanceError::Malformed(
+                "receipt closure needs complete enclosing actuals".into(),
+            ));
+        }
+        let lexical = self.lexical_key(id);
+        if lexical.definition() != request.ordinary_key().definition()
+            || lexical.body() != request.ordinary_key().body()
+            || self.view(parent).body.0 != producer.body
+        {
+            return Ok(false);
+        }
+        let definition = self.view(id).definition()?.clone();
+        let path = definition.path.path();
+        let source_base = key_of(&self.types, path, self.view(id).body, actuals, None, None)?;
+        if &source_base != request.ordinary_key() {
+            return Ok(false);
+        }
+        let input = crate::sealed_source::SourceInput::capture(
+            entry.source_identity(),
+            entry.implementation_revision(),
+            definition.clone(),
+        );
+        let checked = input
+            .closure_entry(
+                &source_base,
+                &self.types,
+                BodyId(producer.body),
+                hirsel_tir::BlockId(producer.block),
+                producer.statement,
+                Ok,
+            )
+            .map_err(|e| {
+                InstanceError::Malformed(format!("receipt closure original entry: {e:?}"))
+            })?;
+        if &checked != entry {
+            return Ok(false);
+        }
+        let parent_body = &definition.bodies[producer.body as usize];
+        let hirsel_tir::InstructionKind::Assign { destination, .. } =
+            parent_body.blocks[producer.block as usize].instructions[producer.statement as usize]
+                .kind
+        else {
+            return Ok(false);
+        };
+        let callable = parent_body.places[destination.0 as usize].ty;
+        let Some(convention) = convention(&self.types, callable) else {
+            return Ok(false);
+        };
+        let body = &definition.bodies[lexical.body() as usize];
+        let taken = taken_capture_locals(body);
+        let scoped = source_scoped_captures(&definition, self.view(id).body);
+        let mut shape = Vec::new();
+        let mut movable = Vec::new();
+        let mut scoped_paths = Vec::new();
+        for capture in checked.captures() {
+            let ty = body.locals[capture.local as usize].ty;
+            if generic_function(&self.types, ty) {
+                return Err(InstanceError::Malformed(
+                    "receipt closure needs complete generic capture expansion".into(),
+                ));
+            }
+            let layout = layouts
+                .layout(&self.types, ty)
+                .map_err(|e| InstanceError::Layout(path.clone(), e))?;
+            let usage = capture_use(capture.usage);
+            shape.push((layout, capture_passing(usage)));
+            if taken.contains(&capture.ordinal)
+                && usage == CaptureUse::Take
+                && layouts.record(layout).copy != hirsel_lir::layout_types::CopyRecipe::Bits
+            {
+                movable.push(capture.ordinal);
+            }
+            if scoped.contains(&capture.ordinal) {
+                scoped_paths.push(hirsel_lir::abi_types::ParameterPath {
+                    parameter: capture.ordinal,
+                    fields: Vec::new(),
+                });
+            }
+        }
+        let environment = layouts
+            .environment_data(path, lexical.body(), &shape, &movable)
+            .map_err(|e| InstanceError::Layout(path.clone(), e))?;
+        let layout = hirsel_lir::LayoutKeys::rooted(layouts.table(), environment).0;
+        let Some(actual_environment) = self.environments[id.index()] else {
+            return Ok(false);
+        };
+        if hirsel_lir::LayoutKeys::rooted(layouts.table(), actual_environment).0 != layout {
+            return Ok(false);
+        }
+        let scoped = hirsel_lir::abi::scoped_contract_digest(&[], &scoped_paths);
+        let environment = ContentHash::of_parts(
+            "hirsel.scoped-environment-instance.v1",
+            [layout.0.as_slice(), scoped.0.as_slice()],
+        );
+        let expected = key_of(
+            &self.types,
+            path,
+            self.view(id).body,
+            actuals,
+            Some(&convention),
+            Some(environment),
+        )?;
+        Ok(&expected == lexical)
+    }
+
     /// Bind an independently selected source request after lexical discovery.
     /// This registers producer inputs; only strict C can accept their custody.
     pub fn bind_receipt_request(
@@ -559,7 +684,7 @@ impl Instances {
         request: &crate::sealed_source::contract::registry::Request,
         layouts: &mut LayoutBuilder<'_>,
     ) -> Result<(), InstanceError> {
-        if self.lexical_key(id) != request.ordinary_key()
+        if !self.receipt_lexical_matches(id, request, layouts)?
             || self.view(id).body.0 != request.declaration().entry().reference().body
         {
             return Err(InstanceError::Malformed(

@@ -283,3 +283,4 @@ mod ownership_nonleaf_71;
 mod receipt_requests_90;
 mod seal_inventory_97;
 mod ownership_launch_71;
+mod receipt_closure_binding_95;
