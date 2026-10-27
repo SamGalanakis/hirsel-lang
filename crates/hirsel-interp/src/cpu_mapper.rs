@@ -18,6 +18,8 @@ fn scalar(types: &TypeInterner, ty: TypeId) -> bool {
                 | Primitive::I16
                 | Primitive::I32
                 | Primitive::I64
+                | Primitive::F32
+                | Primitive::F64
         ),
         TypeKind::Tuple(fields) => fields.iter().all(|ty| scalar(types, *ty)),
         _ => false,
