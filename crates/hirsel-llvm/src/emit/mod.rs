@@ -676,7 +676,31 @@ fn lower<T>(
             // inlinable body. Calls the optimizer keeps stay imports of that export.
             if copy && !template {
                 module.make_available_externally(function);
-                module.add_attribute(function, AttributeSlot::Function, Attribute::InlineHint);
+                // Remove aggregate call traffic without forcing loop bodies past
+                // LLVM's cost model. Copies already have a bounded source size.
+                let attribute = if abi
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| result.register.is_none())
+                    && {
+                        let successors: Vec<_> = unit
+                            .terminators
+                            .iter()
+                            .map(|terminator| {
+                                terminator
+                                    .normal_edges(&unit.pools)
+                                    .iter()
+                                    .map(|edge| unit.tables.edges[edge.index()].target.index())
+                                    .collect()
+                            })
+                            .collect();
+                        hirsel_graph::feedback_edges(&successors, unit.entry.index()).is_empty()
+                    } {
+                    Attribute::AlwaysInline
+                } else {
+                    Attribute::InlineHint
+                };
+                module.add_attribute(function, AttributeSlot::Function, attribute);
                 functions.push((unit, function, signature));
                 continue;
             }

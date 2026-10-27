@@ -2357,3 +2357,34 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     assert_eq!(observation.output, b"scalar maps preserved\n");
     assert!(observation.failures.is_empty(), "{observation:?}");
 }
+
+#[test]
+fn copied_float_aggregates_preserve_rounding_nan_and_negative_zero() {
+    let source = r#"
+type V { x: f64, y: f64, z: f64 }
+fn scaled(v: V, scale: f64) -> V { V(x: v.x * scale, y: v.y * scale, z: v.z * scale) }
+fn normalized(v: V) -> V {
+  scaled(v, 1.0 / core@1/float.sqrt(v.x * v.x + v.y * v.y + v.z * v.z))
+}
+fn bounce(v: V, remaining: u64) -> V {
+  if remaining == 0 { return normalized(v) }
+  bounce(v, remaining - 1)
+}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let original = V(x: 3.0, y: 4.0, z: 0.0)
+  let unit = bounce(original, 3)
+  failure.check(core@1/f64.bits(unit.x) == 4603579539098121012, TextInvariant())
+  failure.check(core@1/f64.bits(unit.y) == 4605380978949069210, TextInvariant())
+  failure.check(original.x == 3.0 && original.y == 4.0, TextInvariant())
+  let negative = normalized(V(x: -0.0, y: 4.0, z: 0.0))
+  failure.check(core@1/f64.bits(negative.x) == 9223372036854775808u64, TextInvariant())
+  let zero = normalized(V(x: 0.0, y: 0.0, z: 0.0))
+  failure.check(core@1/f64.bits(zero.x) == 9221120237041090560u64, TextInvariant())
+  let _ = out.print(io.stdout(rt)?, "float aggregates preserved\n")
+  Ok(())
+}
+"#;
+    let observation = agree("copied-float-aggregate-source", source, &topology_matrix(0));
+    assert_eq!(observation.output, b"float aggregates preserved\n");
+    assert!(observation.failures.is_empty(), "{observation:?}");
+}
