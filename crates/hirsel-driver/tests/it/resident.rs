@@ -2702,6 +2702,7 @@ fn library_session_checks_every_source_and_cannot_launch() {
                 .iter()
                 .any(|d| d.rule.as_str() == "LANG-7")
         );
+        drop(rejected);
         fixture.write("other.hir", "pub fn main() -> u8 { 2u8 }\n");
         assert!(session.check().unwrap().diagnostics.is_empty());
         assert_eq!(session.stats().loads, 1);
@@ -2712,6 +2713,7 @@ fn library_session_checks_every_source_and_cannot_launch() {
             &safe.result,
             hirsel_driver::requests::CompileResult::SafeCheck { reach: None, .. }
         ));
+        drop(safe);
         assert!(
             session
                 .request_applied(hirsel_driver::requests::CompileOperation::Tir {
@@ -2726,6 +2728,7 @@ fn library_session_checks_every_source_and_cannot_launch() {
         let (checked, entry) = compiler.check_safe_path(&manifest).unwrap();
         assert!(checked.diagnostics.is_empty());
         assert!(entry.is_none());
+        drop(checked);
         value["entry"] = serde_json::json!({"module":["other"], "name":"main"});
         std::fs::write(&manifest, value.to_string()).unwrap();
         assert!(session.check().unwrap().diagnostics.is_empty());
