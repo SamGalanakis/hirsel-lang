@@ -560,8 +560,12 @@ impl QueryFactory for InstanceTaskFactory {
                 }
             };
             index.get(&id.address.0).cloned().ok_or_else(|| {
+                let referring = registry.entries.values().find_map(|entry| {
+                    entry.output.get()?.dependencies.iter().find(|key| key.address(id.kind) == id.address)
+                        .map(|key| format!("{} body {} required by {} body {}", key.instance.definition(), key.instance.body(), entry.key.instance.definition(), entry.key.instance.body()))
+                });
                 self.tasks.failure(&format!(
-                    "native instance factory has no registered query {id:?}"
+                    "native instance factory has no registered query {id:?}; reference {referring:?}"
                 ))
             })?
         };
