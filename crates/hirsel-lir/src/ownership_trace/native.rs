@@ -9,6 +9,8 @@ use crate::stage::{Ready, ValidatedUnit};
 use std::collections::BTreeSet;
 
 mod calls;
+mod cleanup;
+pub use cleanup::{CleanupCompletion, resource_cleanup_program};
 mod edges;
 mod reachability;
 mod runtime_calls;
