@@ -1,42 +1,12 @@
-use crate::source_std::load_program_source;
-use hirsel_driver::*;
+use crate::source_std::tir;
 use hirsel_engine::*;
 use hirsel_interp::{Limits, Outcome, Value, library::Library};
-use hirsel_tir::{DefinitionRef, MaterializedRef};
 use hirsel_types::BuiltinType;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
 };
 
-// Freeze already validated query results for repeated oracle calls. This does
-// not implement normalization: every case executes the ordinary std source.
-struct CorpusProvider {
-    engine: QueryEngine,
-    definitions: BTreeMap<DefPath, DefinitionRef>,
-    constants: BTreeMap<DefPath, MaterializedRef>,
-}
-impl TirProvider for CorpusProvider {
-    fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
-        if let Some(value) = self.definitions.get(path) {
-            return Ok(value.clone());
-        }
-        let value = self.engine.definition(path)?;
-        self.definitions.insert(path.clone(), value.clone());
-        Ok(value)
-    }
-    fn constant(&mut self, path: &DefPath) -> Result<MaterializedRef, QueryError> {
-        if let Some(value) = self.constants.get(path) {
-            return Ok(value.clone());
-        }
-        let value = self.engine.constant(path)?;
-        self.constants.insert(path.clone(), value.clone());
-        Ok(value)
-    }
-    fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
-        self.engine.constant_definitions()
-    }
-}
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nfc/main.hir")
 }
@@ -241,22 +211,15 @@ normalization_shards! {
 
 type OracleVector = (usize, usize, String, Vec<String>);
 fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize, entry_name: &str) -> usize {
-    let mut loaded = load_program(&fixture()).unwrap();
-    loaded.check_for_execution().unwrap();
-    let runtime = loaded.engine.runtime_types().unwrap();
-    let sources = loaded.engine.sources.clone();
-    let mut entry = loaded.entry;
-    entry.0.name = entry_name.into();
+    let prepared = tir(&fixture(), None, Some(entry_name)).unwrap();
+    let runtime = &prepared.runtime;
+    let sources = &prepared.sources;
     let configuration = RunConfiguration {
-        entry,
+        entry: prepared.entry.clone(),
         hash_seed: 0,
         inputs: vec![],
     };
-    let mut provider = CorpusProvider {
-        engine: loaded.engine,
-        definitions: BTreeMap::new(),
-        constants: BTreeMap::new(),
-    };
+    let mut provider = prepared.provider();
     let mut checked = 0;
     for (index, batch) in vectors.chunks(16).enumerate() {
         if index % jobs != worker {
@@ -273,7 +236,7 @@ fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize, entry_name:
         let mut library = Library::new(&configuration, Default::default()).unwrap();
         let execution = hirsel_interp::run_with_runtime(
             &mut provider,
-            &sources,
+            sources,
             &configuration,
             arguments,
             Limits {
@@ -282,7 +245,7 @@ fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize, entry_name:
                 source: None,
             },
             &mut library,
-            &runtime,
+            runtime,
         )
         .unwrap();
         let Outcome::Returned {
@@ -493,24 +456,21 @@ fn every_official_unicode16_full_case_mapping_executes_std_source() {
 fn case_insensitive_search_and_equality_match_full_casefold_composition() {
     with_compiler_stack(|| {
         let source = std::fs::read_to_string(fixture().with_file_name("search.hir")).unwrap();
-        let mut loaded = load_program_source(&fixture(), Some(&source)).unwrap();
-        loaded.check_for_execution().unwrap();
-        loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
-            limits: Limits {
-                steps: Some(100_000_000),
-                call_depth: 256,
-                source: None,
-            },
-            ..Default::default()
-        }));
-        let run = run_observed_snapshot(
-            &mut loaded.engine,
+        let prepared = tir(&fixture(), Some(&source), None).unwrap();
+        let run = hirsel_driver::testing::observe_tir(
+            &prepared,
             &RunConfiguration {
-                entry: loaded.entry,
+                entry: prepared.entry.clone(),
                 hash_seed: 0,
                 inputs: vec![],
             },
             SimulationConfig::default(),
+            Limits {
+                steps: Some(100_000_000),
+                call_depth: 256,
+                source: None,
+            },
+            false,
         )
         .unwrap();
         assert!(
@@ -606,30 +566,21 @@ fn property_oracle() -> &'static [ScalarProperties] {
 const PROPERTY_SHARDS: u32 = 64;
 fn check_properties(first: u32, last: u32) -> usize {
     let oracle = property_oracle();
-    let mut loaded = load_program(&fixture()).unwrap();
-    loaded
-        .check_for_execution()
-        .unwrap_or_else(|error| panic!("{error}"));
-    let runtime = loaded.engine.runtime_types().unwrap();
-    let sources = loaded.engine.sources.clone();
-    let mut entry = loaded.entry;
-    entry.0.name = "batch_properties".into();
+    let prepared = tir(&fixture(), None, Some("batch_properties")).unwrap();
+    let runtime = &prepared.runtime;
+    let sources = &prepared.sources;
     let configuration = RunConfiguration {
-        entry,
+        entry: prepared.entry.clone(),
         hash_seed: 0,
         inputs: vec![],
     };
-    let mut provider = CorpusProvider {
-        engine: loaded.engine,
-        definitions: BTreeMap::new(),
-        constants: BTreeMap::new(),
-    };
+    let mut provider = prepared.provider();
     let scalars: Vec<_> = (first..last).filter_map(char::from_u32).collect();
     for batch in scalars.chunks(128) {
         let mut library = Library::new(&configuration, Default::default()).unwrap();
         let execution = hirsel_interp::run_with_runtime(
             &mut provider,
-            &sources,
+            sources,
             &configuration,
             vec![Value::String(batch.iter().collect())],
             Limits {
@@ -638,7 +589,7 @@ fn check_properties(first: u32, last: u32) -> usize {
                 source: None,
             },
             &mut library,
-            &runtime,
+            runtime,
         )
         .unwrap();
         let Outcome::Returned {
@@ -1104,29 +1055,21 @@ fn rust_flt2dec_all_97_exact_rows_and_their_precision_sweeps() {
                 "same_digits(d, expected, cutoff)",
             )
             + "\npub fn main(t: Test) -> Result[(), ()] { Ok(()) }\n";
-        let mut loaded = load_program_source(
+        let prepared = tir(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../conformance/SEM/SEM-3-fstring-flt2dec-exact-1-run.hir"),
             Some(&source),
+            Some("probe"),
         )
         .unwrap();
-        loaded
-            .check_for_execution()
-            .unwrap_or_else(|error| panic!("{error}"));
-        let runtime = loaded.engine.runtime_types().unwrap();
-        let sources = loaded.engine.sources.clone();
-        let mut entry = loaded.entry;
-        entry.0.name = "probe".into();
+        let runtime = &prepared.runtime;
+        let sources = &prepared.sources;
         let configuration = RunConfiguration {
-            entry,
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
-        let mut provider = CorpusProvider {
-            engine: loaded.engine,
-            definitions: BTreeMap::new(),
-            constants: BTreeMap::new(),
-        };
+        let mut provider = prepared.provider();
         let signed = |value: i64| {
             let bits = u32::from_ne_bytes(i32::try_from(value).unwrap().to_ne_bytes());
             Value::Integer(
@@ -1193,7 +1136,7 @@ fn rust_flt2dec_all_97_exact_rows_and_their_precision_sweeps() {
                 let mut library = Library::new(&configuration, Default::default()).unwrap();
                 let execution = hirsel_interp::run_with_runtime(
                     &mut provider,
-                    &sources,
+                    sources,
                     &configuration,
                     arguments,
                     Limits {
@@ -1202,7 +1145,7 @@ fn rust_flt2dec_all_97_exact_rows_and_their_precision_sweeps() {
                         source: None,
                     },
                     &mut library,
-                    &runtime,
+                    runtime,
                 )
                 .unwrap();
                 assert!(

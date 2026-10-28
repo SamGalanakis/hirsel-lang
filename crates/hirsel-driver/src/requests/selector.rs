@@ -65,10 +65,7 @@ impl CompilerRequests {
         path: &std::path::Path,
         operation: CompileOperation,
     ) -> Result<Arc<CompileOutput>, hirsel_engine::ToolError> {
-        use hirsel_engine::{
-            requests::{OutputReadiness, RequestEngine, observe_inputs},
-            runtime::QueryRuntime,
-        };
+        use hirsel_engine::requests::observe_inputs;
         let (loaded, inputs) =
             observe_inputs(self.input_limits(), self.capture_attempts(), |inputs| {
                 if matches!(operation, CompileOperation::DataAbi) {
@@ -83,11 +80,29 @@ impl CompilerRequests {
                 )
             })?;
         drop(loaded?);
-        let mut selected = self.select(&CompileRequest {
+        self.execute_request(&CompileRequest {
             path: path.to_path_buf(),
             inputs,
             operation,
-        })?;
+        })
+    }
+    /// Execute exactly the supplied observed inputs without polling the filesystem.
+    /// Source overlays retain the same graph selection, admission and readiness.
+    pub fn execute_request(
+        &mut self,
+        request: &CompileRequest,
+    ) -> Result<Arc<CompileOutput>, hirsel_engine::ToolError> {
+        hirsel_engine::with_compiler_stack(|| self.execute_request_on_stack(request))
+    }
+    fn execute_request_on_stack(
+        &mut self,
+        request: &CompileRequest,
+    ) -> Result<Arc<CompileOutput>, hirsel_engine::ToolError> {
+        use hirsel_engine::{
+            requests::{OutputReadiness, RequestEngine},
+            runtime::QueryRuntime,
+        };
+        let mut selected = self.select(request)?;
         let completed = {
             let mut runtime = selected
                 .runtime
