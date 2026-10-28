@@ -191,7 +191,8 @@ fn content_key(reference: Reference) -> EntryKey {
         QueryKind::Interpret,
     )
 }
-pub(crate) fn product_domain(kind: QueryKind) -> Domain {
+/// Ordinary phase-result domain, shared by producers and retaining providers.
+pub fn product_domain(kind: QueryKind) -> Domain {
     Domain {
         kind: kind as u32 + 16,
         schema: 9,
@@ -203,7 +204,7 @@ pub const TYPE_RECORDS: Domain = hirsel_product_codec::TypeRecords::DOMAIN;
 /// reference (`VariantRef::valid`), or a type record such a payload cites.
 pub fn is_result_content(domain: Domain) -> bool {
     domain == TYPE_RECORDS
-        || domain.schema == 8
+        || domain.schema == product_domain(QueryKind::Check).schema
             && (16..=QueryKind::PrivateInference as u32 + 16).contains(&domain.kind)
 }
 

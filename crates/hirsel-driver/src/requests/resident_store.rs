@@ -446,10 +446,7 @@ mod tests {
     fn resident_store_retains_result_content_but_not_request_transports() {
         let budget = ProcessBudget::new(1 << 20);
         let store = ResidentStore::new(budget.clone(), 1 << 16);
-        let product = Domain {
-            kind: QueryKind::Modes as u32 + 16,
-            schema: 8,
-        };
+        let product = hirsel_engine::store::product_domain(QueryKind::Modes);
         let types = hirsel_engine::store::TYPE_RECORDS;
         let source_input = Domain {
             kind: 0x4600_0013,
@@ -499,10 +496,7 @@ mod tests {
     fn resident_store_retains_product_content_without_claiming_request_transport() {
         let budget = ProcessBudget::new(1 << 20);
         let store = ResidentStore::new(budget.clone(), 1 << 16);
-        let domain = Domain {
-            kind: QueryKind::Check as u32 + 16,
-            schema: 8,
-        };
+        let domain = hirsel_engine::store::product_domain(QueryKind::Check);
         assert_eq!(store.put_content(domain, b"product"), None);
         let reference = domain.reference(b"product").unwrap();
         assert_eq!(&store.get_content(reference).unwrap()[..], b"product");
