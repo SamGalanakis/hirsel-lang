@@ -368,6 +368,23 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                         }
                         union(&mut n[result.index()], &projected);
                     }
+                    Inst::FlatView { result, address } => {
+                        let address = facts.addresses[address.index()].as_ref().unwrap();
+                        let mut inherit = |value: ValueId| {
+                            union(
+                                &mut n[result.index()],
+                                &project(&old[value.index()], &address.path),
+                            );
+                        };
+                        match address.root {
+                            Root::Value(value) => inherit(value),
+                            Root::Slot(slot) => {
+                                for &value in &before[&at][slot.index()] {
+                                    inherit(value);
+                                }
+                            }
+                        }
+                    }
                     Inst::Weaken { result, value }
                     | Inst::Recast { result, value }
                     | Inst::UniqueCopy { result, value, .. }
@@ -596,6 +613,32 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                         .any(|origin| callable_origins.contains(origin))
                     {
                         reject(report, at, value, "owning callable copy");
+                    }
+                }
+                Inst::FlatView { address, .. }
+                | Inst::FlatCopy { address, .. }
+                | Inst::FlatLength { address, .. }
+                | Inst::FlatNext { address, .. } => {
+                    // Views inherit their reaching source above; lengths and
+                    // offsets retain nothing. FlatCopy creates independent
+                    // encoded storage. Structural C proves the flat encoding.
+                    let address = facts.addresses[address.index()].as_ref().unwrap();
+                    let mut observe = |value: ValueId| {
+                        if project(&n[value.index()], &address.path)
+                            .values()
+                            .flat_map(|roots| &roots.scoped)
+                            .any(|origin| callable_origins.contains(origin))
+                        {
+                            reject(report, at, value, "callable used as flat data");
+                        }
+                    };
+                    match address.root {
+                        Root::Value(value) => observe(value),
+                        Root::Slot(slot) => {
+                            for &value in &before[&at][slot.index()] {
+                                observe(value);
+                            }
+                        }
                     }
                 }
                 Inst::SeqLen { value, .. } => {
