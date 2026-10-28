@@ -374,7 +374,10 @@ pub(crate) fn emit_relocated(
             .collect(),
         program: revision,
         entry: entry.clone(),
-        calls,
+        calls: calls
+            .into_iter()
+            .filter(|(_, targets)| !targets.is_empty())
+            .collect(),
     })
 }
 
@@ -412,6 +415,13 @@ fn compact_object(object: &mut ObjectArtifact) {
 
 impl LeafObjects {
     pub(crate) fn retained_bytes(&self) -> u64 {
+        self.retained_parts().into_iter().sum()
+    }
+    pub(crate) fn retained_summary(&self) -> String {
+        let [objects, markers, calls] = self.retained_parts();
+        format!("objects {objects}, markers {markers}, call bindings {calls} bytes")
+    }
+    fn retained_parts(&self) -> [u64; 3] {
         use hirsel_engine::NativeMetadataWeight as Weight;
         let mut w = Weight::default();
         w.add(std::mem::size_of::<Self>());
@@ -452,6 +462,7 @@ impl LeafObjects {
                 w.flat_vec(&ahead.bounds);
             }
         });
+        let objects = w.bytes();
         w.bulk_tree::<[u8; 32], BTreeMap<u32, Box<Metadata>>>(self.units.len());
         for markers in self.units.values() {
             w.bulk_tree::<u32, Box<Metadata>>(markers.len());
@@ -483,12 +494,13 @@ impl LeafObjects {
                 });
             }
         }
+        let markers = w.bytes() - objects;
         // physical_calls bulk-collects both immutable levels from checked sites.
         w.bulk_tree::<[u8; 32], BTreeSet<[u8; 32]>>(self.calls.len());
         for targets in self.calls.values() {
             w.bulk_tree::<[u8; 32], ()>(targets.len());
         }
-        w.bytes()
+        [objects, markers, w.bytes() - objects - markers]
     }
     pub fn objects(&self) -> &[ObjectArtifact] {
         &self.objects

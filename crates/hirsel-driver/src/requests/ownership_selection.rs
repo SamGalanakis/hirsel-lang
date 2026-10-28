@@ -78,7 +78,11 @@ impl OwnershipExecution {
         let bytes = objects
             .retained_bytes()
             .saturating_add(std::mem::size_of::<OwnershipObjects>() as u64);
-        let allowance = self._owner._bootstrap.reserve_output(bytes)?;
+        let allowance = self
+            ._owner
+            ._bootstrap
+            .reserve_output(bytes)
+            .map_err(|error| format!("{error}; {}", objects.retained_summary()))?;
         Ok(OwnershipObjects {
             objects,
             root: self.root,
