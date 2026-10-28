@@ -14,15 +14,26 @@ impl Drop for Root {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+#[derive(Clone, Copy)]
+struct Entry {
+    domain: Domain,
+    len: u64,
+    offset: u64,
+}
+impl Entry {
+    fn matches(self, reference: Reference) -> bool {
+        self.domain == reference.domain && self.len == reference.len
+    }
+}
 fn index_bytes(entries: usize) -> u64 {
     let mut weight = crate::NativeMetadataWeight::default();
-    weight.tree::<ContentHash, (Reference, u64)>(entries);
+    weight.tree::<ContentHash, Entry>(entries);
     weight.bytes()
 }
 struct Files {
     disk: u64,
     metadata: u64,
-    entries: BTreeMap<ContentHash, (Reference, u64)>,
+    entries: BTreeMap<ContentHash, Entry>,
     spool: fs::File,
 }
 pub(super) struct ScratchStore {
@@ -142,8 +153,8 @@ impl ResultStore for ScratchStore {
     fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
         let expected = domain.reference(bytes)?;
         let mut files = self.files.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((actual, _)) = files.entries.get(&expected.output.0) {
-            return (*actual == expected).then_some(expected);
+        if let Some(entry) = files.entries.get(&expected.output.0) {
+            return entry.matches(expected).then_some(expected);
         }
         if expected.len > self.disk_limit.saturating_sub(files.disk) {
             return None;
@@ -163,7 +174,14 @@ impl ResultStore for ScratchStore {
         }
         files.disk += expected.len;
         files.metadata += metadata;
-        files.entries.insert(expected.output.0, (expected, offset));
+        files.entries.insert(
+            expected.output.0,
+            Entry {
+                domain: expected.domain,
+                len: expected.len,
+                offset,
+            },
+        );
         drop(files);
         // A successful cache put is still evictable. The current request owns
         // its transport independently of later durable/cache reclamation.
@@ -172,26 +190,25 @@ impl ResultStore for ScratchStore {
     }
     fn get_content(&self, reference: Reference) -> Option<Bytes> {
         let files = self.files.lock().unwrap_or_else(|e| e.into_inner());
-        let Some((actual, offset)) = files.entries.get(&reference.output.0) else {
+        let Some(entry) = files.entries.get(&reference.output.0) else {
             drop(files);
             return self.selected.get_content(reference);
         };
-        if *actual != reference {
+        if !entry.matches(reference) {
             return None;
         }
         if files.spool.metadata().ok()?.len() != files.disk {
             return None;
         }
-        // Serialize allocation of the temporary Vec/Arc conversion. Afterwards
-        // each live Bytes owns only one payload plus its retained admission.
+        // Bytes takes the exact Vec backing without copying its payload.
+        // The same charge covers the read and every retained child view.
         let retained = reference.len.checked_add(ENTRY_CHARGE)?;
-        let peak = retained.checked_add(reference.len)?;
-        if !self.admission.charge(peak) {
+        if !self.admission.charge(retained) {
             return None;
         }
         let read = || -> Option<Bytes> {
             let mut value = vec![0; usize::try_from(reference.len).ok()?];
-            read_at(&files.spool, &mut value, *offset).ok()?;
+            read_at(&files.spool, &mut value, entry.offset).ok()?;
             if reference.domain.reference(&value)? != reference {
                 return None;
             }
@@ -199,10 +216,9 @@ impl ResultStore for ScratchStore {
         };
         let value = read();
         if value.is_none() {
-            self.admission.release(peak);
+            self.admission.release(retained);
             return None;
         }
-        self.admission.release(reference.len);
         let owner = Arc::new(ReadOwner {
             admission: self.admission.clone(),
             _root: self.root.clone(),
@@ -251,6 +267,93 @@ mod tests {
         Domain {
             kind: 0x4e00001f,
             schema: 1,
+        }
+    }
+    #[test]
+    fn one_payload_backing_fits_its_original_read_grant_and_refuses_a_second_live_read() {
+        let parent = tempfile::tempdir().unwrap();
+        let ram = 48 << 10;
+        let budget = ProcessBudget::new(ram);
+        let request = RequestStore::with_scratch(
+            Arc::new(NoneStore),
+            budget.reserve(ram).unwrap(),
+            parent.path(),
+            64 << 10,
+        )
+        .unwrap();
+        let reference = request.put_content(domain(), &vec![7; 32 << 10]).unwrap();
+        let before = request.retained_bytes();
+        let (held, actual) =
+            crate::test_alloc::measured(|| request.get_content(reference).unwrap());
+        assert_eq!(&*held, &vec![7; 32 << 10]);
+        assert!(actual.live > 0);
+        assert!(request.retained_bytes() - before >= actual.live as u64);
+        assert!(request.retained_bytes() - before >= actual.peak as u64);
+        assert!(request.retained_bytes() <= ram);
+        let charged = request.retained_bytes();
+        let (refused, allocations) = crate::test_alloc::measured(|| request.get_content(reference));
+        assert!(refused.is_none());
+        assert_eq!(allocations.allocations, 0);
+        assert_eq!(request.retained_bytes(), charged);
+        let child = held.range(3, 11, 1).unwrap();
+        drop(held);
+        drop(request);
+        assert_eq!(&*child, &[7; 11]);
+        assert_eq!(budget.reserved(), ram);
+        drop(child);
+        assert_eq!(budget.reserved(), 0);
+    }
+    #[test]
+    fn compact_spool_index_admits_actual_backing_and_rejects_forged_metadata() {
+        for count in [32u32, 64, 128] {
+            let parent = tempfile::tempdir().unwrap();
+            let ram = 256 << 10;
+            let budget = ProcessBudget::new(ram);
+            let request = RequestStore::with_scratch(
+                Arc::new(NoneStore),
+                budget.reserve(ram).unwrap(),
+                parent.path(),
+                2 << 20,
+            )
+            .unwrap();
+            let before = request.retained_bytes();
+            let (reference, actual) = crate::test_alloc::measured(|| {
+                let mut last = None;
+                for number in 0..count {
+                    last = request.put_content(domain(), &number.to_le_bytes());
+                    assert!(last.is_some());
+                }
+                last.unwrap()
+            });
+            let index = request.retained_bytes() - before;
+            assert!(actual.live > 0);
+            assert!(
+                index >= actual.live as u64,
+                "admitted={index}, actual={}",
+                actual.live
+            );
+            let mut old = crate::NativeMetadataWeight::default();
+            old.tree::<ContentHash, (Reference, u64)>(count as usize);
+            assert!(index < old.bytes(), "index={index}, old={}", old.bytes());
+            for fault in [0, 1] {
+                let mut forged = reference;
+                if fault == 0 {
+                    forged.len += 1;
+                } else {
+                    forged.domain.schema += 1;
+                }
+                let (refused, allocations) =
+                    crate::test_alloc::measured(|| request.get_content(forged));
+                assert!(refused.is_none());
+                assert_eq!(allocations.allocations, 0);
+                assert_eq!(request.retained_bytes(), before + index);
+            }
+            assert_eq!(
+                &*request.get_content(reference).unwrap(),
+                &(count - 1).to_le_bytes()
+            );
+            drop(request);
+            assert_eq!(budget.reserved(), 0);
         }
     }
     #[test]

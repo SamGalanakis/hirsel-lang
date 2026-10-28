@@ -1151,3 +1151,23 @@ fn large_only_admission_publication_preserves_the_first_index_read() {
     assert_eq!(&*reopened.get(reference).unwrap(), b"previous payload");
     request.finish().unwrap();
 }
+
+#[test]
+fn owned_buffer_conversion_keeps_its_payload_and_shared_child_lifetime() {
+    let input = (0..128u8).collect::<Vec<_>>();
+    assert_eq!(input.len(), input.capacity());
+    let pointer = input.as_ptr();
+    let bytes = Bytes::from(input);
+    assert_eq!(
+        bytes.as_ptr(),
+        pointer,
+        "conversion must move the existing buffer"
+    );
+    let clone = bytes.clone();
+    let child = bytes.range(16, 32, 1).unwrap();
+    assert_eq!(clone.as_ptr(), pointer);
+    assert_eq!(child.as_ptr(), pointer.wrapping_add(16));
+    drop(bytes);
+    drop(clone);
+    assert_eq!(&*child, &(16..48u8).collect::<Vec<_>>());
+}

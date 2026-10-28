@@ -654,6 +654,7 @@ impl SourceProducts {
     fn failure_reader(
         &self,
     ) -> Arc<dyn Fn(hirsel_engine::store::Reference) -> ToolError + Send + Sync> {
+        let store = self.store.clone();
         let check = self.check.clone();
         let lower = self.lower.clone();
         let front = self.front.clone();
@@ -667,6 +668,12 @@ impl SourceProducts {
         let ownership = self.ownership.clone();
         let native_sources = self.native_sources.clone();
         Arc::new(move |reference| {
+            if store.exhausted() {
+                return ToolError::Runtime(format!(
+                    "compiler product transport allowance exhausted; retained {}B",
+                    store.retained_bytes(),
+                ));
+            }
             if let Some(error) = ownership
                 .as_ref()
                 .and_then(|selected| selected.failure(reference))

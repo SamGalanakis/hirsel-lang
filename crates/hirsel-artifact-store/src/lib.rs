@@ -145,6 +145,7 @@ enum Region {
         len: usize,
     },
     Owned(Arc<[u8]>),
+    Buffer(Box<[u8]>),
     Static(&'static [u8]),
     Retained {
         region: Arc<Region>,
@@ -203,6 +204,7 @@ impl Region {
                 unsafe { std::slice::from_raw_parts(address.cast(), *len) }
             }
             Self::Owned(bytes) => bytes,
+            Self::Buffer(bytes) => bytes,
             Self::Static(bytes) => bytes,
             Self::Retained { region, .. } => region.bytes(),
         }
@@ -249,7 +251,11 @@ impl From<Arc<[u8]>> for Bytes {
 }
 impl From<Vec<u8>> for Bytes {
     fn from(bytes: Vec<u8>) -> Self {
-        Self::from(Arc::<[u8]>::from(bytes))
+        let len = bytes.len();
+        Self {
+            region: Arc::new(Region::Buffer(bytes.into_boxed_slice())),
+            range: 0..len,
+        }
     }
 }
 impl From<&[u8]> for Bytes {
