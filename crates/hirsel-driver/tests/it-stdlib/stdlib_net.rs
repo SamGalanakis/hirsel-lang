@@ -1,6 +1,6 @@
 //! Vectors ported before implementation from Rust coretests/tests/net/{parser,
 //! ip_addr,socket_addr}.rs (f6c1107f), and Zig Io/net/HostName.zig (bff490a2).
-use crate::source_std::tir;
+use crate::source_std::TirFixture;
 use hirsel_driver::*;
 use hirsel_engine::*;
 
@@ -11,17 +11,37 @@ pub(super) fn execute(body: &str) {
 }
 
 pub(super) fn execute_source(source: &str) {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_source/main.hir");
+    let mut fixture = TirFixture::new(&path).unwrap();
+    execute_source_in(&mut fixture, source);
+}
+
+pub(super) fn execute_in(fixture: &mut TirFixture, body: &str) {
+    execute_source_in(
+        fixture,
+        &format!("pub fn main(t: Test) -> Result[(), ()] {{\n{body}\nOk(())\n}}"),
+    );
+}
+
+fn execute_source_in(fixture: &mut TirFixture, source: &str) {
     with_compiler_stack(|| {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/std_source/main.hir");
-        let prepared = tir(&path, Some(source), None).unwrap_or_else(|e| panic!("{e}\n{source}"));
+        let prepared = fixture
+            .tir(Some(source), None)
+            .unwrap_or_else(|e| panic!("{e}\n{source}"));
+        execute_tir(&prepared, source);
+    });
+}
+
+pub(super) fn execute_tir(prepared: &hirsel_driver::requests::TirExecution, source: &str) {
+    with_compiler_stack(|| {
         let config = RunConfiguration {
             entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
         let run = testing::observe_tir(
-            &prepared,
+            prepared,
             &config,
             SimulationConfig::default(),
             InterpreterAdapter::default().limits,
@@ -37,7 +57,7 @@ pub(super) fn execute_source(source: &str) {
             run.outcome
         );
         let checked = testing::observe_tir(
-            &prepared,
+            prepared,
             &config,
             SimulationConfig::default(),
             InterpreterAdapter::default().limits,

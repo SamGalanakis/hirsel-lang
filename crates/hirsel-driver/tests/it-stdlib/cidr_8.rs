@@ -109,15 +109,13 @@ fn contains(a: &[u8], width: usize, b: &[u8]) -> bool {
     a.len() == b.len() && (0..width).all(|index| bit(a, index) == bit(b, index))
 }
 
-fn execute(body: &str) {
-    // Independent expected vectors are emitted in small programs, each below
-    // the normal interpreter budget. No limit is raised for exhaustive widths.
-    super::stdlib_net::execute(body);
-}
-
 #[test]
 fn every_width_masks_host_bits_roundtrips_and_membership() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_source/main.hir");
+    let mut fixture = crate::source_std::TirFixture::new(&path).unwrap();
+
     let mut cases = 0;
+    let mut programs = Vec::new();
     for len in [4, 16] {
         for width in 0..=len * 8 {
             let mut body = String::new();
@@ -159,7 +157,25 @@ fn every_width_masks_host_bits_roundtrips_and_membership() {
                 body += "}\n";
                 cases += 1;
             }
-            execute(&body);
+            programs.push((format!("width_{len}_{width}"), body));
+        }
+    }
+    assert_eq!(programs.len(), 162);
+    for chunk in programs.chunks(12) {
+        let mut source = "pub fn main(t:Test)->Result[(),()]{Ok(())}\n".to_owned();
+        let names = chunk
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for (name, body) in chunk {
+            source.push_str(&format!(
+                "pub fn {name}(t:Test)->Result[(),()]{{\n{body}\nOk(())\n}}\n"
+            ));
+        }
+        let prepared = fixture.batch(&source, &names).unwrap();
+        assert_eq!(prepared.len(), chunk.len());
+        for (prepared, (_, body)) in prepared.iter().zip(chunk) {
+            super::stdlib_net::execute_tir(prepared, body);
         }
     }
     assert_eq!(cases, 486);

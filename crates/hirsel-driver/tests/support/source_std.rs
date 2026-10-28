@@ -228,6 +228,52 @@ impl TirFixture {
         if let Some(name) = name {
             entry.0.name = name.into();
         }
+        let output = self.select(
+            replacement,
+            CompileOperation::Tir {
+                definition: Some(entry),
+            },
+        )?;
+        let CompileResult::Tir(tir) = &output.result else {
+            return Err(ToolError::Runtime(
+                "source fixture returned another operation".into(),
+            ));
+        };
+        Ok(tir.clone())
+    }
+    pub fn batch(
+        &mut self,
+        source: &str,
+        names: &[String],
+    ) -> Result<Vec<Arc<hirsel_driver::requests::TirExecution>>, ToolError> {
+        use hirsel_driver::requests::*;
+        let definitions = names
+            .iter()
+            .map(|name| {
+                let mut entry = self.entry.clone();
+                entry.0.name = name.into();
+                entry
+            })
+            .collect::<Vec<_>>();
+        let output = self.select(
+            Some(source),
+            CompileOperation::TirBatch {
+                definitions: definitions.clone(),
+            },
+        )?;
+        let CompileResult::TirBatch(batch) = &output.result else {
+            return Err(ToolError::Runtime(
+                "source fixture returned another operation".into(),
+            ));
+        };
+        definitions.iter().map(|entry| batch.entry(entry)).collect()
+    }
+    fn select(
+        &mut self,
+        replacement: Option<&str>,
+        operation: hirsel_driver::requests::CompileOperation,
+    ) -> Result<Arc<hirsel_driver::requests::CompileOutput>, ToolError> {
+        use hirsel_driver::requests::*;
         let inputs = if let Some(source) = replacement {
             self.inputs.replace_sources(
                 &[(self.primary.clone(), Arc::<[u8]>::from(source.as_bytes()))].into(),
@@ -236,19 +282,11 @@ impl TirFixture {
         } else {
             self.inputs.clone()
         };
-        let output = self.requests.execute_request(&CompileRequest {
+        self.requests.execute_request(&CompileRequest {
             path: self.path.clone(),
             inputs,
-            operation: CompileOperation::Tir {
-                definition: Some(entry),
-            },
-        })?;
-        let CompileResult::Tir(tir) = &output.result else {
-            return Err(ToolError::Runtime(
-                "source fixture returned another operation".into(),
-            ));
-        };
-        Ok(tir.clone())
+            operation,
+        })
     }
 }
 
