@@ -515,6 +515,20 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
         {
             Action::Private
         }
+        Inst::ReadStatic { result, symbol }
+            if matches!(
+                u.tables
+                    .symbols
+                    .get(symbol.index())
+                    .map(|symbol| symbol.kind),
+                Some(SymbolKind::Constant | SymbolKind::Shape)
+            ) && cpu_owned_layout(
+                table,
+                u.types[u.values[result.index()].ty.index()].layout,
+            ) =>
+        {
+            Action::Private
+        }
         Inst::FrameEnter { .. }
         | Inst::FrameLeave
         | Inst::Unary { .. }
@@ -623,6 +637,7 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
         Inst::SeqSetLen { address, .. } if !mutable_capture(u, *address) => Action::Private,
         Inst::RegionPublish { .. } => Action::Private,
         Inst::Dup { .. }
+        | Inst::Copy { .. }
         | Inst::Release { .. }
         | Inst::Share { .. }
         | Inst::RegionEnter { .. }

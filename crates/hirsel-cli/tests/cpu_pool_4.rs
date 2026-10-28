@@ -154,3 +154,13 @@ fn ordered_allocating_success_and_failure_release_every_owner_before_teardown() 
 fn ordered_allocating_fixture_agrees_across_four_engines_width_4() {
     cpu_fixture_allocating_four_engine_agreement(4);
 }
+
+#[test]
+fn ordered_empty_list_mapper_agrees_across_four_engines_and_replay() {
+    cpu_fixture_empty_list_four_engine_agreement(4);
+}
+
+#[test]
+fn ordered_copied_list_mapper_agrees_across_four_engines_and_replay() {
+    cpu_fixture_copied_list_four_engine_agreement(4);
+}

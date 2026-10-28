@@ -99,6 +99,27 @@ fn cpu_fixture_four_engine_source(width: u32, source: String, expected_output: &
 }
 
 fn cpu_fixture_allocating_four_engine_agreement(width: u32) {
+    cpu_fixture_allocating_four_engine_mapper(
+        width,
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut out = [job]; list.reserve(mut out, 128u64); list.push(mut out, job + 7u64); take out }",
+    );
+}
+
+fn cpu_fixture_empty_list_four_engine_agreement(width: u32) {
+    cpu_fixture_allocating_four_engine_mapper(
+        width,
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut out: List[u64] = []; list.reserve(mut out, 128u64); list.push(mut out, job); list.push(mut out, job + 7u64); take out }",
+    );
+}
+
+fn cpu_fixture_copied_list_four_engine_agreement(width: u32) {
+    cpu_fixture_allocating_four_engine_mapper(
+        width,
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut out: List[u64] = []; list.reserve(mut out, 128u64); list.push(mut out, job); list.push(mut out, job + 7u64); let mut copied = copy out; copied[1] = job + 7u64; take copied }",
+    );
+}
+
+fn cpu_fixture_allocating_four_engine_mapper(width: u32, mapper: &str) {
     let jobs = (1..=2 * width)
         .map(|n| format!("{n}u64"))
         .collect::<Vec<_>>()
@@ -111,8 +132,7 @@ fn cpu_fixture_allocating_four_engine_agreement(width: u32) {
         .replace("WIDTH", &format!("{width}u32"))
         .replace("JOBS", &format!("[{jobs}]"))
         .replace("EXPECTED", &format!("[{expected}]"))
-        .replace("fn(take job: u64) -> u64 uses {} { job + 7u64 }",
-            "fn(take job: u64) -> unique List[u64] uses {} { let mut out = [job]; list.reserve(mut out, 128u64); list.push(mut out, job + 7u64); take out }");
+        .replace("fn(take job: u64) -> u64 uses {} { job + 7u64 }", mapper);
     cpu_fixture_four_engine_source(width, source.clone(), b"cpu-scalar-ok\n");
     cpu_interpreter_matrix(width as usize, false, &source, false);
 }

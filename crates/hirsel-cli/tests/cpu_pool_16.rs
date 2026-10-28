@@ -86,3 +86,13 @@ include!("support/cpu_pool/four_engine.rs");
 fn ordered_allocating_fixture_agrees_across_four_engines_width_16() {
     cpu_fixture_allocating_four_engine_agreement(16);
 }
+
+#[test]
+fn ordered_empty_list_mapper_agrees_across_four_engines_and_replay() {
+    cpu_fixture_empty_list_four_engine_agreement(16);
+}
+
+#[test]
+fn ordered_copied_list_mapper_agrees_across_four_engines_and_replay() {
+    cpu_fixture_copied_list_four_engine_agreement(16);
+}
