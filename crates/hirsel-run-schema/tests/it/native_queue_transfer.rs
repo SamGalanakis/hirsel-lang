@@ -527,13 +527,20 @@ fn queued_equal_resource_fields_keep_distinct_credit_and_descriptor_drop_order()
             fields: vec![Projection::Field { field: ordinal }],
         })
     };
+    let first_field = 7u64 << 32;
+    let second_field = first_field | 1;
+    first.token = first_field;
+    first.owner = first_field;
     first.token_path = field(0);
     first.owner_path = field(0);
     let mut second = first.clone();
+    second.token = second_field;
+    second.owner = second_field;
     second.token_path = field(1);
     second.owner_path = field(1);
     markers.insert(4, second);
-    log.rows.insert(3, event(4, 0, FIRST, FIRST));
+    log.rows[2] = event(0, 0, first_field, first_field);
+    log.rows.insert(3, event(4, 0, second_field, second_field));
     layouts.get_mut(&99).unwrap().get_mut(&17).unwrap().path = vec![Projection::Field { field: 1 }];
     let mut earlier = layouts[&99][&17].clone();
     earlier.path = vec![Projection::Field { field: 0 }];
