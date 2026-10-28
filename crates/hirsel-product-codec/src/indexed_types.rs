@@ -192,7 +192,9 @@ pub struct CheckedTypeComponent {
 #[derive(Clone, Copy)]
 pub struct TypeRow<'a> {
     component: &'a CheckedTypeComponent,
-    descriptor: usize,
+    label: &'a [u8],
+    edges: &'a [u8],
+    tag: TypeTag,
 }
 /// A checked graph edge. Resolving an external designation requires opening
 /// that child independently; this enum conveys no validation of child bytes.
@@ -311,17 +313,30 @@ impl CheckedTypeComponent {
         if index >= self.dependencies {
             return None;
         }
+        let bytes = &*self.bytes;
         let at = HEADER + index as usize * REFERENCE;
         Some(TypeRef {
-            output: hirsel_syntax::ContentHash(self.bytes.get(at..at + 32)?.try_into().ok()?),
-            len: u64_at(&self.bytes, at + 32)?,
-            member: u32_at(&self.bytes, at + 40)?,
+            output: hirsel_syntax::ContentHash(bytes.get(at..at + 32)?.try_into().ok()?),
+            len: u64_at(bytes, at + 32)?,
+            member: u32_at(bytes, at + 40)?,
         })
     }
     pub fn row(&self, member: u32) -> Option<TypeRow<'_>> {
-        (member < self.count).then_some(TypeRow {
+        if member >= self.count {
+            return None;
+        }
+        let bytes = &*self.bytes;
+        let descriptor = self.directory + member as usize * ROW;
+        let label = size_at(bytes, descriptor)?;
+        let label_end = label.checked_add(size_at(bytes, descriptor + 8)?)?;
+        let edges = size_at(bytes, descriptor + 16)?;
+        let edge_end =
+            edges.checked_add((u32_at(bytes, descriptor + 24)? as usize).checked_mul(4)?)?;
+        Some(TypeRow {
             component: self,
-            descriptor: self.directory + member as usize * ROW,
+            label: bytes.get(label..label_end)?,
+            edges: bytes.get(edges..edge_end)?,
+            tag: TypeTag::read(u32_at(bytes, descriptor + 28)?)?,
         })
     }
     pub fn backing(&self) -> &Bytes {
@@ -329,6 +344,7 @@ impl CheckedTypeComponent {
     }
 
     fn validate(&self, mut cursor: usize) -> Option<()> {
+        let bytes = &*self.bytes;
         let mut distinct = HashSet::new();
         for n in 0..self.dependencies {
             let reference = self.dependency(n)?;
@@ -341,11 +357,12 @@ impl CheckedTypeComponent {
         let mut next_dependency = 0;
         for member in 0..self.count {
             let row = self.row(member)?;
-            let start = size_at(&self.bytes, row.descriptor)?;
-            let len = size_at(&self.bytes, row.descriptor + 8)?;
+            let descriptor = self.directory + member as usize * ROW;
+            let start = size_at(bytes, descriptor)?;
+            let len = size_at(bytes, descriptor + 8)?;
             let end = start.checked_add(len)?;
-            let edge_start = size_at(&self.bytes, row.descriptor + 16)?;
-            let edge_count = u32_at(&self.bytes, row.descriptor + 24)?;
+            let edge_start = size_at(bytes, descriptor + 16)?;
+            let edge_count = u32_at(bytes, descriptor + 24)?;
             let edge_end = edge_start.checked_add((edge_count as usize).checked_mul(4)?)?;
             // rkyv d963abc2 validator.rs:135-157 checks overflow, bounds and
             // alignment. Cap'n Proto b5ee48b9 layout.c++:3024-3055 requires the
@@ -353,13 +370,13 @@ impl CheckedTypeComponent {
             // replace pointer subtrees; integer reads require no Rust alignment.
             if start != cursor
                 || edge_start != aligned(end)?
-                || edge_end > self.bytes.len()
-                || self.bytes.get(end..edge_start)?.iter().any(|&b| b != 0)
+                || edge_end > bytes.len()
+                || bytes.get(end..edge_start)?.iter().any(|&b| b != 0)
             {
                 return None;
             }
-            let tag = TypeTag::read(u32_at(&self.bytes, row.descriptor + 28)?)?;
-            let label = self.bytes.get(start..end)?;
+            let tag = row.tag();
+            let label = bytes.get(start..end)?;
             let value: Type =
                 hirsel_types::with_session_ids(|| crate::options(label.len()).deserialize(label))
                     .ok()?;
@@ -379,7 +396,7 @@ impl CheckedTypeComponent {
             }
             let mut internal = Vec::new();
             for edge in 0..edge_count {
-                let position = u32_at(&self.bytes, edge_start + edge as usize * 4)?;
+                let position = u32_at(bytes, edge_start + edge as usize * 4)?;
                 if position >= positions {
                     return None;
                 }
@@ -398,7 +415,7 @@ impl CheckedTypeComponent {
             graph.push(internal);
             cursor = edge_end;
         }
-        if cursor != self.bytes.len()
+        if cursor != bytes.len()
             || next_dependency != self.dependencies
             || (self.count > 1 || graph[0].contains(&0)) != self.cyclic
             || hirsel_graph::components(&graph).len() != 1
@@ -452,30 +469,26 @@ impl CheckedTypeComponent {
 }
 impl TypeRow<'_> {
     fn label(&self) -> &[u8] {
-        let bytes = &self.component.bytes;
-        let start = size_at(bytes, self.descriptor).expect("checked label");
-        let len = size_at(bytes, self.descriptor + 8).expect("checked label");
-        &bytes[start..start + len]
+        self.label
     }
     fn positions(&self) -> impl Iterator<Item = u32> + '_ {
-        let start = size_at(&self.component.bytes, self.descriptor + 16).expect("checked edges");
-        (0..self.edge_count()).map(move |n| {
-            u32_at(&self.component.bytes, start + n as usize * 4).expect("checked edge")
-        })
+        self.edges
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("four-byte edge")))
     }
+    #[inline]
     pub fn tag(&self) -> TypeTag {
-        TypeTag::read(u32_at(&self.component.bytes, self.descriptor + 28).expect("checked tag"))
-            .expect("checked tag")
+        self.tag
     }
+    #[inline]
     pub fn edge_count(&self) -> u32 {
-        u32_at(&self.component.bytes, self.descriptor + 24).expect("checked edge count")
+        (self.edges.len() / 4) as u32
     }
     pub fn edge(&self, index: u32) -> Option<TypeEdge> {
         if index >= self.edge_count() {
             return None;
         }
-        let start = size_at(&self.component.bytes, self.descriptor + 16)?;
-        let position = u32_at(&self.component.bytes, start + index as usize * 4)?;
+        let position = u32_at(self.edges, index as usize * 4)?;
         Some(if position < self.component.count {
             TypeEdge::Member(position)
         } else {
