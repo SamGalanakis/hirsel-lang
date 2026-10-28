@@ -72,18 +72,30 @@ impl InspectionLedger {
         })
     }
     pub fn admit(&self) -> Result<(), ToolError> {
+        {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if !state.complete {
+                return Err(unavailable());
+            }
+            if state.memory.is_some() {
+                return Ok(());
+            }
+        }
+        // Admission can evict an idle graph whose meter flushes into this
+        // ledger. Reserve without its lock, then publish the reservation.
+        let memory =
+            super::host_selector::GraphBudget::reserve_product(&self.budget, self.capacity)
+                .map_err(ToolError::Io);
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if !state.complete {
             return Err(unavailable());
         }
         if state.memory.is_none() {
-            state.memory = Some(
-                super::host_selector::GraphBudget::reserve_product(&self.budget, self.capacity)
-                    .map_err(ToolError::Io)?,
-            );
+            state.memory = Some(memory?);
         }
         Ok(())
     }
+
     fn add(
         &self,
         delta: &BTreeMap<DefPath, Counters>,
