@@ -685,6 +685,46 @@ impl Frame {
             }
             return Ok((value, Default::default()));
         }
+        // A whole-local Take can transfer the existing shadow tree with its
+        // value. Validate the original before extraction; preserved mutable
+        // inline storage keeps its shadow and therefore still needs a copy.
+        if operand.usage == UseKind::Take {
+            let place = self.place(operand.place)?;
+            if place.projection.is_empty() {
+                let root = place.root.0 as usize;
+                let check = self.check.as_ref().unwrap();
+                let shadow = check
+                    .shadows
+                    .get(root)
+                    .ok_or_else(|| invalid("local out of range"))?;
+                let state = check.state.borrow();
+                state.access(shadow, "operand")?;
+                if !shadow.claim(state.task) {
+                    return Err(state
+                        .trap(
+                            crate::checked::TrapRule::TaskShared,
+                            format!(
+                                "task {} reaches a counted block another task owns",
+                                state.task
+                            ),
+                        )
+                        .into());
+                }
+                drop(state);
+                let value = self.extract(operand)?;
+                let emptied = self.slots[root].is_none();
+                let check = self.check.as_mut().unwrap();
+                let shadow = if emptied {
+                    check.copies.remove(&(root as u32));
+                    check.borrowed.remove(&(root as u32));
+                    std::mem::take(&mut check.shadows[root])
+                } else {
+                    check.shadows[root].clone()
+                };
+                let shadow = shadow.for_value(&value);
+                return Ok((value, shadow));
+            }
+        }
         let mut shadow = self.access(operand.place, "operand")?;
         if let Some(check) = &self.check {
             let state = check.state.borrow();

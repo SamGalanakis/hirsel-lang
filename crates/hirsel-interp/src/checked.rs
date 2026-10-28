@@ -225,6 +225,12 @@ impl Shadow {
         Self::Uniform(bound)
     }
     pub fn total(&self) -> Bound {
+        if let Self::Uniform(bound) = self {
+            let mut bound = bound.clone();
+            bound.sort_unstable();
+            bound.dedup();
+            return bound;
+        }
         let mut out = vec![];
         let mut work = vec![self];
         while let Some(s) = work.pop() {
@@ -265,17 +271,29 @@ impl Shadow {
     /// Copying an item out of a native cursor retains its source storage, but
     /// does not borrow the cursor's temporary access binding (OWN-4).
     pub fn content_bound(&self) -> Bound {
-        match self {
-            Self::Uniform(bound) => bound.clone(),
-            Self::Parts(parts) => {
-                let mut bound = vec![];
-                for part in parts {
-                    union(&mut bound, &part.content_bound());
-                }
-                bound
-            }
-            Self::View { content, .. } | Self::Ownership { content, .. } => content.content_bound(),
+        let mut root = self;
+        while let Self::View { content, .. } | Self::Ownership { content, .. } = root {
+            root = content;
         }
+        if let Self::Uniform(bound) = root {
+            return bound.clone();
+        }
+        fn append(shadow: &Shadow, bound: &mut Bound) {
+            match shadow {
+                Shadow::Uniform(part) => union(bound, part),
+                Shadow::Parts(parts) => {
+                    for part in parts {
+                        append(part, bound);
+                    }
+                }
+                Shadow::View { content, .. } | Shadow::Ownership { content, .. } => {
+                    append(content, bound)
+                }
+            }
+        }
+        let mut bound = vec![];
+        append(self, &mut bound);
+        bound
     }
     /// A borrowed protocol transports the source value, excluding the outer
     /// access chain. Nested capture/view homes remain real content bounds.
