@@ -4627,6 +4627,31 @@ impl Checker<'_> {
             }
         })
     }
+    // Await consumes a Task whose result contract is fixed by its producer.
+    // MODE-2 keeps the physical bare-R result slot aliased, but moving a
+    // declared unique payload out of that linear handle preserves its proof.
+    fn awaited_unique(&self, callee: &Callee, arguments: &[CallArgument]) -> bool {
+        let Callee::Definition { path, .. } = callee else {
+            return false;
+        };
+        if !path.is_core("task.await") {
+            return false;
+        }
+        let Some(handle) = arguments.iter().find(|argument| {
+            argument.parameter == hirsel_types::ParamId(1) && argument.value.usage == UseKind::Take
+        }) else {
+            return false;
+        };
+        let TypeKind::Builtin {
+            kind: BuiltinType::Task,
+            arguments,
+        } = &self.t.row(self.place_type(handle.value.place)).kind
+        else {
+            return false;
+        };
+        matches!(arguments.first(), Some(hirsel_types::GenericArgument::Type(result))
+            if self.t.row(*result).modes.uniqueness == hirsel_types::Uniqueness::Unique)
+    }
     /// A borrowed parameter a bodyless core promise reads and stores nothing of.
     fn callee_unretained(&self, callee: &Callee, ordinal: hirsel_types::ParamId) -> bool {
         let Callee::Definition { path, .. } = callee else {
@@ -6247,6 +6272,7 @@ impl Checker<'_> {
                         || !borrowed && self.operand_unique(state, &a.value)
                 });
                 let parametric = self.parametric_unique(state, callee, arguments);
+                let awaited_unique = self.awaited_unique(callee, arguments);
                 let unique_arguments: Vec<bool> = arguments
                     .iter()
                     .map(|a| self.operand_unique(state, &a.value))
@@ -6547,6 +6573,7 @@ impl Checker<'_> {
                     destination,
                     inferred.results.contains(&hirsel_types::UniqueResultRow::Root) || promised
                         || parametric
+                        || awaited_unique
                         // An owning core cursor transfers parts of its
                         // currently unique owner; the result owns no aliases.
                         // Freshness alone does not prove this for a shared

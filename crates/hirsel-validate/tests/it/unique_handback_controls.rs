@@ -1715,3 +1715,95 @@ fn inferred_result_root_cannot_forge_an_ordinary_call_result() {
         }
     )));
 }
+
+fn awaited_result(unique: bool, core: bool) -> Fixture {
+    let mut f = Fixture::result_call(TypeKind::Primitive(Primitive::String), true);
+    let result = f.body().result;
+    let mut row = interner().row(result).clone();
+    row.modes.uniqueness = Uniqueness::Unique;
+    let unique_result = f.definition.types.push(row);
+    f.body().result = unique_result;
+    f.body().locals[0].ty = unique_result;
+    f.body().places[0].ty = unique_result;
+    let actual = if unique { unique_result } else { result };
+    let scope = param(&mut f, TypeKind::Tuple(vec![].into()));
+    let task = param(
+        &mut f,
+        TypeKind::Builtin {
+            kind: BuiltinType::Task,
+            arguments: vec![GenericArgument::Type(actual)].into(),
+        },
+    );
+    let mut signature = function_signature(
+        "task.await",
+        vec![],
+        TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
+    );
+    if core {
+        signature.definition = DefId::intern(&DefPath::core("task.await"));
+    }
+    let SignatureKind::Function(function) = &mut signature.kind else {
+        panic!()
+    };
+    function.generics = vec![GenericParameter::Type {
+        name: "R".into(),
+        bounds: vec![].into(),
+    }]
+    .into();
+    let task_template = interner().intern(ty(TypeKind::Builtin {
+        kind: BuiltinType::Task,
+        arguments: vec![GenericArgument::Type(function.result)].into(),
+    }));
+    function.parameters = vec![
+        Parameter {
+            name: None,
+            label: None,
+            passing: PassingMode::Borrow,
+            ty: interner().intern(ty(TypeKind::Tuple(vec![].into()))),
+        },
+        Parameter {
+            name: None,
+            label: None,
+            passing: PassingMode::Take,
+            ty: task_template,
+        },
+    ]
+    .into();
+    f.body().blocks[0].terminator = Terminator::Call {
+        callee: Callee::Definition {
+            path: signature.definition.path().clone(),
+            arguments: vec![GenericArgument::Type(actual)],
+        },
+        arguments: vec![
+            CallArgument {
+                parameter: ParamId(0),
+                value: operand(scope, UseKind::Borrow),
+            },
+            CallArgument {
+                parameter: ParamId(1),
+                value: take(task),
+            },
+        ],
+        returns: Some(CallReturn {
+            destination: PlaceId(1),
+            next: BlockId(1),
+        }),
+        on_failure: CleanupId(0),
+    };
+    f.signatures.insert(signature.definition, signature);
+    owner_sig(&mut f, &[PassingMode::Borrow, PassingMode::Take]);
+    f
+}
+
+#[test]
+fn await_preserves_only_the_unique_result_contract_of_its_consumed_task() {
+    awaited_result(true, true).valid();
+    for (unique, core) in [(false, true), (true, false)] {
+        assert_eq!(
+            awaited_result(unique, core).kinds(),
+            vec![ViolationKind::TypeMismatch {
+                entity: "value modes",
+            }]
+        );
+    }
+}
