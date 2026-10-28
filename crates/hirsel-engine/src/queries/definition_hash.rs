@@ -131,6 +131,19 @@ impl QueryEngine {
         } else {
             Form::Tir
         };
+        let lowered = if matches!(&form, Form::Tir) {
+            let lowered = self.lower_to_tir(path)?;
+            if has_errors(&lowered.diagnostics) {
+                return Err(QueryError::Diagnostics(lowered.diagnostics));
+            }
+            Some(lowered.value)
+        } else {
+            None
+        };
+        let signature = self.item_signature(path)?;
+        if has_errors(&signature.diagnostics) {
+            return Err(QueryError::Diagnostics(signature.diagnostics));
+        }
         // A type's content is its owner view: its representation and finalizer.
         let signature = if is_type {
             self.body_signature(&path.0.package, signature.value)?.0
@@ -138,16 +151,10 @@ impl QueryEngine {
             signature.value
         };
         Ok(match form {
-            Form::Tir => {
-                let lowered = self.lower_to_tir(path)?;
-                if has_errors(&lowered.diagnostics) {
-                    return Err(QueryError::Diagnostics(lowered.diagnostics));
-                }
-                DefinitionContent::Body {
-                    signature,
-                    tir: Some(lowered.value),
-                }
-            }
+            Form::Tir => DefinitionContent::Body {
+                signature,
+                tir: lowered,
+            },
             Form::Type => DefinitionContent::Body {
                 signature,
                 tir: None,

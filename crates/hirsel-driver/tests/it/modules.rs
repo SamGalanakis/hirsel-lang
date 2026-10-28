@@ -299,3 +299,4 @@ mod request_batch_128;
 mod export_pressure_128;
 mod cpu_reference_142;
 mod precompute_requests_152;
+mod precompute_zstd_152;
