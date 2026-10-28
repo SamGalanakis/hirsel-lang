@@ -100,6 +100,8 @@ impl Compiler {
             ) {
                 config.store = store;
             }
+        } else if let Ok(store) = crate::store::store_by_name("none@1", None) {
+            config.store = store;
         }
         config
     }
@@ -152,6 +154,8 @@ impl Compiler {
             ) {
                 engine = engine.with_result_store(store);
             }
+        } else if let Ok(store) = crate::store::store_by_name("none@1", None) {
+            engine = engine.with_result_store(store);
         }
         engine
     }
