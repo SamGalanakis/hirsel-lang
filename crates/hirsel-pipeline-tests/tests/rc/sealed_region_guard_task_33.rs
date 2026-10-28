@@ -13,17 +13,17 @@ use hirsel_types::TypeKind;
 use std::{collections::BTreeMap, sync::Arc, task::Poll};
 
 struct Context {
-    inputs: BTreeMap<ContentHash, ProductRef>,
+    inputs: BTreeMap<ContentHash, (u32, ProductRef)>,
     pending: bool,
     changed: bool,
 }
 impl QueryContext for Context {
     fn read(&mut self, id: QueryId) -> Poll<Result<ProductRef, hirsel_engine::store::Reference>> {
-        assert_eq!(id.kind, INSTANCE_KIND);
+        let (expected_kind, mut output) = self.inputs[&id.address.0];
+        assert_eq!(id.kind, expected_kind);
         if self.pending {
             return Poll::Pending;
         }
-        let mut output = self.inputs[&id.address.0];
         if self.changed {
             output.action = Action(ContentHash([255; 32]));
         }
@@ -69,7 +69,8 @@ fn original_guard_task_waits_for_dependencies_and_keeps_its_existing_grant_with_
                 };
                 let inputs = locals
                     .into_iter()
-                    .map(|equations| {
+                    .enumerate()
+                    .map(|(index, equations)| {
                         let encoded = serde_json::to_vec(&equations).unwrap();
                         let record = store.put_content(domain, &encoded).unwrap();
                         let address = Address(ContentHash::of_bytes(&encoded));
@@ -83,10 +84,27 @@ fn original_guard_task_waits_for_dependencies_and_keeps_its_existing_grant_with_
                             action,
                             record,
                         };
-                        context.inputs.insert(address.0, product);
-                        Input { product, equations }
+                        let kind = if index % 2 == 0 {
+                            INSTANCE_KIND
+                        } else {
+                            hirsel_driver::native::queries::instance::CALLABLE_VALUE_KIND
+                        };
+                        context.inputs.insert(address.0, (kind, product));
+                        Input {
+                            query: QueryId { kind, address },
+                            product,
+                            equations,
+                        }
                     })
                     .collect();
+                assert!(
+                    context
+                        .inputs
+                        .values()
+                        .any(|(kind, _)| *kind == INSTANCE_KIND)
+                );
+                assert!(context.inputs.values().any(|(kind, _)| *kind
+                    == hirsel_driver::native::queries::instance::CALLABLE_VALUE_KIND));
                 let root = (
                     originals[entry].header.definition.clone(),
                     originals[entry].header.instance,

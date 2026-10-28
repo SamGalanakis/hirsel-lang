@@ -53,7 +53,14 @@ fn original_scalar_selected_guard_reaches_every_production_ready_unit() {
                             record,
                         };
                         store.associate_product(product.address, product.action, record);
-                        Input { product, equations }
+                        Input {
+                            query: hirsel_engine::runtime::QueryId {
+                                kind: 0x4e00_0001,
+                                address: product.address,
+                            },
+                            product,
+                            equations,
+                        }
                     })
                     .collect();
                 let root = (

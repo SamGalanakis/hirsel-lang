@@ -18,6 +18,7 @@ const OUTPUT: Domain = Domain {
 /// associations below check current outputs; they confer no C authority.
 #[derive(Clone)]
 pub struct Input {
+    pub query: QueryId,
     pub product: ProductRef,
     pub equations: LocalDemandEquations,
 }
@@ -125,6 +126,14 @@ impl Plan {
             return Err("noncanonical seal-demand query inputs".into());
         }
         for input in &inputs {
+            if input.query.address != input.product.address
+                || !matches!(
+                    input.query.kind,
+                    INSTANCE_KIND | super::instance::CALLABLE_VALUE_KIND
+                )
+            {
+                return Err("seal-demand dependency has another query stage or address".into());
+            }
             input.equations.validate()?;
         }
         let entries = roots
@@ -155,6 +164,7 @@ impl Plan {
                 // recomputation preserves the physical selection's complete action.
                 (
                     &input.equations,
+                    (input.query.kind, input.query.address.0),
                     input.product.address.0,
                     input.product.record,
                 )
@@ -376,11 +386,9 @@ impl hirsel_engine::runtime::QueryTask for GuardTask {
             return finish(result);
         }
         let mut waiting = vec![];
-        for expected in self.owner.plan.dependencies() {
-            let key = QueryId {
-                kind: INSTANCE_KIND,
-                address: expected.address,
-            };
+        for input in &self.owner.plan.inputs {
+            let expected = input.product;
+            let key = input.query;
             match cx.read(key) {
                 Poll::Pending => waiting.push(key),
                 Poll::Ready(Err(error)) => {

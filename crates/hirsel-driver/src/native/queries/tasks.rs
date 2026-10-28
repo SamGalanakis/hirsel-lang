@@ -82,7 +82,8 @@ impl NativeTasks {
             } else {
                 let mut locals = inputs
                     .iter()
-                    .map(|(_, output)| super::seal_demand::Input {
+                    .map(|(key, output)| super::seal_demand::Input {
+                        query: instance_query(key, output.product.product),
                         product: output.product.product,
                         equations: output.seal_demand.clone(),
                     })

@@ -41,6 +41,10 @@ fn guard_query_refuses_missing_roots_and_repairs_malformed_cached_selections() {
         .put_content(domain, b"ordinary admitted instance control")
         .unwrap();
     let input = Input {
+        query: hirsel_engine::runtime::QueryId {
+            kind: 0x4e00_0001,
+            address: Address(hash),
+        },
         product: ProductRef {
             address: Address(hash),
             action: Action(hash),
@@ -67,6 +71,14 @@ fn guard_query_refuses_missing_roots_and_repairs_malformed_cached_selections() {
         )
         .is_err()
     );
+    for (kind, address) in [
+        (0x4e00_0002, Address(hash)),
+        (0x4e00_0001, Address(ContentHash([8; 32]))),
+    ] {
+        let mut wrong = input.clone();
+        wrong.query = hirsel_engine::runtime::QueryId { kind, address };
+        assert!(Plan::new(vec![wrong], std::slice::from_ref(&owner), hash, hash).is_err());
+    }
     let missing = (hirsel_syntax::DefPath::core("missing_guard_owner"), hash);
     assert!(Plan::new(vec![input.clone()], &[missing], hash, hash).is_err());
     let query = Plan::new(vec![input], &[owner], hash, hash).unwrap();
@@ -139,7 +151,14 @@ fn original_scalar_guard_query_uses_only_metadata_and_rechecks_dependency_output
                             record,
                         };
                         records.push(product);
-                        Input { product, equations }
+                        Input {
+                            query: hirsel_engine::runtime::QueryId {
+                                kind: 0x4e00_0001,
+                                address: product.address,
+                            },
+                            product,
+                            equations,
+                        }
                     })
                     .collect();
                 let plan = Plan::new(
