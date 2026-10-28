@@ -121,17 +121,28 @@ fn program_for(
             ..config
         })
         .with_comptime_limits(limits);
-    let mut program = compiler
-        .load_program_inputs(path, &key.inputs, true)
-        .unwrap();
+    let inputs = key.inputs.clone();
     if existing.is_none() {
-        let output = program.check(lowering).unwrap();
+        use hirsel_driver::requests::*;
+        let mut requests = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+        let output = requests
+            .execute_request(&CompileRequest {
+                path: path.to_owned(),
+                inputs: key.inputs.clone(),
+                operation: CompileOperation::Check { lowering },
+            })
+            .unwrap();
+        let CompileResult::Check(output) = &output.result else {
+            panic!("expected fixture Check")
+        };
+        let output = output.clone();
         if output.completion != CheckCompletion::Complete || !output.diagnostics.is_empty() {
             return Err(output);
         }
         checked.push(Checked { key, store });
     }
     drop(checked);
+    let program = compiler.load_program_inputs(path, &inputs, true).unwrap();
     // Each caller owns a fresh source map, memo graph and coordinator. Only
     // content-addressed immutable products cross requests, through the ordinary
     // engine store. Later lowerings publish there for subsequent callers too.
