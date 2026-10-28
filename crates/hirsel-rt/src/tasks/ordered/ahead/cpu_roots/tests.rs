@@ -212,7 +212,12 @@ fn withdrawal(published: bool, diagnostic: bool) {
                     d.cpu_batch
                         .as_mut()
                         .unwrap()
-                        .publish(younger, local_prefix.clone(), &raw mut summary)
+                        .publish(
+                            younger,
+                            local_prefix.clone(),
+                            &raw mut summary,
+                            value.to_le_bytes().to_vec(),
+                        )
                         .unwrap();
                 } else {
                     d.stretches.insert(younger, local_prefix.clone());
