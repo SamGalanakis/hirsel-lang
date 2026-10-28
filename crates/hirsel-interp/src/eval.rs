@@ -1221,7 +1221,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                             if reference.definition.is_core("cpu.map_scoped") {
                                 let certified = crate::cpu_mapper::certified(
                                     provider,
-                                    &runtime.types,
+                                    runtime,
                                     arguments
                                         .get(3)
                                         .ok_or_else(|| invalid("CPU mapper argument"))?,
@@ -3064,7 +3064,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                             if path.is_core("cpu.map_scoped") {
                                 let certified = crate::cpu_mapper::certified(
                                     provider,
-                                    &runtime.types,
+                                    runtime,
                                     arguments
                                         .get(3)
                                         .ok_or_else(|| invalid("CPU mapper argument"))?,

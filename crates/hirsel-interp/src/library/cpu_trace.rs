@@ -42,7 +42,23 @@ pub(super) fn scalar(result: &OperationResult) -> Result<Vec<u8>, Error> {
             }
             Value::F32(value) => bytes.extend_from_slice(&value.to_le_bytes()),
             Value::F64(value) => bytes.extend_from_slice(&value.to_le_bytes()),
-            Value::Tuple(fields) => {
+            Value::Sequence {
+                kind: hirsel_types::BuiltinType::List | hirsel_types::BuiltinType::Array,
+                elements,
+                arena: None,
+                ..
+            } => {
+                bytes.extend_from_slice(&(elements.len() as u64).to_le_bytes());
+                for element in elements {
+                    encode(
+                        element
+                            .as_ref()
+                            .ok_or_else(|| invalid("moved CPU sequence element"))?,
+                        bytes,
+                    )?;
+                }
+            }
+            Value::Tuple(fields) | Value::Box(fields) => {
                 for field in fields {
                     encode(
                         field
