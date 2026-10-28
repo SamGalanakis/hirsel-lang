@@ -10,7 +10,9 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+mod projection;
 mod retained;
+pub use projection::TypeProjection;
 
 /// A row of the session interner. It carries no provenance and has no order.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -248,6 +250,8 @@ pub struct InternerStats {
 pub struct TypeInterner {
     base: Option<Arc<TypeBase>>,
     base_len: u32,
+    local_start: u32,
+    frozen: projection::FrozenRows,
     // Like rustc15c1044 ty/context.rs:140-145,759-763, ids and caches that
     // can allocate ids stay within one owning context. Base TypeIds are stable;
     // their normal forms can refer to private rows beyond the shared prefix.
@@ -274,6 +278,8 @@ impl TypeInterner {
         Arc::new(Self {
             base,
             base_len,
+            local_start: base_len,
+            frozen: Default::default(),
             base_normals: AppendTable::new(),
             entries: AppendTable::new(),
             assigned: AtomicU32::new(0),
@@ -388,7 +394,7 @@ impl TypeInterner {
     fn publish(&self, row: Type) -> TypeId {
         let local = self.assigned.fetch_add(1, Ordering::Relaxed);
         let position = local
-            .checked_add(self.base_len)
+            .checked_add(self.local_start)
             .expect("type interner exceeds u32");
         self.counters
             .row_bytes
@@ -410,7 +416,7 @@ impl TypeInterner {
         let count = u32::try_from(count).expect("type graph exceeds u32");
         let local = self.assigned.fetch_add(count, Ordering::Relaxed);
         let first = local
-            .checked_add(self.base_len)
+            .checked_add(self.local_start)
             .and_then(|p| p.checked_add(count))
             .expect("type interner exceeds u32")
             - count;
@@ -450,7 +456,19 @@ impl TypeInterner {
         if position < self.base_len {
             return self.base.as_ref()?.entry(position);
         }
-        self.entries.get(position - self.base_len)
+        self.local_entry(position)
+    }
+
+    fn local_entry(&self, position: u32) -> Option<&Entry> {
+        if position < self.local_start {
+            let index = self.frozen.positions.get(&TypeId::at(position))?;
+            self.frozen
+                .rows
+                .get(*index as usize)
+                .map(|(_, entry)| entry)
+        } else {
+            self.entries.get(position - self.local_start)
+        }
     }
 
     pub(crate) fn normal_forms(&self, id: TypeId) -> Option<&NormalForms> {
@@ -461,9 +479,7 @@ impl TypeInterner {
                     .get_or_init(position, NormalForms::default),
             );
         }
-        self.entries
-            .get(position - self.base_len)
-            .map(|entry| &entry.normals)
+        self.local_entry(position).map(|entry| &entry.normals)
     }
 
     /// Inspect an already materialized row without calling a lazy base source.
@@ -478,9 +494,7 @@ impl TypeInterner {
                 .get()
                 .map(|entry| &entry.row)
         } else {
-            self.entries
-                .get(position - self.base_len)
-                .map(|entry| &entry.row)
+            self.local_entry(position).map(|entry| &entry.row)
         }
     }
     /// The row of `id`, or None for an id this interner never assigned.
@@ -502,21 +516,29 @@ impl TypeInterner {
 
     /// How many rows the session holds, the base included.
     pub fn len(&self) -> usize {
-        self.base_len as usize + self.assigned.load(Ordering::Relaxed) as usize
+        self.base_len as usize
+            + self.frozen.rows.len()
+            + self.assigned.load(Ordering::Relaxed) as usize
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
     /// A snapshot of assigned positions, including the immutable prefix.
     pub fn ids(&self) -> impl Iterator<Item = TypeId> {
-        (0..self.len() as u32).map(TypeId::at)
+        (0..self.base_len)
+            .map(TypeId::at)
+            .chain(self.frozen.rows.iter().map(|(id, _)| *id))
+            .chain(
+                (0..self.assigned.load(Ordering::Acquire))
+                    .map(|local| TypeId::at(self.local_start + local)),
+            )
     }
 
     pub fn stats(&self) -> InternerStats {
         let c = &self.counters;
         let load = |a: &AtomicU64| a.load(Ordering::Relaxed);
         InternerStats {
-            rows: u64::from(self.assigned.load(Ordering::Relaxed)),
+            rows: self.frozen.rows.len() as u64 + u64::from(self.assigned.load(Ordering::Relaxed)),
             hits: load(&c.hits),
             row_bytes: load(&c.row_bytes) + self.base_normals.allocated_bytes() as u64,
             lock_wait_ns: load(&c.lock_wait_ns),

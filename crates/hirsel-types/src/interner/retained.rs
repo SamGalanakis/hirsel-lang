@@ -209,6 +209,36 @@ impl Bytes {
             }
         }
     }
+    fn positions(&mut self, index: &HashMap<TypeId, u32, IdHasher>) {
+        if index.capacity() != 0 {
+            let layout = Layout::new::<(TypeId, u32)>();
+            self.add(
+                index
+                    .capacity()
+                    .saturating_mul(2)
+                    .saturating_mul(layout.size().saturating_add(1))
+                    .saturating_add(16)
+                    .saturating_add(layout.align()),
+            );
+        }
+    }
+}
+impl TypeProjection {
+    /// Upper bound for the projected context, before allocating copied rows.
+    /// Shared row payloads are charged per occurrence, as for a live context.
+    pub fn retained_bytes(&self) -> u64 {
+        let mut bytes = Bytes::default();
+        bytes.arc(&*self.source);
+        bytes.add(self.ids.len().saturating_mul(size_of::<(TypeId, Entry)>()));
+        bytes.positions(&self.positions);
+        for shard in &self.shards {
+            bytes.index(shard);
+        }
+        for id in &self.ids {
+            bytes.row(self.source.get_if_loaded(*id).expect("projected local row"));
+        }
+        bytes.0
+    }
 }
 impl TypeInterner {
     /// Strict backing of this local interner, including its Arc allocation,
@@ -220,6 +250,11 @@ impl TypeInterner {
         bytes.arc(self);
         bytes.add(self.entries.allocated_bytes());
         bytes.add(self.base_normals.allocated_bytes());
+        bytes.add(size_of_val(&*self.frozen.rows));
+        bytes.positions(&self.frozen.positions);
+        for (_, entry) in &self.frozen.rows {
+            bytes.entry(entry);
+        }
         for shard in &self.shards {
             bytes.index(&shard.read().unwrap_or_else(PoisonError::into_inner));
         }
