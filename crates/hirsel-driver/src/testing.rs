@@ -15,6 +15,8 @@ use std::{
 mod diff;
 pub mod impact;
 mod interpreted;
+mod simulation;
+pub use simulation::observe_tir;
 
 #[derive(Clone, Debug)]
 pub struct Test {

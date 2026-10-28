@@ -129,39 +129,14 @@ fn run_simulation(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
-    use hirsel_engine::InterpreterPhase;
     let input = request_tir(path, compiler.verify(), None)?;
-    tir_execution::refuse_foreign_interpretation(&input)?;
     let run = hirsel_tir::RunConfiguration {
         entry: input.entry.clone(),
         hash_seed: 0,
         inputs: vec![],
     };
-    let mut simulation = simulation;
-    if !simulation.runners.is_empty() {
-        simulation.callees = std::sync::Arc::new(input.callees.clone());
-    }
-    let mut interpreter = hirsel_engine::InterpreterAdapter {
-        limits: limits.unwrap_or_default(),
-        ..Default::default()
-    };
-    interpreter.prepare(
-        input.signature.clone(),
-        (*input.runtime).clone(),
-        simulation,
-    );
-    let runtime_error = |error| match error {
-        hirsel_engine::RuntimeError::Io(error) => ToolError::Io(error),
-        hirsel_engine::RuntimeError::Query(error) => ToolError::Query {
-            error,
-            phase: Some(hirsel_engine::QueryKind::Interpret),
-            sources: input.sources.clone(),
-        },
-        hirsel_engine::RuntimeError::Tool(message) => ToolError::Runtime(message),
-    };
-    let observed = interpreter
-        .run_observed_query(&run, &mut input.provider(), &input.sources)
-        .map_err(runtime_error)?;
+    let observed =
+        testing::observe_tir(&input, &run, simulation, limits.unwrap_or_default(), false)?;
     let (output, program_stderr) = if let Some(observation) = observed.observation {
         (
             observation.output,
@@ -200,7 +175,15 @@ fn run_simulation(
         stdout.write_all(&output).map_err(ToolError::Io)?;
         stderr.write_all(&program_stderr).map_err(ToolError::Io)?;
     }
-    observed.outcome.map_err(runtime_error)
+    observed.outcome.map_err(|error| match error {
+        hirsel_engine::RuntimeError::Io(error) => ToolError::Io(error),
+        hirsel_engine::RuntimeError::Query(error) => ToolError::Query {
+            error,
+            phase: Some(hirsel_engine::QueryKind::Interpret),
+            sources: input.sources.clone(),
+        },
+        hirsel_engine::RuntimeError::Tool(message) => ToolError::Runtime(message),
+    })
 }
 
 /// `hirsel export --tir <source|manifest.json>`: the proof-seam TIR export
