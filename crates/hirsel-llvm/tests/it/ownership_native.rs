@@ -242,7 +242,7 @@ fn metadata(program: &support::programs::Program) -> Units {
             };
             (
                 marker.id.0,
-                Metadata {
+                Box::new(Metadata {
                     empty_environment: false,
                     optional_carrier: false,
                     channel: None,
@@ -268,7 +268,7 @@ fn metadata(program: &support::programs::Program) -> Units {
                         column: 1,
                     },
                     value_type: "fixture::Token".into(),
-                },
+                }),
             )
         })
         .collect();

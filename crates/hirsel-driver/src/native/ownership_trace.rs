@@ -172,7 +172,7 @@ pub(crate) fn emit_relocated(
                 }
             }
         }
-        let mut markers: BTreeMap<u32, Metadata> = BTreeMap::new();
+        let mut markers: BTreeMap<u32, Box<Metadata>> = BTreeMap::new();
         for marker in plan.markers() {
             let definition = program
                 .semantic_owners
@@ -230,7 +230,7 @@ pub(crate) fn emit_relocated(
                     }
                 }))
             };
-            let metadata = Metadata {
+            let metadata = Box::new(Metadata {
                 action: marker.kind,
                 channel: plan
                     .channel_binding(body, inputs.layouts, marker.id)
@@ -314,7 +314,7 @@ pub(crate) fn emit_relocated(
                     .get(&marker.layout)
                     .cloned()
                     .unwrap_or_else(|| format!("layout#{}", marker.layout.0)),
-            };
+            });
             if let Some(prior) = markers.get_mut(&marker.id.0) {
                 if prior.action != 2
                     || metadata.action != 2
@@ -383,43 +383,6 @@ pub struct LeafExecution {
     pub program: [u8; 32],
     pub trace: Result<hirsel_run_schema::ownership_trace::Trace, String>,
 }
-// Rust alloc bulk_push fills nodes with eleven keys before opening the
-// next subtree; fix_right_border_of_plentiful only redistributes keys. Thus
-// level counts are floor(n/12)+1, floor(n/144)+1, ... through the root.
-// rust-lang/rust ea137335b, alloc/collections/btree/append.rs:8-68,
-// map.rs:2557-2572 and fix.rs:102-118. Nodes use the same conservative field
-// alignment bound as NativeMetadataWeight::tree, including internal edges.
-// Only the freshly bulk-collected, private immutable marker maps use this.
-fn packed_marker_bytes(w: &mut hirsel_engine::NativeMetadataWeight, len: usize) {
-    use std::alloc::Layout;
-    if len == 0 {
-        return;
-    }
-    let fields = [
-        Layout::new::<usize>(),
-        Layout::new::<u16>(),
-        Layout::new::<u16>(),
-        Layout::new::<[u32; 11]>(),
-        Layout::new::<[Metadata; 11]>(),
-        Layout::new::<[usize; 12]>(),
-    ];
-    let align = fields.iter().map(Layout::align).max().unwrap();
-    let bytes = fields.iter().fold(align - 1, |n, field| {
-        n.saturating_add(field.size())
-            .saturating_add(field.align() - 1)
-    });
-    let mut keys = len;
-    let mut nodes = 0usize;
-    loop {
-        keys /= 12;
-        nodes = nodes.saturating_add(keys.saturating_add(1));
-        if keys == 0 {
-            break;
-        }
-    }
-    w.add(nodes.saturating_mul(bytes));
-}
-
 impl LeafObjects {
     pub(crate) fn retained_bytes(&self) -> u64 {
         use hirsel_engine::NativeMetadataWeight as Weight;
@@ -463,8 +426,9 @@ impl LeafObjects {
             }
         });
         w.map(&self.units, |w, _, markers| {
-            packed_marker_bytes(w, markers.len());
+            w.bulk_tree::<u32, Box<Metadata>>(markers.len());
             for marker in markers.values() {
+                w.add(std::mem::size_of::<Metadata>());
                 w.add(marker.value_type.capacity());
                 w.add(marker.source.definition.capacity());
                 w.add(marker.source.file.capacity());

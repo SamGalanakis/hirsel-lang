@@ -218,7 +218,9 @@ pub struct DropMember {
     pub layout: u32,
     pub value_type: String,
 }
-pub type Units = BTreeMap<[u8; 32], BTreeMap<u32, Metadata>>;
+/// Marker records live outside the tree nodes. Sparse per-unit maps otherwise
+/// reserve eleven full metadata records even for a single ownership marker.
+pub type Units = BTreeMap<[u8; 32], BTreeMap<u32, Box<Metadata>>>;
 /// Closed direct-call targets, derived from checked units rather than log rows.
 pub type LocalCalls = BTreeMap<[u8; 32], BTreeSet<[u8; 32]>>;
 

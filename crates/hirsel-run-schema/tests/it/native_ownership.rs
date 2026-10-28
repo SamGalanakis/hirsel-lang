@@ -18,7 +18,7 @@ fn fixture() -> (Log, Units) {
         (4, 1, 1, slot),
         (5, 2, slot, slot),
     ] {
-        let metadata = Metadata {
+        let metadata = Box::new(Metadata {
             empty_environment: false,
             optional_carrier: false,
             channel: None,
@@ -40,7 +40,7 @@ fn fixture() -> (Log, Units) {
                 column: 1,
             },
             value_type: "Token".into(),
-        };
+        });
         rows.push(Row::Event {
             task: 0,
             frame: 1,
@@ -398,7 +398,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
     }];
     let mut units = Units::from([(parent, BTreeMap::new()), (child, BTreeMap::new())]);
     let mut event = |unit, frame, marker, action, token, owner| {
-        let metadata = Metadata {
+        let metadata = Box::new(Metadata {
             empty_environment: false,
             optional_carrier: false,
             channel: None,
@@ -420,7 +420,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
                 column: 1,
             },
             value_type: "Token".into(),
-        };
+        });
         units.get_mut(&unit).unwrap().insert(marker, metadata);
         Row::Event {
             task: 0,
@@ -511,7 +511,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
     let mut emit = |unit, frame, marker, action, token, owner, site| {
         units.entry(unit).or_default().insert(
             marker,
-            Metadata {
+            Box::new(Metadata {
                 empty_environment: false,
                 optional_carrier: false,
                 channel: None,
@@ -533,7 +533,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
                     column: 1,
                 },
                 value_type: "Token".into(),
-            },
+            }),
         );
         Row::Event {
             task: 0,
@@ -798,7 +798,7 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
     ] {
         units.entry(unit).or_default().insert(
             marker,
-            Metadata {
+            Box::new(Metadata {
                 empty_environment: false,
                 optional_carrier: false,
                 channel: None,
@@ -820,7 +820,7 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
                     column: 1,
                 },
                 value_type: "Token".into(),
-            },
+            }),
         );
         rows.push(Row::Event {
             task: 0,
@@ -1277,12 +1277,12 @@ fn native_parallel_cycles_and_chains_preserve_equal_resource_identities() {
             let marker = marker as u32;
             metadata.insert(
                 marker,
-                Metadata {
+                Box::new(Metadata {
                     action,
                     token,
                     owner,
                     ..template.clone()
-                },
+                }),
             );
             rows.push(Row::Event {
                 task: 0,
@@ -1636,12 +1636,14 @@ fn native_ownership_spawn_binds_actual_child_to_checked_capture_custody() {
     let parameter = 2u64 << 32 | 1;
     let capture = 6u64 << 32;
     let child = (1u64 << 32) | 1;
-    let metadata = |action, token, owner, callee| Metadata {
-        action,
-        token,
-        owner,
-        callee,
-        ..base.clone()
+    let metadata = |action, token, owner, callee| {
+        Box::new(Metadata {
+            action,
+            token,
+            owner,
+            callee,
+            ..*base.clone()
+        })
     };
     let units = BTreeMap::from([
         (
@@ -1952,7 +1954,7 @@ fn native_empty_spawn_still_binds_the_actual_child_and_rejects_hidden_capture_cr
     let base = template[&[7; 32]][&0].clone();
     let parameter = 2u64 << 32 | 1;
     let child = (1u64 << 32) | 1;
-    let spawn = Metadata {
+    let spawn = Box::new(Metadata {
         action: 5,
         token: 0,
         owner: parameter,
@@ -1960,13 +1962,16 @@ fn native_empty_spawn_still_binds_the_actual_child_and_rejects_hidden_capture_cr
         empty_environment: true,
         optional_carrier: false,
         channel: None,
-        ..base.clone()
-    };
+        ..*base.clone()
+    });
     let mut units = BTreeMap::from([
         ([7; 32], BTreeMap::from([(0, spawn), (1, base.clone())])),
         (
             [8; 32],
-            BTreeMap::from([(0, base.clone()), (1, Metadata { action: 2, ..base })]),
+            BTreeMap::from([
+                (0, base.clone()),
+                (1, Box::new(Metadata { action: 2, ..*base })),
+            ]),
         ),
     ]);
     let event = |task, frame, marker, action, token, owner| Row::Event {

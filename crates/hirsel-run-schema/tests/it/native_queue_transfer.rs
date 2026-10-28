@@ -41,7 +41,7 @@ fn fixture() -> (Log, Units) {
     .map(|(id, action, token, owner)| {
         (
             id,
-            Metadata {
+            Box::new(Metadata {
                 action,
                 channel: (action == 8).then_some(ChannelBinding {
                     direction: if id == 1 {
@@ -70,7 +70,7 @@ fn fixture() -> (Log, Units) {
                     column: 1,
                 },
                 value_type: "Token".into(),
-            },
+            }),
         )
     })
     .collect();
