@@ -24,6 +24,8 @@ pub use launch::{
 mod callbacks;
 mod cpu;
 pub use cpu::CpuControl;
+mod cpu_trace;
+pub use cpu_trace::{CpuBoundary, CpuPhase};
 pub mod race;
 mod root_trace;
 mod sealed;

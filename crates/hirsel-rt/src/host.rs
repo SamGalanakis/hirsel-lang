@@ -603,14 +603,7 @@ impl BodyRun {
     ) {
         self.run_impl(setup, body, |ctx, _| unsafe {
             let run = (*ctx).run_ptr();
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while crate::pool::busy(&*run) != 0 {
-                assert!(
-                    std::time::Instant::now() < until,
-                    "bounded stopped worker did not leave"
-                );
-                std::thread::yield_now();
-            }
+            crate::tasks::ordered::events::Trace::bounded_stop(run)?;
             crate::tasks::ordered::events::Trace::capture(run, 0)
         })
     }

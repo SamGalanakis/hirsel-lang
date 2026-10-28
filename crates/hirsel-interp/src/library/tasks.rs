@@ -15,6 +15,7 @@ pub(super) struct Tasks {
     pub shielded: bool,
     /// Free mode gives every returned frame a distinct completion op.
     pub free_rests: bool,
+    pub cpu_children: BTreeSet<u64>,
     /// Deadline scopes retained until their owner's called cleanup returns.
     closing_deadlines: BTreeMap<u64, u64>,
     spawn_counts: BTreeMap<u64, u32>,
@@ -288,7 +289,7 @@ impl Tasks {
         values: Vec<Value>,
         exit: bool,
     ) {
-        if values.is_empty() && !self.free_rests {
+        if values.is_empty() && !self.free_rests && !self.cpu_children.contains(&task) {
             self.frameless.remove(&task);
             return;
         }
@@ -310,7 +311,7 @@ impl Tasks {
         ));
     }
     /// The running task's operation yields after its rests, if it has any.
-    fn defer_yield(&mut self) {
+    pub(super) fn defer_yield(&mut self) {
         if self.rests.iter().any(|(parent, _)| *parent == self.current) {
             self.yield_now = false;
             self.deferred_yield.insert(self.current);
@@ -375,6 +376,7 @@ impl Tasks {
             child.finished
                 && child.result.as_ref().is_some_and(|result| {
                     self.free_rests
+                        || self.cpu_children.contains(&task)
                         || !matches!(
                             result,
                             OperationResult::Complete {
@@ -408,6 +410,7 @@ impl Tasks {
         task: u64,
         mut failures: Vec<FailureRecord>,
     ) -> Result<(), Error> {
+        self.cpu_children.remove(&task);
         let resting = self
             .resting
             .remove(&task)
@@ -466,6 +469,7 @@ impl Tasks {
             .get_mut(&task)
             .ok_or_else(|| invalid("unknown completed task"))?;
         if let OperationResult::FailureChain { failures, .. } = &mut result {
+            self.cpu_children.remove(&task);
             for failure in failures {
                 if failure.spawn_path.is_empty() {
                     failure.spawn_path = child.path.clone();
@@ -557,6 +561,13 @@ impl Library {
             .or_default()
             .push(scope);
         scope
+    }
+
+    pub(super) fn cpu_finished(&self, child: u64) -> bool {
+        self.tasks
+            .tasks
+            .get(&child)
+            .is_some_and(|task| task.finished)
     }
 
     pub(super) fn cpu_child_result(&mut self, child: u64) -> Option<OperationResult> {
@@ -1185,7 +1196,11 @@ impl Library {
         for (path, id, child) in completed {
             match child {
                 OperationResult::Complete { value, .. } => match id {
-                    Some((id, canceled)) if value != Value::Unit || self.free.is_some() => {
+                    Some((id, canceled))
+                        if value != Value::Unit
+                            || self.free.is_some()
+                            || self.tasks.cpu_children.contains(&id) =>
+                    {
                         rests.push((id, path, canceled, value))
                     }
                     _ => released.push(value),
@@ -1235,13 +1250,17 @@ impl Library {
             }
             _ => return Err(invalid("unfinished joined task")),
         };
-        if self.free.is_some() && matches!(result, OperationResult::Complete { .. }) {
+        if (self.free.is_some() || self.cpu_active.contains(&self.tasks.current))
+            && matches!(result, OperationResult::Complete { .. })
+        {
             let child = &self.tasks.tasks[&task];
             let (scope, path, canceled) = (child.scope, child.path.clone(), child.canceled);
             // A moved result still has an empty native cleanup rest. Its actual
             // completion is a separate Free op, just as for a discarded result.
             self.tasks.rest(task, scope, path, canceled, vec![], false);
-            self.tasks.defer_yield();
+            if self.free.is_some() {
+                self.tasks.defer_yield();
+            }
         }
         self.simulation.record(
             "Tasks",

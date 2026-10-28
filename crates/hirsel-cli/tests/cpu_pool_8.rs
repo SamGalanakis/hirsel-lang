@@ -132,3 +132,19 @@ fn cpu_interpreter_canceled_admission_agrees_across_four_engines() {
 fn cpu_job_withdrawal_and_transfer_retire_once_per_generation() {
     cpu_job_withdrawal(8);
 }
+
+#[test]
+fn cpu_interpreter_ordered_cancellation_at_every_task_phase() {
+    cpu_interpreter_cancel_cuts(4);
+}
+
+include!("support/cpu_pool/interpreter_receipts.rs");
+#[test]
+fn cpu_interpreter_cut_withdrawal_and_cancellation_receipts() {
+    cpu_interpreter_receipt_cuts(8);
+}
+include!("support/cpu_pool/interpreter_fuel.rs");
+#[test]
+fn cpu_interpreter_cut_exact_source_fuel_stops() {
+    cpu_interpreter_fuel_cuts(8);
+}

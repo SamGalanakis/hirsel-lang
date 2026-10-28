@@ -31,6 +31,7 @@ pub struct Library {
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
     pub(super) cpu_certified: bool,
+    pub(super) cpu_trace: Option<super::cpu_trace::Trace>,
     pub(super) cpu_supplied: Option<(super::cpu::CpuControl, u32)>,
     pub(super) cpu_waits: std::collections::BTreeMap<u64, super::cpu::Batch>,
     pub(super) cpu_active: std::collections::BTreeSet<u64>,
@@ -118,6 +119,7 @@ impl Library {
             cpu_active: Default::default(),
             cpu_waits: Default::default(),
             cpu_certified: false,
+            cpu_trace: None,
             cpu_supplied: None,
             next_shared: 0,
             drop_failure: None,
@@ -1551,6 +1553,18 @@ impl Operations for Library {
     fn cpu_mapper_certified(&mut self, certified: bool) {
         self.cpu_certified = certified;
     }
+    fn fuel_charged(&mut self, cost: u64) {
+        if let Some(trace) = &mut self.cpu_trace {
+            trace.fuel = trace.fuel.saturating_add(cost);
+        }
+    }
+    fn immediate_poll(&self, token: u64) -> bool {
+        !self.simulation.config.tasks_free
+            && self
+                .cpu_waits
+                .get(&token)
+                .is_some_and(|batch| batch.immediate())
+    }
     fn take_tasks(&mut self) -> Vec<crate::TaskStart> {
         self.tasks.take_starts()
     }
@@ -1583,6 +1597,7 @@ impl Operations for Library {
             .collect();
         Ok(self.tasks.schedule.choose(&priorities))
     }
+
     fn task_resumed(&mut self, id: u64, context: &mut OperationContext<'_>) -> Result<(), Error> {
         self.simulation.record(
             "Tasks",
@@ -1620,6 +1635,7 @@ impl Operations for Library {
     ) -> Result<(), Error> {
         // Result readiness and a returned rest's actual completion are
         // separate Free ops in both engines, even for a dropless rest.
+        self.cpu_rest();
         self.free_end(child)?;
         self.tasks.rest_finished(child, failures)
     }
@@ -1650,6 +1666,14 @@ impl Operations for Library {
             ))],
             context,
         )?;
+        if self.cpu_trace.is_some()
+            && self.cpu_active.contains(&id)
+            && !self.simulation.config.tasks_free
+        {
+            self.cpu_boundary(super::cpu_trace::CpuPhase::End(super::cpu_trace::scalar(
+                &result,
+            )?));
+        }
         self.free_end(id)?;
         self.cpu_active.remove(&id);
         self.tasks.finished(id, result)

@@ -420,6 +420,11 @@ fn run_provider_on_host(
         call_depth: 256,
         source: None,
     };
+    let cpu_trace = std::env::var_os("HIRSEL_TIR_CPU_PHASES");
+    let cpu_fuel = std::env::var_os("HIRSEL_TIR_CPU_FUEL");
+    if cpu_trace.is_some() || cpu_fuel.is_some() {
+        operations.library.enable_cpu_trace();
+    }
     let execution = if let Some(capture) = ownership {
         capture.program = Some(run.program());
         hirsel_interp::ownership_trace::run_resources(
@@ -458,6 +463,31 @@ fn run_provider_on_host(
             Err(_) => "stopped",
         };
         hook.finish(session, outcome).map_err(ToolError::Runtime)?;
+    }
+    if let Some(path) = cpu_trace {
+        let trace = operations.library.cpu_trace().unwrap();
+        let text = trace
+            .iter()
+            .map(|event| format!("{event:?}\n"))
+            .collect::<String>();
+        std::fs::write(path, text)
+            .map_err(|error| ToolError::Runtime(format!("CPU phase trace: {error}")))?;
+    }
+    if let Some(path) = cpu_fuel {
+        let trace = operations.library.cpu_trace().unwrap();
+        let fuel = operations.library.cpu_fuel_trace().unwrap();
+        let events: Vec<_> = trace.iter().zip(fuel).map(|(event, fuel)| serde_json::json!({
+            "task":event.task, "phase":format!("{:?}", event.phase),
+            "end":matches!(event.phase, hirsel_interp::library::CpuPhase::End(_)), "fuel":fuel,
+        })).collect();
+        std::fs::write(
+            path,
+            serde_json::to_vec(
+                &serde_json::json!({"task":operations.library.task_path(),"events":events}),
+            )
+            .unwrap(),
+        )
+        .map_err(|error| ToolError::Runtime(format!("CPU fuel trace: {error}")))?;
     }
     let replay = matches!(operations.io, network::HostIo::Replay(_));
     if let Some(refusal) = operations.refused.take() {

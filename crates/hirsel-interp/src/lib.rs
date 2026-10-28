@@ -401,6 +401,9 @@ operation_boundary! {
     /// until a poll's `woken` names it, its poll returns None without effect. Asked once,
     /// when the wait parks. An unwatched wait is polled at every poll.
     fn watched(&self, _token: u64) -> bool { false }
+    /// A provider continuation can advance on this task's current turn. None
+    /// from its poll still parks normally; this never bypasses an observed yield.
+    fn immediate_poll(&self, _token: u64) -> bool { false }
     /// The logical bytes of the values this layer holds for the run (channel buffers,
     /// task results), measured with the evaluator's own (`budgets.limits@2`).
     fn retained_bytes(&self) -> u64 { 0 }
@@ -470,6 +473,8 @@ operation_boundary! {
     fn take_drop_failure(&mut self) -> Option<(String, String)> {
         None
     }
+    /// Diagnostic accounting after successful fuel preflight, before source work.
+    fn fuel_charged(&mut self, _cost: u64) {}
     /// Independent scalar TIR graph evidence for the immediately following CPU call.
     fn cpu_mapper_certified(&mut self, _certified: bool) {}
     fn take_tasks(&mut self) -> Vec<TaskStart> {

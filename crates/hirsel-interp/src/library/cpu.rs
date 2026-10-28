@@ -1,4 +1,5 @@
 //! Closed batches follow the native CPU body's scope, receipts and task order.
+use super::cpu_trace::{self, CpuPhase};
 use super::{
     Library,
     callbacks::Pending,
@@ -29,7 +30,9 @@ enum Stage {
     Preclaim,
     Spawn,
     Join,
+    JoinPark,
     Joining,
+    Joined(Vec<u32>, Vec<u8>),
     Exit,
     Exiting(u64),
     Leave,
@@ -37,6 +40,7 @@ enum Stage {
 
 pub(super) struct Batch {
     width: u32,
+    join_waited: bool,
     scope: u64,
     stage: Stage,
     prepare: Option<Value>,
@@ -49,6 +53,9 @@ pub(super) struct Batch {
     released: Vec<Value>,
 }
 impl Batch {
+    pub(super) fn immediate(&self) -> bool {
+        !matches!(self.stage, Stage::Joining) || !self.join_waited
+    }
     pub(super) fn bytes(&self) -> u64 {
         self.jobs
             .as_ref()
@@ -207,6 +214,7 @@ impl Library {
                 .map_err(|e| invalid(format!("free-mode {e}")))?,
             None => live,
         };
+        self.cpu_boundary(CpuPhase::Control(request, status));
         if matches!(action, 0 | 4) && status == 0 {
             self.cpu_active.insert(self.tasks.current);
         }
@@ -217,7 +225,7 @@ impl Library {
         if matches!(done, OperationResult::Park { .. }) {
             return Ok(Err(done));
         }
-        self.tasks.yield_now = true;
+        self.tasks.yield_now |= self.simulation.config.tasks_free || action != 5;
         Ok(Ok(status))
     }
 
@@ -239,6 +247,7 @@ impl Library {
         Ok(self.cpu_pause(
             Batch {
                 width,
+                join_waited: false,
                 scope: 0,
                 stage: Stage::Scope,
                 prepare: Some(arg(call.arguments, 2)?.clone()),
@@ -258,7 +267,7 @@ impl Library {
         let token = self.next_callback;
         self.next_callback += 1;
         self.cpu_waits.insert(token, batch);
-        self.tasks.yield_now = true;
+        self.tasks.yield_now |= self.simulation.config.tasks_free;
         OperationResult::Park {
             token,
             wait: BlockedWait {
@@ -324,7 +333,9 @@ impl Library {
                 if let super::free::Enter::Park(park) = self.free_enter(Phase::Done, context)? {
                     return Ok(Some(park));
                 }
+                self.tasks.yield_now = true;
                 batch.scope = self.cpu_scope();
+                self.cpu_boundary(CpuPhase::ScopeEnter);
                 batch.stage = Stage::Prepare;
                 let result = self.cpu_pause(batch, context);
                 return self.free_done(result, context).map(Some);
@@ -367,6 +378,7 @@ impl Library {
                         };
                     if status != 0 {
                         batch.refuse(status);
+                        batch.stage = Stage::Join;
                     } else {
                         batch.stage = Stage::Spawn;
                     }
@@ -396,6 +408,11 @@ impl Library {
                     vec![vec![batch.next]],
                     context,
                 )?;
+                if !self.simulation.config.tasks_free {
+                    self.tasks.cpu_children.insert(child);
+                }
+                self.tasks.yield_now = self.simulation.config.tasks_free;
+                self.cpu_boundary(CpuPhase::Spawn(self.ownership_task_path(child).unwrap()));
                 batch.children.push_back(child);
                 batch.next += 1;
                 batch.stage = Stage::Preclaim;
@@ -409,8 +426,22 @@ impl Library {
                     if let super::free::Enter::Park(park) = self.free_enter_call(context)? {
                         return Ok(Some(park));
                     }
-                    batch.stage = Stage::Joining;
+                    let child = *batch.children.front().unwrap();
+                    self.cpu_boundary(CpuPhase::Join(self.ownership_task_path(child).unwrap()));
+                    batch.join_waited =
+                        !self.simulation.config.tasks_free && !self.cpu_finished(child);
+                    batch.stage = if batch.join_waited {
+                        self.tasks.yield_now = true;
+                        Stage::JoinPark
+                    } else {
+                        Stage::Joining
+                    };
                 }
+            }
+            Stage::JoinPark => {
+                let child = *batch.children.front().unwrap();
+                self.cpu_boundary(CpuPhase::Join(self.ownership_task_path(child).unwrap()));
+                batch.stage = Stage::Joining;
             }
             Stage::Joining => {
                 let child = *batch.children.front().expect("CPU child");
@@ -418,7 +449,19 @@ impl Library {
                     self.cpu_waits.insert(token, batch);
                     return Ok(None);
                 };
+                let path = self.ownership_task_path(child).unwrap();
+                let payload = if self.cpu_trace.is_some() && !self.simulation.config.tasks_free {
+                    cpu_trace::scalar(&result)?
+                } else {
+                    vec![]
+                };
+                if batch.join_waited {
+                    self.cpu_boundary(CpuPhase::Join(path.clone()));
+                }
                 self.record_join(child, &result, context)?;
+                if !self.simulation.config.tasks_free && !batch.join_waited {
+                    self.tasks.defer_yield();
+                }
                 batch.children.pop_front();
                 match result {
                     OperationResult::Complete {
@@ -426,7 +469,11 @@ impl Library {
                     } => {
                         batch.results.push(value);
                         batch.released.extend(released);
-                        batch.stage = Stage::Join;
+                        batch.stage = if self.simulation.config.tasks_free {
+                            Stage::Join
+                        } else {
+                            Stage::Joined(path, payload)
+                        };
                     }
                     result @ OperationResult::FailureChain { .. } => {
                         batch.outcome = Some(result);
@@ -437,7 +484,12 @@ impl Library {
                 let result = self.cpu_pause(batch, context);
                 return self.free_done(result, context).map(Some);
             }
+            Stage::Joined(ref path, ref payload) => {
+                self.cpu_boundary(CpuPhase::Joined(path.clone(), payload.clone()));
+                batch.stage = Stage::Join;
+            }
             Stage::Exit => {
+                self.cpu_boundary(CpuPhase::ScopeExit);
                 let result = batch.outcome.take().unwrap_or_else(|| {
                     OperationResult::returned(ok(collection::sequence(
                         BuiltinType::List,
@@ -469,6 +521,7 @@ impl Library {
                 batch.stage = Stage::Leave;
             }
             Stage::Leave => {
+                self.cpu_boundary(CpuPhase::ScopeExited);
                 let status = match self.cpu_control(batch.width, 1, 0, context)? {
                     Ok(status) => status,
                     Err(park) => return Ok(Some(park)),
@@ -574,6 +627,7 @@ mod tests {
                 let mut result = library.cpu_pause(
                     Batch {
                         width,
+                        join_waited: false,
                         scope: 0,
                         stage: Stage::Scope,
                         prepare: Some(Value::Unit),

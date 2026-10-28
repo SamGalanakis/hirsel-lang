@@ -905,6 +905,23 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     frame.operation = Some(Box::new((*result, state)));
                 }
                 OperationResult::Park { token, wait } => {
+                    if operations.immediate_poll(token)
+                        && let Some(next) = operations.poll(
+                            token,
+                            &mut OperationContext {
+                                configuration,
+                                sources,
+                                stdout: &mut execution.stdout,
+                                trace: &mut execution.trace,
+                                trace_mode: runtime.trace_mode,
+                                anchor: Some(&state.anchor),
+                            },
+                        )?
+                    {
+                        observer.builtin_completed(task, frame, &next);
+                        frame.operation = Some(Box::new((next, state)));
+                        continue;
+                    }
                     frame.operation =
                         Some(Box::new((OperationResult::Park { token, wait }, state)));
                     operations.parked(token);
@@ -1149,6 +1166,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     .run
                                     .primitive(allowed)
                                     .map_err(Error::BudgetExceeded)?;
+                                operations.fuel_charged(allowed);
                                 execution.steps = execution.steps.saturating_add(1 + allowed);
                                 profile.add(frame.definition.path.path(), 1 + allowed);
                                 primitive_limit = allowed != cost;
@@ -2381,6 +2399,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
         if frames.last().is_some_and(|f| f.fuel_due) {
             frames.last_mut().unwrap().fuel_due = false;
             budgets.run.fuel().map_err(Error::BudgetExceeded)?;
+            operations.fuel_charged(1);
         }
         if budgets.run.due() {
             let live = frames
@@ -2933,6 +2952,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                 .run
                                 .primitive(allowed)
                                 .map_err(Error::BudgetExceeded)?;
+                            operations.fuel_charged(allowed);
                             execution.steps = execution.steps.saturating_add(allowed);
                             profile.add(frame.definition.path.path(), allowed);
                             if allowed != cost {

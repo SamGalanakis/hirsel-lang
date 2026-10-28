@@ -38,7 +38,11 @@ impl Trace {
         pending: u32,
     ) -> Result<Self, &'static str> {
         if pending != 0 {
-            return Err("canonical trace has running workers");
+            if std::env::var_os("HIRSEL_RT_BOUNDED_STOP_TRACE").is_none() {
+                return Err("canonical trace has running workers");
+            }
+            // SAFETY: capture's caller retains the stopped run until inspection.
+            unsafe { Self::bounded_stop(run) }?;
         }
         let _role = unsafe { crate::tasks::role::IdleGuard::new(run) };
         let scheduler = unsafe { &mut *(*run).tasks.get() }
@@ -59,6 +63,23 @@ impl Trace {
             .as_ref()
             .ok_or("canonical evidence was not enabled")?;
         Self::completed(log)
+    }
+
+    /// A diagnostic for known bounded callbacks, sharing the runtime proof
+    /// harness's existing deadline. No trace is captured before every owner left.
+    /// # Safety
+    /// The admission thread retains the stopped run until this returns.
+    pub(crate) unsafe fn bounded_stop(
+        run: *mut crate::context::RunShared,
+    ) -> Result<(), &'static str> {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::pool::busy(unsafe { &*run }) != 0 {
+            if std::time::Instant::now() >= until {
+                return Err("bounded stopped worker did not leave");
+            }
+            std::thread::yield_now();
+        }
+        Ok(())
     }
 
     fn completed(log: &Log) -> Result<Self, &'static str> {

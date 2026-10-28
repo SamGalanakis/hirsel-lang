@@ -64,3 +64,9 @@ include!("support/cpu_pool/canonical.rs");
 fn free_cpu_canonical_receipts_agree_across_emitters_and_replay() {
     cpu_free_canonical_receipts(16);
 }
+
+include!("support/cpu_pool/interpreter.rs");
+#[test]
+fn cpu_interpreter_ordered_cancellation_at_every_task_phase() {
+    cpu_interpreter_cancel_cuts(8);
+}
