@@ -2410,14 +2410,21 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if args.len() != signature.ir.params.len() {
             return self.invalid("a call whose arguments differ from its signature");
         }
-        if matches!(site.callee, Callee::Operation(_))
-            || self
-                .em
-                .inputs
-                .unit()
-                .ahead
-                .and_then(|p| p.host_spine(unit.header.instance))
-                .is_some_and(|s| !s.scalar_calls.contains(&call))
+        let observation = self
+            .em
+            .inputs
+            .unit()
+            .ahead
+            .is_some_and(|p| p.cpu_observation(unit.header.instance, call));
+        if !observation
+            && (matches!(site.callee, Callee::Operation(_))
+                || self
+                    .em
+                    .inputs
+                    .unit()
+                    .ahead
+                    .and_then(|p| p.host_spine(unit.header.instance))
+                    .is_some_and(|s| !s.scalar_calls.contains(&call)))
         {
             self.ahead_barrier()?;
         }

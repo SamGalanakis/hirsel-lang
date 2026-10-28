@@ -164,7 +164,7 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
             &plan,
             program.fuel
         ));
-        for field in 0..6 {
+        for field in 0..7 {
             let mut bad = plan.clone();
             let root = bad
                 .roots
@@ -183,9 +183,13 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
                     root.cpu.as_mut().unwrap().binding.map_digest =
                         hirsel_syntax::ContentHash::default()
                 }
-                _ => {
+                5 => {
                     root.cpu.as_mut().unwrap().binding.caller_digest =
                         hirsel_syntax::ContentHash::default()
+                }
+                _ => {
+                    let worker = &mut root.cpu.as_mut().unwrap().binding.worker;
+                    worker.observations[0] = worker.finish;
                 }
             }
             assert!(

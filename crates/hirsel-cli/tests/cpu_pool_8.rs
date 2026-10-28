@@ -127,3 +127,8 @@ fn cpu_interpreter_scalar_fixture_agrees_across_four_engines() {
 fn cpu_interpreter_canceled_admission_agrees_across_four_engines() {
     cpu_fixture_canceled_admission(8);
 }
+
+#[test]
+fn cpu_job_withdrawal_and_transfer_retire_once_per_generation() {
+    cpu_job_withdrawal(8);
+}

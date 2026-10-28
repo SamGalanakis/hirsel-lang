@@ -728,6 +728,29 @@ impl<S: Stage> Machine<'_, S> {
         let arguments = self
             .pool(site.arguments, &self.unit(f.unit).pools.call_arguments)?
             .to_vec();
+        // Worker observations have no scheduler, timer or budget effect.
+        if name == "$intrinsic.CpuMapScoped"
+            && matches!(
+                self.task_word(f, &Self::task_argument(&arguments, 2)?)?,
+                6 | 7
+            )
+        {
+            let result = site
+                .result
+                .ok_or_else(|| err(V::Malformed, "CPU observation without a result"))?;
+            return self.task_return(
+                f,
+                &arguments,
+                Some((
+                    result,
+                    Val::Bits {
+                        scalar: ScalarKind::U32,
+                        bits: 0,
+                    },
+                )),
+                normal,
+            );
+        }
         // A task operation the running task starts, not one it resumes, is a timer choice point.
         let resumed = self.tasks.as_deref().is_some_and(|s| {
             s.tasks[s.current as usize]

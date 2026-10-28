@@ -169,6 +169,7 @@ pub(super) unsafe fn finish(
                 std::ptr::copy_nonoverlapping(slot, image.as_mut_ptr().cast(), size);
                 row.inline_value = Some((image, size));
             }
+            cpu_job_event(row, "transfer");
         })
     };
     unsafe { std::ptr::copy_nonoverlapping(none, slot, size as usize) };

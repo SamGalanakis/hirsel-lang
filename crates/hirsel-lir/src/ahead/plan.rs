@@ -926,6 +926,13 @@ impl AheadPlan {
         let cpu = self.roots.get(&unit)?.cpu.as_ref()?;
         (cpu.binding.worker.mapper == call).then_some(&cpu.binding.callback)
     }
+    /// Only the checked worker's constant entry/claim observations are local.
+    pub fn cpu_observation(&self, unit: ContentHash, call: CallId) -> bool {
+        self.roots
+            .get(&unit)
+            .and_then(|root| root.cpu.as_ref())
+            .is_some_and(|cpu| cpu.binding.worker.observations.contains(&call))
+    }
     pub fn cpu_claim(&self, unit: ContentHash, call: CallId) -> bool {
         self.roots
             .get(&unit)

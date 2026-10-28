@@ -66,7 +66,9 @@ fn take_held(s: &mut Scheduler, child: u32) -> bool {
     let row = s.task(child);
     let holding = row.state == State::Holding;
     if holding {
-        row.slot = None;
+        if row.slot.take().is_some() {
+            cpu_job_event(row, "withdrawal");
+        }
     }
     holding
 }
@@ -103,7 +105,9 @@ pub(crate) unsafe fn detach(ctx: *mut TaskCtx, scope: u64, word: u64) -> Stopped
             role::with_held(ctx, |s| {
                 let row = s.task(child);
                 row.detached = true;
-                row.slot = None;
+                if row.slot.take().is_some() {
+                    cpu_job_event(row, "withdrawal");
+                }
             })
         })?;
         unsafe { hand_off(&mut *ctx, child) };
@@ -194,6 +198,7 @@ pub(crate) unsafe fn join(
             });
             unsafe {
                 deliver(held, slot, size);
+                role::with_held(ctx, |s| cpu_job_event(s.task(child), "transfer"));
                 hand_off(&mut *ctx, child);
             }
         }
@@ -265,7 +270,9 @@ pub(crate) unsafe fn finish(
         // A replay may reach this point on either side of the parent's detach.
         super::record::end(ctx, || unsafe {
             role::with_held(ctx, |s| {
-                s.task(me).ended = true;
+                let row = s.task(me);
+                row.ended = true;
+                cpu_job_event(row, "withdrawal");
                 s.order(me);
             })
         })?;
@@ -342,6 +349,9 @@ pub(super) unsafe fn completion(ctx: *mut TaskCtx, index: u32, status: u8) -> St
             row.ended = true;
             row.finishing = true;
             row.state = State::Ready;
+            if first_end {
+                cpu_job_event(row, "withdrawal");
+            }
             if !failed && first_end {
                 s.order(index);
             }

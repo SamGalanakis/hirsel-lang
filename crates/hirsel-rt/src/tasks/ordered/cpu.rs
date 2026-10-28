@@ -68,6 +68,12 @@ impl Batch {
         );
     }
 
+    pub(super) fn job(&self, task: TaskId) -> Option<(u32, u64)> {
+        self.owners
+            .get(&task)
+            .map(|&ordinal| (self.width, ordinal as u64))
+    }
+
     pub(super) fn pending(&self, parent: TaskId, width: u32, ordinal: u64) -> bool {
         self.pending.get(&parent) == Some(&(width, ordinal))
     }

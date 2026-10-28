@@ -76,6 +76,7 @@ pub(crate) struct Native {
     pub(super) growth: *mut super::cpu_handoff::Growth,
     pub(super) growth_status: u32,
     pub(super) growth_plan: Option<super::cpu_handoff::growth::Plan>,
+    pub(crate) cpu_job: Option<std::sync::Arc<crate::pool::cpu_scoped::probe::Job>>,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -331,6 +332,7 @@ impl Native {
             growth: std::ptr::null_mut(),
             growth_status: 0,
             growth_plan: None,
+            cpu_job: None,
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary

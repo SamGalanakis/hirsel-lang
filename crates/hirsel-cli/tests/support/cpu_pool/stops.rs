@@ -28,7 +28,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {{
         fs::write(&grants, authority.to_string()).unwrap();
         for backend in ["llvm", "cranelift"] {
             let executable = root.join(backend);
-            let mut build = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            let mut build = cpu_compiler();
             build
                 .args(["build", "--validate-stages", "--backend", backend])
                 .arg(&manifest)

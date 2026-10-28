@@ -53,3 +53,14 @@ fn native_wide_failure_every_byte_cleanup_cut() {
 fn native_wide_cancel_every_byte_cleanup_cut() {
     wide_cleanup_cuts(16, "cancel");
 }
+
+#[test]
+fn cpu_job_withdrawal_and_transfer_retire_once_per_generation() {
+    cpu_job_withdrawal(16);
+}
+
+include!("support/cpu_pool/canonical.rs");
+#[test]
+fn free_cpu_canonical_receipts_agree_across_emitters_and_replay() {
+    cpu_free_canonical_receipts(16);
+}

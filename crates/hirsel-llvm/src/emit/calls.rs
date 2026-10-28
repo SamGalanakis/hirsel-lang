@@ -798,12 +798,17 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             (Some(_), _) => return self.invalid("a nested resumable call without a known callee"),
             (None, _) => function,
         };
-        if matches!(site.callee, Callee::Operation(_))
-            || self
-                .inputs
-                .ahead
-                .and_then(|p| p.host_spine(unit.header.instance))
-                .is_some_and(|s| !s.scalar_calls.contains(&call))
+        let observation = self
+            .inputs
+            .ahead
+            .is_some_and(|p| p.cpu_observation(unit.header.instance, call));
+        if !observation
+            && (matches!(site.callee, Callee::Operation(_))
+                || self
+                    .inputs
+                    .ahead
+                    .and_then(|p| p.host_spine(unit.header.instance))
+                    .is_some_and(|s| !s.scalar_calls.contains(&call)))
         {
             self.ahead_barrier()?;
         }

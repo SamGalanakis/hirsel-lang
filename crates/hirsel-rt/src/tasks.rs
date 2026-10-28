@@ -258,6 +258,7 @@ struct Task {
     owner: Owner,
     /// The task belongs to the active closed CPU batch.
     cpu_scoped: bool,
+    cpu_job: Option<std::sync::Arc<crate::pool::cpu_scoped::probe::Job>>,
     /// It is the home thread's only until its next suspension, for the run's Io binding.
     pinned: bool,
     /// The compute worker it last ran on, at width > 1.
@@ -950,6 +951,9 @@ impl Scheduler {
                 "a root retired with live children"
             );
         }
+        if let Some(job) = &task.cpu_job {
+            job.event("retire");
+        }
         self.task_slots.retire(
             index,
             task.generation,
@@ -1037,6 +1041,7 @@ impl Task {
             priority: 0,
             owner: Owner::Any,
             cpu_scoped: false,
+            cpu_job: None,
             pinned: false,
             last: None,
         }
@@ -1733,6 +1738,36 @@ pub(crate) fn running_key(ctx: *mut TaskCtx) -> registry::TaskKey {
     role::with_role(ctx, |t| t.key(t.current))
 }
 
+pub(crate) fn cpu_job_entry(ctx: *mut TaskCtx, width: u32, ordinal: u64) {
+    let Some(probe) = (unsafe { (*ctx).run_ref().cpu_probe.as_ref() }) else {
+        return;
+    };
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        let scope = s.task(me).scope.expect("CPU mapper scope");
+        let batch = handle(scope, s.scope(scope).generation);
+        let key = s.key(me).word();
+        let row = s.task(me);
+        if row.cpu_job.is_none() {
+            row.cpu_job = Some(probe.job(key, batch, width, ordinal, &row.path));
+        }
+        row.cpu_job.as_ref().unwrap().enter(width, ordinal);
+    });
+}
+
+fn cpu_job_event(row: &Task, kind: &str) {
+    if let Some(job) = &row.cpu_job {
+        job.event(kind);
+    }
+}
+
+pub(crate) fn cpu_job_claim(ctx: *mut TaskCtx) {
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        cpu_job_event(s.task(me), "claim");
+    });
+}
+
 pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
     if ordered::ahead::private(ctx) {
         return Owner::Any;
@@ -2339,6 +2374,7 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
                         let held = s.task(child).slot.take().unwrap();
                         // SAFETY: the child is in its finish and the awaiter parked, both slots live.
                         deliver(held, slot, size);
+                        cpu_job_event(s.task(child), "transfer");
                         true
                     }
                     State::Done => true,
@@ -3676,6 +3712,7 @@ unsafe fn join(
             // SAFETY: the child is stopped in its finish, its slot live.
             unsafe {
                 deliver(held, slot, size);
+                role::with_held(ctx, |s| cpu_job_event(s.task(child), "transfer"));
                 hand_off(ctx, child);
                 crate::free::done(ctx);
                 yield_now(ctx);

@@ -278,6 +278,13 @@ pub(crate) unsafe fn spawn_certified(
             .as_mut()
             .is_some_and(|batch| batch.bind(parent, word))
     });
+    if let Some(probe) = unsafe { (*ctx).run_ref().cpu_probe.as_ref() }
+        && let Some((width, ordinal)) = engine::with_driver(ctx, |d| {
+            d.cpu_batch.as_ref().and_then(|batch| batch.job(word))
+        })
+    {
+        task.cpu_job = Some(probe.job(word, scope, width, ordinal, &task.path));
+    }
     // CPU Shared roots use their checked custody recipe. Their scalar tail
     // starts after spawn retirement, without an unpublished reservation.
     let host = certificate
@@ -315,6 +322,7 @@ pub(crate) unsafe fn spawn_certified(
         {
             let mut native =
                 super::ahead::native::Native::new(child, environment, operation_site, certificate);
+            native.cpu_job = task.cpu_job.clone();
             unsafe {
                 (*child).ahead_physical = &raw mut native.physical;
                 (*child).task_sp = task.stack.as_ref().unwrap().prepare(
@@ -537,8 +545,14 @@ pub(super) unsafe fn call_start(ctx: *mut TaskCtx, child: u32, call: Call) -> St
                     let held = s.task(child).slot.take().expect("a holding result");
                     // SAFETY: the child is saved and this callback owns the caller.
                     unsafe { deliver(held, slot, size) };
+                    cpu_job_event(s.task(child), "transfer");
                 }
-                ResultAction::Discard => s.task(child).slot = None,
+                ResultAction::Discard => {
+                    let row = s.task(child);
+                    if row.slot.take().is_some() {
+                        cpu_job_event(row, "withdrawal");
+                    }
+                }
             }
             s.task(me).state = State::Parked;
             let row = s.task(child);
@@ -831,6 +845,9 @@ pub(crate) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
 fn finish_end(ctx: *mut TaskCtx, s: &mut Scheduler, index: u32, status: u8) {
     let row = s.task(index);
     let first_end = !std::mem::replace(&mut row.ended, true);
+    if first_end {
+        cpu_job_event(row, "withdrawal");
+    }
     let path = row.path.clone();
     let chain = unsafe { (*ctx).failure.take_chain(&path) };
     let failed = status != STATUS_OK;

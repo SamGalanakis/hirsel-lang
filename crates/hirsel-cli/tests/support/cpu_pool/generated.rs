@@ -15,7 +15,7 @@ fn qual_build(
 ) -> std::path::PathBuf {
     let executable = root.join(backend);
     checked(
-        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        cpu_compiler()
             .args(["build", "--fuel", "--validate-stages", "--backend", backend])
             .arg(manifest)
             .arg("-o")

@@ -111,7 +111,7 @@ fn ordered_remaining(name: &str, template: &str, status: i32) {
     for backend in ["llvm", "cranelift"] {
         let executable = root.join(backend);
         checked(
-            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            cpu_compiler()
                 .args(["build", "--fuel", "--validate-stages", "--backend", backend])
                 .arg(&manifest)
                 .arg("-o")

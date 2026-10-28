@@ -28,10 +28,11 @@ fn cpu_free_canonical_receipts(width: usize) {
         "io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
     let mut reference = None;
+    let mut job_reference = None;
     for backend in ["llvm", "cranelift"] {
         let executable = root.join(backend);
         checked(
-            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            cpu_compiler()
                 .args(["build", "--fuel", "--validate-stages", "--backend", backend])
                 .arg(&manifest)
                 .arg("-o")
@@ -51,13 +52,22 @@ fn cpu_free_canonical_receipts(width: usize) {
                     command.arg("--hirsel-record").arg(&tape);
                 }
             }
+            let probe = root.join("canonical.probe");
             checked(
                 command
+                    .env("HIRSEL_RT_CPU_PROBE", &probe)
                     .arg("--hirsel-trace-events")
                     .arg(&events)
                     .output()
                     .unwrap(),
             );
+            let jobs = cpu_job_stages(&root.join("canonical.probe.jobs"));
+            assert_eq!(jobs.len(), 4 * width);
+            if let Some(reference) = &job_reference {
+                assert_eq!(&jobs, reference);
+            } else {
+                job_reference = Some(jobs);
+            }
             let bytes = fs::read(&events).unwrap();
             let rows: Vec<serde_json::Value> = std::str::from_utf8(&bytes)
                 .unwrap()

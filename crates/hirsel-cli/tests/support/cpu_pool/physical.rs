@@ -1,9 +1,11 @@
+include!("compiler.rs");
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     process::Command,
 };
 
+include!("job_stages.rs");
 include!("physical_host.rs");
 include!("physical_exclusive.rs");
 
@@ -145,9 +147,8 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
     for &backend in backends {
         let executable = root.join(backend);
-        let cli = env!("CARGO_BIN_EXE_hirsel");
         checked(
-            Command::new(cli)
+            cpu_compiler()
                 .args(["build", "--fuel", "--backend", backend])
                 .arg(&manifest)
                 .arg("-o")

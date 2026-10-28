@@ -639,6 +639,7 @@ pub struct CpuWorkerProtocol {
     pub mapper: CallId,
     pub mapper_loan: LoanId,
     pub claim: Option<CallId>,
+    pub observations: [CallId; 2],
     pub finish: CallId,
     pub result: SlotId,
     pub job_layout: LayoutId,
@@ -975,7 +976,24 @@ impl CpuWorkerProtocol {
             _ => None,
         });
         let taken_jobs_value = taken_jobs.next()?;
-        if taken_jobs.next().is_some() || taken_jobs_value != job {
+        if taken_jobs.next().is_some() {
+            return None;
+        }
+        // The moved input has a cleanup owner while the claim receipt can
+        // yield or fail. C verifies that owner on every failure edge; the
+        // mapper must take the same value from its single-assignment slot.
+        let input = stored(unit, taken_jobs_value)?;
+        if !unit.instructions.iter().any(|inst| {
+            matches!(inst,
+            Inst::Read { result, address, mode: ReadMode::Take, .. }
+                if *result == job && whole(unit, *address) == Some(input))
+        }) || unit.instructions.iter().any(|inst| {
+            matches!(inst,
+                Inst::Store { address, value, .. }
+                    if whole(unit, *address) == Some(input) && *value != taken_jobs_value)
+        }) || unit.tables.loans.iter().any(|loan| {
+            loan.mutable && place(unit, loan.address).is_some_and(|(slot, _)| slot == input)
+        }) {
             return None;
         }
         let mut clears = unit.instructions.iter().filter_map(|inst| match *inst {
@@ -1038,9 +1056,10 @@ impl CpuWorkerProtocol {
                 return None;
             }
         }
-        // The complete worker has only the scalar mapper and TaskFinish.
+        // The worker has the mapper, two bound stage controls and TaskFinish.
         // Its held Option owns exactly that mapper's result.
         let mut finish = None;
+        let mut stages = BTreeMap::new();
         for (index, call) in unit.tables.calls.iter().enumerate() {
             if index == mapper_index {
                 continue;
@@ -1048,16 +1067,48 @@ impl CpuWorkerProtocol {
             let Callee::Operation(op) = call.callee else {
                 return None;
             };
-            if !unit
-                .tables
-                .operations
-                .get(op.index())?
-                .definition
-                .is_core("$intrinsic.TaskFinish")
+            let definition = &unit.tables.operations.get(op.index())?.definition;
+            if definition.is_core("$intrinsic.CpuMapScoped") {
+                let args = call.arguments.get(&unit.pools.call_arguments)?;
+                if args.len() != 4 {
+                    return None;
+                }
+                let value = |parameter| {
+                    let arg = args.iter().find(|a| a.parameter == parameter)?;
+                    if arg.passing != Passing::Borrow {
+                        return None;
+                    }
+                    if let ArgumentValue::Value(value) = arg.value {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                };
+                let action = integer(unit, value(2)?)?;
+                if !matches!(action, 6 | 7) || stages.insert(action, CallId(index as u32)).is_some()
+                {
+                    return None;
+                }
+                for (parameter, slot) in [(0, tasks), (1, width), (3, ordinal)] {
+                    let value = value(parameter)?;
+                    if !unit.instructions.iter().any(|inst| {
+                        matches!(inst,
+                        Inst::Read { result, address, mode: ReadMode::Bits, .. }
+                        if *result == value && whole(unit, *address) == Some(slot))
+                    }) {
+                        return None;
+                    }
+                }
+                continue;
+            }
+            if !definition.is_core("$intrinsic.TaskFinish")
                 || finish.replace(CallId(index as u32)).is_some()
             {
                 return None;
             }
+        }
+        if stages.keys().copied().collect::<BTreeSet<_>>() != BTreeSet::from([6, 7]) {
+            return None;
         }
         let finish = finish?;
         let args = unit.tables.calls[finish.index()]
@@ -1100,6 +1151,7 @@ impl CpuWorkerProtocol {
             mapper: CallId(mapper_index as u32),
             mapper_loan,
             claim: None,
+            observations: [stages[&6], stages[&7]],
             finish,
             result: sink,
             job_layout,

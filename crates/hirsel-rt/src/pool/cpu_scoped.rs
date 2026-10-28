@@ -569,6 +569,31 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
     action: u32,
     count: u64,
 ) -> u8 {
+    // Observations never enter the scheduler, settle a CPU prefix, or yield.
+    // The independently checked worker certificate permits these two calls
+    // on a private native frame. Its immutable job handle was installed at spawn.
+    if matches!(action, 6 | 7) {
+        let native =
+            unsafe { (*ctx).ahead_physical }.cast::<crate::tasks::ordered::ahead::native::Native>();
+        if !native.is_null() {
+            if let Some(job) = unsafe { (*native).cpu_job.as_ref() } {
+                if action == 6 {
+                    job.enter(width, count);
+                } else {
+                    job.event("claim");
+                }
+            }
+        } else if unsafe { (*ctx).run_ref().cpu_probe.is_some() } {
+            let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+            if action == 6 {
+                crate::tasks::cpu_job_entry(ctx, width, count);
+            } else {
+                crate::tasks::cpu_job_claim(ctx);
+            }
+        }
+        unsafe { out.write(0) };
+        return crate::STATUS_OK;
+    }
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     if action > 5 {
         crate::fault("invalid scoped CPU action");

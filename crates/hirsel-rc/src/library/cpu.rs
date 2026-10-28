@@ -87,6 +87,7 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .map_err(|error| PassError::Layout(cx.path.clone(), error))?;
     let (held_layout, held_size) = option_of(cx, result)?;
     let finish = intrinsic(cx, "TaskFinish", vec![GenericArgument::Type(result)])?;
+    let pool = intrinsic(cx, "CpuMapScoped", vec![])?;
     let descriptor_layout = cx.primitive(hirsel_types::Primitive::U32)?;
     let environment = cx
         .environment()
@@ -95,9 +96,9 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
     let root = b.capture(0, fields[0].layout)?;
     let jobs = b.capture(1, fields[1].layout)?;
-    b.capture(2, fields[2].layout)?;
-    b.capture(3, fields[3].layout)?;
-    b.capture(4, fields[4].layout)?;
+    let tasks = b.capture(2, fields[2].layout)?;
+    let width = b.capture(3, fields[3].layout)?;
+    let ordinal = b.capture(4, fields[4].layout)?;
     let live = b.capture(5, fields[5].layout)?;
     b.ed.unit.tables.init_flags.push(InitFlag {
         path: PoolRange::EMPTY,
@@ -105,13 +106,11 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         slot: live.slot,
         environment: Some(environment),
     });
-    let mapper_address = b.place(
-        AddressBase::Address(root.address),
-        &[ProjectionStep::Field(0)],
-        mapper_layout,
-        None,
-    )?;
-    let (mapper, loan) = b.borrow(mapper_address, false)?;
+    let tasks = b.read_bits(tasks.address)?;
+    let width = b.read_bits(width.address)?;
+    let ordinal = b.read_bits(ordinal.address)?;
+    // Entry binds this invocation to the task slot's current generation.
+    worker_stage(&mut b, &pool, tasks, width, ordinal, 6)?;
     let input = b.take(jobs.address)?;
     let old = b.read_bits(live.address)?;
     let cleared = b.value(fields[5].layout, Holding::Plain);
@@ -122,12 +121,24 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         initialized: false,
     });
     b.store(live.address, cleared)?;
+    let input = local(&mut b, input)?;
+    // The job has moved out of its environment before the actual claim.
+    worker_stage(&mut b, &pool, tasks, width, ordinal, 7)?;
+    let mapper_address = b.place(
+        AddressBase::Address(root.address),
+        &[ProjectionStep::Field(0)],
+        mapper_layout,
+        None,
+    )?;
+    let (mapper, loan) = b.borrow(mapper_address, false)?;
+    let value_input = b.take(input.1)?;
+    b.emptied(input.0);
     let value = b
         .call(
             Callee::Indirect(mapper),
             vec![],
             mapper_abi,
-            vec![argument(0, Passing::Take, input)],
+            vec![argument(0, Passing::Take, value_input)],
             &[loan],
         )
         .ok_or_else(|| PassError::Malformed("CPU mapper returns a value".into()))?;
@@ -154,6 +165,32 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
             .map(|r| b.constant(r.layout, ConstantValue::Unit));
     b.ret(unit);
     Ok(b.finish())
+}
+
+fn worker_stage(
+    b: &mut Body<'_, '_>,
+    pool: &super::tasks::Intrinsic,
+    tasks: ValueId,
+    width: ValueId,
+    ordinal: ValueId,
+    action: u128,
+) -> R<()> {
+    let layout = b.cx.primitive(hirsel_types::Primitive::U32)?;
+    let action = b.constant(layout, ConstantValue::Integer(action));
+    let callee = operation(b, pool);
+    b.call(
+        callee.0,
+        callee.1,
+        pool.abi,
+        vec![
+            argument(0, Passing::Borrow, tasks),
+            argument(1, Passing::Borrow, width),
+            argument(2, Passing::Borrow, action),
+            argument(3, Passing::Borrow, ordinal),
+        ],
+        &[],
+    );
+    Ok(())
 }
 
 pub static MAP: LibraryBody = LibraryBody {

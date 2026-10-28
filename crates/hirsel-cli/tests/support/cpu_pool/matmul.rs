@@ -1,3 +1,4 @@
+include!("compiler.rs");
 use std::{fs, process::Command};
 include!("matmul_stages.rs");
 
@@ -62,7 +63,7 @@ pub fn main(rt: Io) -> Result[(), String] {{
          "max_physical_bytes":1073741824u64,"max_batch_bytes":16777216}}}).to_string()).unwrap();
     for backend in ["llvm", "cranelift"] {
         let executable = root.join(backend);
-        let compiled = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        let compiled = cpu_compiler()
             .args(["build", "--validate-stages", "--backend", backend])
             .arg(&manifest)
             .arg("-o")
@@ -172,7 +173,7 @@ fn every_cell(width: u32) {
         let executable = root.join(backend);
         for mut command in [
             {
-                let mut build = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                let mut build = cpu_compiler();
                 build
                     .args(["build", "--validate-stages", "--backend", backend])
                     .arg(&manifest)

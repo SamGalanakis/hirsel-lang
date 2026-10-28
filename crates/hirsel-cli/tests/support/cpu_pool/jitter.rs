@@ -106,13 +106,12 @@ fn cpu_source_with_jitter(width: usize, source: &str, domain_count: usize) {
     fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_jitter","version":"1"},
         "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
     let grants_path = root.join("grants.json");
-    let cli = env!("CARGO_BIN_EXE_hirsel");
     if width == 1 {
         let grants = serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1",
             "cpu":{"provider":"cpu.scoped@1","max_workers":1,"max_domains":1,
             "max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}});
         checked(
-            Command::new(cli)
+            cpu_compiler()
                 .arg("run")
                 .arg(&manifest)
                 .arg("--grants")
@@ -125,7 +124,7 @@ fn cpu_source_with_jitter(width: usize, source: &str, domain_count: usize) {
         for provider in ["tasks.free@1", "tasks.cooperative@1"] {
             let executable = root.join(format!("{backend}-{provider}"));
             checked(
-                Command::new(cli)
+                cpu_compiler()
                     .args(["build", "--fuel", "--validate-stages", "--backend", backend])
                     .arg(&manifest)
                     .arg("-o")

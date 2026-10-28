@@ -288,7 +288,9 @@ pub(super) unsafe fn after_save(
         match row.state {
             State::Parked if row.wait.is_some() => s.wake(task),
             State::Holding if row.detached => {
-                row.slot = None;
+                if row.slot.take().is_some() {
+                    cpu_job_event(row, "withdrawal");
+                }
                 row.state = State::Ready;
                 s.runnable.push_back(task);
             }

@@ -12,6 +12,7 @@ pub(crate) struct Probe {
     boundaries: Mutex<std::fs::File>,
     controls: Mutex<std::fs::File>,
     threads: Mutex<std::fs::File>,
+    jobs: std::sync::Arc<Mutex<std::fs::File>>,
     rejected_output: std::fs::File,
     rejected: [Mutex<Vec<(Sample, Sample)>>; 16],
     jitter: u64,
@@ -36,6 +37,8 @@ impl Probe {
         boundaries.push(".boundaries");
         let mut controls = path.as_os_str().to_os_string();
         controls.push(".control");
+        let mut jobs = path.as_os_str().to_os_string();
+        jobs.push(".jobs");
         let mut rejected = path.as_os_str().to_os_string();
         rejected.push(".rejected");
         let mut threads = path.as_os_str().to_os_string();
@@ -46,6 +49,7 @@ impl Probe {
             boundaries: Mutex::new(std::fs::File::create(boundaries)?),
             controls: Mutex::new(std::fs::File::create(controls)?),
             threads: Mutex::new(std::fs::File::create(threads)?),
+            jobs: std::sync::Arc::new(Mutex::new(std::fs::File::create(jobs)?)),
             rejected_output: std::fs::File::create(rejected)?,
             rejected: std::array::from_fn(|_| Mutex::new(Vec::new())),
             jitter: std::env::var("HIRSEL_RT_CPU_JITTER")
@@ -77,6 +81,29 @@ impl Probe {
         .expect("CPU control probe write");
     }
 
+    pub(crate) fn job(
+        &self,
+        task: u64,
+        batch: u64,
+        width: u32,
+        ordinal: u64,
+        path: &[u32],
+    ) -> std::sync::Arc<Job> {
+        std::sync::Arc::new(Job {
+            output: self.jobs.clone(),
+            task,
+            batch,
+            width,
+            ordinal,
+            path: path
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join("."),
+            entered: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
     fn perturb(&self, domain: u64, worker: u32) {
         if self.jitter == 0 {
             return;
@@ -87,6 +114,45 @@ impl Probe {
         for _ in 0..turns {
             std::thread::yield_now();
         }
+    }
+}
+
+/// A diagnostic handle follows the runtime row, never a saved task context.
+/// Its generation-qualified identity is reconstructed from recorded controls
+/// and the existing TaskFinish, completion and retirement boundaries in replay.
+pub(crate) struct Job {
+    output: std::sync::Arc<Mutex<std::fs::File>>,
+    task: u64,
+    batch: u64,
+    width: u32,
+    ordinal: u64,
+    path: String,
+    entered: std::sync::atomic::AtomicBool,
+}
+impl Job {
+    pub(crate) fn enter(&self, width: u32, ordinal: u64) {
+        assert_eq!((self.width, self.ordinal), (width, ordinal));
+        assert!(
+            !self.entered.swap(true, Ordering::Relaxed),
+            "one mapper entry per generation"
+        );
+        self.event("generation");
+        self.event("entry");
+    }
+    pub(crate) fn event(&self, kind: &str) {
+        if !self.entered.load(Ordering::Relaxed) {
+            return;
+        }
+        writeln!(
+            self.output.lock().unwrap(),
+            "{kind} {} {} {} {} {}",
+            self.task,
+            self.batch,
+            self.width,
+            self.ordinal,
+            self.path
+        )
+        .expect("CPU job probe write");
     }
 }
 

@@ -17,7 +17,7 @@ fn replay_width(width: usize) {
     for backend in ["llvm", "cranelift"] {
         let executable = root.join(backend);
         checked(
-            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            cpu_compiler()
                 .args(["build", "--validate-stages", "--backend", backend])
                 .arg(&manifest)
                 .arg("-o")
@@ -96,7 +96,7 @@ fn ordered_replay_width(width: usize) {
     for backend in ["llvm", "cranelift"] {
         let executable = root.join(backend);
         checked(
-            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            cpu_compiler()
                 .args(["build", "--fuel", "--validate-stages", "--backend", backend])
                 .arg(&manifest)
                 .arg("-o")
@@ -111,8 +111,10 @@ fn ordered_replay_width(width: usize) {
                 "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
             let tape = root.join(format!("{backend}-{reorder}.tape"));
             let trace = root.join("live.events");
+            let probe = root.join("ordered.probe");
             checked(
                 Command::new(&executable)
+                    .env("HIRSEL_RT_CPU_PROBE", &probe)
                     .arg("--hirsel-grants")
                     .arg(&grants)
                     .arg("--hirsel-record")
@@ -122,6 +124,8 @@ fn ordered_replay_width(width: usize) {
                     .output()
                     .unwrap(),
             );
+            let jobs = cpu_job_stages(&root.join("ordered.probe.jobs"));
+            assert_eq!(jobs.len(), 2 * width);
             let mut recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
             let binding = recording.binding.as_mut().unwrap();
             binding.admitted_at = 0;
@@ -146,6 +150,7 @@ fn ordered_replay_width(width: usize) {
                     .unwrap(),
             );
             assert_eq!(fs::read(&replayed).unwrap(), reference.as_ref().unwrap().0);
+            assert_eq!(cpu_job_stages(&root.join("replay.probe.jobs")), jobs);
             assert!(fs::read(&probe).unwrap().is_empty());
         }
         eprintln!(

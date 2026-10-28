@@ -87,33 +87,28 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         let controls = root.join("contraction.probe.control");
         let projection = root.join("contraction.projection");
         let observation = root.join("contraction.observation");
+        // Replay leaves semantic job rows, so the next emitter starts empty.
+        fs::write(root.join("contraction.probe.jobs"), "").unwrap();
         let monitor = std::thread::spawn({
-            let (controls, group, lifecycle) = (
+            let (controls, group, jobs) = (
                 controls.clone(),
                 group.clone(),
-                root.join("contraction.probe.lifecycle"),
+                root.join("contraction.probe.jobs"),
             );
             move || {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                 loop {
                     let rows = cpu_controls(&controls);
-                    let events = fs::read_to_string(&lifecycle).unwrap_or_default();
-                    let worker = events.lines().find_map(|line| {
-                        let fields: Vec<_> = line.split_whitespace().collect();
-                        (fields.len() == 4 && fields[0] == "start" && fields[3] == "1")
-                            .then(|| fields[2].to_owned())
-                    });
-                    let running = worker.is_some_and(|worker| {
-                        events.lines().any(|line| {
+                    let events = fs::read_to_string(&jobs).unwrap_or_default();
+                    let claim = events
+                        .split_inclusive('\n')
+                        .filter(|line| line.ends_with('\n'))
+                        .find_map(|line| {
                             let fields: Vec<_> = line.split_whitespace().collect();
-                            fields.len() == 4 && fields[0] == "run" && fields[2] == worker
-                        })
-                    });
-                    if running
-                        && rows
-                            .iter()
-                            .any(|row| row[2] == 5 && row[3] >= 1 && row[4] == 0)
-                    {
+                            (fields.len() == 6 && fields[0] == "claim")
+                                .then(|| (fields[1].to_owned(), fields[5].to_owned()))
+                        });
+                    if let Some(claim) = claim {
                         let before = fs::read_to_string(group.join("cpu.max")).unwrap();
                         assert_eq!(before.trim(), "400000 100000");
                         fs::write(group.join("cpu.max"), "100000 100000").unwrap();
@@ -121,11 +116,27 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                             fs::read_to_string(group.join("cpu.max")).unwrap().trim(),
                             "100000 100000"
                         );
-                        return (rows, fs::read_to_string(group.join("cpu.stat")).unwrap());
+                        let after = fs::read_to_string(&jobs).unwrap();
+                        assert!(
+                            !after
+                                .split_inclusive('\n')
+                                .filter(|line| line.ends_with('\n'))
+                                .any(|line| {
+                                    let fields: Vec<_> = line.split_whitespace().collect();
+                                    matches!(fields[0], "transfer" | "withdrawal" | "retire")
+                                        && fields[1] == claim.0
+                                }),
+                            "claimed mapper finished before owned quota contraction: {after}"
+                        );
+                        return (
+                            claim,
+                            rows,
+                            fs::read_to_string(group.join("cpu.stat")).unwrap(),
+                        );
                     }
                     assert!(
                         std::time::Instant::now() < deadline,
-                        "no mapper admission in owned cgroup {group:?}"
+                        "no actual mapper claim in owned cgroup {group:?}"
                     );
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
@@ -163,7 +174,9 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
             .arg(&tape);
         let live = qual_native_output(&mut command, root);
         checked(live);
-        let (admitted, stats) = monitor.join().unwrap();
+        let (claim, admitted, stats) = monitor.join().unwrap();
+        let jobs = cpu_job_stages(&root.join("contraction.probe.jobs"));
+        assert!(jobs.contains_key(&claim.1));
         let rows = cpu_controls(&controls);
         assert!(
             rows.iter().any(|row| row[2] == 1 && row[4] == 8),
@@ -231,6 +244,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                 .unwrap()
                 .is_empty()
         );
+        assert_eq!(cpu_job_stages(&root.join("contraction.probe.jobs")), jobs);
         let semantic_controls = |rows: Vec<[u64; 5]>| {
             let mut rows: Vec<_> = rows.into_iter().map(|row| row[1..].to_vec()).collect();
             rows.sort_unstable();
@@ -241,7 +255,8 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
             semantic_controls(rows.clone())
         );
         eprintln!(
-            "Free {backend} host quota 4->1, admitted={admitted:?}, controls={rows:?}, {stats}, all 4 workers drained; one-permit replay matched"
+            "Free {backend} host quota 4->1 after actual claim {claim:?}, {} jobs retired, admitted={admitted:?}, controls={rows:?}, {stats}, all 4 workers drained; one-permit replay matched",
+            jobs.len()
         );
     }
 }

@@ -32,6 +32,7 @@ unsafe fn poll(s: &mut Scheduler, task: u32, pool_available: Option<bool>) -> Op
                     let held = s.task(child).slot.take().expect("a held result");
                     // SAFETY: both stacks were saved, with live Option images.
                     unsafe { deliver(held, slot, size) };
+                    cpu_job_event(s.task(child), "transfer");
                     true
                 }
                 State::Done => true,
