@@ -1138,6 +1138,10 @@ impl FrontLowerQueries {
         let table_growth = outcome_table_bytes(next_len)
             .checked_sub(outcome_table_bytes(outcomes.len()))
             .ok_or(self.errors.resource)?;
+        eprintln!(
+            "ownership-trace-71 LOWER retention remaining={}",
+            *retention
+        );
         let remaining = retention
             .checked_add(old.unwrap_or(0))
             .and_then(|n| n.checked_sub(charge))

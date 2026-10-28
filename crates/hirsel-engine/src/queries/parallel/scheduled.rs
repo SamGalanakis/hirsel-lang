@@ -329,6 +329,13 @@ impl FrontBodyQueries {
     ) -> Option<()> {
         let charge = retained::compact_metadata(outcome, checked, table_keys, memos)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        if charge > *retention {
+            eprintln!(
+                "ownership-trace-71 FRONT retention requested={charge} remaining={} total={}",
+                *retention,
+                self._allowance.bytes()
+            );
+        }
         *retention = retention.checked_sub(charge)?;
         Some(())
     }

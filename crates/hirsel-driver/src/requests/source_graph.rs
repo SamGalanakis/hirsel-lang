@@ -1292,7 +1292,10 @@ pub(super) fn install(
             ),
             matches!(request.operation, CompileOperation::CheckedProducts { .. }),
             artifacts,
-            !matches!(request.operation, CompileOperation::Expand),
+            matches!(
+                request.operation,
+                CompileOperation::NativeSources { .. } | CompileOperation::NativeOwnership(_)
+            ),
             matches!(request.operation, CompileOperation::TirBatch { .. }),
             footprint,
             run_input_bytes,
@@ -1511,7 +1514,10 @@ pub(super) fn install(
             .install_carry(carry.lower.clone())
             .map_err(|_| uninstalled())?;
     }
-    let storage_allowance = if !matches!(request.operation, CompileOperation::Expand) {
+    let storage_allowance = if matches!(
+        request.operation,
+        CompileOperation::NativeSources { .. } | CompileOperation::NativeOwnership(_)
+    ) {
         // Each producer keeps its fixed input inventory. Only the remaining
         // output grant is shared; splitting the whole grant steals Growth's
         // already admitted source roots on large source scopes.
