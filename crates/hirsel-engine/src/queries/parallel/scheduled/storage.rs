@@ -20,9 +20,9 @@ struct Outcome {
 }
 pub struct FrontStorageQueries {
     front: Arc<FrontBodyQueries>,
-    inputs: BTreeMap<Key, DefPath>,
+    inputs: BTreeMap<Key, DefId>,
     completed: Mutex<BTreeMap<Key, Outcome>>,
-    anchors: crate::NativeRecordContext,
+    anchors: Arc<crate::NativeRecordContext>,
     records: crate::NativeRecords,
     weight: MemoryWeight,
     errors: RuntimeErrors,
@@ -48,15 +48,15 @@ impl FrontStorageQueries {
     pub fn input_bytes_for_definitions<'a>(
         definitions: impl IntoIterator<Item = &'a DefPath>,
     ) -> Option<u64> {
-        definitions.into_iter().try_fold(0u64, |n, path| {
-            n.checked_add((std::mem::size_of::<(Key, DefPath)>() + 64) as u64)?
-                .checked_add(bincode::serialized_size(path).ok()?)
-        })
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(std::mem::size_of::<Self>());
+        weight.tree::<Key, DefId>(definitions.into_iter().count());
+        Some(weight.bytes())
     }
 
     pub fn query(&self, path: &DefPath) -> Option<QueryId> {
         self.inputs.iter().find_map(|(&address, selected)| {
-            (path == selected).then_some(QueryId {
+            (path == selected.path()).then_some(QueryId {
                 kind: FRONT_STORAGE_KIND,
                 address: hirsel_artifact_store::Address(address),
             })
@@ -155,6 +155,7 @@ impl QueryTask for StorageTask {
         let Some(path) = self.owner.inputs.get(&self.id.address.0) else {
             return finish(Err(self.owner.errors.protocol));
         };
+        let path = path.path();
         let Some(front) = self.owner.front.query(path) else {
             return finish(Err(self.owner.errors.protocol));
         };
@@ -186,7 +187,8 @@ impl StorageTask {
         let path = owner
             .inputs
             .get(&self.id.address.0)
-            .ok_or(owner.errors.protocol)?;
+            .ok_or(owner.errors.protocol)?
+            .path();
         let body = owner
             .front
             .outcome(product.record)
@@ -294,27 +296,25 @@ impl QueryEngine {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontStorageQueries>, QueryError> {
+        let inventory =
+            FrontStorageQueries::input_bytes(&front).ok_or(QueryError::NotImplemented)?;
+        if inventory > allowance.bytes() {
+            return Err(QueryError::NotImplemented);
+        }
         let mut inputs = BTreeMap::new();
-        let mut inventory = 0u64;
         for (address, input) in &front.inputs {
-            inventory = inventory
-                .checked_add((std::mem::size_of::<(Key, DefPath)>() + 64) as u64)
-                .and_then(|n| n.checked_add(bincode::serialized_size(&input.definition).ok()?))
-                .ok_or(QueryError::NotImplemented)?;
-            if inventory > allowance.bytes() {
-                return Err(QueryError::NotImplemented);
-            }
             let address =
                 ContentHash::of_parts("hirsel.front.storage.address.v1", [address.0.as_slice()]);
-            inputs.insert(address, input.definition.path().clone());
+            inputs.insert(address, input.definition);
         }
+        let source = front.stage_source();
         let store = front.store.clone();
         Ok(Arc::new(FrontStorageQueries {
             front,
             inputs,
             completed: Mutex::new(BTreeMap::new()),
-            anchors: crate::NativeRecordContext::capture(self),
-            records: crate::NativeRecords::new(self.types.clone(), store),
+            anchors: source.anchors,
+            records: source.records,
             weight,
             errors,
             retention: Mutex::new(allowance.bytes() - inventory),

@@ -35,14 +35,14 @@ pub struct FrontStorageGraphOutput {
 }
 pub struct FrontStorageGraphQueries {
     query: QueryId,
-    definitions: Vec<DefPath>,
-    instances: BTreeSet<DefPath>,
+    definitions: Vec<DefId>,
+    instances: BTreeSet<DefId>,
     front: Arc<FrontBodyQueries>,
     growth: Arc<FrontGrowthQueries>,
     recipes: Arc<FrontStorageQueries>,
     lower: Arc<FrontLowerQueries>,
     records: crate::NativeRecords,
-    anchors: crate::NativeRecordContext,
+    anchors: Arc<crate::NativeRecordContext>,
     store: Arc<dyn ResultStore>,
     completed: Mutex<Option<(ProductRef, Arc<Data>)>>,
     failure: Mutex<Option<(Reference, QueryError)>>,
@@ -64,17 +64,19 @@ impl FrontStorageGraphQueries {
             && Arc::ptr_eq(&self.growth, growth)
     }
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
-        definitions
-            .iter()
-            .try_fold(std::mem::size_of::<Self>() as u64, |n, path| {
-                n.checked_add(bincode::serialized_size(path).ok()?.checked_mul(3)?)?
-                    .checked_add(
-                        (std::mem::size_of::<DefPath>()
-                            + std::mem::size_of::<DefId>()
-                            + 8 * std::mem::size_of::<usize>()) as u64,
-                    )
-            })
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(std::mem::size_of::<Self>());
+        weight.add(
+            definitions
+                .len()
+                .checked_mul(std::mem::size_of::<DefId>())?,
+        );
+        // Every potential instance can occupy one set entry. Interned source
+        // paths and the immutable record context stay with the front owner.
+        weight.tree::<DefId, ()>(definitions.len());
+        Some(weight.bytes())
     }
+
     pub fn query(&self) -> QueryId {
         self.query
     }
@@ -222,7 +224,8 @@ impl Task {
             };
             self.input = Some(product);
             let mut checked = Vec::new();
-            for path in &owner.definitions {
+            for definition in &owner.definitions {
+                let path = definition.path();
                 let Some(output) = owner.front.checked_definition(path) else {
                     return Poll::Ready(Err(owner.fail(invalid(format!(
                         "missing checked source storage root {path}"
@@ -270,7 +273,8 @@ impl Task {
                 }
                 // Reviewed core recipes are independent. An instance body is
                 // selected through the immutable instance table at each use.
-                if path.0.package.name == "core" || owner.instances.contains(&path) {
+                if path.0.package.name == "core" || owner.instances.contains(&DefId::intern(&path))
+                {
                     continue;
                 }
                 let Some(query) = owner.recipes.query(&path) else {
@@ -451,8 +455,7 @@ impl Task {
         arguments: &[hirsel_types::GenericArgument],
     ) -> Result<(), QueryError> {
         self.pending.insert(definition.path().clone());
-        if definition.path().0.package.name == "core"
-            || !self.owner.instances.contains(definition.path())
+        if definition.path().0.package.name == "core" || !self.owner.instances.contains(&definition)
         {
             return Ok(());
         }
@@ -586,7 +589,7 @@ impl QueryEngine {
         let instances = definitions
             .iter()
             .filter(|p| self.source_facts(p).is_some_and(|f| f.instance_bodied))
-            .cloned()
+            .map(DefId::intern)
             .collect();
         let store = self
             .result_store
@@ -603,16 +606,17 @@ impl QueryEngine {
                 ],
             )),
         };
+        let source = front.stage_source();
         Ok(Arc::new(FrontStorageGraphQueries {
             query,
-            definitions,
+            definitions: definitions.iter().map(DefId::intern).collect(),
             instances,
             front,
             growth,
             recipes,
             lower,
-            records: crate::NativeRecords::new(self.types.clone(), store.clone()),
-            anchors: crate::NativeRecordContext::capture(self),
+            records: source.records,
+            anchors: source.anchors,
             store,
             completed: Mutex::new(None),
             failure: Mutex::new(None),
