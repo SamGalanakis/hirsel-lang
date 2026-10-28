@@ -1,21 +1,121 @@
-//! Source carry retains the reverse reads of its actual header table. Body
-//! records have no retained query value and cannot validate a later body.
+//! A source carry owns exact header records and effective dirty marks.
+//! Reverse indexes are derived from those receipts in the fresh source engine.
 use super::*;
 
-// The same Rust std/hashbrown capacity and layout bound as retained_bytes.
-fn hash<K, V>(len: usize) -> Option<usize> {
-    if len == 0 {
+pub(crate) struct SourceHeaderGraph {
+    revision: Revision,
+    last_changed: [Revision; 3],
+    records: Vec<(MemoKey, Record)>,
+    dirty: Vec<(MemoKey, Invalidation)>,
+    stats: MemoStats,
+    touched_memos: Option<HashSet<MemoKey>>,
+}
+impl SourceHeaderGraph {
+    pub(crate) fn restore(self) -> MemoGraph {
+        let mut graph = MemoGraph {
+            revision: self.revision,
+            last_changed: self.last_changed,
+            stats: self.stats,
+            touched_memos: self.touched_memos,
+            ..Default::default()
+        };
+        for (key, record) in self.records {
+            for (read, _) in record.reads.iter() {
+                Arc::make_mut(graph.subscribers.entry(*read).or_default()).insert(key);
+                if matches!(
+                    read,
+                    ReadKey::ValidationUniverse(_) | ReadKey::UniverseErrors | ReadKey::FirstHeap
+                ) {
+                    graph.validation_contexts.entry(*read).or_default();
+                }
+            }
+            graph.by_def.entry(key.def).or_default().insert(key);
+            graph.records.insert(key, record);
+        }
+        graph.dirty.extend(self.dirty);
+        graph
+    }
+}
+fn set_bytes(capacity: usize) -> Option<usize> {
+    if capacity == 0 {
         return Some(0);
     }
-    len.checked_mul(8)?
+    capacity
+        .checked_mul(8)?
         .div_ceil(7)
         .checked_next_power_of_two()?
         .max(4)
-        .checked_mul(size_of::<(K, V)>().checked_add(1)?)?
+        .checked_mul(size_of::<(MemoKey, ())>().checked_add(1)?)?
         .checked_add(16)?
-        .checked_add(align_of::<(K, V)>())
+        .checked_add(align_of::<(MemoKey, ())>())
 }
-
+impl MemoGraph {
+    /// Inspect the complete compact state without allocation or query work.
+    /// Header entries already own the same exact read Arcs and payloads.
+    pub(crate) fn source_headers_bytes<'a>(
+        &self,
+        headers: impl Fn(&MemoKey) -> Option<&'a Arc<Reads>>,
+    ) -> Option<u64> {
+        let count = self
+            .records
+            .keys()
+            .filter(|key| headers(key).is_some())
+            .count();
+        let dirty = self
+            .records
+            .keys()
+            .filter(|key| headers(key).is_some() && self.invalidation(key).is_some())
+            .count();
+        let mut bytes = size_of::<SourceHeaderGraph>()
+            .checked_add(count.checked_mul(size_of::<(MemoKey, Record)>())?)?
+            .checked_add(dirty.checked_mul(size_of::<(MemoKey, Invalidation)>())?)?;
+        if let Some(touched) = &self.touched_memos {
+            bytes = bytes.checked_add(set_bytes(touched.capacity())?)?;
+        }
+        let mut stats = crate::NativeMetadataWeight::default();
+        stats.tree::<QueryKind, u64>(self.stats.recomputed.len());
+        (bytes as u64).checked_add(stats.bytes())
+    }
+    /// Discard indexes that can be rebuilt from the exact retained receipts.
+    /// Flatten pending context marks before dropping their reverse sets.
+    pub(crate) fn into_source_headers<'a>(
+        mut self,
+        headers: impl Fn(&MemoKey) -> Option<&'a Arc<Reads>>,
+    ) -> SourceHeaderGraph {
+        let count = self
+            .records
+            .keys()
+            .filter(|key| headers(key).is_some())
+            .count();
+        let dirty_count = self
+            .records
+            .keys()
+            .filter(|key| headers(key).is_some() && self.invalidation(key).is_some())
+            .count();
+        let mut dirty = Vec::with_capacity(dirty_count);
+        for key in self.records.keys().filter(|key| headers(key).is_some()) {
+            if let Some(why) = self.invalidation(key) {
+                dirty.push((*key, why));
+            }
+        }
+        let mut records = Vec::with_capacity(count);
+        for (key, mut record) in std::mem::take(&mut self.records) {
+            if let Some(reads) = headers(&key) {
+                debug_assert_eq!(&record.reads, reads);
+                record.reads = reads.clone();
+                records.push((key, record));
+            }
+        }
+        SourceHeaderGraph {
+            revision: self.revision,
+            last_changed: self.last_changed,
+            records,
+            dirty,
+            stats: self.stats,
+            touched_memos: self.touched_memos,
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41,6 +141,7 @@ mod tests {
                 .collect();
             let ((graph, bound), allocated) = crate::test_alloc::measured(|| {
                 let mut graph = MemoGraph::default();
+                graph.begin_touch_tracking();
                 graph.adopt_value(
                     header,
                     ContentHash::default(),
@@ -61,6 +162,7 @@ mod tests {
                 changes.read(universe, Durability::Low);
                 graph.apply(&changes);
                 let stats = graph.stats().clone();
+                let touched = graph.touched_memos.clone();
                 let choose = |key: &MemoKey| (*key == header).then_some(&reads);
                 let (bound, inspection) = crate::test_alloc::measured_independent(|| {
                     graph.source_headers_bytes(choose).unwrap()
@@ -68,7 +170,8 @@ mod tests {
                 assert_eq!(inspection.allocations, 0);
                 assert_eq!(graph.stats(), &stats);
                 let graph = graph.into_source_headers(choose);
-                assert_eq!(graph.stats(), &stats);
+                assert_eq!(graph.stats, stats);
+                assert_eq!(graph.touched_memos, touched);
                 (graph, bound)
             });
             assert!(
@@ -76,192 +179,15 @@ mod tests {
                 "{} > {bound}",
                 allocated.live
             );
-            assert!(graph.is_dirty(&header));
             assert_eq!(graph.records.len(), 1);
-            assert_eq!(graph.subscribers(&universe).copied().collect::<Vec<_>>(), [header]);
+            let graph = graph.restore();
+            assert!(graph.is_dirty(&header));
+            assert_eq!(
+                graph.subscribers(&universe).copied().collect::<Vec<_>>(),
+                [header]
+            );
             assert!(bodies.iter().all(|key| !graph.records.contains_key(key)));
             assert!(Arc::ptr_eq(&graph.records[&header].reads, &reads));
-        }
-    }
-}
-fn set(len: usize) -> Option<usize> {
-    hash::<MemoKey, ()>(len)
-}
-fn shared_set(len: usize) -> Option<usize> {
-    size_of::<HashSet<MemoKey>>()
-        .checked_add(2 * size_of::<usize>())?
-        .checked_add(set(len)?)
-}
-fn selected_set(keys: &HashSet<MemoKey>, keep: impl Fn(&MemoKey) -> bool) -> HashSet<MemoKey> {
-    let mut selected = HashSet::with_capacity(keys.iter().filter(|key| keep(key)).count());
-    selected.extend(keys.iter().filter(|key| keep(key)).copied());
-    selected
-}
-
-impl MemoGraph {
-    /// Complete projected index backing. The matching header entries already
-    /// own the read Arcs and payloads; projection reuses those exact owners.
-    /// This inspection allocates nothing and changes no memo or work counter.
-    pub(crate) fn source_headers_bytes<'a>(
-        &self,
-        headers: impl Fn(&MemoKey) -> Option<&'a Arc<Reads>>,
-    ) -> Option<u64> {
-        let keep = |key: &MemoKey| headers(key).is_some() && self.records.contains_key(key);
-        let records = self.records.keys().filter(|key| keep(key)).count();
-        let subscribers = self
-            .subscribers
-            .values()
-            .filter(|keys| keys.iter().any(&keep))
-            .count();
-        let contexts = self
-            .validation_contexts
-            .keys()
-            .filter(|read| {
-                self.subscribers
-                    .get(read)
-                    .is_some_and(|keys| keys.iter().any(&keep))
-            })
-            .count();
-        let definitions = self
-            .by_def
-            .values()
-            .filter(|keys| keys.iter().any(&keep))
-            .count();
-        let dirty = self.dirty.keys().filter(|key| keep(key)).count();
-        let mut bytes = size_of::<Self>()
-            .checked_add(hash::<MemoKey, Record>(records)?)?
-            .checked_add(hash::<ReadKey, Arc<HashSet<MemoKey>>>(subscribers)?)?
-            .checked_add(hash::<ReadKey, ContextInvalidation>(contexts)?)?
-            .checked_add(hash::<DefId, HashSet<MemoKey>>(definitions)?)?
-            .checked_add(hash::<MemoKey, Invalidation>(dirty)?)?;
-        for keys in self.subscribers.values() {
-            let count = keys.iter().filter(|key| keep(key)).count();
-            if count != 0 {
-                bytes = bytes.checked_add(shared_set(count)?)?;
-            }
-        }
-        for (read, context) in &self.validation_contexts {
-            if self
-                .subscribers
-                .get(read)
-                .is_none_or(|keys| !keys.iter().any(&keep))
-            {
-                continue;
-            }
-            bytes =
-                bytes.checked_add(set(context.confirmed.iter().filter(|k| keep(k)).count())?)?;
-            if let Some(pending) = &context.pending {
-                bytes =
-                    bytes.checked_add(shared_set(pending.iter().filter(|k| keep(k)).count())?)?;
-            }
-        }
-        for keys in self.by_def.values() {
-            let count = keys.iter().filter(|key| keep(key)).count();
-            if count != 0 {
-                bytes = bytes.checked_add(set(count)?)?;
-            }
-        }
-        if let Some(touched) = &self.touched_memos {
-            bytes = bytes.checked_add(set(touched.capacity())?)?;
-        }
-        let mut stats = crate::NativeMetadataWeight::default();
-        stats.tree::<QueryKind, u64>(self.stats.recomputed.len());
-        (bytes as u64).checked_add(stats.bytes())
-    }
-
-    /// Project under the source carry's admitted reservation. Existing public
-    /// header/read owners remain unchanged. No query is verified or executed.
-    pub(crate) fn into_source_headers<'a>(
-        self,
-        headers: impl Fn(&MemoKey) -> Option<&'a Arc<Reads>>,
-    ) -> Self {
-        let Self {
-            revision,
-            last_changed,
-            records,
-            subscribers,
-            validation_contexts,
-            by_def,
-            dirty,
-            stats,
-            touched_memos,
-        } = self;
-        let mut retained =
-            HashMap::with_capacity(records.keys().filter(|key| headers(key).is_some()).count());
-        for (key, mut record) in records {
-            if let Some(reads) = headers(&key) {
-                debug_assert_eq!(&record.reads, reads);
-                record.reads = reads.clone();
-                retained.insert(key, record);
-            }
-        }
-        let keep = |key: &MemoKey| retained.contains_key(key);
-        let mut selected_subscribers = HashMap::with_capacity(
-            subscribers
-                .values()
-                .filter(|keys| keys.iter().any(&keep))
-                .count(),
-        );
-        for (read, keys) in &subscribers {
-            if keys.iter().any(&keep) {
-                selected_subscribers.insert(*read, Arc::new(selected_set(keys, &keep)));
-            }
-        }
-        let mut contexts = HashMap::with_capacity(
-            validation_contexts
-                .keys()
-                .filter(|read| selected_subscribers.contains_key(read))
-                .count(),
-        );
-        for (read, context) in validation_contexts {
-            let Some(current) = selected_subscribers.get(&read) else {
-                continue;
-            };
-            let pending = context.pending.map(|pending| {
-                if subscribers
-                    .get(&read)
-                    .is_some_and(|old| Arc::ptr_eq(old, &pending))
-                {
-                    current.clone()
-                } else {
-                    Arc::new(selected_set(&pending, &keep))
-                }
-            });
-            contexts.insert(
-                read,
-                ContextInvalidation {
-                    pending,
-                    confirmed: selected_set(&context.confirmed, &keep),
-                },
-            );
-        }
-        let mut definitions = HashMap::with_capacity_and_hasher(
-            by_def
-                .values()
-                .filter(|keys| keys.iter().any(&keep))
-                .count(),
-            IdHasher::new(),
-        );
-        for (definition, keys) in by_def {
-            if keys.iter().any(&keep) {
-                definitions.insert(definition, selected_set(&keys, &keep));
-            }
-        }
-        let mut selected_dirty =
-            HashMap::with_capacity(dirty.keys().filter(|key| keep(key)).count());
-        selected_dirty.extend(dirty.into_iter().filter(|(key, _)| keep(key)));
-        // Work already observed remains observable after carrying the source heads.
-        let touched_memos = touched_memos;
-        Self {
-            revision,
-            last_changed,
-            records: retained,
-            subscribers: selected_subscribers,
-            validation_contexts: contexts,
-            by_def: definitions,
-            dirty: selected_dirty,
-            stats,
-            touched_memos,
         }
     }
 }

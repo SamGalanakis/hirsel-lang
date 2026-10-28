@@ -6,6 +6,7 @@ pub use reads::{
     Reads, ReadsBuilder, Revision, decode_def_path, encode_def_path, encoded_def_path_bytes,
 };
 mod graph;
+pub(crate) use graph::SourceHeaderGraph;
 pub use graph::{
     ChangeSet, Invalidation, Memo, MemoGraph, MemoKey, MemoStats, Verdict, invalidation_count,
 };

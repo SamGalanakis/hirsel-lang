@@ -15,7 +15,7 @@ pub struct SourceIndexState {
     private_summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
     private_unique_failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
     private_summary_revision: Option<crate::Revision>,
-    graph: MemoGraph,
+    graph: crate::memo::SourceHeaderGraph,
     front_changes: frontier::FrontTracker,
     inputs: hirsel_syntax::DefMap<memos::DefInputs>,
     environment_seen: Option<(QueryEnvironment, crate::ComptimeLimits, Option<ContentHash>)>,
@@ -487,7 +487,7 @@ impl SourceIndexState {
         engine.private_summaries = private_summaries;
         engine.private_unique_failures = private_unique_failures;
         engine.private_summary_revision = private_summary_revision;
-        engine.graph = graph;
+        engine.graph = graph.restore();
         engine.graph.reset_stats();
         engine.front_changes = front_changes;
         engine.inputs = inputs;

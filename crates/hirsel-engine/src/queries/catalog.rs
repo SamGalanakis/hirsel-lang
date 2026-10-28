@@ -186,6 +186,9 @@ impl Clone for Catalog {
 }
 impl Catalog {
     pub(super) fn retained_payload_bytes(&self) -> u64 {
+        self.payload_bytes(true)
+    }
+    fn payload_bytes(&self, cached_facts: bool) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
         let facts = |weight: &mut crate::NativeMetadataWeight, facts: &SourceFacts| {
             weight.flat_vec(&facts.comptime);
@@ -201,10 +204,12 @@ impl Catalog {
             w.path(path);
             w.vec(candidates, |w, candidate| facts(w, &candidate.facts));
         });
-        weight.map(
-            &self.facts_cache.read().unwrap_or_else(|e| e.into_inner()),
-            |w, _, (_, value)| facts(w, value),
-        );
+        if cached_facts {
+            weight.map(
+                &self.facts_cache.read().unwrap_or_else(|e| e.into_inner()),
+                |w, _, (_, value)| facts(w, value),
+            );
+        }
         weight.bytes()
     }
     /// Body-free carry over materialized sources, preserving every candidate's
@@ -248,7 +253,7 @@ impl Catalog {
         indexed: &BTreeMap<FileId, (FileContext, QueryEnvironment)>,
     ) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
-        weight.add(self.retained_payload_bytes() as usize);
+        weight.add(self.payload_bytes(false) as usize);
         weight.map(indexed, |w, _, (context, _)| {
             w.add(context.package.name.capacity());
             w.add(context.package.version.capacity());

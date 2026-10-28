@@ -135,7 +135,11 @@ impl Declarations {
 impl DeclarationIndex {
     pub(crate) fn source_carry_bytes(&self) -> u64 {
         let mut weight = Weight::default();
-        weight.map(&self.rows, |w, _, value| row(w, value));
+        weight.map(&self.rows, |w, _, value| {
+            w.arc(value);
+            w.add(value.site_spans.len() * size_of::<Span>());
+            w.add(value.headers.len() * size_of::<ContentHash>());
+        });
         hash::<std::path::PathBuf, BTreeSet<FileId>>(&mut weight, self.paths.capacity());
         for (path, values) in &self.paths {
             weight.add(path.capacity());
@@ -172,6 +176,67 @@ impl DeclarationIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_projection_releases_derived_sites_with_a_complete_allocation_bound() {
+        crate::with_compiler_stack(|| {
+            for width in [1, 4, 16] {
+                let paths: Vec<_> = (0..width)
+                    .map(|i| DefPath::core(&format!("carry_row_{i}")))
+                    .collect();
+                for path in &paths {
+                    DefId::intern(path);
+                }
+                let ((carried, predicted), actual) = crate::test_alloc::measured(|| {
+                    let mut index = DeclarationIndex::default();
+                    for (i, path) in paths.iter().enumerate() {
+                        let span = Span {
+                            anchor: Anchor(i as u32 + 1),
+                            start: 0,
+                            end: 1,
+                        };
+                        let mut sites = Vec::with_capacity(64);
+                        sites.push(span);
+                        let mut headers = Vec::with_capacity(64);
+                        headers.push(ContentHash::default());
+                        let row = Arc::new(Row::from(DeclarationRow {
+                            definition: DefId::intern(path),
+                            types: true,
+                            visibility: Visibility::Public,
+                            span,
+                            metadata: DefinitionMetadata {
+                                public: true,
+                                alias: false,
+                            },
+                            site_spans: sites,
+                            headers,
+                            candidates: ContentHash::default(),
+                            identity: [0; 4],
+                        }));
+                        let _ = row.sites();
+                        index.rows.insert(DefId::intern(path), row);
+                    }
+                    let (predicted, inspection) =
+                        crate::test_alloc::measured_independent(|| index.source_carry_bytes());
+                    assert_eq!(inspection.allocations, 0);
+                    (index.into_source_carry(), predicted)
+                });
+                assert!(
+                    actual.live as u64 <= predicted,
+                    "{} > {predicted}",
+                    actual.live
+                );
+                for path in &paths {
+                    let row = &carried.rows[&DefId::intern(path)];
+                    assert_eq!(row.definition.path(), path);
+                    assert_eq!(row.site_spans.len(), 1);
+                    assert!(row.sites.get().is_none());
+                }
+                let (_, released) = crate::test_alloc::measured(|| drop(carried));
+                assert_eq!(-released.live, actual.live);
+            }
+        });
+    }
 
     #[test]
     fn declaration_backing_bound_covers_manifest_frozen_rows_sites_and_last_clone() {

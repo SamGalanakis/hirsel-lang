@@ -316,6 +316,11 @@ fn lanes(hash: ContentHash) -> [u64; 4] {
 
 impl DeclarationIndex {
     pub(crate) fn into_source_carry(mut self) -> Self {
+        self.rows = self
+            .rows
+            .into_iter()
+            .map(|(id, row)| (id, Arc::new(Row::from(row.data.clone()))))
+            .collect();
         self.files.clear();
         self.anchors = HashMap::new();
         self.frozen = OnceLock::new();
