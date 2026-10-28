@@ -248,7 +248,10 @@ impl Task {
         let data = Arc::new(Data {
             growth: Arc::new(growth),
             diagnostics: Arc::new(diagnostics),
-            reads: Arc::new(reads),
+            reads: queries
+                .front
+                .retained_reads(&Arc::new(reads))
+                .ok_or(queries.errors.resource)?,
         });
         // Encoded bytes are temporary scratch and belong to the result store
         // after publication. Bound only the actual retained allocation graph.

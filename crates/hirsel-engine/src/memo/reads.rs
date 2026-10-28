@@ -455,7 +455,7 @@ impl Reads {
     /// Standard Arc slice ownership and sorted integer indices keep the flat
     /// binary-search/order/codec contract; no lookup can see an excluded row.
     pub(crate) fn share_rows(&self, complete: &Self) -> Option<Self> {
-        if complete.indices.is_some() || self.len() > complete.len() {
+        if complete.indices.is_some() || complete.rows.shared() || self.len() > complete.len() {
             return None;
         }
         let mut indices = Vec::with_capacity(self.len());

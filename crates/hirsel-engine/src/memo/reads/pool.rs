@@ -55,6 +55,9 @@ impl ReadPool {
         allowance: &mut MemoryReservation,
         remaining: &mut u64,
     ) -> Option<Reads> {
+        if reads.is_empty() {
+            return Some(Reads::empty());
+        }
         let missing = reads.iter().filter(|row| !self.rows.contains(*row)).count();
         let row_bytes = std::alloc::Layout::new::<[usize; 2]>()
             .extend(std::alloc::Layout::new::<ChargedRow>())
@@ -69,12 +72,23 @@ impl ReadPool {
             }
             weight.bytes()
         };
-        let charge = (missing as u64).checked_mul(row_bytes)?.checked_add(
+        let shared_bytes = std::alloc::Layout::new::<[usize; 2]>()
+            .extend(std::alloc::Layout::new::<SharedRows>())
+            .ok()?
+            .0
+            .pad_to_align()
+            .size()
+            .checked_add(reads.len().checked_mul(size_of::<Arc<ChargedRow>>())?)?
+            as u64;
+        let loaned = (missing as u64)
+            .checked_mul(row_bytes)?
+            .checked_add(shared_bytes)?;
+        let charge = loaned.checked_add(
             tree_bytes(self.rows.len().checked_add(missing)?)
                 .checked_sub(tree_bytes(self.rows.len()))?,
         )?;
         let after = remaining.checked_sub(charge)?;
-        if allowance.bytes() < (missing as u64).checked_mul(row_bytes)? {
+        if allowance.bytes() < loaned {
             return None;
         }
         let mut rows = Vec::with_capacity(reads.len());
@@ -91,19 +105,36 @@ impl ReadPool {
             };
             rows.push(value);
         }
-        self.charged_bytes += (missing as u64) * row_bytes;
+        let shared = Arc::new(SharedRows {
+            values: rows.into_boxed_slice(),
+            _allowance: allowance
+                .split(shared_bytes)
+                .expect("pre-admitted read array"),
+        });
+        self.charged_bytes += loaned;
         *remaining = after;
         Some(Reads {
-            rows: Rows::Shared(rows.into()),
+            rows: Rows::Shared(shared),
             indices: None,
         })
+    }
+}
+
+pub(super) struct SharedRows {
+    values: Box<[Arc<ChargedRow>]>,
+    _allowance: MemoryReservation,
+}
+
+impl std::fmt::Debug for SharedRows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.values.fmt(f)
     }
 }
 
 #[derive(Clone, Debug)]
 pub(super) enum Rows {
     Flat(Arc<[Row]>),
-    Shared(Arc<[Arc<ChargedRow>]>),
+    Shared(Arc<SharedRows>),
 }
 impl Default for Rows {
     fn default() -> Self {
@@ -116,24 +147,27 @@ impl From<Vec<Row>> for Rows {
     }
 }
 impl Rows {
+    pub(super) fn shared(&self) -> bool {
+        matches!(self, Self::Shared(_))
+    }
     pub(super) fn len(&self) -> usize {
         match self {
             Self::Flat(rows) => rows.len(),
-            Self::Shared(rows) => rows.len(),
+            Self::Shared(rows) => rows.values.len(),
         }
     }
     pub(super) fn as_ptr(&self) -> *const () {
         match self {
             Self::Flat(rows) => rows.as_ptr().cast(),
-            Self::Shared(rows) => rows.as_ptr().cast(),
+            Self::Shared(rows) => Arc::as_ptr(rows).cast(),
         }
     }
     pub(super) fn allocation_bytes(&self) -> usize {
-        // A shared observation carries its own original-budget reservation.
-        // Its immutable Arc slot array still belongs to each retaining receipt.
+        // Shared observations and each receipt's array carry their own
+        // original source reservations, including after their source drops.
         match self {
             Self::Flat(rows) => super::super::retained::retained_arc_bytes(&**rows) as usize,
-            Self::Shared(rows) => super::super::retained::retained_arc_bytes(&**rows) as usize,
+            Self::Shared(_) => 0,
         }
     }
     pub(super) fn binary_search_by(
@@ -142,7 +176,7 @@ impl Rows {
     ) -> Result<usize, usize> {
         match self {
             Self::Flat(rows) => rows.binary_search_by(compare),
-            Self::Shared(rows) => rows.binary_search_by(|row| compare(&row.value)),
+            Self::Shared(rows) => rows.values.binary_search_by(|row| compare(&row.value)),
         }
     }
 }
@@ -151,7 +185,7 @@ impl std::ops::Index<usize> for Rows {
     fn index(&self, at: usize) -> &Row {
         match self {
             Self::Flat(rows) => &rows[at],
-            Self::Shared(rows) => &rows[at].value,
+            Self::Shared(rows) => &rows.values[at].value,
         }
     }
 }
@@ -243,6 +277,47 @@ mod tests {
             "escaped rows must retain their original admission"
         );
         assert_eq!(held, originals[0]);
+        drop(held);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn independently_held_receipt_arrays_keep_their_original_admission() {
+        let reads = Reads::from_vec(
+            (0..128)
+                .map(|index| {
+                    (
+                        ReadKey::Signature(DefId::intern(&DefPath::core(&format!(
+                            "held_pool_{index}"
+                        )))),
+                        ContentHash::of_bytes(b"observed"),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+        let budget = ProcessBudget::new(1 << 20);
+        let mut held = Vec::with_capacity(32);
+        let (_, actual) = crate::test_alloc::measured(|| {
+            let mut allowance = budget.reserve(1 << 20).unwrap();
+            let mut remaining = allowance.bytes();
+            let mut pool = ReadPool::default();
+            for _ in 0..32 {
+                held.push(pool.intern(&reads, &mut allowance, &mut remaining).unwrap());
+            }
+            drop(pool);
+            drop(allowance);
+        });
+        assert!(actual.live > 0);
+        assert!(
+            budget.reserved() >= actual.live as u64,
+            "reserved={}, live={}",
+            budget.reserved(),
+            actual.live
+        );
+        for receipt in &held {
+            assert_eq!(receipt, &reads);
+        }
         drop(held);
         assert_eq!(budget.reserved(), 0);
     }

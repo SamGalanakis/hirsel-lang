@@ -326,6 +326,19 @@ impl FrontBodyQueries {
     pub fn compact_retained_reads(&self) {
         self.read_pool.get_or_init(Mutex::default);
     }
+    pub(crate) fn retained_reads(&self, reads: &Arc<Reads>) -> Option<Arc<Reads>> {
+        let Some(pool) = self.read_pool.get() else {
+            return Some(reads.clone());
+        };
+        let mut pool = pool.lock().unwrap_or_else(|e| e.into_inner());
+        let mut remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        let mut allowance = self._allowance.lock().unwrap_or_else(|e| e.into_inner());
+        Some(Arc::new(pool.intern(
+            reads,
+            &mut allowance,
+            &mut remaining,
+        )?))
+    }
     fn pool_completion_reads(
         &self,
         outcome: &mut ModeResult,
@@ -428,8 +441,14 @@ impl FrontBodyQueries {
 
     /// Immutable producer grant, including input rows and retained outcomes.
     pub fn admitted_bytes(&self) -> u64 {
-        let pool = self.read_pool.get().map(|pool| pool.lock().unwrap_or_else(|e| e.into_inner()));
-        self._allowance.lock().unwrap_or_else(|e| e.into_inner()).bytes()
+        let pool = self
+            .read_pool
+            .get()
+            .map(|pool| pool.lock().unwrap_or_else(|e| e.into_inner()));
+        self._allowance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .bytes()
             + pool.as_ref().map_or(0, |pool| pool.charged_bytes())
     }
 
