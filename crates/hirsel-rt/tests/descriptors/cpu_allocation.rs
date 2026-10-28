@@ -20,6 +20,10 @@ fn idle_cpu_allocation_keeps_budget_settlement_and_heap_work_outside_the_task_st
         )),
         None
     );
+    let publish = "tasks::ordered::ahead::cpu_handoff::hirsel_rt_v2_cpu_publish";
+    assert!(graph.directly_calls(publish, "tasks::ordered::engine::at_head"));
+    // Publication settles the existing prefix, including its charge trace.
+    // The independent budget audit follows at_head and rejects new operations.
     assert!(budget_service_violations(graph).is_empty());
 }
 

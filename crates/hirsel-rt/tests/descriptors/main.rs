@@ -324,6 +324,7 @@ fn every_inline_effect_is_classified() {
 const PHYSICAL_BUDGET_SERVICES: &[&str] = &[
     "tasks::ordered::engine::reserve_allocation",
     "tasks::ordered::engine::fuel_refill",
+    "tasks::ordered::engine::at_head",
 ];
 
 // These save/adopt the same segment without publishing an operation. Their
