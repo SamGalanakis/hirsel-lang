@@ -326,7 +326,12 @@ impl QueryEngine {
                 let share = projection.shared_products;
                 let compact = projection.compact;
                 let compact_output = projection.compact_output;
-                if entry.products.resolution.is_none() && !compact && !projection.detail {
+                if entry.products.resolution.is_none()
+                    && !compact
+                    && !projection.detail
+                    && !projection.compact_reads
+                    && !projection.shared_products
+                {
                     return (id, entry);
                 }
                 let mut memo = entry.memo.clone();
@@ -794,6 +799,7 @@ mod tests {
                 prior
                     .snapshot_sources
                     .insert(id, Arc::downgrade(prior.signatures.get(&id).unwrap()));
+                let held_reads = prior.signatures[&id].memo.reads.clone();
                 let required = prior.source_index_bytes().unwrap();
                 let budget = ProcessBudget::new(required);
                 let carry = prior
@@ -806,6 +812,9 @@ mod tests {
                 assert_eq!(header.covered.capacity(), 0);
                 assert!(header.reads().allocations().next().unwrap().1 < prior_read_bytes);
                 assert_eq!(bincode::serialize(header.reads()).unwrap(), exact_wire);
+                assert_eq!(bincode::serialize(&*held_reads).unwrap(), exact_wire);
+                assert_eq!(held_reads.allocations().next().unwrap().1, prior_read_bytes);
+                assert!(!Arc::ptr_eq(&held_reads, &header.memo.reads));
                 let actual = header.result().unwrap();
                 assert!(Arc::ptr_eq(&actual.value, &signature));
                 if let Some(held) = held {

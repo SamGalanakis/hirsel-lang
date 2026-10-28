@@ -99,8 +99,9 @@ pub(crate) fn source_projection(
     entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
 ) -> SourceProjection {
     // Entry weak references belong to the engine's disposable snapshot_sources.
-    // They retain no payload and cannot escape the engine. Public output/read
-    // owners still require both strong and weak uniqueness below.
+    // They retain no payload and cannot escape the engine. Public output
+    // owners still require both strong and weak uniqueness below. A carried
+    // exact read slice can detach without mutating any existing read owner.
     let compact = std::sync::Arc::strong_count(entry) == 1;
     let detail = &entry.detail;
     let detail = detail.signatures.capacity() != 0
@@ -110,6 +111,8 @@ pub(crate) fn source_projection(
         || detail.manifest_lookups.capacity() != 0
         || detail.resolver.node_identity().is_some()
         || detail.citations.capacity() != 0;
+    let compact_reads = entry.reads().flat_backing_bytes().is_some();
+    let projected = compact || detail || compact_reads || entry.products.resolution.is_some();
     SourceProjection {
         compact,
         detail,
@@ -117,11 +120,8 @@ pub(crate) fn source_projection(
             && entry.memo.value.as_ref().is_ok_and(|output| {
                 std::sync::Arc::strong_count(output) == 1 && std::sync::Arc::weak_count(output) == 0
             }),
-        compact_reads: compact
-            && std::sync::Arc::strong_count(&entry.memo.reads) == 1
-            && std::sync::Arc::weak_count(&entry.memo.reads) == 0
-            && entry.reads().flat_backing_bytes().is_some(),
-        shared_products: compact
+        compact_reads,
+        shared_products: projected
             && entry.products.representation.is_none()
             && entry.products.mode_archive.is_none()
             && entry.products.mode_diagnostics.is_empty(),
@@ -185,9 +185,13 @@ fn signature_entry_bytes(
     names: Option<&mut dyn super::NameAllocationSet>,
 ) -> Option<u64> {
     let head = projection.is_some();
-    let projected = projection
-        .as_ref()
-        .is_some_and(|p| p.compact || p.detail || entry.products.resolution.is_some());
+    let projected = projection.as_ref().is_some_and(|p| {
+        p.compact
+            || p.detail
+            || p.compact_reads
+            || p.shared_products
+            || entry.products.resolution.is_some()
+    });
     let compact_output = projection.as_ref().is_some_and(|p| p.compact_output);
     let compact_reads = projection.as_ref().is_some_and(|p| p.compact_reads);
     let shared_products = projection.as_ref().is_some_and(|p| p.shared_products);
