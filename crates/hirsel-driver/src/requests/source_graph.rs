@@ -337,9 +337,10 @@ impl GraphProducts for SourceProducts {
                         .as_ref()
                         .and_then(|run| run.query(entry))
                         .ok_or_else(|| {
-                            ToolError::Runtime(
-                                "selected TIR definition has no admitted run root".into(),
-                            )
+                            ToolError::Runtime(format!(
+                                "launch: the program declares no entry `pub fn {}`",
+                                entry.0.name
+                            ))
                         })?,
                 ]
             }
@@ -1948,7 +1949,7 @@ pub(super) fn install(
                 .as_ref()
                 .or(launch_entry.as_ref())
                 .cloned()
-                .ok_or_else(|| uninstalled())?;
+                .ok_or_else(|| ToolError::Runtime("launch manifest requires entry".into()))?;
             Some(
                 super::native_selection::NativeSelection::new(
                     &mut program,

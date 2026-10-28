@@ -173,6 +173,16 @@ impl FrontLowerQueries {
     fn carry(&self) -> Option<Arc<LowerCarry>> {
         self.carry.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
+    /// Inspect a current source/Lower input without executing a query. A missing
+    /// observation remains absent; a read key conveys no validation authority.
+    pub fn observed_read_value(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
+        match *read {
+            ReadKey::ExecutedBody(id) if self.inputs.get_id(id).is_none() => None,
+            ReadKey::LayoutBody(id) if !self.layouts.contains_key(&id) => None,
+            _ => self.observe(owner, read),
+        }
+    }
+
     /// A read's value in this graph. Body and layout texts come from this
     /// producer's own inputs; every other read is the front's source fact.
     pub(super) fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {

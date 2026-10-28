@@ -386,11 +386,10 @@ impl GraphMeter {
         let mut memos: BTreeMap<_, _> = self.memos.iter().cloned().collect();
         memos.extend(self.front.memo_snapshot());
         memos.extend(self.lower.memo_snapshot().ok_or_else(unavailable)?);
-        Ok(Arc::new(CompileInspection::new(
-            stats,
-            memos.into_iter().collect(),
-            definitions,
-        )))
+        Ok(Arc::new(
+            CompileInspection::new(stats, memos.into_iter().collect(), definitions)
+                .with_observations(self.lower.clone()),
+        ))
     }
     pub fn counts(
         &self,

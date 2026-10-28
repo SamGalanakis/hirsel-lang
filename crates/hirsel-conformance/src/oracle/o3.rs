@@ -186,9 +186,9 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
     // resident's physical work and counters have been captured above.
     let mut cold = Session::open_configured(&entry, config());
     cold.check().map_err(|e| format!("reference check: {e}"))?;
-    let reference = inspect(&mut cold)?.memos.clone();
+    let reference = inspect(&mut cold)?;
     let mut observed = BTreeMap::new();
-    for (owner, reads) in &reference {
+    for (owner, reads) in &reference.memos {
         for (key, value) in reads.iter() {
             // V's contextual reads are interpreted in their owner's package.
             let scoped = (owner.def.path().0.package.clone(), *key);
@@ -212,8 +212,12 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
         }
         for (read, previous) in reads.iter() {
             let scoped = (memo.def.path().0.package.clone(), *read);
-            match observed.get(&scoped) {
-                Some(current) if current != previous => {
+            let value = observed
+                .get(&scoped)
+                .copied()
+                .or_else(|| reference.observed_read_value(memo.def.path(), read));
+            match value {
+                Some(current) if current != *previous => {
                     changed_values.insert(scoped);
                     affected.insert(*memo);
                 }

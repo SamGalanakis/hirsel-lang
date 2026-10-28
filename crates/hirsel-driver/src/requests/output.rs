@@ -38,9 +38,26 @@ pub struct CompileInspection {
     pub stats: hirsel_engine::memo::MemoStats,
     pub memos: Vec<(hirsel_engine::memo::MemoKey, Arc<hirsel_engine::Reads>)>,
     pub definitions: Vec<DefinitionWork>,
+    observations: Option<Arc<hirsel_engine::FrontLowerQueries>>,
     owner: Arc<dyn Send + Sync>,
 }
 impl CompileInspection {
+    /// The current value of a source/Lower input, including inputs whose memo
+    /// a rejected Check never demanded. This performs no compiler work.
+    pub fn observed_read_value(
+        &self,
+        owner: &DefPath,
+        read: &hirsel_engine::ReadKey,
+    ) -> Option<hirsel_syntax::ContentHash> {
+        self.observations.as_ref()?.observed_read_value(owner, read)
+    }
+    pub(crate) fn with_observations(
+        mut self,
+        lower: Arc<hirsel_engine::FrontLowerQueries>,
+    ) -> Self {
+        self.observations = Some(lower);
+        self
+    }
     pub(crate) fn new(
         stats: hirsel_engine::memo::MemoStats,
         memos: Vec<(hirsel_engine::memo::MemoKey, Arc<hirsel_engine::Reads>)>,
@@ -50,6 +67,7 @@ impl CompileInspection {
             stats,
             memos,
             definitions,
+            observations: None,
             owner: Arc::new(()),
         }
     }
