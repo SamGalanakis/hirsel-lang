@@ -162,7 +162,9 @@ fn an_executable_links_each_host_provider_only_when_its_program_reaches_it() {
         for kind in [elf::SHT_SYMTAB, elf::SHT_DYNSYM] {
             let symbols = sections.symbols(endian, bytes, kind).unwrap();
             for symbol in symbols.iter() {
-                names.push(symbol.name(endian, symbols.strings()).unwrap());
+                if symbol.st_type() == elf::STT_FUNC {
+                    names.push(symbol.name(endian, symbols.strings()).unwrap());
+                }
             }
         }
         let symbol = |needle: &[u8]| {
