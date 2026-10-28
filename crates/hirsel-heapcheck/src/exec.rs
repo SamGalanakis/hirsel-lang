@@ -589,6 +589,9 @@ impl<'p, S: Stage> Machine<'p, S> {
     /// Bind capture slots to their environment fields.
     fn bind_captures(&mut self, f: &mut Frame) -> Checked<()> {
         let u = self.unit(f.unit);
+        if u.tables.receipt_entry.is_some() && !u.captures.is_empty() {
+            self.check_ordinary_capture_entry(f)?;
+        }
         for (index, slot) in u.slots.iter().enumerate() {
             if let SlotKind::Capture(i) = slot.kind {
                 let version = *u
@@ -7230,6 +7233,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                     borrow: None,
                 },
             )?;
+        }
+        if !self.config.seal_sources.is_empty() {
+            let anchor = u.tables.source_anchors[site.anchor.index()].clone();
+            self.seal_allocations.insert(env.alloc, (f.unit, anchor));
         }
         Ok(Val::Callable {
             code,

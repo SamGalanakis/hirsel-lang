@@ -263,6 +263,26 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                 };
                 source.check_structure().unwrap();
                 let original = request.declaration().entry();
+                for capture in original.captures() {
+                    if hirsel_lir::sealed_payload_source::is_shared_boundary(&capture.ty.ty) {
+                        assert!(
+                            !source
+                                .contract
+                                .captures
+                                .iter()
+                                .any(|entry| entry.ordinal == capture.ordinal)
+                        );
+                        assert!(
+                            source
+                                .profile(ReceiptPort::Capture(capture.ordinal))
+                                .is_some()
+                        );
+                        owned += usize::from(matches!(
+                            capture.usage,
+                            hirsel_types::UseKind::Copy | hirsel_types::UseKind::Take
+                        ));
+                    }
+                }
                 for capture in &source.contract.captures {
                     let usage = original
                         .captures()
@@ -459,7 +479,7 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                 projected > 0,
                 "{name} has no original projected capture paths"
             );
-            assert!(owned > 0, "{name} has no demanded owning capture");
+            assert!(owned > 0, "{name} has no owning original capture");
             assert!(
                 closed_entries > 0,
                 "{name} has no checked original closure entries"

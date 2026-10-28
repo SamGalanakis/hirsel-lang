@@ -19,8 +19,12 @@ use hirsel_types::{Primitive as P, Type, TypeKind};
 struct Declarations {
     ordinary: OperationRegistry,
     sources: Vec<ReceiptSource>,
+    environments: Option<SourceEnvironments>,
 }
 impl OperationDeclarations for Declarations {
+    fn seal_environments(&self, _: &DefPath, _: ContentHash) -> Option<SourceEnvironments> {
+        self.environments.clone()
+    }
     fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
         &self.ordinary.pretransfer_adapters
     }
@@ -444,6 +448,7 @@ fn fixture_passing(
         t.builder.ret(ENTRY, None);
     }
     let declarations = Declarations {
+        environments: None,
         ordinary: t.operations.clone(),
         sources,
     };
@@ -503,6 +508,7 @@ fn borrowed_data_entry_refuses_missing_source_wrong_profile_and_extra_entry_slot
             _ => unreachable!(),
         }
         let declarations = Declarations {
+            environments: None,
             ordinary: declarations.ordinary.clone(),
             sources,
         };
@@ -563,6 +569,7 @@ fn borrowed_data_call_refuses_crossed_snapshots_missing_callee_and_closed_loans(
             _ => unreachable!(),
         }
         let declarations = Declarations {
+            environments: None,
             ordinary: declarations.ordinary.clone(),
             sources,
         };
@@ -646,6 +653,7 @@ fn erasing_both_call_companions_and_abi_contract_cannot_hide_original_demand() {
         "{errors:#?}"
     );
     let ordinary = Declarations {
+        environments: None,
         ordinary: declarations.ordinary.clone(),
         sources: declarations.sources[..1].to_vec(),
     };
@@ -665,6 +673,7 @@ fn cached_call_output_replays_absent_and_present_callee_source_without_materiali
     abi.receipts = None;
     abi.key.receipt_contract = None;
     let ordinary = Declarations {
+        environments: None,
         ordinary: declarations.ordinary.clone(),
         sources: declarations.sources[..1].to_vec(),
     };
@@ -1318,6 +1327,7 @@ fn parameter_inventory_107_uses_only_its_original_arena_carrier() {
         }],
     };
     let declarations = Declarations {
+        environments: None,
         ordinary: t.operations.clone(),
         sources: vec![source],
     };
@@ -1334,12 +1344,222 @@ fn parameter_inventory_107_uses_only_its_original_arena_carrier() {
             _ => unreachable!(),
         }
         let declarations = Declarations {
+            environments: None,
             ordinary: declarations.ordinary.clone(),
             sources: vec![source],
         };
         assert!(
             !check(&unit, &table, &manifest, &declarations).is_empty(),
             "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_capture_entry_174_requires_complete_original_storage_and_refuses_region_environments() {
+    let (mut unit, mut table, manifest, mut declarations) = fixture(false);
+    let types = support::session();
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(P::U64)));
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let owners = Owners::default();
+    let mut builder = LayoutBuilder::new(&target, &owners);
+    let scalar = builder.layout(&types, scalar).unwrap();
+    let base = builder
+        .environment_data(
+            &unit.header.definition,
+            1,
+            &[(scalar, Passing::Borrow)],
+            &[],
+        )
+        .unwrap();
+    let offset = table.layouts.len() as u32;
+    for mut row in builder.finish().layouts {
+        row.for_each_reference_mut(&mut |layout| layout.0 += offset);
+        table.layouts.push(row);
+    }
+    let scalar = LayoutId(scalar.0 + offset);
+    let base = LayoutId(base.0 + offset);
+    let ty = LirTypeId(unit.types.len() as u32);
+    unit.types.push(LirType {
+        repr: ValueRepr::Scalar(ScalarKind::U64),
+        layout: scalar,
+    });
+    let version = ValueId(unit.values.len() as u32);
+    unit.values.push(ValueInfo {
+        ty,
+        holding: Holding::Plain,
+    });
+    unit.captures.push(version);
+    unit.slots.push(SlotInfo {
+        ty,
+        kind: SlotKind::Capture(0),
+        scope: ROOT,
+    });
+    table.fn_abis[unit.header.abi.0 as usize].shape = hirsel_lir::abi_types::CallableShape::Closure;
+    table.fn_abis[unit.header.abi.0 as usize].environment = true;
+    table.fn_abis[unit.header.abi.0 as usize].caller_site = true;
+    let source = SourceClosure {
+        original: hirsel_lir::invocations::ReferenceBody {
+            definition: unit.header.definition.clone(),
+            instance: support::hash("original capture entry 174"),
+            body: 1,
+        },
+        instance: unit.header.instance,
+        context: SourceClosureContext::Scoped,
+        base_layout: hirsel_lir::LayoutKeys::rooted(&table, base).0,
+        payload: SourcePayload {
+            root_type: NativeType::Function(hirsel_lir::abi_types::CallMultiplicity::Many),
+            recipe: PayloadRecipe {
+                source: unit.tables.source_anchors[0].clone(),
+                operation: PayloadOperation::Allocate {
+                    destination: PayloadDestination::Heap,
+                },
+                inputs: vec![PayloadOperand {
+                    place: 0,
+                    ty: NativeType::Primitive(Primitive::U64),
+                    producer: PayloadProducer::Parameter(0),
+                    capture_slot: Some(0),
+                }],
+            },
+        },
+        captures: vec![CaptureUse::Borrow],
+    };
+    declarations.environments = Some(SourceEnvironments {
+        entry: Some(source.clone()),
+        constructions: vec![],
+    });
+    let accepted = check(&unit, &table, &manifest, &declarations);
+    assert!(accepted.is_empty(), "{accepted:#?}");
+    for mutation in 0..4 {
+        let mut changed = declarations.environments.clone().unwrap();
+        match mutation {
+            0 => changed.entry = None,
+            1 => changed.entry.as_mut().unwrap().instance = support::hash("foreign captured entry"),
+            2 => {
+                changed.entry.as_mut().unwrap().base_layout =
+                    support::hash("foreign ordinary environment")
+            }
+            3 => {
+                changed.entry.as_mut().unwrap().payload.recipe.operation =
+                    PayloadOperation::Allocate {
+                        destination: PayloadDestination::Arena(PayloadOperand {
+                            place: 1,
+                            ty: NativeType::Named(DefPath::core("Arena"), vec![]),
+                            producer: PayloadProducer::Parameter(1),
+                            capture_slot: None,
+                        }),
+                    }
+            }
+            _ => unreachable!(),
+        }
+        declarations.environments = Some(changed);
+        assert!(
+            !check(&unit, &table, &manifest, &declarations).is_empty(),
+            "mutation {mutation}"
+        );
+        declarations.environments = Some(SourceEnvironments {
+            entry: Some(source.clone()),
+            constructions: vec![],
+        });
+    }
+}
+
+#[test]
+fn ordinary_capture_174_construction_checks_selected_code_use_and_original_producer() {
+    use support::{Lir, l};
+    let mut t = Lir::<Rc>::new(&[], None);
+    let abi = t.abi_shaped(hirsel_lir::abi_types::CallableShape::Closure, &[], None);
+    let code = t.symbol(SymbolKind::Function);
+    let instance = support::hash("selected captured child 174");
+    t.builder.unit.tables.symbols[code.index()].instance = Some(instance);
+    let value = t.int(ENTRY);
+    let captures = PoolRange::push(
+        &mut t.builder.unit.pools.captures,
+        [CaptureValue {
+            value,
+            usage: CaptureUse::Copy,
+        }],
+    );
+    t.builder.unit.tables.closures.push(ClosureSite {
+        receipts: None,
+        scoped: false,
+        code: Some(ClosureCode { symbol: code, abi }),
+        environment: l::ENV,
+        captures,
+        destination: DestinationClass::Heap,
+        placement: t.heap(),
+        anchor: SourceAnchorId(0),
+    });
+    let result = t.owned(l::CLOSURE);
+    let failure = t.fails();
+    t.builder.push(
+        ENTRY,
+        Inst::Closure {
+            result,
+            closure: ClosureId(0),
+            failure,
+        },
+    );
+    t.release(ENTRY, result, &[]);
+    t.builder.ret(ENTRY, None);
+    let ordinary = t.operations.clone();
+    let (unit, table, manifest) = t.finish();
+    let source = SourceClosure {
+        original: hirsel_lir::invocations::ReferenceBody {
+            definition: unit.tables.symbols[code.index()].definition.clone(),
+            instance: support::hash("original captured child 174"),
+            body: 1,
+        },
+        instance,
+        context: SourceClosureContext::Escaping,
+        base_layout: hirsel_lir::LayoutKeys::rooted(&table, l::ENV).0,
+        payload: SourcePayload {
+            root_type: NativeType::Function(hirsel_lir::abi_types::CallMultiplicity::Many),
+            recipe: PayloadRecipe {
+                source: unit.tables.source_anchors[0].clone(),
+                operation: PayloadOperation::Allocate {
+                    destination: PayloadDestination::Heap,
+                },
+                inputs: vec![PayloadOperand {
+                    place: 0,
+                    ty: NativeType::Primitive(Primitive::I64),
+                    producer: PayloadProducer::Literal(PayloadLiteral::Integer(7)),
+                    capture_slot: Some(0),
+                }],
+            },
+        },
+        captures: vec![CaptureUse::Copy],
+    };
+    let mut declarations = Declarations {
+        ordinary,
+        sources: vec![],
+        environments: Some(SourceEnvironments {
+            entry: Some(source.clone()),
+            constructions: vec![source.clone()],
+        }),
+    };
+    let accepted = check(&unit, &table, &manifest, &declarations);
+    assert!(accepted.is_empty(), "{accepted:?}");
+    for mutation in 0..5 {
+        let mut changed = source.clone();
+        match mutation {
+            0 => changed.instance = support::hash("wrong selected code"),
+            1 => changed.base_layout = support::hash("wrong captured layout"),
+            2 => changed.captures[0] = CaptureUse::Take,
+            3 => {
+                changed.payload.recipe.inputs[0].producer =
+                    PayloadProducer::Literal(PayloadLiteral::Integer(8))
+            }
+            4 => changed.payload.recipe.source.body += 1,
+            _ => unreachable!(),
+        }
+        declarations.environments.as_mut().unwrap().constructions = vec![changed];
+        let errors = check(&unit, &table, &manifest, &declarations);
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error.kind, validate::ViolationKind::Sealed(_))),
+            "mutation {mutation}: {errors:?}"
         );
     }
 }

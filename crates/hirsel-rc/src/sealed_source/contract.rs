@@ -141,7 +141,9 @@ fn assemble(input: &Input<'_>, requirements: Requirements) -> Result<Declaration
     let mut parameters = Vec::new();
     let mut inventory = Vec::new();
     for parameter in input.entry.parameters() {
-        if requirements.payload_locals.contains(&parameter.local) {
+        if requirements.payload_locals.contains(&parameter.local)
+            && !hirsel_lir::sealed_payload_source::is_shared_boundary(&parameter.ty.ty)
+        {
             parameters.push(ReceiptParameter {
                 source: parameter.ordinal,
                 ty: receipt_type(input, Port::Parameter(parameter.ordinal))?,
@@ -171,7 +173,7 @@ fn assemble(input: &Input<'_>, requirements: Requirements) -> Result<Declaration
                 "receipt mutable capture needs exclusive environment transport",
             ));
         }
-        if payload {
+        if payload && !hirsel_lir::sealed_payload_source::is_shared_boundary(&capture.ty.ty) {
             captures.push(ReceiptCapture {
                 ordinal: capture.ordinal,
                 ty: receipt_type(input, Port::Capture(capture.ordinal))?,
@@ -200,7 +202,9 @@ fn assemble(input: &Input<'_>, requirements: Requirements) -> Result<Declaration
             inventory.push(ReceiptGrant::Capture(capture.ordinal));
         }
     }
-    let result = if requirements.result {
+    let result = if requirements.result
+        && !hirsel_lir::sealed_payload_source::is_shared_boundary(&input.entry.result().ty)
+    {
         Some(ReceiptResult {
             ty: receipt_type(input, Port::Result)?,
         })

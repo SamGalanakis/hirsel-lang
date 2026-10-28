@@ -350,7 +350,15 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                     } => {
                         let path = &facts.addresses[address.index()].as_ref().unwrap().path;
                         let mut projected = project(&old[reaching.index()], path);
-                        if cx.repr(result) == ValueRepr::Unit
+                        // MEM-11: copying a Shared root acquires an independent
+                        // global root credit. A borrowed read keeps its view.
+                        let shared_copy = matches!(inst, Inst::Copy { .. })
+                            && matches!(
+                                cx.layouts.get(cx.value_layout(result)).map(|r| &r.kind),
+                                Some(crate::layout_types::LayoutKind::Shared { .. })
+                            );
+                        if shared_copy
+                            || cx.repr(result) == ValueRepr::Unit
                             || matches!(cx.repr(result), ValueRepr::Scalar(k)
                                 if k != crate::layout_types::ScalarKind::Pointer)
                         {
@@ -457,11 +465,31 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                 continue;
             };
             let at = Site::block(BlockId(block as u32));
-            for argument in u.tables.calls[call.index()]
-                .arguments
-                .get(&u.pools.call_arguments)
-                .unwrap_or(&[])
-            {
+            let call = &u.tables.calls[call.index()];
+            let callee = &cx.layouts.0.fn_abis[call.abi.0 as usize];
+            for argument in call.arguments.get(&u.pools.call_arguments).unwrap_or(&[]) {
+                // A Shared borrow may be forwarded without retaining its
+                // container. Borrowed results still retain the incoming view,
+                // including when embedded in an opaque result carrier.
+                if let (Some(result), ArgumentValue::Value(value)) = (call.result, argument.value) {
+                    if callee
+                        .result
+                        .as_ref()
+                        .is_some_and(|r| r.borrowed_parameters.contains(&argument.parameter))
+                    {
+                        let roots =
+                            old[value.index()]
+                                .values()
+                                .fold(Origins::default(), |mut all, row| {
+                                    all.extend(row);
+                                    all
+                                });
+                        union(
+                            &mut n[result.index()],
+                            &BTreeMap::from([(Vec::new(), roots)]),
+                        );
+                    }
+                }
                 if let ArgumentValue::Address { address, version } = argument.value {
                     let address = facts.addresses[address.index()].as_ref().unwrap();
                     if let Root::Slot(slot) = address.root {
@@ -541,6 +569,22 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                 | Inst::EndOrigin { .. }
                 | Inst::Drop { .. }
                 | Inst::Release { .. } => {}
+                Inst::Copy { result, .. }
+                    if matches!(
+                        cx.layouts.get(cx.value_layout(result)).map(|r| &r.kind),
+                        Some(crate::layout_types::LayoutKind::Shared { .. })
+                    ) =>
+                {
+                    // The copied credit is independent; callable restrictions
+                    // cannot be converted into an immutable data observation.
+                    if n[result.index()]
+                        .values()
+                        .flat_map(|r| &r.scoped)
+                        .any(|origin| callable_origins.contains(origin))
+                    {
+                        reject(report, at, result, "callable used as data");
+                    }
+                }
                 Inst::SeqLen { value, .. } => {
                     // The length reads storage without retaining it. Callable
                     // origins cannot be reinterpreted as data observations.
@@ -683,11 +727,23 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                     match a.value {
                         ArgumentValue::Value(v) => {
                             for (path, roots) in &n[v.index()] {
+                                // A Shared root's retained copies own independent
+                                // credits and do not retain the containing region.
+                                // Ordinary loan checking still bounds this borrow.
+                                let shared = matches!(
+                                    cx.layouts.get(cx.value_layout(v)).map(|r| &r.kind),
+                                    Some(crate::layout_types::LayoutKind::Shared { .. })
+                                ) && roots
+                                    .scoped
+                                    .iter()
+                                    .all(|origin| !callable_origins.contains(origin));
                                 let covered = a.passing == Passing::Borrow
-                                    && !matches!(call.callee, Callee::Operation(_))
-                                    && callee.nonretaining.iter().any(|p| {
-                                        p.parameter == a.parameter && path.starts_with(&fields(p))
-                                    });
+                                    && (shared
+                                        || (!matches!(call.callee, Callee::Operation(_))
+                                            && callee.nonretaining.iter().any(|p| {
+                                                p.parameter == a.parameter
+                                                    && path.starts_with(&fields(p))
+                                            })));
                                 if !covered {
                                     for &origin in roots {
                                         report.add(

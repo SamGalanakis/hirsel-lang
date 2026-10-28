@@ -86,29 +86,30 @@ impl Importer<'_> {
                         [hirsel_lir::structural::Shape::Leaf]
                     ) && descriptor.bits_root(self.layouts.table()).is_ok()
                 });
-            let receipt = if plain {
-                None
-            } else {
-                let slot = self.receipt_slot(field.value).ok_or_else(|| {
-                    PassError::Unsupported(format!(
-                        "construction child needs paired original receipt custody: {:?}, {:?}",
-                        original.ty, original.producer
-                    ))
-                })?;
-                let metadata = self.whole(slot);
-                let address = self.address(&metadata)?;
-                let loan = self.synthetic_loan(address);
-                let receipt = self.value(metadata.ty, Holding::Borrowed(loan));
-                let reaching = self.reaching(slot)?;
-                self.push(Inst::Read {
-                    result: receipt,
-                    address,
-                    reaching,
-                    mode: ReadMode::Borrow,
-                });
-                loans.push(loan);
-                Some(receipt)
-            };
+            let receipt =
+                if plain || hirsel_lir::sealed_payload_source::is_shared_boundary(&original.ty) {
+                    None
+                } else {
+                    let slot = self.receipt_slot(field.value).ok_or_else(|| {
+                        PassError::Unsupported(format!(
+                            "construction child needs paired original receipt custody: {:?}, {:?}",
+                            original.ty, original.producer
+                        ))
+                    })?;
+                    let metadata = self.whole(slot);
+                    let address = self.address(&metadata)?;
+                    let loan = self.synthetic_loan(address);
+                    let receipt = self.value(metadata.ty, Holding::Borrowed(loan));
+                    let reaching = self.reaching(slot)?;
+                    self.push(Inst::Read {
+                        result: receipt,
+                        address,
+                        reaching,
+                        mode: ReadMode::Borrow,
+                    });
+                    loans.push(loan);
+                    Some(receipt)
+                };
             inputs.push(ReceiptInput {
                 original: field.value,
                 receipt,

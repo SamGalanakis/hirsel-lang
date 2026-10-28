@@ -4,14 +4,14 @@ use crate::ir::*;
 use crate::sealed_payload_source::{PayloadProducer, PayloadProjection};
 use std::collections::{HashMap, VecDeque};
 
-pub(super) struct Projections<'a, S> {
+pub(in crate::validate) struct Projections<'a, S> {
     unit: &'a LirUnit<S>,
     definitions: Vec<Option<&'a Inst>>,
     incoming: Vec<Vec<ValueId>>,
     concrete: Vec<bool>,
 }
 impl<'a, S> Projections<'a, S> {
-    pub(super) fn new(unit: &'a LirUnit<S>) -> Self {
+    pub(in crate::validate) fn new(unit: &'a LirUnit<S>) -> Self {
         let mut definitions = vec![None; unit.values.len()];
         let mut concrete = vec![false; unit.values.len()];
         for &value in &unit.parameters {
@@ -124,7 +124,7 @@ impl<'a, S> Projections<'a, S> {
         Some(dependencies)
     }
 
-    pub(super) fn matches(
+    pub(in crate::validate) fn matches(
         &self,
         value: ValueId,
         expected: &PayloadProducer,

@@ -41,7 +41,21 @@ fn sealed_aggregate_roots_133_runs_on_four_engines_and_replays() {
     run_sealed_program("MEM-4-sealed-aggregate-roots-run.hir");
 }
 
+#[test]
+fn sealed_callback_failure_174_runs_on_checked_heap() {
+    run_sealed_program_engines("MEM-4-sealed-callback-failure-run.hir", true);
+}
+
+#[test]
+fn sealed_callback_drop_cause_174_runs_on_checked_heap() {
+    run_sealed_program_engines("MEM-4-sealed-callback-drop-cause-run.hir", true);
+}
+
 fn run_sealed_program(name: &str) {
+    run_sealed_program_engines(name, false);
+}
+
+fn run_sealed_program_engines(name: &str, checked_heap_only: bool) {
     with_compiler_stack(|| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../conformance/MEM")
@@ -67,7 +81,11 @@ fn run_sealed_program(name: &str) {
         assert_eq!(observation.exit_code, Some(0));
         assert!(observation.failures.is_empty());
         eprintln!("{name}: reference PASS");
-        let mut matrix = native::trace_roots_matrix();
+        let mut matrix = if checked_heap_only {
+            Vec::new()
+        } else {
+            native::trace_roots_matrix()
+        };
         matrix.push(native::Configuration {
             options: native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
             engine: native::Engine::Heap { campaign: false },
@@ -86,13 +104,17 @@ fn run_sealed_program(name: &str) {
             scratch.path(),
             &native::Fixture::default(),
         );
-        assert_eq!(outcomes.len(), 3);
+        assert_eq!(outcomes.len(), matrix.len());
         let mut failures = Vec::new();
         for (configuration, outcome) in outcomes {
             eprintln!("{configuration}: {outcome:?}");
             if !matches!(outcome, native::Outcome::Agree) {
                 failures.push((configuration, outcome));
             }
+        }
+        if checked_heap_only {
+            assert!(failures.is_empty(), "{failures:#?}");
+            return;
         }
         let replay = native::real_io_replay_in(
             &validated,

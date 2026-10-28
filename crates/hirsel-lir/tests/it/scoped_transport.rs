@@ -966,3 +966,134 @@ fn a_capture_selector_cannot_name_an_absent_capture() {
         }
     }
 }
+
+#[test]
+fn shared_174_forwarding_preserves_borrowed_result_origins() {
+    for layout in [l::SHARED, l::BLK] {
+        for alias in [false, true] {
+            let mut t = Lir::<Ready>::new(&[(Passing::Borrow, layout)], alias.then_some(layout));
+            contract(
+                &mut t,
+                vec![ParameterPath {
+                    parameter: 0,
+                    fields: vec![],
+                }],
+            );
+            let slot = t.slot(layout, SlotKind::Parameter(0), ROOT);
+            let p = t.version_of(slot);
+            t.param(p);
+            let address = t.at(ENTRY, slot, &[], &[]);
+            let loan = t.loan(address, false);
+            t.begin(ENTRY, loan);
+            let view = t.read(ENTRY, address, p, ReadMode::Borrow, Some(loan));
+            let abi = t.abi(&[(Passing::Borrow, layout)], alias.then_some(layout));
+            if alias {
+                t.table.fn_abis[abi.0 as usize]
+                    .result
+                    .as_mut()
+                    .unwrap()
+                    .borrowed_parameters = vec![0];
+            }
+            let next = t.builder.block(BlockKind::Body, &[]);
+            let failed = t.cleanup(&[Undo::End(loan)]);
+            let symbol = t.symbol(SymbolKind::Function);
+            let result = t.call_to(
+                ENTRY,
+                Callee::Direct(symbol),
+                abi,
+                &[(Passing::Borrow, layout)],
+                alias.then_some(layout),
+                &[ArgumentValue::Value(view)],
+                (next, &[]),
+                failed,
+            );
+            t.end(next, loan);
+            t.builder.ret(next, result);
+            let errors = check(t);
+            let forwarding = errors.iter().any(|k| {
+                matches!(
+                    k,
+                    K::ScopedRetention {
+                        operation: "may-retain call argument",
+                        ..
+                    }
+                )
+            });
+            assert_eq!(
+                forwarding,
+                layout == l::BLK,
+                "{layout:?} alias={alias}: {errors:?}"
+            );
+            let escaped = errors.iter().any(|k| {
+                matches!(
+                    k,
+                    K::ScopedRetention {
+                        operation: "return or error payload",
+                        ..
+                    }
+                )
+            });
+            assert_eq!(escaped, alias, "{layout:?} alias={alias}: {errors:?}");
+            if layout == l::SHARED && !alias {
+                assert!(errors.is_empty(), "{errors:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_174_copy_acquires_a_root_but_borrowed_reads_keep_the_view() {
+    for layout in [l::SHARED, l::BLK] {
+        for copied in [false, true] {
+            let mut t = Lir::<Ready>::new(&[(Passing::Borrow, layout)], Some(layout));
+            contract(
+                &mut t,
+                vec![ParameterPath {
+                    parameter: 0,
+                    fields: vec![],
+                }],
+            );
+            let slot = t.slot(layout, SlotKind::Parameter(0), ROOT);
+            let p = t.version_of(slot);
+            t.param(p);
+            let address = t.at(ENTRY, slot, &[], &[]);
+            let result = if copied {
+                let result = t.owned(layout);
+                let failure = t.fails();
+                t.builder.push(
+                    ENTRY,
+                    Inst::Copy {
+                        result,
+                        address,
+                        reaching: p,
+                        failure,
+                    },
+                );
+                result
+            } else {
+                let loan = t.loan(address, false);
+                t.begin(ENTRY, loan);
+                t.read(ENTRY, address, p, ReadMode::Borrow, Some(loan))
+            };
+            t.builder.ret(ENTRY, Some(result));
+            let errors = check(t);
+            let escaped = errors.iter().any(|k| {
+                matches!(
+                    k,
+                    K::ScopedRetention {
+                        operation: "return or error payload",
+                        ..
+                    }
+                )
+            });
+            assert_eq!(
+                escaped,
+                !(copied && layout == l::SHARED),
+                "{layout:?} copied={copied}: {errors:?}"
+            );
+            if copied && layout == l::SHARED {
+                assert!(errors.is_empty(), "{errors:?}");
+            }
+        }
+    }
+}

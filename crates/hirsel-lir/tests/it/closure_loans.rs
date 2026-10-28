@@ -22,6 +22,7 @@ enum Forgery {
     ReleasesUnderLoan,
     /// The loan ends before the call that uses the borrowed callable.
     EndsLoanBeforeCall,
+    SkipsFailureCleanup,
 }
 
 /// `let f = fn() { x }; while _ { f() }`, the closure in slot `s`: entry
@@ -86,7 +87,11 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
         t.end(body, loan);
     }
     let after = t.builder.block(BlockKind::Body, &[]);
-    let failed = t.cleanup(&[Undo::End(loan), Undo::Drop(s)]);
+    let failed = if forgery == Some(Forgery::SkipsFailureCleanup) {
+        t.cleanup(&[Undo::End(loan)])
+    } else {
+        t.cleanup(&[Undo::End(loan), Undo::Drop(s)])
+    };
     t.call_to(
         body,
         Callee::Bound { code, closure: f },
@@ -180,5 +185,16 @@ fn a_callable_called_after_its_loan_ends_is_rejected() {
     pair(
         |mutant| kernel(false, mutant.then_some(Forgery::EndsLoanBeforeCall)),
         |k| matches!(k, K::OutsideLoan(_)),
+    );
+}
+
+#[test]
+fn captured_environment_174_cannot_skip_cleanup_on_entered_failure() {
+    let accepted = kernel(false, None);
+    assert!(accepted.is_empty(), "{accepted:?}");
+    let rejected = kernel(false, Some(Forgery::SkipsFailureCleanup));
+    assert!(
+        !rejected.is_empty(),
+        "the entered failure leaked its captured environment"
     );
 }

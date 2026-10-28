@@ -76,3 +76,78 @@ snapshot_struct!(SourceEnvironments {
     entry,
     constructions
 });
+
+impl SourceClosure {
+    /// Bind complete ordinary capture storage to the independently selected
+    /// original environment. No capture is inferred from filtered native order.
+    pub fn check_ordinary_entry<S>(
+        &self,
+        unit: &crate::ir::LirUnit<S>,
+        layouts: &crate::LayoutTable,
+    ) -> Result<crate::LayoutId, &'static str> {
+        self.check_structure()?;
+        if self.original.definition != unit.header.definition
+            || self.instance != unit.header.instance
+        {
+            return Err("ordinary capture entry selects another original body");
+        }
+        if !matches!(
+            self.payload.recipe.operation,
+            PayloadOperation::Allocate {
+                destination: PayloadDestination::Heap
+            }
+        ) {
+            return Err("ordinary receipt captures require their original heap environment");
+        }
+        let mut candidates = layouts.layouts.iter().enumerate().filter(|(index, base)| {
+            base.fields.len() == unit.captures.len()
+                && base
+                    .fields
+                    .iter()
+                    .zip(&unit.captures)
+                    .all(|(field, value)| {
+                        unit.values
+                            .get(value.index())
+                            .and_then(|value| unit.types.get(value.ty.index()))
+                            .is_some_and(|ty| ty.layout == field.layout)
+                    })
+                && crate::LayoutKeys::rooted(layouts, crate::LayoutId(*index as u32)).0
+                    == self.base_layout
+        });
+        let (index, base) = candidates
+            .next()
+            .ok_or("ordinary capture entry lacks its source environment layout")?;
+        let live = usize::from(matches!(
+            base.kind,
+            crate::layout_types::LayoutKind::Environment { .. }
+        ));
+        if base.fields.len() != self.captures.len() + live
+            || unit.captures.len() != base.fields.len()
+        {
+            return Err("ordinary capture entry differs from complete original capture coverage");
+        }
+        for (ordinal, (&version, field)) in unit.captures.iter().zip(&base.fields).enumerate() {
+            let mut slots = unit
+                .slots
+                .iter()
+                .filter(|slot| slot.kind == crate::ir::SlotKind::Capture(ordinal as u32));
+            let slot = slots
+                .next()
+                .ok_or("ordinary capture entry lacks original storage")?;
+            if slots.next().is_some()
+                || field.ordinal != ordinal as u32
+                || unit
+                    .values
+                    .get(version.index())
+                    .is_none_or(|value| value.ty != slot.ty)
+                || unit
+                    .types
+                    .get(slot.ty.index())
+                    .is_none_or(|ty| ty.layout != field.layout)
+            {
+                return Err("ordinary capture entry storage differs from original environment");
+            }
+        }
+        Ok(crate::LayoutId(index as u32))
+    }
+}

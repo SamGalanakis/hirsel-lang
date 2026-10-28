@@ -856,3 +856,217 @@ fn h_inventory_117_requires_its_paired_live_root_with_an_accepted_control() {
     m.exec(&mut f, &instruction).unwrap();
     assert!(m.seal_inventory[&0].contains_key(&first.alloc));
 }
+
+fn ordinary_capture_174() -> (Program<Rc>, Config) {
+    use hirsel_lir::sealed_payload_source::*;
+    let mut layouts = Layouts::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
+    let number = layouts.scalar(ScalarKind::U64);
+    let environment = layouts.record(&[number]);
+    let (target, mut layouts) = layouts.finish();
+    layouts.fn_abis[0].shape = hirsel_lir::abi_types::CallableShape::Closure;
+    layouts.fn_abis[0].environment = true;
+    let mut unit = crate::build::fixture_unit::<Rc>(crate::build::path("ordinary_capture_174"));
+    unit.header.target = target.digest();
+    unit.types.push(LirType {
+        repr: ValueRepr::Scalar(ScalarKind::U64),
+        layout: number,
+    });
+    unit.values.extend((0..2).map(|_| ValueInfo {
+        ty: LirTypeId(0),
+        holding: Holding::Plain,
+    }));
+    unit.slots.push(SlotInfo {
+        ty: LirTypeId(0),
+        kind: SlotKind::Capture(0),
+        scope: ScopeId(0),
+    });
+    unit.captures.push(ValueId(0));
+    unit.tables.symbols.push(Symbol {
+        kind: SymbolKind::Function,
+        definition: unit.header.definition.clone(),
+        instance: Some(unit.header.instance),
+    });
+    let captures = PoolRange::push(
+        &mut unit.pools.captures,
+        [CaptureValue {
+            value: ValueId(1),
+            usage: CaptureUse::Copy,
+        }],
+    );
+    unit.tables.closures.push(ClosureSite {
+        receipts: None,
+        scoped: true,
+        code: Some(ClosureCode {
+            symbol: SymbolId(0),
+            abi: hirsel_lir::FnAbiId(0),
+        }),
+        environment,
+        captures,
+        destination: DestinationClass::Heap,
+        placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
+        anchor: SourceAnchorId(0),
+    });
+    let source = SourceClosure {
+        original: hirsel_lir::invocations::ReferenceBody {
+            definition: unit.header.definition.clone(),
+            instance: hirsel_syntax::ContentHash::of_bytes(b"original capture 174"),
+            body: 0,
+        },
+        instance: unit.header.instance,
+        context: SourceClosureContext::Scoped,
+        base_layout: hirsel_lir::LayoutKeys::rooted(&layouts, environment).0,
+        payload: SourcePayload {
+            root_type: T::Function(hirsel_lir::abi_types::CallMultiplicity::Many),
+            recipe: PayloadRecipe {
+                source: unit.tables.source_anchors[0].clone(),
+                operation: PayloadOperation::Allocate {
+                    destination: PayloadDestination::Heap,
+                },
+                inputs: vec![PayloadOperand {
+                    place: 0,
+                    ty: T::Primitive(P::U64),
+                    producer: PayloadProducer::Literal(PayloadLiteral::Integer(7)),
+                    capture_slot: Some(0),
+                }],
+            },
+        },
+        captures: vec![CaptureUse::Copy],
+    };
+    let environments = SourceEnvironments {
+        entry: Some(source.clone()),
+        constructions: vec![source],
+    };
+    let witness = SealSourceWitness::from_expectations(
+        hirsel_syntax::ContentHash::of_bytes(b"original capture observation 174"),
+        unit.header.definition.clone(),
+        unit.header.implementation_revision,
+        unit.header.instance,
+        &[],
+        &[],
+    )
+    .with_environments(Some(&environments));
+    let config = Config {
+        seal_sources: vec![SourceSeal {
+            reference: hirsel_lir::invocations::ReferenceBody {
+                definition: unit.header.definition.clone(),
+                instance: unit.header.instance,
+                body: 0,
+            },
+            witness,
+            events: vec![],
+            payloads: vec![],
+            environments: Some(environments),
+        }],
+        ..Config::default()
+    };
+    (
+        Program {
+            target,
+            layouts,
+            units: vec![unit],
+            statics: vec![],
+            invocation_bodies: vec![],
+            pretransfer_adapters: vec![],
+            invocations: Default::default(),
+        },
+        config,
+    )
+}
+
+fn enter_ordinary_capture_174(m: &mut Machine<'_, Rc>) -> (Frame, Ptr) {
+    let mut caller = m.frame(0, Role::Entry, None);
+    m.define_fresh(
+        &mut caller,
+        ValueId(1),
+        Val::Bits {
+            scalar: ScalarKind::U64,
+            bits: 7,
+        },
+    )
+    .unwrap();
+    let Val::Callable {
+        env: Some(environment),
+        ..
+    } = m.closure(&mut caller, ClosureId(0)).unwrap()
+    else {
+        panic!("expected captured environment");
+    };
+    let mut child = m.frame(0, Role::Callee, Some(environment));
+    m.check_ordinary_capture_entry(&child).unwrap();
+    m.bind_captures(&mut child).unwrap();
+    let SlotStore::Alias(cell) = child.slots[0] else {
+        panic!("capture must alias its actual environment cell");
+    };
+    assert_eq!(child.versions[0], Some(ValueId(0)));
+    assert_eq!(cell.alloc, environment.alloc);
+    let allocation = m.ledger.check(cell).unwrap();
+    assert_eq!(
+        allocation.extent.read_bytes(cell.offset, 8),
+        &7u64.to_le_bytes()
+    );
+    (child, environment)
+}
+
+#[test]
+fn h_capture_174_binds_actual_cells_and_rejects_an_environment_after_its_region_ends() {
+    let (program, config) = ordinary_capture_174();
+    let mut ops = NoOperations;
+    let mut m = Machine::new(&program, &config, &mut ops);
+    let (frame, environment) = enter_ordinary_capture_174(&mut m);
+    let original = m.seal_allocations.remove(&environment.alloc).unwrap();
+    assert!(
+        m.check_ordinary_capture_entry(&frame)
+            .unwrap_err()
+            .message
+            .contains("actual original construction")
+    );
+    m.seal_allocations.insert(environment.alloc, original);
+    let allocation = m.ledger.get_mut(environment.alloc);
+    allocation.owner = Owner::Region(0);
+    allocation.state = AllocState::Dead;
+    assert_eq!(
+        m.check_ordinary_capture_entry(&frame).unwrap_err().kind,
+        V::RegionEscape
+    );
+}
+
+#[test]
+fn h_capture_174_entered_failure_cannot_omit_environment_cleanup() {
+    let (program, config) = ordinary_capture_174();
+    let mut ops = NoOperations;
+    let mut m = Machine::new(&program, &config, &mut ops);
+    let (_, environment) = enter_ordinary_capture_174(&mut m);
+    let error = m.audit().unwrap_err();
+    assert!(
+        matches!(error.kind, V::CountMismatch | V::UnexplainedAllocation),
+        "{error:?}"
+    );
+    let mut work = vec![];
+    m.decrement(environment, None, &mut work).unwrap();
+    drain(&mut m, work);
+    m.audit().unwrap();
+}
+
+#[test]
+fn h_capture_174_keeps_borrowed_payload_companions_closed() {
+    use hirsel_lir::sealed_payload_source::*;
+    let (mut program, _) = ordinary_capture_174();
+    let identity = hirsel_syntax::ContentHash::of_bytes(b"borrowed region payload");
+    let contract = ReceiptContract::new(
+        vec![],
+        None,
+        vec![ReceiptCapture {
+            ordinal: 0,
+            mode: ReceiptMode::Borrow,
+            ty: ReceiptType {
+                source_type: identity,
+                profile: identity,
+            },
+        }],
+        vec![],
+    )
+    .unwrap();
+    program.layouts.fn_abis[0].key.receipt_contract = Some(contract.content().unwrap());
+    program.layouts.fn_abis[0].receipts = Some(contract);
+    assert_eq!(program.check().unwrap_err().kind, V::Unsupported);
+}

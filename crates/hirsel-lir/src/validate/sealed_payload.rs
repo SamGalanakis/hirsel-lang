@@ -5,7 +5,7 @@ use crate::ir::*;
 use crate::sealed_payload::*;
 use crate::stage::Stage;
 pub(super) mod pairing;
-mod projection;
+pub(super) mod projection;
 
 pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
     let unit = cx.unit;
@@ -23,7 +23,16 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
     }
     let pairs = pairing::Pairing::new(unit);
     let mut observed = vec![];
-    let origins = producers(unit, &cx.layouts.0.fn_abis[unit.header.abi.0 as usize]);
+    let captured = cx
+        .operations
+        .seal_environments(&unit.header.definition, unit.header.instance)
+        .and_then(|sources| sources.entry)
+        .is_some_and(|source| source.check_ordinary_entry(unit, cx.layouts.0).is_ok());
+    let origins = producers(
+        unit,
+        &cx.layouts.0.fn_abis[unit.header.abi.0 as usize],
+        captured,
+    );
     let projections = projection::Projections::new(unit);
     for inst in &unit.instructions {
         let Inst::PayloadReceipt {
@@ -142,7 +151,10 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                                 }]
                             )
                         });
-                    if !plain && !matches!(source.producer, PayloadProducer::Literal(_)) {
+                    if !plain
+                        && !crate::sealed_payload_source::is_shared_boundary(&source.ty)
+                        && !matches!(source.producer, PayloadProducer::Literal(_))
+                    {
                         reject("payload receipt omits demanded original provenance");
                     }
                 }
@@ -412,14 +424,22 @@ fn literal(value: &ConstantValue) -> Option<PayloadLiteral> {
 
 /// Recover canonical producers through whole-value transport and CFG joins.
 /// A projection or an unknown producer is not guessed to be an identity copy.
-fn producers<S>(unit: &LirUnit<S>, abi: &crate::FnAbi) -> Vec<Vec<PayloadProducer>> {
+pub(super) fn producers<S>(
+    unit: &LirUnit<S>,
+    abi: &crate::FnAbi,
+    captured: bool,
+) -> Vec<Vec<PayloadProducer>> {
     let mut result = vec![vec![]; unit.values.len()];
     for (parameter, value) in abi.parameters.iter().zip(&unit.parameters) {
         result[value.index()].push(PayloadProducer::Parameter(parameter.source));
     }
-    // Filtered native capture order cannot establish original source ordinals.
-    // A complete original environment association is required before accepting
-    // captured producers; no candidate ordinal is guessed here.
+    // Receipt entry validation binds this complete ordinary environment to its
+    // original source before any captured producer is accepted.
+    if captured {
+        for (ordinal, &value) in unit.captures.iter().enumerate() {
+            result[value.index()].push(PayloadProducer::Capture(ordinal as u32));
+        }
+    }
     for inst in &unit.instructions {
         let (value, origin) = match *inst {
             Inst::Const { result, constant } => {

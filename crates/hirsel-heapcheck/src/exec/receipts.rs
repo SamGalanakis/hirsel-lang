@@ -278,7 +278,10 @@ impl<S: Stage> Machine<'_, S> {
                 let plain = self.config.seal_descriptors.iter().any(|d| {
                     d.root_type == original.ty && d.bits_root(&self.program.layouts).is_ok()
                 });
-                if !plain && !matches!(original.producer, PayloadProducer::Literal(_)) {
+                if !plain
+                    && !hirsel_lir::sealed_payload_source::is_shared_boundary(&original.ty)
+                    && !matches!(original.producer, PayloadProducer::Literal(_))
+                {
                     return fail(V::Malformed, "receipt omits original child provenance");
                 }
             }
@@ -554,6 +557,66 @@ impl<S: Stage> Machine<'_, S> {
                     "receipt construction differs from original operand cells",
                 );
             }
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_ordinary_capture_entry(&self, frame: &Frame) -> Checked<()> {
+        let unit = self.unit(frame.unit);
+        let source = self
+            .config
+            .seal_sources
+            .iter()
+            .find(|source| {
+                source.reference.definition == unit.header.definition
+                    && source.reference.instance == unit.header.instance
+            })
+            .and_then(|source| source.environments.as_ref())
+            .and_then(|sources| sources.entry.as_ref())
+            .ok_or_else(|| {
+                err(
+                    V::Malformed,
+                    "H capture entry lacks independent original environment",
+                )
+            })?;
+        let layout = source
+            .check_ordinary_entry(unit, &self.program.layouts)
+            .map_err(|error| err(V::Malformed, error))?;
+        let env = frame
+            .env
+            .ok_or_else(|| err(V::BorrowExpired, "H capture entry has no live environment"))?;
+        if self.ledger.check(env)?.layout != Some(layout) {
+            return fail(
+                V::TypeConfusion,
+                "H capture entry has another actual environment layout",
+            );
+        }
+        let (parent, anchor) = self.seal_allocations.get(&env.alloc).ok_or_else(|| {
+            err(
+                V::Malformed,
+                "H capture entry lacks actual original construction",
+            )
+        })?;
+        let caller = self.unit(*parent);
+        let matching =
+            self.config
+                .seal_sources
+                .iter()
+                .find(|source| {
+                    source.reference.definition == caller.header.definition
+                        && source.reference.instance == caller.header.instance
+                })
+                .and_then(|source| source.environments.as_ref())
+                .is_some_and(|sources| {
+                    sources.constructions.iter().any(|original| {
+                        original == source && &original.payload.recipe.source == anchor
+                    })
+                });
+        if !matching {
+            return fail(
+                V::Malformed,
+                "H capture cells belong to another original construction",
+            );
         }
         Ok(())
     }

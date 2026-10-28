@@ -59,6 +59,7 @@ mod ownership;
 mod ready;
 mod receipt_boundary;
 mod receipt_custody;
+mod receipt_environments;
 mod scoped_transport;
 mod sealed;
 mod sealed_payload;
@@ -810,6 +811,7 @@ fn check_with_context<S: Stage>(
         sealed_payload::check(&cx, &mut report);
         receipt_custody::check(&cx, &mut report);
         receipt_boundary::calls(&cx, &mut report);
+        receipt_environments::check(&cx, &mut report);
         ownership::check(&cx, &facts, &mut report);
         holes::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);

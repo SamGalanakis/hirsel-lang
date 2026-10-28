@@ -18,6 +18,13 @@ pub use receipt::{
     ReceiptProfile, ReceiptResult, ReceiptSource, ReceiptType,
 };
 
+/// Immutable Shared roots carry their own independent MEM-11 credit. Their
+/// enclosing construction observes the actual root cell without a child journal.
+pub fn is_shared_boundary(ty: &NativeType) -> bool {
+    matches!(ty, NativeType::Builtin(crate::operation::BuiltinType::Shared, arguments)
+        if matches!(arguments.as_slice(), [crate::operation::OperationArgument::Type(_)]))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum PayloadLiteral {
     Unit,

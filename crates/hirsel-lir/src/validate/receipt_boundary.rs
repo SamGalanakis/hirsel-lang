@@ -1,5 +1,6 @@
 //! Data entry companions are source-bound snapshots with matching custody.
-//! Captures and tasks remain closed here.
+//! Demanded capture companions remain closed. Ordinary capture storage requires
+//! an independently bound source environment.
 use super::{Cx, Inputs, Report, Site, ViolationKind as K};
 use crate::{ir::*, sealed_payload_source::*, stage::Stage};
 
@@ -107,14 +108,19 @@ pub(super) fn entry<S: Stage>(unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Result<
         .operations
         .receipt_source(&unit.header.definition, unit.header.instance)
         .ok_or("receipt entry requires independent source and custody validation")?;
-    if !unit.captures.is_empty()
-        || entry.environment.is_some()
-        || selected
-            .profiles
-            .iter()
-            .any(|p| matches!(p.port, ReceiptPort::Capture(_)))
-    {
+    if entry.environment.is_some() {
         return Err("receipt entry captures require independent environment custody".into());
+    }
+    if !unit.captures.is_empty() {
+        let environments = inputs
+            .operations
+            .seal_environments(&unit.header.definition, unit.header.instance)
+            .ok_or("receipt entry lacks independent ordinary environments")?;
+        environments
+            .entry
+            .as_ref()
+            .ok_or("receipt entry lacks its original ordinary capture association")?
+            .check_ordinary_entry(unit, inputs.layouts)?;
     }
     source(
         &selected,

@@ -459,8 +459,21 @@ fn ordinary_and_unique_generic_actuals_sharing_erased_base_cannot_share_source_p
 }
 
 fn captured_fixture(usage: UseKind, arena: bool) -> Fixture {
+    captured_fixture_shape(usage, arena, false)
+}
+
+fn captured_fixture_shape(usage: UseKind, arena: bool, shared: bool) -> Fixture {
     let (types, bytes, scalar, grant) = types();
-    let captured = if arena { grant } else { bytes };
+    let captured = if arena {
+        grant
+    } else if shared {
+        types.intern(Type::with_kind(TypeKind::Builtin {
+            kind: BuiltinType::Shared,
+            arguments: vec![GenericArgument::Type(bytes)].into(),
+        }))
+    } else {
+        bytes
+    };
     let callable = types.intern(Type::with_kind(TypeKind::Function(function(
         &[(PassingMode::Borrow, captured)],
         scalar,
@@ -671,5 +684,25 @@ fn returned_grant_demand_remains_strict_until_original_grant_transport_exists() 
     assert_eq!(
         derive(&[callee.input(), caller.input()]).unwrap_err(),
         SourceError::Unsupported("receipt result needs original grant transport")
+    );
+}
+
+#[test]
+fn shared_capture_174_keeps_original_demand_without_a_redundant_child_snapshot() {
+    for usage in [UseKind::Borrow, UseKind::Copy, UseKind::Take] {
+        let fixture = captured_fixture_shape(usage, false, true);
+        let declaration = fixture.derive().unwrap();
+        assert!(declaration.requirements().payload_locals.contains(&1));
+        assert!(declaration.contract().unwrap().captures.is_empty());
+        assert!(hirsel_lir::sealed_payload_source::is_shared_boundary(
+            &fixture.profiles[&Port::Capture(0)].root.ty
+        ));
+        let ordinary = captured_fixture(usage, false).derive().unwrap();
+        assert_eq!(ordinary.contract().unwrap().captures.len(), 1);
+    }
+    assert!(
+        captured_fixture_shape(UseKind::Mut, false, true)
+            .derive()
+            .is_err()
     );
 }
