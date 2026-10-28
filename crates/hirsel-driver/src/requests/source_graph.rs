@@ -1437,6 +1437,7 @@ pub(super) fn install(
             .as_ref()
             .map_or(0, |inputs| inputs.input_bytes()),
     )?;
+    let sources = program.engine.sources.clone();
     let GraphAdmission {
         runtime,
         source,
@@ -1453,12 +1454,6 @@ pub(super) fn install(
         .split(plan.source_index_bytes)
         .ok_or_else(|| uninstalled())?;
     let source = Arc::new(source);
-    // This partition covers the complete current source view. Rebind before
-    // producers capture it, so a restored carry's older header/graph charge
-    // cannot remain pinned through the new graph's source maps.
-    program.engine.sources =
-        std::mem::take(&mut program.engine.sources).replace_owner(source.clone());
-    let sources = program.engine.sources.clone();
     let query_error = |error| ToolError::Query {
         error,
         phase: None,
