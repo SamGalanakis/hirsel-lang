@@ -49,10 +49,11 @@ sources before replacing any destination, so equal payloads retain their distinc
 identities. Resources created and dropped inside a child task are supported
 along with captured Resources transferred at the actual committed spawn. The
 compiler binds the callback and capture paths from the complete checked code
-graph. Statically nested Resource results keep their original credits through
-the actual child-to-parent result copy. A detached result stays with its child
+graph. Resource and Resource-tuple task results keep their original credits
+through the actual child-to-parent result copy. A detached result stays with its child
 until its cleanup drops it. Failed children create no parent result credit.
-Unknown callbacks and unsupported dynamic result storage refuse before launch.
+Unknown callbacks, unsupported dynamic result storage and some nested variant
+cleanup paths refuse before launch.
 The runtime sidecar binds each created task's generation and canonical path,
 so interleaved frames and reused scheduler slots remain distinct. Channel
 payloads with statically nested Resources preserve FIFO item identity through
