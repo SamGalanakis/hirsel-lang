@@ -98,6 +98,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {
  let tasks=io.tasks(rt)?
  task.scope(tasks,fn(s:Scope) {
   let child=task.async(s,fn()->(Token,Token) {(Token(),Token())})
+  task.detach(s,take child)
  })
  Ok(())
 }
@@ -119,7 +120,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {
   let child=task.async(s,fn()->Token {
    let first=Token()
    let second=Token()
-   failure.check(false,Bounds())
+   failure.check(false,Arithmetic())
    take first
   })
   let token=task.await(s,take child)
