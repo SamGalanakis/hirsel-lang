@@ -284,7 +284,7 @@ fn cpu_scalar_scopes_agree_under_free_and_ordered_at_widths_1_4_8() {
                 b"cpu-scalar-ok\n",
                 false,
                 free,
-                width == 1,
+                true,
             );
         }
     }
@@ -359,4 +359,46 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         false,
         true,
     );
+}
+
+#[test]
+fn cpu_canceled_admission_skips_preparation_and_parent_can_reenter() {
+    for width in [1, 4, 8] {
+        let source = r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(tasks, fn(scope: Scope) -> () {
+    let (wake, sleep): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let child = task.async(scope, fn() -> bool {
+      let mut gate = take sleep
+      failure.check(channel.receive(tasks, mut gate) == Error(Canceled(Requested())), Arithmetic())
+      let batch = core@1/cpu.map_scoped(tasks, WIDTH,
+        fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1u64] },
+        fn(take job: u64) -> u64 uses {} { job + 7u64 })
+      batch == Error(Canceled(Requested()))
+    })
+    task.cancel(scope, child)
+    failure.check(task.await(scope, take child), Arithmetic())
+    let _ = wake
+  })
+  let after = core@1/cpu.map_scoped(tasks, WIDTH,
+    fn() -> List[u64] uses {} { [7u64] },
+    fn(take job: u64) -> u64 uses {} { job + 1u64 })
+  failure.check(after == Ok([8u64]), Bounds())
+  let _ = out.print(io.stdout(rt)?, "cpu-canceled-ok\n")
+  Ok(())
+}
+"#
+        .replace("WIDTH", &format!("{width}u32"));
+        for free in [true, false] {
+            agree_in(
+                &source,
+                Some(grant(width)),
+                b"cpu-canceled-ok\n",
+                false,
+                free,
+                true,
+            );
+        }
+    }
 }
