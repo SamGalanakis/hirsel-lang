@@ -1451,7 +1451,7 @@ pub fn constant_identity(
         chain.push(path.clone());
         let signature = read(DefId::intern(&path))?;
         match &signature.metadata.constant_alias {
-            Some(target) => path = target.clone(),
+            Some(target) => path = (**target).clone(),
             None => return Ok(path),
         }
     }

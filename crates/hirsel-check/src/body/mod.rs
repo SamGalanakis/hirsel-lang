@@ -747,7 +747,7 @@ impl Checker<'_, '_> {
                     let Some(target) = self
                         .snapshots
                         .get(&DefId::intern(&path))
-                        .and_then(|s| s.metadata.constant_alias.as_ref())
+                        .and_then(|s| s.metadata.constant_alias.as_deref())
                     else {
                         break;
                     };

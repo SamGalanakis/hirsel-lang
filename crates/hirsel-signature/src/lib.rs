@@ -594,7 +594,7 @@ fn normalize_inner(
         ast::ItemKind::Const { value, .. } => {
             match &input.syntax.tree.expressions[value.0 as usize].kind {
                 ast::ExprKind::Path(path) if matches!(&kind, SignatureKind::Const { ty, .. } if !n.satisfies(*ty, Bound::Data)) => {
-                    Some(n.definition(path, None)?)
+                    Some(Box::new(n.definition(path, None)?))
                 }
                 _ => None,
             }

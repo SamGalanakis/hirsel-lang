@@ -623,6 +623,7 @@ impl Weight<'_> {
             self.def_path(binder.family.path());
         }
         if let Some(path) = constant_alias {
+            self.add(size_of_val(&**path));
             self.def_path(path);
         }
         if self.shared_allocation(std::sync::Arc::as_ptr(roles) as usize, arc_bytes(&**roles)) {

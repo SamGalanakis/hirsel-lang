@@ -268,7 +268,7 @@ pub(super) fn validate(export: &Export) -> Result<(), ImportError> {
                 "dictionary graph disagrees with validated initializer TIR",
             ));
         }
-        if alias != signature.metadata.constant_alias {
+        if alias.as_ref() != signature.metadata.constant_alias.as_deref() {
             return Err(refuse(
                 at,
                 "dictionary alias disagrees with its initializer",
