@@ -410,7 +410,8 @@ pub(super) fn record_clone(shadow: &Shadow) {
 
 #[test]
 fn whole_local_take_keeps_holder_identity_and_checks_ended_bounds_before_extraction() {
-    use hirsel_tir::{Operand, PlaceId, UseKind};
+    use hirsel_tir::{Operand, PlaceId};
+    use hirsel_types::UseKind;
     let holder = Holder::new(true);
     let mut frame = frame(own(Shadow::default(), &holder), vec![]);
     frame.slots[0] = Some(Value::Bytes(vec![3, 7]));
@@ -438,7 +439,8 @@ fn whole_local_take_keeps_holder_identity_and_checks_ended_bounds_before_extract
 
 #[test]
 fn whole_mutable_inline_take_preserves_the_source_shadow_and_access_bookkeeping() {
-    use hirsel_tir::{Operand, PlaceId, UseKind};
+    use hirsel_tir::{Operand, PlaceId};
+    use hirsel_types::UseKind;
     let holder = Holder::new(true);
     let tree = own(Shadow::default(), &holder);
     let mut frame = frame(tree.clone(), vec![]);
