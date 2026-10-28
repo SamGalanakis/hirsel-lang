@@ -725,7 +725,13 @@ impl SourceProducts {
                 };
             }
             let message = if reference == errors.resource {
-                "compiler query allowance exhausted"
+                return ToolError::Runtime(format!(
+                    "compiler query allowance exhausted; Front retained {}/{}B, Lower retained {}/{}B",
+                    front.retained_bytes(),
+                    front.admitted_bytes(),
+                    lower.retained_bytes(),
+                    lower.admitted_bytes(),
+                ));
             } else if reference == errors.cycle {
                 "compiler query dependency cycle"
             } else if reference == errors.cancelled {

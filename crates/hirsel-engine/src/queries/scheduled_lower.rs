@@ -397,6 +397,11 @@ impl FrontLowerQueries {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+    /// Immutable producer grant, including input rows and retained outcomes.
+    pub fn admitted_bytes(&self) -> u64 {
+        self._allowance.bytes()
+    }
+
     /// Settled memo identities for work accounting. No read archive or body
     /// is decoded merely to count the producer work this graph demanded.
     pub fn memo_keys(&self) -> Vec<crate::memo::MemoKey> {

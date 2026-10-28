@@ -376,6 +376,11 @@ impl FrontBodyQueries {
         self._allowance.bytes() - *self.retention.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Immutable producer grant, including input rows and retained outcomes.
+    pub fn admitted_bytes(&self) -> u64 {
+        self._allowance.bytes()
+    }
+
     pub fn store_adoptions(&self) -> u64 {
         self.store_adoptions.load(Relaxed)
     }
