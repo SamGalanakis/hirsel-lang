@@ -135,6 +135,14 @@ struct RequestVerifierRows {
     admission: Arc<Admission>,
     rows: Mutex<BTreeMap<ContentHash, Reference>>,
 }
+fn verifier_row_bytes(entries: usize) -> u64 {
+    if entries == 0 {
+        return 0;
+    }
+    let mut weight = crate::NativeMetadataWeight::default();
+    weight.tree::<ContentHash, Reference>(entries);
+    weight.bytes()
+}
 impl Drop for RequestVerifierRows {
     fn drop(&mut self) {
         let entries = self
@@ -142,7 +150,7 @@ impl Drop for RequestVerifierRows {
             .get_mut()
             .unwrap_or_else(|error| error.into_inner())
             .len();
-        self.admission.release((entries as u64) * ENTRY_CHARGE);
+        self.admission.release(verifier_row_bytes(entries));
     }
 }
 impl hirsel_artifact_store::Contents for RequestVerifierRows {
@@ -163,7 +171,9 @@ impl hirsel_validate::VerifierRows for RequestVerifierRows {
     }
     fn set_row(&self, key: ContentHash, reference: Reference) {
         let mut rows = self.rows.lock().unwrap_or_else(|error| error.into_inner());
-        if rows.contains_key(&key) || self.admission.charge(ENTRY_CHARGE) {
+        let additional = verifier_row_bytes(rows.len().saturating_add(1))
+            .saturating_sub(verifier_row_bytes(rows.len()));
+        if rows.contains_key(&key) || self.admission.charge(additional) {
             rows.insert(key, reference);
         }
     }
@@ -390,5 +400,43 @@ mod tests {
         assert!(request.lookup_product(other).is_none());
         assert!(backend.lookup_product(other).is_none());
         assert!(request.lookup_product(address()).is_some());
+    }
+    #[test]
+    fn verifier_transport_admits_its_actual_index_and_releases_all_rows() {
+        use hirsel_validate::VerifierRows;
+        let allowance = 64 << 10;
+        let budget = ProcessBudget::new(allowance);
+        let admission = Arc::new(Admission {
+            memory: budget.reserve(allowance).unwrap(),
+            used: AtomicU64::new(0),
+            exhausted: AtomicBool::new(false),
+            scratch: OnceLock::new(),
+        });
+        let reference = domain().reference(b"verifier-owned content").unwrap();
+        let (rows, allocated) = crate::test_alloc::measured(|| {
+            let rows = RequestVerifierRows {
+                backend: Arc::new(NoneStore),
+                admission: admission.clone(),
+                rows: Mutex::new(BTreeMap::new()),
+            };
+            for index in 0u32..256 {
+                rows.set_row(ContentHash::of_bytes(&index.to_le_bytes()), reference);
+            }
+            rows
+        });
+        assert!(!admission.exhausted.load(Ordering::Acquire));
+        assert!(allocated.live > 0);
+        assert!(allocated.live as u64 <= admission.used.load(Ordering::Acquire));
+        for index in 0u32..256 {
+            let key = ContentHash::of_bytes(&index.to_le_bytes());
+            assert_eq!(rows.row(key), Some(reference));
+            let before = admission.used.load(Ordering::Acquire);
+            rows.set_row(key, reference);
+            assert_eq!(admission.used.load(Ordering::Acquire), before);
+        }
+        drop(rows);
+        assert_eq!(admission.used.load(Ordering::Acquire), 0);
+        drop(admission);
+        assert_eq!(budget.reserved(), 0);
     }
 }
