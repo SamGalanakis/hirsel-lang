@@ -16,6 +16,7 @@ pub struct DirStore {
     read_only: Vec<hirsel_artifact_store::Store>,
     cap: u64,
     verifier: std::sync::Arc<hirsel_validate::VerifierCache>,
+    operation: bool,
 }
 
 /// What a collection found and removed.
@@ -39,6 +40,7 @@ impl DirStore {
             root,
             read_only: vec![],
             cap: DEFAULT_CAP,
+            operation: false,
         }
     }
     /// Read installed ordinary products with the same checked format. Writes,
@@ -132,6 +134,7 @@ impl DirStore {
             physical: None,
             cap: 0,
             verifier,
+            operation: false,
         })
     }
     /// Compose environment-selected local storage with installed ordinary
@@ -197,6 +200,9 @@ impl DirStore {
 
 impl ResultStore for DirStore {
     fn for_operation(&self) -> Option<std::sync::Arc<dyn ResultStore>> {
+        if self.operation {
+            return None;
+        }
         let physical = self.physical.as_ref().map(|store| store.for_operation());
         Some(std::sync::Arc::new(Self {
             root: self.root.clone(),
@@ -208,6 +214,7 @@ impl ResultStore for DirStore {
                 .map(|store| store.for_operation())
                 .collect(),
             cap: self.cap,
+            operation: true,
         }))
     }
     fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {

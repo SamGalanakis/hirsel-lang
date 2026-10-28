@@ -66,25 +66,50 @@ impl CompilerRequests {
         operation: CompileOperation,
     ) -> Result<Arc<CompileOutput>, hirsel_engine::ToolError> {
         use hirsel_engine::requests::observe_inputs;
-        let (loaded, inputs) =
-            observe_inputs(self.input_limits(), self.capture_attempts(), |inputs| {
-                if matches!(operation, CompileOperation::DataAbi) {
-                    self.compiler.load_export_package_inputs(path, inputs)
-                } else {
-                    self.compiler.load_check_package_inputs(path, inputs, true)
-                }
+        // Discovery and graph installation use the same independent provider.
+        // Restore selector policy before returning; retained older graphs keep
+        // their own completed products and never inherit this operation's tail.
+        let previous_config = self.config.clone();
+        let previous_compiler = self.compiler.clone();
+        self.config.store = previous_config
+            .store
+            .for_operation()
+            .unwrap_or_else(|| previous_config.store.clone());
+        self.compiler = previous_compiler.clone().with_config(self.config.clone());
+        let store_operation = self.config.store.operation_scope();
+        let output = (|| {
+            let (loaded, inputs) =
+                observe_inputs(self.input_limits(), self.capture_attempts(), |inputs| {
+                    if matches!(operation, CompileOperation::DataAbi) {
+                        self.compiler.load_export_package_inputs(path, inputs)
+                    } else {
+                        self.compiler.load_check_package_inputs(path, inputs, true)
+                    }
+                })
+                .map_err(|_| {
+                    hirsel_engine::ToolError::Runtime(
+                        "compiler inputs kept changing during discovery".into(),
+                    )
+                })?;
+            drop(loaded?);
+            self.execute_request(&CompileRequest {
+                path: path.to_path_buf(),
+                inputs,
+                operation,
             })
-            .map_err(|_| {
-                hirsel_engine::ToolError::Runtime(
-                    "compiler inputs kept changing during discovery".into(),
-                )
-            })?;
-        drop(loaded?);
-        self.execute_request(&CompileRequest {
-            path: path.to_path_buf(),
-            inputs,
-            operation,
-        })
+        })();
+        self.config = previous_config;
+        self.compiler = previous_compiler;
+        if let Ok(completed) = &output
+            && !matches!(&completed.result, CompileResult::Check(checked) if checked.completion != hirsel_engine::CheckCompletion::Complete)
+        {
+            let publication = store_operation.finish();
+            if matches!(completed.result, CompileResult::Precomputed { .. }) {
+                publication
+                    .map_err(|error| hirsel_engine::ToolError::Runtime(error.to_string()))?;
+            }
+        }
+        output
     }
     /// Execute exactly the supplied observed inputs without polling the filesystem.
     /// Source overlays retain the same graph selection, admission and readiness.

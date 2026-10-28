@@ -187,3 +187,83 @@ fn directory_request_products_reuse_unchanged_bodies_across_sessions_and_edits()
         }
     });
 }
+
+#[test]
+fn unfinished_equal_requests_have_independent_abort_owners_and_completed_graphs_reuse() {
+    use hirsel_driver::requests::{
+        CompileOperation, CompileRequest, CompilerRequests, RequestLimits,
+    };
+    use hirsel_engine::{
+        LoweringPolicy,
+        requests::{OutputReadiness, RequestEngine, observe_inputs},
+        runtime::{ProcessBudget, QueryRuntime},
+    };
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(
+            directory.path().join("main.hir"),
+            "pub fn main()->u8{7u8}\n",
+        )
+        .unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"independent","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let config = CompileConfig {
+            store: Arc::new(DirStore::new(directory.path().join("results"))),
+            jobs: hirsel_intern::jobs::Jobs::ONE,
+            hold_bytes: 0,
+            ..Default::default()
+        };
+        let compiler = hirsel_driver::COMPILER
+            .with_config(config.clone())
+            .with_owned_engines();
+        let (loaded, inputs) = observe_inputs(
+            hirsel_engine::loader_inputs::InputLimits {
+                bytes: 1 << 20,
+                operations: 128,
+            },
+            3,
+            |inputs| compiler.load_check_package_inputs(&manifest, inputs, false),
+        )
+        .unwrap();
+        drop(loaded.unwrap());
+        let mut engine = CompilerRequests::new(
+            compiler,
+            config,
+            ProcessBudget::new(1 << 30),
+            RequestLimits {
+                runtime_bytes: 256 << 20,
+                snapshot_bytes: 64 << 20,
+                transport_bytes: 32 << 20,
+            },
+        );
+        let request = CompileRequest {
+            path: manifest,
+            inputs,
+            operation: CompileOperation::Check {
+                lowering: LoweringPolicy::Reachable,
+            },
+        };
+        let first = engine.select(&request).unwrap();
+        {
+            let mut runtime = first.runtime.lock().unwrap();
+            let demand = runtime.request(&first.roots);
+            runtime.wait(demand).unwrap();
+        }
+        let mut second = engine.select(&request).unwrap();
+        assert!(!Arc::ptr_eq(&first.runtime, &second.runtime));
+        drop(first);
+        let products = {
+            let mut runtime = second.runtime.lock().unwrap();
+            let demand = runtime.request(&second.roots);
+            runtime.wait(demand).unwrap()
+        };
+        let output = second.output.ready(&products).unwrap();
+        let hirsel_driver::requests::CompileResult::Check(checked) = &output.result else {
+            panic!()
+        };
+        assert_eq!(checked.completion, CheckCompletion::Complete);
+        assert!(checked.diagnostics.is_empty());
+        let third = engine.select(&request).unwrap();
+        assert!(Arc::ptr_eq(&second.runtime, &third.runtime));
+    });
+}

@@ -168,6 +168,7 @@ struct SourceProducts {
     sources: SourceMap,
     store: Arc<RequestStore>,
     initial_operation: Mutex<Option<hirsel_engine::store::StoreOperation>>,
+    completed_operation: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
     errors: RuntimeErrors,
     meter: Arc<GraphMeter>,
 }
@@ -180,6 +181,15 @@ impl GraphProducts for SourceProducts {
         Some(Arc::new((self.meter.source_owner(), self.store.clone())))
     }
     fn accepts(&self, operation: &CompileOperation) -> bool {
+        if self
+            .completed_operation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|completed| !completed.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return false;
+        }
         if self.declaration_export {
             return matches!(operation, CompileOperation::DataAbi) && self.native_sources.is_some();
         }
@@ -249,6 +259,15 @@ impl GraphProducts for SourceProducts {
         if let Some(native) = &self.native {
             store_operation.join(native.store_operation());
         }
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *self
+            .completed_operation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(completed.clone());
+        let store_operation = super::output::CompileStoreOperation {
+            scope: store_operation,
+            completed,
+        };
         let roots = match operation {
             CompileOperation::NativeOwnership(_) => {
                 vec![
@@ -2273,6 +2292,7 @@ pub(super) fn install(
         sources,
         store,
         initial_operation: Mutex::new(Some(store_operation)),
+        completed_operation: Mutex::new(None),
         errors,
         meter,
     });

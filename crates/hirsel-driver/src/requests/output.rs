@@ -344,9 +344,23 @@ impl NativeExecution {
 /// Engine-selected materialization after query completion. The implementation
 /// is installed by the selector; hosts receive this only inside SelectedRequest.
 pub struct CompilerReadiness {
-    pub(crate) read_scope: Option<hirsel_engine::store::StoreOperation>,
+    pub(crate) read_scope: Option<CompileStoreOperation>,
     pub(crate) materialize: Arc<Materialize>,
     pub(crate) failure: Arc<dyn Fn(hirsel_engine::store::Reference) -> ToolError + Send + Sync>,
+}
+pub(crate) struct CompileStoreOperation {
+    pub scope: hirsel_engine::store::StoreOperation,
+    pub completed: Arc<std::sync::atomic::AtomicBool>,
+}
+impl CompileStoreOperation {
+    fn finish(self) -> std::io::Result<()> {
+        let result = self.scope.finish();
+        if result.is_ok() {
+            self.completed
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        result
+    }
 }
 pub(crate) type Materialize = dyn Fn(&[hirsel_engine::runtime::ProductRef]) -> Result<Arc<CompileOutput>, ToolError>
     + Send
