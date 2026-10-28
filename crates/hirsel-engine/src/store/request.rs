@@ -309,8 +309,12 @@ mod tests {
             let reference = backend.put_content(domain(), b"selected").unwrap();
             let allowance = 64 << 10;
             let budget = ProcessBudget::new(allowance);
-            let request = RequestStore::new(backend, budget.reserve(allowance).unwrap());
             let action = Action(address().0);
+            for index in 0..count {
+                let address = Address(ContentHash::of_bytes(&index.to_le_bytes()));
+                backend.associate_product(address, action, reference);
+            }
+            let request = RequestStore::new(backend, budget.reserve(allowance).unwrap());
             let (_, actual) = crate::test_alloc::measured(|| {
                 for index in 0..count {
                     let address = Address(ContentHash::of_bytes(&index.to_le_bytes()));
