@@ -133,6 +133,7 @@ pub fn task_result_call<S>(
 mod tests {
     use super::*;
     use crate::layout_types::*;
+    use hirsel_core_contract::Passing;
 
     fn record(kind: LayoutKind) -> LayoutRecord {
         LayoutRecord {
@@ -196,7 +197,7 @@ mod tests {
 
     fn call_fixture(direction: TaskResultDirection) -> (LirUnit<Ready>, LayoutTable) {
         use crate::{abi_types::FnAbiId, objects::UnitKey, testing::UnitBuilder};
-        use hirsel_core_contract::{OperationId, Passing};
+        use hirsel_core_contract::OperationId;
         let hash = ContentHash::of_bytes(b"task-result-formals");
         let mut b = UnitBuilder::new(LirUnit::<Ready>::new(UnitHeader {
             source_count: 0, track_caller: false, stage: crate::stage::StageKind::Ready,
