@@ -64,7 +64,7 @@ mod tests {
                     },
                     kind: SignatureKind::Const {
                         ty: TypeId::DANGLING,
-                        generics: vec![],
+                        generics: Default::default(),
                     },
                     fingerprint: Default::default(),
                 })
