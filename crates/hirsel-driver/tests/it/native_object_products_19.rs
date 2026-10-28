@@ -363,7 +363,13 @@ fn compile_settled<R>(
     let mut discovery =
         AdmittedRuntime::new(jobs, budget.reserve(runtime_bytes).unwrap(), errors).unwrap();
     let factory = Arc::new(InstanceTaskFactory::new(instances.clone()));
-    for kind in [queries::INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
+    for kind in [
+        queries::INSTANCE_KIND,
+        queries::instance::CALLABLE_VALUE_KIND,
+        queries::instance_tasks::CALLABLE_GRAPH_KIND,
+        INSTANCE_INPUT_KIND,
+        DISCOVERY_KIND,
+    ] {
         discovery.register(kind, factory.clone()).unwrap();
     }
     let factory = Arc::new(ArenaTaskFactory::new(arenas.clone()));
@@ -429,6 +435,7 @@ fn compile_settled<R>(
     let factory = Arc::new(NativeTaskFactory::new(native.clone()));
     for kind in [
         queries::INSTANCE_KIND,
+        queries::instance::CALLABLE_VALUE_KIND,
         queries::ARENA_CANDIDATES_KIND,
         queries::ARENA_CHOSEN_KIND,
         queries::READY_KIND,
