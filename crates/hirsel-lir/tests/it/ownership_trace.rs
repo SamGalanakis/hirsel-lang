@@ -5855,3 +5855,34 @@ fn ownership_trace_uses_the_original_guard_selection_at_the_placement_boundary()
         .is_err()
     );
 }
+
+#[test]
+fn ownership_trace_incoming_sealed_owner_requires_a_proved_plain_root() {
+    use hirsel_lir::layout_types::{CopyRecipe, DropStep, LayoutId, LayoutKind, ScanStep};
+    for (root, supported) in [(l::U64, true), (l::RES, false), (l::RESBLK, false)] {
+        let mut t = Lir::<hirsel_lir::stage::Value>::new(&[], None);
+        let owner = LayoutId(t.table.layouts.len() as u32);
+        let mut record = t.table.layouts[l::BLK.0 as usize].clone();
+        record.kind = LayoutKind::SealedRegion { root };
+        record.copy = CopyRecipe::NotCopyable;
+        record.scan = vec![ScanStep::Uncounted { offset: 0 }];
+        record.drop = vec![DropStep::ReleaseSealed { offset: 0 }];
+        t.table.layouts.push(record);
+        let abi = t.abi(&[(Passing::Take, owner)], Some(owner));
+        t.table.fn_abis[abi.0 as usize].parameters[0].passing =
+            hirsel_lir::layout_types::ParameterPassing::ByValue;
+        t.builder.unit.header.abi = abi;
+        let value = t.value_as(ValueRepr::Handle, owner, Holding::Owned);
+        t.param(value);
+        t.builder.ret(ENTRY, Some(value));
+        let (unit, table, _) = t.finish();
+        let checked = checked_native_fixture(unit, &table);
+        let plan = native::LeafPlan::prepare_value_for_program(&checked, &table);
+        if supported {
+            assert_eq!(plan.unwrap().observations.len(), 2);
+        } else {
+            let error = plan.unwrap_err();
+            assert!(error.contains("nested ownership"), "{error}");
+        }
+    }
+}

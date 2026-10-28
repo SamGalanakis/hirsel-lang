@@ -1664,9 +1664,8 @@ fn leaf(table: &LayoutTable, id: LayoutId) -> bool {
         LayoutKind::Resource | LayoutKind::Aggregate => {
             record.fields.iter().all(|f| plain(table, f.layout, 0))
         }
-        LayoutKind::Handle
-        | LayoutKind::HostCapability { .. }
-        | LayoutKind::SealedRegion { .. } => true,
+        LayoutKind::SealedRegion { root } => plain(table, root, 0),
+        LayoutKind::Handle | LayoutKind::HostCapability { .. } => true,
         _ => false,
     }
 }
