@@ -8,6 +8,7 @@ mod dependencies;
 mod depth;
 mod evidence;
 mod inputs;
+mod inspection;
 mod reads;
 mod registration;
 mod stored;
@@ -21,6 +22,7 @@ use dependencies::Dependencies;
 use evidence::Evidence;
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
 use inputs::Inputs;
+pub use inspection::FrontLowerDependencies;
 pub use registration::{
     FRONT_REGISTRATION_KIND, FrontRegistrationOutput, FrontRegistrationQueries,
 };

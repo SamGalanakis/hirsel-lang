@@ -177,6 +177,16 @@ impl PrecomputedSources {
         self.run
             .source_products_with_allowance(self.product(path)?, allowance)
     }
+    pub fn dependency_decode_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {
+        self.lower.settled_dependency_decode_bytes(path)
+    }
+    pub fn dependencies(
+        &self,
+        path: &DefPath,
+        allowance: hirsel_engine::runtime::MemoryReservation,
+    ) -> Result<hirsel_engine::FrontLowerDependencies, QueryError> {
+        self.lower.settled_dependencies(path, allowance)
+    }
     pub fn definition_decode_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {
         self.lower.settled_definition_decode_bytes(path)
     }
