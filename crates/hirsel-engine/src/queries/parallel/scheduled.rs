@@ -215,7 +215,7 @@ pub struct FrontBodyOutput {
 pub struct FrontCheckedOutput {
     pub(crate) table_keys: Arc<crate::table_keys::TableKeyUse>,
     pub summary: Arc<CheckedSummary>,
-    pub dependencies: Arc<Vec<SignatureDependency>>,
+    pub(crate) dependencies: Arc<Vec<SignatureDependency>>,
     pub reads: Arc<Reads>,
     _snapshot: Arc<FrontBodyQueries>,
 }
