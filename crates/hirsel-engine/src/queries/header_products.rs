@@ -98,7 +98,7 @@ impl HeaderProducts {
             owners: owners.clone(),
             provisional: engine.private_summary_active,
             failure: engine.current_private_summary_failure().cloned(),
-            syntax: HeaderSources::capture(engine, owners),
+            syntax: HeaderSources::capture(engine),
             declarations: engine.declarations.observations(),
             catalog: engine.catalog.clone(),
             types: engine.types.clone(),

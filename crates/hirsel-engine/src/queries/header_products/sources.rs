@@ -6,7 +6,7 @@ const SOURCE_INPUT: Domain = Domain {
 };
 enum Transport {
     Stored {
-        files: BTreeMap<FileId, Vec<Option<Reference>>>,
+        files: BTreeMap<FileId, Vec<Reference>>,
         records: crate::NativeRecords,
         owners: Arc<crate::NativeRecordContext>,
         store: Arc<dyn crate::store::ResultStore>,
@@ -18,7 +18,7 @@ pub(super) struct HeaderSources {
     transport: std::sync::RwLock<Transport>,
 }
 impl HeaderSources {
-    pub(super) fn capture(engine: &QueryEngine, owners: Arc<crate::NativeRecordContext>) -> Self {
+    pub(super) fn capture(engine: &QueryEngine) -> Self {
         let mut files = BTreeMap::<_, Vec<_>>::new();
         let mut by_definition = hirsel_syntax::DefMap::<Vec<FileId>>::default();
         for (path, candidates) in &engine.items {
@@ -61,7 +61,6 @@ impl HeaderSources {
                         records
                             .encode(&*owners, &(syntax, syntax.occurrence))
                             .and_then(|bytes| store.put_content(SOURCE_INPUT, &bytes))
-                            .map(Some)
                             .ok_or_else(refused)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -107,9 +106,7 @@ impl HeaderSources {
                     .ok_or_else(refused)?
                     .iter()
                     .map(|reference| {
-                        let bytes = store
-                            .get_content(reference.ok_or_else(refused)?)
-                            .ok_or_else(refused)?;
+                        let bytes = store.get_content(*reference).ok_or_else(refused)?;
                         let (mut syntax, occurrence): (ItemSyntax, u32) =
                             records.decode(&**owners, &bytes).ok_or_else(refused)?;
                         if !syntax.structurally_valid(|span| engine.sources.slice(span).is_some())
