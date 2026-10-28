@@ -2405,6 +2405,7 @@ pub(crate) unsafe fn execute(
                 let reader = hirsel_run_config::managed_cores::LinuxLimits::capture()
                     .map_err(|e| e.to_string())?;
                 let limits = reader.read().map_err(|e| e.to_string())?;
+                crate::pool::init_compute_grant(&limits);
                 let (process_grant, _, _) = crate::pool::compute_permits();
                 let grant = hirsel_run_config::managed_cores::HostGrant {
                     max_cores: process_grant.into(),

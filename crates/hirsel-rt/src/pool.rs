@@ -267,6 +267,22 @@ fn process_permits() -> Arc<Permits> {
     }))
 }
 
+/// Seed the default process grant from the host snapshot admission already read.
+/// An embedding manager's existing grant and every live permit stay untouched.
+pub(crate) fn init_compute_grant(limits: &hirsel_run_config::managed_cores::HostLimits) {
+    PROCESS_PERMITS.get_or_init(|| {
+        // Rust std sys/thread/unix.rs:175-187,887-890 takes the minimum of
+        // affinity and the floored ancestor quota, with at least one worker.
+        let affinity = limits.admission_affinity.len();
+        let limit = limits
+            .quota
+            .map_or(affinity, |q| affinity.min(q.floor().max(1)));
+        Arc::new(Permits::new(
+            u32::try_from(limit.max(1)).unwrap_or(u32::MAX),
+        ))
+    });
+}
+
 /// Set the process's compute grant. Only the embedding manager calls this;
 /// a contraction lets existing holders leave, and admits no replacement meanwhile.
 /// All runs, pool callbacks and nested local runner code use this same pool.
