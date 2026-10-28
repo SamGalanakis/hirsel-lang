@@ -99,7 +99,7 @@ impl HeaderProducts {
             provisional: engine.private_summary_active,
             failure: engine.current_private_summary_failure().cloned(),
             syntax: HeaderSources::capture(engine),
-            declarations: engine.declarations.observations(),
+            declarations: engine.declarations.header_inputs(),
             catalog: engine.catalog.clone(),
             types: engine.types.clone(),
             memo: engine.memo.clone(),

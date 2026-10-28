@@ -164,8 +164,8 @@ pub(crate) trait DeclarationSiblings: Send + Sync {
 pub struct Declarations {
     archived_siblings: Option<Arc<dyn DeclarationSiblings>>,
     rows: Arc<FrozenRows>,
-    files: BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>,
-    anchors: HashMap<Anchor, FileId>,
+    files: Arc<BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>>,
+    anchors: Arc<HashMap<Anchor, FileId>>,
 }
 /// What the rows and the explicit inputs alone decide: frozen again only when
 /// a row or an input changes, so a body edit, which moves no row, reuses it.
@@ -173,7 +173,7 @@ struct FrozenRows {
     index: ManifestIndex,
     package_indexes: BTreeMap<PackageId, ManifestIndex>,
     metadata: Metadata,
-    sites: BTreeMap<DefId, Arc<Row>>,
+    sites: Arc<BTreeMap<DefId, Arc<Row>>>,
 }
 impl Declarations {
     pub(crate) fn name_set(
@@ -209,8 +209,8 @@ impl Declarations {
     pub(crate) fn with_archived_siblings(&self, source: Arc<dyn DeclarationSiblings>) -> Arc<Self> {
         Arc::new(Self {
             rows: self.rows.clone(),
-            files: BTreeMap::new(),
-            anchors: HashMap::new(),
+            files: Arc::default(),
+            anchors: Arc::default(),
             archived_siblings: Some(source),
         })
     }
@@ -258,15 +258,15 @@ impl Declarations {
 pub struct DeclarationIndex {
     /// Changes to signature inputs, independent of source body revisions.
     revision: u64,
-    rows: BTreeMap<DefId, Arc<Row>>,
-    files: BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>,
-    anchors: HashMap<Anchor, FileId>,
+    rows: Arc<BTreeMap<DefId, Arc<Row>>>,
+    files: Arc<BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>>,
+    anchors: Arc<HashMap<Anchor, FileId>>,
     /// The FileIds listing items, by source path: each indexing of a
     /// source adds a snapshot at a new FileId.
-    paths: HashMap<std::path::PathBuf, std::collections::BTreeSet<FileId>>,
+    paths: Arc<HashMap<std::path::PathBuf, std::collections::BTreeSet<FileId>>>,
     /// The sum of every row's identity part, which a row change updates.
     identity: [u64; 4],
-    inputs: ModuleInputs,
+    inputs: Arc<ModuleInputs>,
     frozen: OnceLock<Arc<Declarations>>,
     /// The rows' part of `frozen`, which outlives a change of files only.
     frozen_rows: OnceLock<Arc<FrozenRows>>,
@@ -316,13 +316,14 @@ fn lanes(hash: ContentHash) -> [u64; 4] {
 
 impl DeclarationIndex {
     pub(crate) fn into_source_carry(mut self) -> Self {
-        self.rows = self
-            .rows
-            .into_iter()
-            .map(|(id, row)| (id, Arc::new(Row::from(row.data.clone()))))
-            .collect();
-        self.files.clear();
-        self.anchors = HashMap::new();
+        self.rows = Arc::new(
+            Arc::unwrap_or_clone(std::mem::take(&mut self.rows))
+                .into_iter()
+                .map(|(id, row)| (id, Arc::new(Row::from(row.data.clone()))))
+                .collect(),
+        );
+        self.files = Arc::default();
+        self.anchors = Arc::default();
         self.frozen = OnceLock::new();
         self.frozen_rows = OnceLock::new();
         self
@@ -447,19 +448,21 @@ impl DeclarationIndex {
         if let Some(old) = self.files.get(&file) {
             for item in old.iter() {
                 if self.anchors.get(&item.anchor) == Some(&file) {
-                    self.anchors.remove(&item.anchor);
+                    Arc::make_mut(&mut self.anchors).remove(&item.anchor);
                 }
             }
         }
         for item in &listed {
-            self.anchors.insert(item.anchor, file);
+            Arc::make_mut(&mut self.anchors).insert(item.anchor, file);
         }
         let path = sources.file(file).unwrap().path.clone();
-        let snapshots = self.paths.entry(path.clone()).or_default();
+        let snapshots = Arc::make_mut(&mut self.paths)
+            .entry(path.clone())
+            .or_default();
         if listed.is_empty() {
             snapshots.remove(&file);
             if snapshots.is_empty() {
-                self.paths.remove(&path);
+                Arc::make_mut(&mut self.paths).remove(&path);
             }
         } else {
             snapshots.insert(file);
@@ -468,9 +471,9 @@ impl DeclarationIndex {
             old.len() != listed.len() || old.iter().zip(&listed).any(|(a, b)| !Arc::ptr_eq(a, b))
         });
         if listed.is_empty() {
-            self.files.remove(&file);
+            Arc::make_mut(&mut self.files).remove(&file);
         } else {
-            self.files.insert(file, listed.into());
+            Arc::make_mut(&mut self.files).insert(file, listed.into());
         }
         if changed {
             self.frozen = OnceLock::new();
@@ -535,8 +538,8 @@ impl DeclarationIndex {
     }
     fn replace_row(&mut self, path: &DefPath, row: Option<Arc<Row>>) {
         let old = match &row {
-            Some(row) => self.rows.insert(DefId::intern(path), row.clone()),
-            None => self.rows.remove(&DefId::intern(path)),
+            Some(row) => Arc::make_mut(&mut self.rows).insert(DefId::intern(path), row.clone()),
+            None => Arc::make_mut(&mut self.rows).remove(&DefId::intern(path)),
         };
         if old == row {
             return;
@@ -604,7 +607,8 @@ impl DeclarationIndex {
     /// Header rows and source placement retained by an observation-only copy.
     /// No item arenas or frozen full-syntax sibling lists participate.
     pub(crate) fn observation_bytes(&self) -> Option<u64> {
-        let mut bytes = std::mem::size_of::<Self>() as u64;
+        let mut bytes = (std::mem::size_of::<Self>() + Self::shared_container_bytes()) as u64;
+        bytes = bytes.checked_add(self.inputs.retained_payload_bytes())?;
         for row in self.rows.values() {
             bytes = bytes
                 .checked_add(
@@ -622,7 +626,7 @@ impl DeclarationIndex {
         bytes = bytes.checked_add(
             (self.anchors.capacity() * (std::mem::size_of::<(Anchor, FileId)>() + 1) + 16) as u64,
         )?;
-        for (path, files) in &self.paths {
+        for (path, files) in self.paths.iter() {
             bytes = bytes.checked_add(path.capacity() as u64)?.checked_add(
                 (std::mem::size_of::<std::path::PathBuf>()
                     + files.len()
@@ -632,11 +636,28 @@ impl DeclarationIndex {
         }
         Some(bytes)
     }
+    fn shared_container_bytes() -> usize {
+        5 * 2 * size_of::<usize>()
+            + size_of::<BTreeMap<DefId, Arc<Row>>>()
+            + size_of::<BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>>()
+            + size_of::<HashMap<Anchor, FileId>>()
+            + size_of::<HashMap<std::path::PathBuf, std::collections::BTreeSet<FileId>>>()
+            + size_of::<ModuleInputs>()
+    }
+    /// A header worker shares the indexed namespace and owns only the files
+    /// it materializes. The immutable row product is built once per revision.
+    pub(crate) fn header_inputs(&self) -> Self {
+        let mut inputs = self.observations();
+        inputs.anchors = Arc::default();
+        inputs.paths = Arc::default();
+        let _ = inputs.frozen_rows.set(self.frozen().rows.clone());
+        inputs
+    }
     pub(crate) fn observations(&self) -> Self {
         Self {
             revision: self.revision,
             rows: self.rows.clone(),
-            files: BTreeMap::new(),
+            files: Arc::default(),
             anchors: self.anchors.clone(),
             paths: self.paths.clone(),
             identity: self.identity,
@@ -672,7 +693,7 @@ impl DeclarationIndex {
         self.revision += 1;
         self.frozen = OnceLock::new();
         self.frozen_rows = OnceLock::new();
-        &mut self.inputs
+        Arc::make_mut(&mut self.inputs)
     }
     fn freeze(&self) -> FrozenRows {
         let mut metadata = self.inputs.signature_metadata.clone();
@@ -685,7 +706,7 @@ impl DeclarationIndex {
         // Source declaration sites have one indexed representation below.
         metadata.declarations.clear();
         let mut entries = Vec::with_capacity(self.rows.len());
-        for (path, row) in &self.rows {
+        for (path, row) in self.rows.iter() {
             work::count(work::Counter::ModuleDeclarationRows);
             metadata
                 .definitions

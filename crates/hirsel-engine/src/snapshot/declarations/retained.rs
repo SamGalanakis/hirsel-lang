@@ -113,6 +113,7 @@ fn frozen(weight: &mut Weight, value: &Arc<FrozenRows>) {
         w.add(value.retained_payload_bytes() as usize);
     });
     metadata(weight, &value.metadata);
+    weight.arc(&value.sites);
     weight.map(&value.sites, |w, _, value| row(w, value));
 }
 fn hash<K, V>(weight: &mut Weight, capacity: usize) {
@@ -146,6 +147,8 @@ impl Declarations {
         }
         let mut weight = Weight::default();
         frozen(&mut weight, &self.rows);
+        weight.arc(&self.files);
+        weight.arc(&self.anchors);
         files(&mut weight, &self.files);
         hash::<Anchor, FileId>(&mut weight, self.anchors.capacity());
         Some(weight.bytes())
@@ -154,13 +157,14 @@ impl Declarations {
 impl DeclarationIndex {
     pub(crate) fn source_carry_bytes(&self) -> u64 {
         let mut weight = Weight::default();
+        weight.add(Self::shared_container_bytes());
         weight.map(&self.rows, |w, _, value| {
             w.arc(value);
             w.add(value.site_spans.len() * size_of::<Span>());
             w.add(value.headers.len() * size_of::<ContentHash>());
         });
         hash::<std::path::PathBuf, BTreeSet<FileId>>(&mut weight, self.paths.capacity());
-        for (path, values) in &self.paths {
+        for (path, values) in self.paths.iter() {
             weight.add(path.capacity());
             weight.tree::<FileId, ()>(values.len());
         }
@@ -172,11 +176,12 @@ impl DeclarationIndex {
     /// Source text and type/session interners remain separate components.
     pub fn retained_payload_bytes(&self) -> Option<u64> {
         let mut weight = Weight::default();
+        weight.add(Self::shared_container_bytes());
         weight.map(&self.rows, |w, _, value| row(w, value));
         files(&mut weight, &self.files);
         hash::<Anchor, FileId>(&mut weight, self.anchors.capacity());
         hash::<std::path::PathBuf, BTreeSet<FileId>>(&mut weight, self.paths.capacity());
-        for (path, values) in &self.paths {
+        for (path, values) in self.paths.iter() {
             weight.add(path.capacity());
             weight.tree::<FileId, ()>(values.len());
         }
