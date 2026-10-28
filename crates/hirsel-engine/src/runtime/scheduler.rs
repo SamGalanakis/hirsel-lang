@@ -138,6 +138,7 @@ struct Node {
     subscribers: Vec<Subscriber>,
     generation: u32,
     position: u32,
+    visited: u32,
     live: bool,
     // A cancelled in-flight poll is drained before a new claim can replace it.
     discard: bool,
@@ -764,6 +765,7 @@ impl State {
                 subscribers: Vec::new(),
                 generation: 0,
                 position: 0,
+                visited: 0,
                 live: true,
                 discard: false,
             },

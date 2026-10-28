@@ -1,7 +1,8 @@
 //! DICE 47675948 key_index.rs:35-76 separates interned keys from dense rows.
 //! Like Incremental 98b5750 adjust_heights_heap.ml:137-202, an ordered edge
 //! proves acyclicity without search. Hirsel instead repairs an exact finite
-//! order interval with Kahn's algorithm, retaining failed and settled reads.
+//! order interval by stable partition of exact reachable successors, retaining
+//! failed and settled reads.
 use super::*;
 use std::ops::{Index, IndexMut};
 
@@ -31,6 +32,7 @@ pub(super) struct Nodes {
     free: Vec<u32>,
     order: Vec<u32>,
     serial: u32,
+    repair_epoch: u32,
     pub repair_visits: u64,
 }
 impl Nodes {
@@ -191,53 +193,51 @@ impl Nodes {
         let start = self.rows[target.slot as usize].position as usize;
         let end = self.rows[source.slot as usize].position as usize;
         if start <= end {
-            // Only this closed interval can change order. All crossing edges
-            // already point forward. Count internal edges plus the proposed one.
-            let mut degrees = vec![0u32; end - start + 1];
+            // A path to source cannot leave this closed order interval. Move
+            // only target's reachable successors after source, preserving both
+            // partitions' old topological order. A marked-to-unmarked edge in
+            // the interval is impossible by traversal closure.
+            self.repair_epoch = self.repair_epoch.checked_add(1).unwrap_or_else(|| {
+                for node in &mut self.rows {
+                    node.visited = 0;
+                }
+                1
+            });
+            let epoch = self.repair_epoch;
+            self.rows[target.slot as usize].visited = epoch;
+            let mut pending = vec![target.slot];
+            while let Some(slot) = pending.pop() {
+                self.repair_visits += 1;
+                for i in 0..self.rows[slot as usize].dependencies.len() {
+                    self.repair_visits += 1;
+                    let next = self.rows[slot as usize].dependencies[i].target;
+                    if next == source.slot {
+                        return None;
+                    }
+                    let node = &mut self.rows[next as usize];
+                    if node.position as usize <= end && node.visited != epoch {
+                        node.visited = epoch;
+                        pending.push(next);
+                    }
+                }
+            }
+            // Reuse traversal capacity for the moved suffix. At most two
+            // u32 vectors live here, bounded by twelve bytes per arena row.
+            let mut ordered = Vec::with_capacity(end - start + 1);
             for &slot in &self.order[start..=end] {
                 self.repair_visits += 1;
-                for edge in &self.rows[slot as usize].dependencies {
-                    self.repair_visits += 1;
-                    let p = self.rows[edge.target as usize].position as usize;
-                    if (start..=end).contains(&p) {
-                        degrees[p - start] += 1;
-                    }
+                if self.rows[slot as usize].visited == epoch {
+                    pending.push(slot);
+                } else {
+                    ordered.push(slot);
                 }
             }
-            degrees[0] += 1;
-            let mut sorted = Vec::with_capacity(degrees.len());
-            for (i, &degree) in degrees.iter().enumerate() {
-                if degree == 0 {
-                    sorted.push(self.order[start + i]);
-                }
-            }
-            let mut cursor = 0;
-            while cursor < sorted.len() {
-                let slot = sorted[cursor];
-                cursor += 1;
-                for edge in &self.rows[slot as usize].dependencies {
-                    let p = self.rows[edge.target as usize].position as usize;
-                    if (start..=end).contains(&p) {
-                        degrees[p - start] -= 1;
-                        if degrees[p - start] == 0 {
-                            sorted.push(edge.target);
-                        }
-                    }
-                }
-                if slot == source.slot {
-                    degrees[0] -= 1;
-                    if degrees[0] == 0 {
-                        sorted.push(target.slot);
-                    }
-                }
-            }
-            if sorted.len() != degrees.len() {
-                return None;
-            }
-            for (offset, &slot) in sorted.iter().enumerate() {
+            ordered.extend(pending);
+            for (offset, &slot) in ordered.iter().enumerate() {
+                self.repair_visits += 1;
                 self.rows[slot as usize].position = (start + offset) as u32;
             }
-            self.order[start..=end].copy_from_slice(&sorted);
+            self.order[start..=end].copy_from_slice(&ordered);
         }
         let edge = self.rows[source.slot as usize].dependencies.len();
         self.edges.insert((source.slot, target.slot), edge as u32);
@@ -316,7 +316,7 @@ impl Nodes {
         };
         // Include sparse B-tree nodes and hash control/bucket slack, as in
         // MemoGraph::retained_bytes. Vectors use allocated capacities; the
-        // interval sorter needs at most eight extra bytes per arena row.
+        // interval repair needs at most twelve extra bytes per arena row.
         let bytes = self.rows.capacity() * size_of::<Node>()
             + self.keys.capacity() * size_of::<Option<Key>>()
             + (self.free.capacity() + self.order.capacity()) * size_of::<u32>()

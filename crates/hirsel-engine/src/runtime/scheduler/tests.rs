@@ -1727,6 +1727,7 @@ fn bare_node() -> super::Node {
         subscribers: Vec::new(),
         generation: 0,
         position: 0,
+        visited: 0,
         unsatisfied: 0,
         live: true,
         discard: false,
