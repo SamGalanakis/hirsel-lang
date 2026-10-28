@@ -2251,6 +2251,10 @@ impl QueryEngine {
             None => self.missing(QueryKind::Lower),
         });
         let mut result = result.map(shared_output);
+        // The Lower receipt covers code executed while producing this body.
+        // V's verdict on the resulting body has its own retained evidence;
+        // compiling it does not itself execute it in this receipt's context.
+        let (_, acceptance, selections) = self.end_evaluation_validation();
         let mut verification = None;
         if let Ok(lowered) = &result {
             if self.verify == Verify::On
@@ -2277,7 +2281,6 @@ impl QueryEngine {
             .expect("lowering execution frame");
         observed.merged.extend(executed);
         let depth = self.s1.finish_requests(self.depth_limit());
-        let (_, acceptance, selections) = self.end_evaluation_validation();
         let key = MemoKey::new(QueryKind::Lower, id);
         let mut entry = self.finish(key, text, reads, result, observed);
         entry.depth = entry.result().is_ok().then_some(depth);
