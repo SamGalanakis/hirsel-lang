@@ -154,7 +154,7 @@ pub fn sign(
   )
   let day = part(timestamp, 0, 8)
   let scope = string.join(
-    [unique day, unique region, unique service, "aws4_request"],
+    [copy day, unique region, unique service, "aws4_request"],
     "/"
   )
   let to_sign = string.join(

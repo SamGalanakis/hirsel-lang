@@ -80,7 +80,7 @@ fn object_read(mut state: ObjectBackend, name: String) -> Result[Bytes, FileErro
       state.cached = []
       state.cached_bytes = 0
     }
-    list.push(mut state.cached, (unique name, unique data))
+    list.push(mut state.cached, (unique name, copy data))
     state.cached_bytes += charge
   }
   Ok(take data)

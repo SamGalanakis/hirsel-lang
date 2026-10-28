@@ -299,7 +299,7 @@ fn request(
   }
   let mut headers: List[http.Header] = [
     http.Header(name: "host", value: host),
-    http.Header(name: "x-amz-date", value: unique stamp),
+    http.Header(name: "x-amz-date", value: copy stamp),
     http.Header(name: "x-amz-content-sha256", value: hash_hex(payload))
   ]
   for header in extra {
@@ -515,7 +515,7 @@ pub fn list_objects(mut c: Client, prefix: String) -> Result[List[String], S3Err
     let mut query: List[(String, String)] = [
       ("list-type", "2"),
       ("encoding-type", "url"),
-      ("prefix", unique full_prefix)
+      ("prefix", copy full_prefix)
     ]
     if let Some(value) = token {
       list.push(mut query, ("continuation-token", unique value))
