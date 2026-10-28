@@ -21,6 +21,8 @@ mod network;
 pub mod observation_view;
 pub mod ownership_trace;
 mod pipeline;
+#[cfg(test)]
+mod prepared_host_152;
 pub mod requests;
 pub mod resident;
 pub mod serve;
@@ -561,13 +563,29 @@ pub fn record_fixture_observations(
     tape: &Path,
     checked: bool,
 ) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    let selection = launch_binding::LaunchSelection::read(HostLaunch::Live {
+        config: LaunchConfig::Record(run.as_os_str()),
+        record: Some(tape),
+        revocations: None,
+    })?;
+    let input = request_tir(path, hirsel_engine::Verify::On, selection.entry().cloned())?;
+    record_prepared_fixture_observations(&input, run, fixture, tape, checked)
+}
+
+/// Record a fixture from settled immutable source products with fresh host state.
+pub fn record_prepared_fixture_observations(
+    input: &requests::TirExecution,
+    run: &Path,
+    fixture: &native::Fixture,
+    tape: &Path,
+    checked: bool,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
     let launch = HostLaunch::Live {
         config: LaunchConfig::Record(run.as_os_str()),
         record: Some(tape),
         revocations: None,
     };
     let selection = launch_binding::LaunchSelection::read(launch)?;
-    let input = request_tir(path, hirsel_engine::Verify::On, selection.entry().cloned())?;
     let mut observed = None;
     let host = hirsel_rt::host_launch::HostGrants::snapshot(
         fixture.files.clone(),
@@ -575,7 +593,7 @@ pub fn record_fixture_observations(
         fixture.monotonic.unwrap_or(0),
     );
     let (outcome, _) = tir_execution::run_tir_on_host_with_grants(
-        &input,
+        input,
         launch,
         selection,
         fixture.steps,
@@ -583,6 +601,28 @@ pub fn record_fixture_observations(
         None,
         checked,
         Some(host),
+    )?;
+    replay_observation(observed, &outcome)
+}
+
+/// Replay a bound tape from settled products, creating fresh replay state per call.
+pub fn replay_prepared_observations(
+    input: &requests::TirExecution,
+    tape: &Path,
+    max_steps: Option<u64>,
+    checked: bool,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    let launch = HostLaunch::Replay(tape);
+    let selection = launch_binding::LaunchSelection::read(launch)?;
+    let mut observed = None;
+    let (outcome, _) = tir_execution::run_tir_on_host(
+        input,
+        launch,
+        selection,
+        max_steps,
+        Some(&mut observed),
+        None,
+        checked,
     )?;
     replay_observation(observed, &outcome)
 }
