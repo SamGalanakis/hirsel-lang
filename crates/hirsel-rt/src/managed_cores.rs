@@ -4,7 +4,10 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use crate::host::RunControl;
@@ -64,7 +67,7 @@ impl ManagedCores {
             .filter(|n| *n <= crate::pool::MAX_WIDTH)
             .ok_or_else(|| format!("worker target exceeds {}", crate::pool::MAX_WIDTH))
     }
-    /// Called every second even for fixed integer requests. Read errors leave the
+    /// Rechecked at claim and settlement, at most once per second. Read errors leave the
     /// previous (never wider) configuration in place and are returned to the host.
     pub fn refresh(
         &self,
@@ -169,15 +172,113 @@ impl ManagedCores {
     }
 }
 
+/// The run owns its admission snapshot through the final worker exit. Claims
+/// and settlements refresh it synchronously; diagnostics never read capacity.
+/// Go 1.25 runtime/proc.go:6733-6767 refreshes through its existing sysmon.
+pub(crate) struct Service {
+    reader: LinuxLimits,
+    manager: Arc<ManagedCores>,
+    started: Instant,
+    failed: AtomicBool,
+    pending: Mutex<Option<PendingDiagnostics>>,
+    diagnostics: OnceLock<Option<Diagnostics>>,
+}
+struct PendingDiagnostics {
+    writer: Option<File>,
+    socket: Option<ControlSocket>,
+    metrics: Option<Arc<crate::pool::WorkerMetrics>>,
+}
+impl Service {
+    pub(crate) fn new(
+        reader: LinuxLimits,
+        manager: Arc<ManagedCores>,
+        writer: Option<File>,
+        socket: Option<ControlSocket>,
+        metrics: Option<Arc<crate::pool::WorkerMetrics>>,
+    ) -> Self {
+        Self {
+            reader,
+            manager,
+            started: Instant::now(),
+            failed: AtomicBool::new(false),
+            pending: Mutex::new(Some(PendingDiagnostics {
+                writer,
+                socket,
+                metrics,
+            })),
+            diagnostics: OnceLock::new(),
+        }
+    }
+    pub(crate) fn refresh(&self) -> bool {
+        self.diagnostics.get_or_init(|| {
+            let pending = self.pending.lock().unwrap().take().unwrap();
+            if pending.writer.is_none() && pending.socket.is_none() {
+                return None;
+            }
+            match Diagnostics::start(
+                self.manager.clone(),
+                pending.writer,
+                pending.socket,
+                pending.metrics,
+            ) {
+                Ok(diagnostics) => Some(diagnostics),
+                Err(_) => {
+                    self.failed.store(true, Ordering::Release);
+                    self.manager.control.stop();
+                    None
+                }
+            }
+        });
+        self.check(self.started.elapsed(), || {
+            self.reader.read().map_err(|e| e.to_string())
+        })
+    }
+    fn check(&self, now: Duration, read: impl FnOnce() -> Result<HostLimits, String>) -> bool {
+        if self.failed.load(Ordering::Acquire) {
+            return false;
+        }
+        let mut grant = self.manager.state.lock().unwrap().grant.clone();
+        grant.max_cores = crate::pool::compute_permits().0.into();
+        if self
+            .manager
+            .refresh(now, || read().map(|limits| (grant, limits)))
+            .is_err()
+        {
+            // Preserve the service's read-error stop, including the previous width.
+            self.failed.store(true, Ordering::Release);
+            self.manager.control.stop();
+            return false;
+        }
+        true
+    }
+    pub(crate) fn permits(&self, width: u32) -> bool {
+        if !self.refresh() {
+            return false;
+        }
+        let state = self.manager.state.lock().unwrap();
+        state
+            .limits
+            .admission_affinity
+            .intersection(&state.limits.effective_cpuset)
+            .len()
+            >= u64::from(width)
+            && state
+                .limits
+                .quota
+                .is_none_or(|quota| quota.floor() >= u64::from(width))
+    }
+}
+
+/// Created on first use only when a sidecar was requested. Owns Send
+/// diagnostics, never a run pointer, adapter, sink or capacity reader.
 /// Owned by admission. Its service thread owns only Send diagnostics, never a
 /// run pointer, adapter or sink. A shutdown descriptor wakes poll immediately.
-pub(crate) struct Service {
+struct Diagnostics {
     wake: UnixStream,
     thread: Option<std::thread::JoinHandle<()>>,
 }
-impl Service {
+impl Diagnostics {
     pub(crate) fn start(
-        reader: LinuxLimits,
         manager: Arc<ManagedCores>,
         writer: Option<File>,
         socket: Option<ControlSocket>,
@@ -185,7 +286,7 @@ impl Service {
     ) -> io::Result<Self> {
         let (wake, stop) = UnixStream::pair()?;
         let thread = std::thread::Builder::new()
-            .name("hirsel-placement".into())
+            .name("hirsel-diagnostics".into())
             .spawn(move || {
                 let started = Instant::now();
                 let initial = manager.snapshot().throttled_usec;
@@ -227,20 +328,6 @@ impl Service {
                     }
                     if Instant::now() >= tick {
                         let now = started.elapsed();
-                        let mut grant = manager.state.lock().unwrap().grant.clone();
-                        grant.max_cores = crate::pool::compute_permits().0.into();
-                        if manager
-                            .refresh(now, || {
-                                reader
-                                    .read()
-                                    .map(|limits| (grant, limits))
-                                    .map_err(|e| e.to_string())
-                            })
-                            .is_err()
-                        {
-                            // A malformed/unreadable hard limit must never silently widen.
-                            manager.control.stop();
-                        }
                         let mut snapshot = manager.snapshot();
                         if let Some(metrics) = &metrics {
                             for (name, value) in metrics.values() {
@@ -267,7 +354,7 @@ impl Service {
         })
     }
 }
-impl Drop for Service {
+impl Drop for Diagnostics {
     fn drop(&mut self) {
         let _ = self.wake.write_all(&[1]);
         if let Some(thread) = self.thread.take() {

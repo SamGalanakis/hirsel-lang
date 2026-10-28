@@ -2587,12 +2587,9 @@ pub(crate) unsafe fn execute(
     let admission_policy = managed
         .as_ref()
         .map(|(_, manager, _, _)| manager.admission_policy());
-    let _managed_service = managed
-        .map(|(reader, manager, writer, socket)| {
-            crate::managed_cores::Service::start(reader, manager, writer, socket, worker_metrics)
-        })
-        .transpose()
-        .map_err(|e| e.to_string())?;
+    unsafe { &mut *ctx }.run().capacity = managed.map(|(reader, manager, writer, socket)| {
+        crate::managed_cores::Service::new(reader, manager, writer, socket, worker_metrics)
+    });
     #[cfg(feature = "measurement")]
     if let Some(file) = measurement {
         unsafe { &mut *ctx }.set_measurement_output(file);

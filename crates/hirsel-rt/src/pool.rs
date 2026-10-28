@@ -1435,6 +1435,9 @@ fn grow(run: *mut RunShared, execs: &Execs, compute: &mut ComputeWorkers, width:
 /// after their outgoing handoff; no C frame or pure segment is preempted. Keep
 /// retired execs alive until shutdown, so a task's last-worker pointer stays valid.
 fn resize(ctx: *mut TaskCtx) {
+    if let Some(capacity) = unsafe { (*ctx).run_ref().capacity.as_ref() } {
+        capacity.refresh();
+    }
     let run = unsafe { (*ctx).run_ptr() };
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     let width = unsafe { (&(*run).control).width.load(Ordering::Acquire) };
@@ -1798,6 +1801,9 @@ pub(crate) unsafe fn home_wake(run: *mut RunShared) -> Option<Arc<dyn Fn() + Sen
 /// A pool slot for an interval: an idle pool thread, a new one, or `None` when all
 /// [`POOL_THREADS`] are busy.
 pub(crate) fn claim(ctx: *mut TaskCtx) -> Option<u16> {
+    if let Some(capacity) = unsafe { (*ctx).run_ref().capacity.as_ref() } {
+        capacity.refresh();
+    }
     unsafe {
         crate::io::Binding::bridge(ctx);
     }
@@ -1864,6 +1870,9 @@ pub(crate) unsafe fn has_slot_run(run: *mut RunShared) -> bool {
 
 /// The calling thread's compute permit goes back: the task it runs enters C.
 pub(crate) fn release_permit(ctx: *mut TaskCtx) {
+    if let Some(capacity) = unsafe { (*ctx).run_ref().capacity.as_ref() } {
+        capacity.refresh();
+    }
     // SAFETY: the context is live.
     if let Some(execs) = unsafe { (*(*(*ctx).run_ptr()).execs.get()).as_deref() } {
         // SAFETY: the current exec is this thread's.
@@ -1875,6 +1884,9 @@ pub(crate) fn release_permit(ctx: *mut TaskCtx) {
 /// begins: whether it took one. Before a width-1 run's first dispatch its one thread holds
 /// the run's one permit.
 pub(crate) fn acquire_permit(ctx: *mut TaskCtx) -> bool {
+    if let Some(capacity) = unsafe { (*ctx).run_ref().capacity.as_ref() } {
+        capacity.refresh();
+    }
     let execs = execs(ctx);
     // A callee belongs to its execution root's stop, while using its own
     // executor and heap on this physical thread.
@@ -1898,6 +1910,9 @@ pub(crate) fn acquire_permit(ctx: *mut TaskCtx) -> bool {
 /// Enter ordinary width-1 code on the admission thread. The launcher's frame
 /// returns the permit even when a stop abandons every program frame.
 pub(crate) fn enter_root(ctx: *mut TaskCtx) -> Stopped<()> {
+    if let Some(capacity) = unsafe { (*ctx).run_ref().capacity.as_ref() } {
+        capacity.refresh();
+    }
     let execs = execs(ctx);
     execs.permits.acquire(
         &execs.home,

@@ -420,13 +420,7 @@ fn exercise(schedule: Schedule) {
                 // Ordinary unit actions may have only one CPU. This fixture
                 // tests simultaneous owners and process-grant contraction;
                 // exact host-width qualification has its own native targets.
-                super::super::execs(ctx)
-                    .scoped
-                    .lock()
-                    .unwrap()
-                    .as_mut()
-                    .unwrap()
-                    .limits = None;
+                assert!((*ctx).run_ref().capacity.is_none());
             }
             let mut scope = 0;
             assert_eq!(

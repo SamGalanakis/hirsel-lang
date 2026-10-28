@@ -168,7 +168,6 @@ pub(super) struct Workers {
     contraction: u64,
     domain: u64,
     caller_task: u32,
-    limits: Option<hirsel_run_config::managed_cores::LinuxLimits>,
 }
 
 impl Workers {
@@ -231,7 +230,6 @@ unsafe fn start_at(
         contraction: execs.permits.state.lock().unwrap().contraction,
         domain: unsafe { (*run).cpu_probe.as_ref().map_or(0, |p| p.domain()) },
         caller_task: u32::MAX,
-        limits: hirsel_run_config::managed_cores::LinuxLimits::capture().ok(),
     };
     for index in 0..width {
         // Sequential attachment is role-owned, like grow(). No scoped task
@@ -538,21 +536,13 @@ fn capacity_lost(ctx: *mut TaskCtx) -> bool {
     let Some(workers) = slot.as_ref() else {
         return false;
     };
+    // Refresh before taking permit state: refresh also inspects process permits.
+    let host_lost = unsafe { (*ctx).run_ref().capacity.as_ref() }
+        .is_some_and(|capacity| !capacity.permits(workers.execs.len() as u32));
     let state = execs.permits.state.lock().unwrap();
     state.contraction != workers.contraction
         || state.limit < workers.execs.len() as u32
-        || workers.limits.as_ref().is_some_and(|reader| {
-            reader.read().map_or(true, |limits| {
-                limits
-                    .admission_affinity
-                    .intersection(&limits.effective_cpuset)
-                    .len()
-                    < workers.execs.len() as u64
-                    || limits
-                        .quota
-                        .is_some_and(|quota| quota.floor() < workers.execs.len() as u64)
-            })
-        })
+        || host_lost
 }
 
 /// Private control for the typed cpu.map_scoped body. Preparation and mapper
@@ -617,7 +607,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
                     return 16 + cause;
                 }
                 if width > grant.max_workers
-                    || std::thread::available_parallelism().is_ok_and(|n| n.get() < width as usize)
+                    || (*ctx).run_ref().capacity.as_ref().map_or_else(
+                        || {
+                            std::thread::available_parallelism()
+                                .is_ok_and(|n| n.get() < width as usize)
+                        },
+                        |capacity| !capacity.permits(width),
+                    )
                 {
                     return 4;
                 }

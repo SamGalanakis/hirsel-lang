@@ -136,3 +136,49 @@ fn ordered_width_is_installed_before_root_readiness_in_repeated_runs() {
         }
     }
 }
+
+#[test]
+fn claim_and_settlement_share_the_interval_and_stop_on_unreadable_capacity() {
+    if !isolated("claim_and_settlement_share_the_interval_and_stop_on_unreadable_capacity") {
+        return;
+    }
+    let run = BodyRun::new(4, false);
+    let control = run.control();
+    let manager = manager(control.clone(), 4);
+    let proc = tempfile::tempdir().unwrap();
+    std::fs::create_dir(proc.path().join("thread-self")).unwrap();
+    std::fs::write(
+        proc.path().join("thread-self/status"),
+        "Cpus_allowed_list:\t0-7\n",
+    )
+    .unwrap();
+    let service = Service::new(
+        LinuxLimits::from_proc(proc.path()).unwrap(),
+        manager.clone(),
+        None,
+        None,
+        None,
+    );
+    let mut contracted = manager.state.lock().unwrap().limits.clone();
+    contracted.quota = hirsel_run_config::managed_cores::Quota::parse("100000 100000\n").unwrap();
+    assert!(service.permits(4));
+    assert!(service.check(Duration::from_millis(999), || Ok(contracted.clone())));
+    assert!(service.permits(4));
+    assert!(service.check(Duration::from_secs(1), || Ok(contracted.clone())));
+    assert!(!service.permits(4));
+    assert!(service.permits(1));
+    assert_eq!(
+        manager.state.lock().unwrap().resolver.resolution().target,
+        1
+    );
+    assert!(!control.status().stop_requested);
+    assert!(!service.check(Duration::from_secs(2), || Err(
+        "unreadable hard limit".into()
+    )));
+    assert!(control.status().stop_requested);
+    assert!(!service.permits(1));
+    assert_eq!(
+        manager.state.lock().unwrap().resolver.resolution().target,
+        1
+    );
+}

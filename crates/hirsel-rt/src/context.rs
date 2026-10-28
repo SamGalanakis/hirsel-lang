@@ -393,6 +393,7 @@ pub(crate) struct RunShared {
     /// The admitted tasks.free@1 policy, independently of recording or
     /// physical dispatch; false for Ordered and the cooperative test harness.
     pub(crate) free_mode: bool,
+    pub(crate) capacity: Option<crate::managed_cores::Service>,
     pub(crate) cpu_grant: Option<hirsel_run_schema::CpuGrant>,
     pub(crate) cpu_ledger: Option<std::sync::Arc<crate::pool::cpu_scoped::ledger::Ledger>>,
     pub(crate) cpu_probe: Option<crate::pool::cpu_scoped::probe::Probe>,
@@ -1073,6 +1074,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         schedule: Default::default(),
         free: RoleCell::new(None),
         free_mode: false,
+        capacity: None,
         cpu_grant: None,
         cpu_ledger: None,
         cpu_probe: None,
