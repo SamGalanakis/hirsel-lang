@@ -1,7 +1,5 @@
-use hirsel_driver::{COMPILER, CompilerRequestsExt};
-use hirsel_engine::{
-    CompileConfig, DefinitionQueries, QueryKind, store::DirStore, with_compiler_stack,
-};
+use hirsel_driver::{COMPILER, CompilerRequestsExt, requests::*};
+use hirsel_engine::{CompileConfig, QueryKind, store::DirStore, with_compiler_stack};
 use hirsel_syntax::{DefPath, ItemPath, PackageId};
 use std::sync::Arc;
 
@@ -35,46 +33,101 @@ fn precomputed_zstd_zeros_preserves_the_cold_body_and_hash() {
             modules: vec!["zstd".into()],
             name: "zeros".into(),
         });
-        let mut warm = COMPILER
-            .with_config(CompileConfig {
-                store: Arc::new(
-                    DirStore::new(dir.path().join("reader")).with_read_only_root(products),
-                ),
+        let requests = |store: Arc<dyn hirsel_engine::store::ResultStore>| {
+            let config = CompileConfig {
+                store,
                 jobs: hirsel_intern::jobs::Jobs::ONE,
                 ..Default::default()
-            })
-            .load_program(&manifest)
+            };
+            CompilerRequests::for_host(COMPILER.with_config(config.clone()), config)
+        };
+        let mut warm = requests(Arc::new(
+            DirStore::new(dir.path().join("reader")).with_read_only_root(products),
+        ));
+        let mut cold = requests(Arc::new(hirsel_engine::store::NoneStore));
+        let hash = |requests: &mut CompilerRequests| {
+            let output = requests
+                .execute(
+                    &manifest,
+                    CompileOperation::Hashes {
+                        package: Some(path.0.package.clone()),
+                    },
+                )
+                .unwrap();
+            let CompileResult::Hashes(hashes) = &output.result else {
+                panic!("expected definition hashes")
+            };
+            hashes[&path]
+        };
+        let actual_hash = hash(&mut warm);
+        let expected_hash = hash(&mut cold);
+        let precompute = |requests: &mut CompilerRequests| {
+            let output = requests
+                .execute(&manifest, CompileOperation::Precompute)
+                .unwrap();
+            let CompileResult::Precomputed { sources, .. } = &output.result else {
+                panic!("expected settled source products")
+            };
+            sources.clone()
+        };
+        let actual = precompute(&mut warm);
+        let expected = precompute(&mut cold);
+        let bound = actual.definition_decode_bytes(&path).unwrap()
+            + expected.definition_decode_bytes(&path).unwrap();
+        let budget = hirsel_engine::runtime::ProcessBudget::new(bound);
+        let actual_allowance = budget
+            .reserve(actual.definition_decode_bytes(&path).unwrap())
             .unwrap();
-        let mut cold = COMPILER
-            .with_config(CompileConfig {
-                store: Arc::new(hirsel_engine::store::NoneStore),
-                jobs: hirsel_intern::jobs::Jobs::ONE,
-                ..Default::default()
-            })
-            .load_program(&manifest)
+        let expected_allowance = budget
+            .reserve(expected.definition_decode_bytes(&path).unwrap())
             .unwrap();
-        let actual_hash = warm.engine.definition_hash(&path).unwrap();
-        let expected_hash = cold.engine.definition_hash(&path).unwrap();
-        let actual = warm.engine.lower_to_tir(&path).unwrap();
-        let expected = cold.engine.lower_to_tir(&path).unwrap();
-        let render = |program: &hirsel_engine::LoadedProgram, value: &hirsel_tir::Definition| {
+        let actual_body = actual.definition(&path, &actual_allowance).unwrap();
+        let expected_body = expected.definition(&path, &expected_allowance).unwrap();
+        let render = |products: &PrecomputedSources, value: &hirsel_tir::Definition| {
             canonical_debug::placed(
-                &program.engine.sources,
+                products.sources(),
                 canonical_debug::canonical_ids(
-                    program.engine.types(),
+                    products.signatures().types(),
                     || serde_json::to_vec(value).unwrap(),
                     format!("{value:?}"),
                 ),
             )
         };
-        let actual_text = render(&warm, &actual.value);
-        let expected_text = render(&cold, &expected.value);
+        let actual_text = render(&actual, &actual_body);
+        let expected_text = render(&expected, &expected_body);
         assert_eq!(actual_text, expected_text);
-        assert_eq!(actual.dependencies, expected.dependencies);
+        let bound = actual.dependency_decode_bytes(&path).unwrap()
+            + expected.dependency_decode_bytes(&path).unwrap();
+        let budget = hirsel_engine::runtime::ProcessBudget::new(bound);
+        let actual_dependencies = actual
+            .dependencies(
+                &path,
+                budget
+                    .reserve(actual.dependency_decode_bytes(&path).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+        let expected_dependencies = expected
+            .dependencies(
+                &path,
+                budget
+                    .reserve(expected.dependency_decode_bytes(&path).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            actual_dependencies.dependencies(),
+            expected_dependencies.dependencies()
+        );
         assert_eq!(actual_hash, expected_hash);
-        assert_eq!(expected_hash, cold.engine.definition_hash(&path).unwrap());
-        for phase in [QueryKind::Check, QueryKind::Modes] {
-            assert_eq!(warm.engine.recompute_count(&path, phase), 0);
+        assert_eq!(expected_hash, hash(&mut cold));
+        let counts = warm
+            .recompute_counts(
+                &[QueryKind::Check, QueryKind::Modes].map(|phase| (path.clone(), phase)),
+            )
+            .unwrap();
+        for (definition, phase, count) in counts {
+            assert_eq!(count, 0, "{definition}: {phase:?}");
         }
     });
 }
