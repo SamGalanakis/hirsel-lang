@@ -1,10 +1,13 @@
-//! Saved unique growth uses the allocator's existing classes and RawVec rule.
+//! Saved growth uses the existing heap classes, holder walk and arena segments.
 use super::*;
 use crate::alloc;
 
 pub(in crate::tasks::ordered::ahead) enum Plan {
     Heap(HeapPlan),
-    Region(crate::region::cpu_ahead::Plan),
+    Region {
+        allocation: crate::region::cpu_ahead::Plan,
+        moved: Option<(*mut Header, u64)>,
+    },
 }
 
 pub(in crate::tasks::ordered::ahead) struct HeapPlan {
@@ -15,7 +18,7 @@ pub(in crate::tasks::ordered::ahead) struct HeapPlan {
 }
 
 /// Compute the same class extent as block_grow/seq_grow without allocating,
-/// freeing, or changing a saved input. Shared flat sequences detach at the
+/// freeing, or changing a saved input. Shared sequences detach at the
 /// requested capacity, as alloc::detach_reserved does.
 unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(HeapPlan, u64, u64)> {
     if !matches!(request.kind, GROW_BLOCK | GROW_SEQUENCE) || request.block.is_null() {
@@ -37,7 +40,6 @@ unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(HeapPlan, u64, u6
                 || ((*old).domain() == alloc::DOMAIN_STATIC
                     && (*old).count != crate::COUNT_IMMORTAL)
                 || !matches!((*old).domain(), alloc::DOMAIN_HEAP | alloc::DOMAIN_STATIC)
-                || layout.step_count != 0
                 || layout.finalizer.is_some()
             {
                 return None;
@@ -171,6 +173,7 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
                     request.extent,
                     request.align,
                     request.flags,
+                    false,
                 )
             })
             .flatten();
@@ -182,10 +185,91 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
             (*native)
                 .allocation
                 .begin(request.index, request.extent, request.align);
-            (*native).growth_plan = Some(Plan::Region(plan));
+            (*native).growth_plan = Some(Plan::Region {
+                allocation: plan,
+                moved: None,
+            });
         }
     }
-    if let Some(Plan::Region(plan)) = unsafe { (*native).growth_plan.as_ref() } {
+    if unsafe { (*native).growth_plan.is_none() && (*pointer).kind == GROW_BLOCK } {
+        let request = unsafe { &*pointer };
+        let task = super::super::super::engine::current(ctx);
+        let owner = super::super::super::engine::with_driver(ctx, |d| {
+            d.cpu_batch
+                .as_ref()
+                .and_then(|batch| batch.block_owner(task))
+        });
+        // Check the allocation's task generation and ordinal before its header.
+        let certified = owner.is_some_and(|owner| {
+            owner.ordinal == request.ordinal
+                && !request.block.is_null()
+                && unsafe { (*ctx).heap_ref().meter.cpu.get() }.is_none_or(|ledger| {
+                    ledger
+                        .blocks
+                        .lock()
+                        .unwrap()
+                        .retain(owner, &[request.block])
+                        .is_some()
+                })
+        });
+        if certified && unsafe { crate::region::is_tracked(request.block) } {
+            let old = request.block;
+            let region = unsafe { crate::region::tracked_region(old) };
+            let owned = unsafe { (*ctx).heap_ref().meter.cpu.get() }.is_none_or(|ledger| {
+                ledger
+                    .blocks
+                    .lock()
+                    .unwrap()
+                    .region_owned(owner.unwrap(), region.addr())
+            });
+            let valid = owned
+                && unsafe { (*old).count == crate::COUNT_ARENA_UNIQUE }
+                && request.align != 0
+                && request.align.is_power_of_two()
+                && request.align <= 1 << 30
+                && request.extent <= alloc::EXTENT_MAX;
+            let prepared = valid
+                .then(|| unsafe {
+                    crate::region::cpu_ahead::plan(
+                        ctx,
+                        region,
+                        (*old).index(),
+                        request.extent,
+                        request.align.max(8),
+                        crate::region::ALLOC_TRACKED,
+                        true,
+                    )
+                })
+                .flatten();
+            let Some(plan) = prepared else {
+                unsafe { finish(native, std::ptr::null_mut(), NOT_CERTIFIED) };
+                return Ok(true);
+            };
+            let bytes = unsafe { (*ctx).heap_ref().capacity(old) };
+            if request.keep > bytes || request.keep > request.extent {
+                unsafe { finish(native, std::ptr::null_mut(), NOT_CERTIFIED) };
+                return Ok(true);
+            }
+            if bytes >= request.extent {
+                unsafe { finish(native, old, ACCEPTED) };
+                return Ok(true);
+            }
+            unsafe {
+                (*native)
+                    .allocation
+                    .begin((*old).index(), request.extent, request.align.max(8));
+                (*native).growth_plan = Some(Plan::Region {
+                    allocation: plan,
+                    moved: Some((old, request.keep)),
+                });
+            }
+        }
+    }
+    if let Some(Plan::Region {
+        allocation: plan,
+        moved,
+    }) = unsafe { (*native).growth_plan.as_ref() }
+    {
         if !unsafe { (*native).allocation.admit(ctx, plan.charge())? } {
             return Ok(false);
         }
@@ -198,6 +282,16 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
         };
         super::super::cpu_withdrawal::release(ctx);
         unsafe {
+            if let Some((old, keep)) = moved {
+                std::ptr::copy_nonoverlapping(
+                    alloc::payload(*old),
+                    alloc::payload(fresh),
+                    *keep as usize,
+                );
+                // The new cleanup owns the moved holders; the abandoned block
+                // remains scheduled with an empty sequence until region exit.
+                alloc::payload(*old).cast::<u64>().write(0);
+            }
             if let Some(ledger) = (*ctx).heap_ref().meter.cpu.get() {
                 let task = super::super::super::engine::current(ctx);
                 let owner = super::super::super::engine::with_driver(ctx, |d| {
@@ -207,7 +301,7 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
                     .blocks
                     .lock()
                     .unwrap()
-                    .adopt_in(owner, fresh, (*pointer).region.addr());
+                    .adopt_in(owner, fresh, plan.region.addr());
             }
             (*native).allocation.complete();
             finish(native, fresh, ACCEPTED);
@@ -284,8 +378,9 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
             alloc::set_sequence_capacity(fresh, slots);
         }
         if plan.detach {
-            // Flat layouts have no child holders to duplicate. The original
-            // retains its other credits; immortal/static storage keeps none.
+            crate::copy::retain_children(ctx, fresh);
+            // The original retains its other credits; immortal/static storage
+            // keeps none. A shared sequence cannot be freed by this return.
             if (*plan.old).count != crate::COUNT_IMMORTAL {
                 (*plan.old).count -= 1;
             }

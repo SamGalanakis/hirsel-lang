@@ -249,9 +249,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
     align: u64,
     flags: u32,
 ) -> *mut Header {
-    unsafe { arena_alloc(ctx, region, index, extent, align, flags, false) }
+    unsafe { arena_alloc(ctx, region, index, extent, align, flags, false, false) }
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn arena_alloc(
     ctx: *mut TaskCtx,
     region: *mut Region,
@@ -260,6 +261,7 @@ unsafe fn arena_alloc(
     align: u64,
     flags: u32,
     prepared: bool,
+    schedule: bool,
 ) -> *mut Header {
     unsafe {
         check_request(extent, align);
@@ -288,14 +290,8 @@ unsafe fn arena_alloc(
         } else {
             24
         };
-        let start = reserve_in_mode(
-            ctx,
-            region,
-            prefix + extent + (physical - 8),
-            8,
-            true,
-            prepared,
-        );
+        let reserved = prefix + extent + (physical - 8);
+        let start = reserve_in_mode(ctx, region, reserved, 8, true, prepared);
         let payload = start.add(prefix as usize);
         let payload = payload.add(payload.align_offset(physical as usize));
         let block = payload.sub(8).cast::<Header>();
@@ -330,6 +326,21 @@ unsafe fn arena_alloc(
                 .sub(TRACKED_REGION_BACK as usize)
                 .cast::<*mut Region>()
                 .write(region);
+        }
+        if schedule {
+            let entry = reserve_in_mode(
+                ctx,
+                region,
+                size_of::<Entry>() as u64,
+                align_of::<Entry>() as u64,
+                false,
+                prepared,
+            )
+            .cast::<Entry>();
+            (*entry).prev = (*region).cleanup.cast();
+            (*entry).block = ptr::null_mut();
+            finalize_item(&mut (*entry).cleanup, index, payload);
+            (*region).cleanup = entry.cast();
         }
         block.write(Header {
             count: if tracked {

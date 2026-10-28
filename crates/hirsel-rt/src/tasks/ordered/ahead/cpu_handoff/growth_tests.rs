@@ -27,8 +27,14 @@ enum Refusal {
     Region,
 }
 
+unsafe fn heap_backing(ctx: *mut TaskCtx) -> u64 {
+    let heap = unsafe { (*ctx).heap_ref() };
+    // The CPU ledger includes each diagnostic slab's shadow allocation.
+    heap.backing_bytes() + heap.slab_count * alloc::SLAB_SIZE as u64 * u64::from(heap.diagnostic)
+}
+
 fn run_growth(sequence: bool, refuse: bool, repeat: bool, refusal: Option<Refusal>) {
-    run_growth_with_sharing(sequence, refuse, repeat, refusal, false);
+    run_growth_with_sharing(sequence, refuse, repeat, refusal, false, false);
 }
 
 fn run_growth_with_sharing(
@@ -37,6 +43,7 @@ fn run_growth_with_sharing(
     repeat: bool,
     refusal: Option<Refusal>,
     shared: bool,
+    holders: bool,
 ) {
     let grant = hirsel_run_schema::CpuGrant {
         provider: "cpu.scoped@1".into(),
@@ -49,7 +56,9 @@ fn run_growth_with_sharing(
     let _topology = ledger.topology(4).unwrap();
     let configured = ledger.clone();
     let setup_grant = grant.clone();
-    let outcome = crate::host::BodyRun::new(1, false).run(
+    let mut run = crate::host::BodyRun::new(1, false);
+    run.config.flags |= crate::context::CONFIG_DIAGNOSTIC;
+    let outcome = run.run(
         move |ctx| unsafe {
             (*ctx).run().cpu_grant = Some(setup_grant.clone());
             (*ctx).set_budgets(Some(100), Some(setup_grant.max_batch_bytes));
@@ -65,8 +74,31 @@ fn run_growth_with_sharing(
             engine::fuel_in(ctx);
             assert_eq!(cpu::control(ctx, 4, 2, 1, || 0), Ok(0));
             assert_eq!(cpu::control(ctx, 4, 3, 0, || 0), Ok(0));
-            let old = alloc::hirsel_rt_v2_alloc(ctx, 0, 32, 8, alloc::DOMAIN_HEAP, 0);
-            alloc::payload(old).cast::<[u64; 4]>().write([1, 2, 112, 0]);
+            let child = holders.then(|| {
+                let child = alloc::hirsel_rt_v2_alloc(ctx, 0, 16, 8, alloc::DOMAIN_HEAP, 0);
+                alloc::payload(child).cast::<[u64; 2]>().write([8, 112]);
+                crate::count::hirsel_rt_v2_dup(ctx, child);
+                child
+            });
+            let index = if holders {
+                crate::text::bytes_list_index(ctx)
+            } else {
+                0
+            };
+            let old = alloc::hirsel_rt_v2_alloc(
+                ctx,
+                index,
+                if holders { 64 } else { 32 },
+                8,
+                alloc::DOMAIN_HEAP,
+                0,
+            );
+            let input = if let Some(child) = child {
+                vec![2, 2, child.addr() as u64, 8, 8, child.addr() as u64, 8, 8]
+            } else {
+                vec![1, 2, 112, 0]
+            };
+            std::ptr::copy_nonoverlapping(input.as_ptr(), alloc::payload(old).cast(), input.len());
             if shared {
                 crate::count::hirsel_rt_v2_dup(ctx, old);
             }
@@ -108,7 +140,7 @@ fn run_growth_with_sharing(
                 extent: 65536,
                 align: 8,
                 keep: 16,
-                element_size: 8,
+                element_size: if holders { 24 } else { 8 },
                 element_align: 8,
                 capacity: 8192,
             };
@@ -120,7 +152,7 @@ fn run_growth_with_sharing(
             );
             let held = refuse.then(|| {
                 ledger
-                    .reserve_heap(grant.max_batch_bytes - (*ctx).heap_ref().backing_bytes())
+                    .reserve_heap(grant.max_batch_bytes - heap_backing(ctx))
                     .unwrap()
             });
             crate::fiber::switch(&raw mut native.physical.idle_sp, sp);
@@ -133,10 +165,10 @@ fn run_growth_with_sharing(
                 assert_eq!(native.growth_status, u32::from(NOT_CERTIFIED));
                 assert_eq!(request.block, old);
                 assert_eq!(
-                    alloc::payload(old).cast::<[u64; 4]>().read(),
-                    [1, 2, 112, 0]
+                    std::slice::from_raw_parts(alloc::payload(old).cast::<u64>(), input.len()),
+                    input.as_slice()
                 );
-                assert_eq!((*ctx).heap_ref().live().0, 1);
+                assert_eq!((*ctx).heap_ref().live().0, 1 + u64::from(holders));
                 crate::tasks::role::release(ctx);
                 crate::stop::set_running(ctx);
                 let saved = native.physical.saved_sp;
@@ -154,10 +186,10 @@ fn run_growth_with_sharing(
                 for _ in 0..3 {
                     assert_eq!(request.block, old, "refusal retains the input owner");
                     assert_eq!(
-                        alloc::payload(old).cast::<[u64; 4]>().read(),
-                        [1, 2, 112, 0]
+                        std::slice::from_raw_parts(alloc::payload(old).cast::<u64>(), input.len()),
+                        input.as_slice()
                     );
-                    assert_eq!((*ctx).heap_ref().live().0, 1);
+                    assert_eq!((*ctx).heap_ref().live().0, 1 + u64::from(holders));
                     assert_eq!(serve(ctx, &raw mut *native), Ok(false));
                     assert_eq!(
                         engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled),
@@ -171,7 +203,7 @@ fn run_growth_with_sharing(
             assert_ne!(fresh, old);
             assert_eq!(
                 (*ctx).heap_ref().live().0,
-                if shared { 2 } else { 1 },
+                if shared { 2 } else { 1 } + u64::from(holders),
                 "unique growth reclaims its input; shared growth retains the other holder"
             );
             if shared {
@@ -181,14 +213,15 @@ fn run_growth_with_sharing(
                     "detach returns exactly the caller's credit"
                 );
                 assert_eq!(
-                    alloc::payload(old).cast::<[u64; 4]>().read(),
-                    [1, 2, 112, 0]
+                    std::slice::from_raw_parts(alloc::payload(old).cast::<u64>(), input.len()),
+                    input.as_slice()
                 );
             }
-            assert_eq!(alloc::payload(fresh).cast::<u64>().read(), 1);
+            assert_eq!(alloc::payload(fresh).cast::<u64>().read(), input[0]);
             if sequence {
-                assert_eq!(alloc::payload(fresh).add(16).cast::<u64>().read(), 112);
-                let exact = alloc::sequence_slots((*ctx).heap_ref(), fresh, 16, 8);
+                assert_eq!(alloc::payload(fresh).add(16).cast::<u64>().read(), input[2]);
+                let exact =
+                    alloc::sequence_slots((*ctx).heap_ref(), fresh, 16, request.element_size);
                 assert!(exact >= request.capacity);
                 assert_eq!(alloc::payload(fresh).add(8).cast::<u64>().read(), exact);
             } else {
@@ -213,7 +246,7 @@ fn run_growth_with_sharing(
                 assert_eq!(request.block, fresh);
                 assert_eq!(
                     (*ctx).heap_ref().live().0,
-                    if shared { 2 } else { 1 },
+                    if shared { 2 } else { 1 } + u64::from(holders),
                     "a resumed no-op must not free the result twice"
                 );
                 crate::tasks::role::release(ctx);
@@ -222,9 +255,31 @@ fn run_growth_with_sharing(
                 crate::fiber::switch(&raw mut native.physical.idle_sp, saved);
                 assert_eq!(native.physical.reason, 64);
             }
-            (*ctx).heap().free(fresh);
-            if shared {
-                (*ctx).heap().free(old);
+            if let Some(child) = child {
+                assert_eq!(
+                    (*child).count,
+                    4,
+                    "detach retains every child holder exactly once"
+                );
+                assert_eq!(
+                    crate::release::hirsel_rt_v2_release(ctx, old, index, std::ptr::null(), 0, 0),
+                    0
+                );
+                assert_eq!(
+                    (*child).count,
+                    2,
+                    "the copy retains both child credits after the original dies"
+                );
+                assert_eq!(alloc::payload(child).add(8).cast::<u64>().read(), 112);
+                assert_eq!(
+                    crate::release::hirsel_rt_v2_release(ctx, fresh, index, std::ptr::null(), 0, 0),
+                    0
+                );
+            } else {
+                (*ctx).heap().free(fresh);
+                if shared {
+                    (*ctx).heap().free(old);
+                }
             }
             (*ctx).heap().trim();
             assert_eq!((*ctx).heap_ref().live().0, 0);
@@ -274,11 +329,11 @@ fn native_growth_refuses_wrong_claims_versions_and_regions_without_consuming_the
 #[test]
 fn shared_flat_sequence_growth_keeps_other_holders_and_retries_once() {
     for refuse in [false, true] {
-        run_growth_with_sharing(true, refuse, true, None, true);
+        run_growth_with_sharing(true, refuse, true, None, true, false);
     }
 }
 
-fn run_region(refuse: bool, diagnostic: bool, tracked: bool) {
+fn run_region(refuse: bool, diagnostic: bool, tracked: bool, growth: Option<u64>) {
     let grant = hirsel_run_schema::CpuGrant {
         provider: "cpu.scoped@1".into(),
         max_workers: 4,
@@ -299,6 +354,7 @@ fn run_region(refuse: bool, diagnostic: bool, tracked: bool) {
             (*ctx).run().cpu_grant = Some(setup_grant.clone());
             (*ctx).set_budgets(Some(100), Some(setup_grant.max_batch_bytes));
             (*ctx).heap_ref().meter.cpu.set(configured).ok().unwrap();
+            (*ctx).heap().idle_cap = 0;
             engine::enable(
                 ctx,
                 crate::ordered::Policy::admit(&Default::default(), None),
@@ -334,7 +390,11 @@ fn run_region(refuse: bool, diagnostic: bool, tracked: bool) {
                 ordinal: 0,
                 block: std::ptr::null_mut(),
                 region,
-                index: 0,
+                index: if growth.is_some() {
+                    crate::text::bytes_list_index(ctx)
+                } else {
+                    0
+                },
                 flags: if tracked {
                     crate::region::ALLOC_TRACKED
                 } else {
@@ -413,12 +473,168 @@ fn run_region(refuse: bool, diagnostic: bool, tracked: bool) {
             crate::fiber::switch(&raw mut native.physical.idle_sp, native.physical.saved_sp);
             assert_eq!(native.physical.reason, 64);
             assert!(native.growth.is_null());
+            let mut generations = retained.clone();
+            if let Some(extent) = growth {
+                // Two holder slots name the same child. Moving them must neither
+                // add nor lose credits, and only the fresh cleanup may release them.
+                let child = alloc::hirsel_rt_v2_alloc(ctx, 0, 16, 8, alloc::DOMAIN_HEAP, 0);
+                alloc::payload(child).cast::<[u64; 2]>().write([8, 170]);
+                crate::count::hirsel_rt_v2_dup(ctx, child);
+                alloc::payload(block).cast::<[u64; 8]>().write([
+                    2,
+                    2,
+                    child.addr() as u64,
+                    8,
+                    8,
+                    child.addr() as u64,
+                    8,
+                    8,
+                ]);
+                crate::region::hirsel_rt_v2_region_schedule(
+                    ctx,
+                    region,
+                    (*block).index(),
+                    alloc::payload(block),
+                );
+                request.kind = GROW_BLOCK;
+                request.keep = 64;
+                request.extent = extent;
+                // GROW_BLOCK derives the region and descriptor from the old block.
+                request.region = std::ptr::dangling_mut();
+                let sp = stack.prepare(
+                    growing,
+                    (&raw mut request).cast(),
+                    (&raw mut *native).cast(),
+                );
+                let held = (refuse && extent > 65536 - 1024).then(|| {
+                    ledger
+                        .reserve_heap(
+                            grant.max_batch_bytes
+                                - crate::region::SEGMENT_SIZE as u64
+                                - heap_backing(ctx),
+                        )
+                        .unwrap()
+                });
+                let before_growth =
+                    engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled.level);
+                let before_segments = (*ctx).pool().active_bytes();
+                crate::fiber::switch(&raw mut native.physical.idle_sp, sp);
+                crate::stop::set_running(std::ptr::null_mut());
+                crate::tasks::role::enter(ctx);
+                let blocked = held.is_some();
+                assert_eq!(serve(ctx, &raw mut *native), Ok(!blocked));
+                let charged = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
+                if blocked {
+                    for _ in 0..3 {
+                        assert_eq!(request.block, block);
+                        assert_eq!(alloc::payload(block).cast::<u64>().read(), 2);
+                        assert_eq!((*child).count, 2);
+                        assert!(ledger.blocks.lock().unwrap().valid(&retained));
+                        assert_eq!(serve(ctx, &raw mut *native), Ok(false));
+                        assert_eq!(
+                            engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled),
+                            charged,
+                            "tracked growth charges exactly once across backing refusals"
+                        );
+                    }
+                    drop(held);
+                    assert_eq!(serve(ctx, &raw mut *native), Ok(true));
+                    assert_eq!(
+                        engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled),
+                        charged
+                    );
+                }
+                assert_eq!(
+                    charged.level - before_growth,
+                    (*ctx).pool().active_bytes() - before_segments,
+                    "growth admits exactly the bytes in its added region segments"
+                );
+                let fresh = request.block;
+                assert_ne!(fresh, block);
+                assert_eq!(native.growth_status, u32::from(ACCEPTED));
+                assert_eq!(crate::region::tracked_region(fresh), region);
+                assert_eq!((*fresh).count, crate::COUNT_ARENA_UNIQUE);
+                assert_eq!(alloc::payload(fresh).addr() % 64, 0);
+                assert_eq!(alloc::payload(block).cast::<u64>().read(), 0);
+                assert_eq!(alloc::payload(fresh).cast::<u64>().read(), 2);
+                assert_eq!(
+                    (*child).count,
+                    2,
+                    "tracked growth moves both holder credits"
+                );
+                let fresh_generation = ledger
+                    .blocks
+                    .lock()
+                    .unwrap()
+                    .retain(owner, &[fresh])
+                    .unwrap();
+                assert_eq!(fresh_generation.len(), 1);
+                assert_ne!(fresh_generation, retained);
+                for wrong in [
+                    crate::pool::cpu_scoped::ledger::blocks::Owner {
+                        task: owner.task + (1 << 32),
+                        ..owner
+                    },
+                    crate::pool::cpu_scoped::ledger::blocks::Owner {
+                        ordinal: owner.ordinal + 1,
+                        ..owner
+                    },
+                ] {
+                    assert!(
+                        ledger
+                            .blocks
+                            .lock()
+                            .unwrap()
+                            .retain(wrong, &[fresh])
+                            .is_none(),
+                        "tracked growth retains its exact task generation and ordinal"
+                    );
+                }
+                generations.extend(fresh_generation);
+                assert!(ledger.blocks.lock().unwrap().valid(&generations));
+                crate::tasks::role::release(ctx);
+                crate::stop::set_running(ctx);
+                crate::fiber::switch(&raw mut native.physical.idle_sp, native.physical.saved_sp);
+                assert_eq!(native.physical.reason, 64);
+                // The second request fits and must neither allocate nor charge.
+                let sp = stack.prepare(
+                    growing,
+                    (&raw mut request).cast(),
+                    (&raw mut *native).cast(),
+                );
+                crate::fiber::switch(&raw mut native.physical.idle_sp, sp);
+                crate::stop::set_running(std::ptr::null_mut());
+                crate::tasks::role::enter(ctx);
+                assert_eq!(serve(ctx, &raw mut *native), Ok(true));
+                assert_eq!(request.block, fresh);
+                assert_eq!(
+                    engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled),
+                    charged
+                );
+                crate::tasks::role::release(ctx);
+                crate::stop::set_running(ctx);
+                crate::fiber::switch(&raw mut native.physical.idle_sp, native.physical.saved_sp);
+            }
             (*ctx).ahead_physical = std::ptr::null_mut();
             assert_eq!(
                 crate::region::hirsel_rt_v2_region_exit(ctx, region, 0, 0),
                 0
             );
-            assert!(!ledger.blocks.lock().unwrap().valid(&retained));
+            for generation in &generations {
+                assert!(
+                    !ledger
+                        .blocks
+                        .lock()
+                        .unwrap()
+                        .valid(std::slice::from_ref(generation)),
+                    "region exit revokes every tracked allocation generation"
+                );
+            }
+            assert_eq!(
+                (*ctx).heap_ref().live().0,
+                0,
+                "region cleanup releases the moved child holders"
+            );
             assert!(
                 ledger
                     .blocks
@@ -445,7 +661,25 @@ fn saved_region_allocation_preserves_refused_inputs_charges_once_and_revokes_on_
     for refuse in [false, true] {
         for diagnostic in [false, true] {
             for tracked in [false, true] {
-                run_region(refuse, diagnostic, tracked);
+                run_region(refuse, diagnostic, tracked, None);
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_holder_sequence_growth_retains_children_across_refusal_and_original_release() {
+    for refuse in [false, true] {
+        run_growth_with_sharing(true, refuse, true, None, true, true);
+    }
+}
+
+#[test]
+fn saved_tracked_growth_moves_holders_charges_once_and_revokes_every_generation_on_exit() {
+    for diagnostic in [false, true] {
+        for refuse in [false, true] {
+            for extent in [256, 65184, 65536] {
+                run_region(refuse, diagnostic, true, Some(extent));
             }
         }
     }

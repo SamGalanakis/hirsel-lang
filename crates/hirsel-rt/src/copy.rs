@@ -693,6 +693,28 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
     }
 }
 
+/// Retain the child holders of a freshly copied block using its drop program.
+///
+/// # Safety
+/// `copy` has initialized holder slots borrowed from a live source. The caller
+/// owns the task role and adds exactly one credit for each copied slot.
+pub(crate) unsafe fn retain_children(ctx: *mut TaskCtx, copy: *mut Header) {
+    unsafe {
+        let diagnostic = (*ctx).heap_ref().diagnostic;
+        holders(
+            (*ctx).descriptor((*copy).index()),
+            payload(copy),
+            &mut |slot| {
+                let child = slot.cast::<*mut Header>().read_unaligned();
+                if diagnostic {
+                    check_live_block(&*ctx, child);
+                }
+                crate::roots::dup_holder(ctx, child);
+            },
+        );
+    }
+}
+
 /// A copy-on-write detach (OWN-4) of the sequence `block` into a fresh heap block of at least
 /// `extent` payload bytes at `align`, for a reserve (`hirsel_rt_v2_seq_grow`): its first `used`
 /// bytes (the count and the elements) are copied, each counted child gains a holder, and the
@@ -737,18 +759,7 @@ pub(crate) unsafe fn detach_sized(
             );
         }
         ptr::copy_nonoverlapping(payload(block), payload(copy), used as usize);
-        let diagnostic = ctx.heap().diagnostic;
-        holders(
-            ctx.descriptor((*copy).index()),
-            payload(copy),
-            &mut |slot| {
-                let child = slot.cast::<*mut Header>().read_unaligned();
-                if diagnostic {
-                    check_live_block(ctx, child);
-                }
-                crate::roots::dup_holder(raw, child);
-            },
-        );
+        retain_children(raw, copy);
         // Not unique, so the credit never frees it.
         crate::release::release_block(ctx, block, ptr::null(), 0, 0);
         (copy, capacity)
@@ -815,18 +826,7 @@ pub(crate) unsafe fn copy_held(
     unsafe {
         let ctx = &mut *raw;
         let copy = clone_block(ctx, block, region, tracked);
-        let diagnostic = ctx.heap().diagnostic;
-        holders(
-            ctx.descriptor((*copy).index()),
-            payload(copy),
-            &mut |slot| {
-                let child = slot.cast::<*mut Header>().read_unaligned();
-                if diagnostic {
-                    check_live_block(ctx, child);
-                }
-                crate::roots::dup_holder(raw, child);
-            },
-        );
+        retain_children(raw, copy);
         let index = (*copy).index();
         if tracked && (*ctx.descriptor(index)).step_count != 0 {
             crate::region::hirsel_rt_v2_region_schedule(raw, region, index, payload(copy));
