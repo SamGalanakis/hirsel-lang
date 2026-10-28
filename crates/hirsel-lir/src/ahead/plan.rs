@@ -44,10 +44,9 @@ impl RootPlan {
     pub fn handoff_bytes(&self, ordinary: u64) -> u64 {
         if self.cpu.as_ref().is_some_and(|cpu| {
             cpu.summary.is_some()
-                || cpu
-                    .mapper
-                    .as_ref()
-                    .is_some_and(|mapper| !mapper.allocations.is_empty())
+                || cpu.mapper.as_ref().is_some_and(|mapper| {
+                    !mapper.allocations.is_empty() || !mapper.growth.is_empty()
+                })
         }) {
             ordinary.max(80)
         } else {
