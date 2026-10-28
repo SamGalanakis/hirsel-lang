@@ -301,3 +301,4 @@ mod cpu_reference_142;
 mod precompute_requests_152;
 mod precompute_zstd_152;
 mod precompute_defaults_152;
+mod precompute_compact_152;

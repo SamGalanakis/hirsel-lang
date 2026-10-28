@@ -147,7 +147,7 @@ struct FactsRef<'a> {
     table_keys: Option<&'a Arc<crate::table_keys::TableKeyUse>>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
-struct Facts {
+pub(super) struct Facts {
     summary: Option<Arc<PublishedSummary>>,
     checked: CheckedProduct,
     dead_arms: Option<crate::tools::DeadArmUse>,
@@ -158,12 +158,20 @@ struct Facts {
 }
 impl FactsRef<'_> {
     fn bytes(&self, decoded: bool) -> u64 {
+        self.weight(decoded, None)
+    }
+    fn weight(&self, decoded: bool, compact: Option<&Arc<Reads>>) -> u64 {
         let mut w = if decoded {
             Weight::decoded()
         } else {
             Weight::default()
         };
-        if let Some(summary) = &self.summary {
+        if let Some(reads) = compact {
+            w.reads(reads);
+        }
+        if let Some(summary) = &self.summary
+            && !compact.is_some_and(|reads| FrontSummary::shareable(summary, self.checked, reads))
+        {
             w.arc(summary, |w, summary| {
                 retained::definition(w, &summary.summary);
                 w.add(size_of_val(&*summary.growth.edges));
@@ -205,7 +213,11 @@ impl FactsRef<'_> {
         }
         w.bytes
             .saturating_add(dead.bytes())
-            .saturating_add(size_of::<Facts>() as u64)
+            .saturating_add(if compact.is_some() {
+                0
+            } else {
+                size_of::<Facts>() as u64
+            })
     }
 }
 impl FrontBodyQueries {
@@ -311,6 +323,7 @@ impl BodyTask {
         if decode_bytes > self.weight.scratch {
             return;
         }
+        self.store_compact(reference, &outcome.reads, &bytes, decode_bytes);
         carry.remember(
             self.input,
             queries.inputs[&self.input].definition,
@@ -349,14 +362,22 @@ impl BodyTask {
         {
             return None;
         }
-        let facts: Facts = queries
-            .records
-            .decode_record(&row.bytes, |path, occurrence| {
-                queries
-                    .citations
-                    .owners
-                    .record_source_anchor(path, occurrence)
-            })?;
+        let facts = self.decode_facts(&row.bytes, &row.reads)?;
+        let reference = row.reference;
+        let reads = row.reads.clone();
+        // Completion takes the outcomes lock, while capture takes it before carry.
+        drop(rows);
+        self.install_facts(reference, reads, facts, clean)
+    }
+    pub(super) fn decode_facts(&self, bytes: &[u8], reads: &Arc<Reads>) -> Option<Facts> {
+        let queries = &self.queries;
+        let input = &queries.inputs[&self.input];
+        let facts: Facts = queries.records.decode_record(bytes, |path, occurrence| {
+            queries
+                .citations
+                .owners
+                .record_source_anchor(path, occurrence)
+        })?;
         let (encoded, roots) = hirsel_types::with_table_collection(|| {
             bincode::serialize_into(std::io::sink(), &facts)
         });
@@ -366,14 +387,68 @@ impl BodyTask {
                 s.definition != input.definition
                     || s.storage.is_some()
                     || s.text != input.key.1
-                    || s.reads.as_ref() != row.reads.as_ref()
+                    || s.reads.as_ref() != reads.as_ref()
             })
         {
             return None;
         }
+        let view = FactsRef {
+            summary: facts.summary.clone(),
+            checked: &facts.checked,
+            dead_arms: &facts.dead_arms,
+            diagnostics: &facts.diagnostics,
+            diagnostic_phases: &facts.diagnostic_phases,
+            lowering: &facts.lowering,
+            table_keys: facts.table_keys.as_ref(),
+        };
+        (view.bytes(true) <= self.weight.scratch).then_some(facts)
+    }
+    pub(super) fn install_facts(
+        &self,
+        reference: Reference,
+        reads: Arc<Reads>,
+        facts: Facts,
+        clean: bool,
+    ) -> Option<Result<ProductRef, Reference>> {
+        self.install_facts_inner(reference, reads, facts, clean, false)
+    }
+    pub(super) fn install_cached_facts(
+        &self,
+        reference: Reference,
+        reads: Arc<Reads>,
+        mut facts: Facts,
+    ) -> Option<Result<ProductRef, Reference>> {
+        // The wire codec gives repeated Arcs independent allocations. Join
+        // equal checked facts before selecting the compact retained shape;
+        // the complete decoded peak was admitted before this normalization.
+        if let Some((checked, checked_reads)) = &mut facts.checked {
+            if checked_reads.as_ref() == reads.as_ref() {
+                *checked_reads = reads.clone();
+            }
+            if let Some(summary) = &mut facts.summary
+                && summary.checked.as_ref().is_some_and(|previous| {
+                    previous.summary == checked.summary && previous.growth == checked.growth
+                })
+                && let Some(summary) = Arc::get_mut(summary)
+            {
+                summary.checked = Some(checked.clone());
+            }
+        }
+        self.install_facts_inner(reference, reads, facts, false, true)
+    }
+    fn install_facts_inner(
+        &self,
+        reference: Reference,
+        reads: Arc<Reads>,
+        facts: Facts,
+        clean: bool,
+        cached: bool,
+    ) -> Option<Result<ProductRef, Reference>> {
+        let queries = &self.queries;
+        let input = &queries.inputs[&self.input];
         let mut memo_rows = vec![(
             crate::memo::MemoKey::new(QueryKind::Modes, input.definition),
-            row.reads.clone(),
+            reads.clone(),
         )];
         if let Some((_, reads)) = &facts.checked {
             memo_rows.push((
@@ -390,29 +465,25 @@ impl BodyTask {
             lowering: &facts.lowering,
             table_keys: facts.table_keys.as_ref(),
         };
-        let mut weight = Weight::default();
-        weight.reads(&row.reads);
         let mut clean_rows = crate::NativeMetadataWeight::default();
         if clean {
             for _ in &memo_rows {
                 clean_rows.tree::<crate::memo::MemoKey, ()>(0);
             }
         }
-        let charge = view
-            .bytes(false)
-            .checked_add(weight.bytes)?
-            .checked_add(clean_rows.bytes())?;
+        let charge = if cached {
+            view.weight(false, Some(&reads))
+        } else {
+            let mut weight = Weight::default();
+            weight.reads(&reads);
+            view.bytes(false).checked_add(weight.bytes)?
+        }
+        .checked_add(clean_rows.bytes())?;
         let mut retention = queries.retention.lock().unwrap_or_else(|e| e.into_inner());
         let remaining = retention.checked_sub(charge)?;
         *retention = remaining;
         drop(retention);
-        // Publication takes the outcomes/table-key locks. Never hold the
-        // shared carry lock across them: a completing producer captures in
-        // the opposite order, and must be able to publish concurrently.
-        let reference = row.reference;
-        let reads = row.reads.clone();
         let action = crate::store::query_action(&input.key, input.key.1, &reads);
-        drop(rows);
         let summary = facts
             .summary
             .map(|s| FrontSummary::capture(s, &facts.checked, &reads));
@@ -455,7 +526,7 @@ impl BodyTask {
             .unwrap_or_else(|e| e.into_inner())
             .insert(self.input, outcome);
         queries.store_adoptions.fetch_add(1, Relaxed);
-        // Carried facts complete this in-process query independently of body
+        // Compact facts complete this query independently of body
         // storage. Publishing a body association would fetch its archive just
         // to check existence, even though Check needs only these compact facts.
         // A later actual body demand owns materialization and its association.

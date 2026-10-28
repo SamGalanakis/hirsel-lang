@@ -106,6 +106,9 @@ impl Drop for ScratchStore {
     }
 }
 impl ResultStore for ScratchStore {
+    fn cache_product(&self, address: Address, action: Action, domain: Domain, bytes: &[u8]) {
+        self.selected.cache_product(address, action, domain, bytes);
+    }
     fn query_cache_enabled(&self) -> bool {
         self.selected.query_cache_enabled()
     }

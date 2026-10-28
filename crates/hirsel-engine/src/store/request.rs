@@ -179,6 +179,9 @@ impl hirsel_validate::VerifierRows for RequestVerifierRows {
     }
 }
 impl ResultStore for RequestStore {
+    fn cache_product(&self, address: Address, action: Action, domain: Domain, bytes: &[u8]) {
+        self.backend.cache_product(address, action, domain, bytes);
+    }
     fn query_cache_enabled(&self) -> bool {
         self.backend.query_cache_enabled()
     }
@@ -400,6 +403,41 @@ mod tests {
         assert!(request.lookup_product(other).is_none());
         assert!(backend.lookup_product(other).is_none());
         assert!(request.lookup_product(address()).is_some());
+    }
+    #[test]
+    fn optional_cache_projections_never_spend_required_transport_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = Arc::new(MemStore::default());
+        let allowance = 64 << 10;
+        let budget = ProcessBudget::new(allowance);
+        let request = RequestStore::with_scratch(
+            backend.clone(),
+            budget.reserve(allowance).unwrap(),
+            directory.path(),
+            1 << 20,
+        )
+        .unwrap();
+        let before = request.retained_bytes();
+        let action = Action(address().0);
+        for index in 0u32..256 {
+            let address = Address(ContentHash::of_bytes(&index.to_le_bytes()));
+            request.cache_product(address, action, domain(), b"optional projection");
+            assert!(backend.lookup_product(address).is_some());
+        }
+        assert_eq!(request.retained_bytes(), before);
+        assert!(!request.exhausted());
+        let required = request.put_content(domain(), b"required output").unwrap();
+        request.associate_product(address(), action, required);
+        assert!(request.lookup_product(address()).is_some());
+        assert!(!request.exhausted());
+        drop(request);
+        assert_eq!(budget.reserved(), 0);
+
+        let disabled = RequestStore::new(Arc::new(NoneStore), budget.reserve(0).unwrap());
+        disabled.cache_product(address(), action, domain(), b"optional projection");
+        assert!(disabled.lookup_product(address()).is_none());
+        assert_eq!(disabled.retained_bytes(), 0);
+        assert!(!disabled.exhausted());
     }
     #[test]
     fn verifier_transport_admits_its_actual_index_and_releases_all_rows() {

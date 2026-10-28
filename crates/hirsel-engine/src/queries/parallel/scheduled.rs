@@ -11,6 +11,7 @@ use std::sync::{
 };
 
 mod carry;
+mod compact_store;
 mod retained;
 use carry::CarryChanges;
 pub use carry::FrontCarry;
@@ -1009,6 +1010,9 @@ impl BodyTask {
         }
         if !self.materialize && self.queries.verify_store == crate::store::VerifyStore::Off {
             if let Some(hit) = self.load_carry() {
+                return hit;
+            }
+            if let Some(hit) = self.load_compact() {
                 return hit;
             }
             if let Some(hit) = self.load() {

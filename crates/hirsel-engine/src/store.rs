@@ -100,6 +100,16 @@ pub trait ResultStore: Send + Sync {
     /// any earlier demand. A bounded provider evicts others before them;
     /// this changes retention only, never what a lookup returns.
     fn demand(&self, _keys: &[EntryKey]) {}
+    /// Best-effort publication for a projection no active request depends on.
+    /// Request transports forward this directly to the selected cache, without
+    /// pinning optional bytes or associations in their required-output budget.
+    fn cache_product(&self, address: Address, action: Action, domain: Domain, bytes: &[u8]) {
+        if self.query_cache_enabled()
+            && let Some(reference) = self.put_content(domain, bytes)
+        {
+            self.associate_product(address, action, reference);
+        }
+    }
     /// Generic product associations share this provider with front queries.
     /// Their registered domains are independent of front QueryKind tags. An
     /// association supplies integrity only, never verifier/native authority.
