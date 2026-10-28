@@ -12,7 +12,8 @@ pub struct FrontPrecomputeOutput {
 }
 pub(super) struct Selection {
     query: QueryId,
-    roots: Vec<QueryId>,
+    roots: Vec<(QueryId, bool)>,
+    definitions: u64,
 }
 impl FrontRunQueries {
     pub fn with_precompute(
@@ -29,12 +30,11 @@ impl FrontRunQueries {
         let roots = this
             .semantic_ids
             .iter()
-            .filter(|(path, _)| this.inputs[*path].source)
-            .map(|(_, query)| *query)
+            .map(|(path, query)| (*query, this.inputs[path].source))
             .collect::<Vec<_>>();
         let bytes = roots
             .capacity()
-            .checked_mul(std::mem::size_of::<QueryId>())
+            .checked_mul(std::mem::size_of::<(QueryId, bool)>())
             .ok_or(QueryError::NotImplemented)? as u64;
         let remaining = this
             .retention
@@ -51,7 +51,12 @@ impl FrontRunQueries {
             )),
         };
         this.check = Some(check);
-        this.precompute = Some(Selection { query, roots });
+        let definitions = roots.iter().filter(|(_, source)| *source).count() as u64;
+        this.precompute = Some(Selection {
+            query,
+            roots,
+            definitions,
+        });
         Ok(self)
     }
     pub fn precompute_query(&self) -> Option<QueryId> {
@@ -167,24 +172,26 @@ impl Task {
         let Some(selection) = &queries.precompute else {
             return Poll::Ready(Err(queries.errors.protocol));
         };
-        while let Some(query) = selection.roots.get(self.index).copied() {
+        while let Some((query, source)) = selection.roots.get(self.index).copied() {
             let product = match self.read(cx, query) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Ready(Ok(product)) => product,
             };
-            self.digest = ContentHash::of_parts(
-                "hirsel.front.precompute.fold.v1",
-                [
-                    self.digest.0.as_slice(),
-                    product.record.output.0.0.as_slice(),
-                ],
-            );
+            if source {
+                self.digest = ContentHash::of_parts(
+                    "hirsel.front.precompute.fold.v1",
+                    [
+                        self.digest.0.as_slice(),
+                        product.record.output.0.0.as_slice(),
+                    ],
+                );
+            }
             self.index += 1;
         }
         Poll::Ready((|| {
             let output = FrontPrecomputeOutput {
-                definitions: self.index as u64,
+                definitions: selection.definitions,
                 digest: self.digest,
             };
             let bytes = bincode::serialize(&(output.definitions, output.digest))

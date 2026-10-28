@@ -197,6 +197,23 @@ impl Node {
                 .into_boxed_slice(),
         })
     }
+    pub(super) fn decode_bytes(&self, path: &DefPath) -> Option<u64> {
+        // Bincode's length-framed path bounds Display's separators too. A
+        // growing String may retain up to twice its final formatted length.
+        let path_bytes = |path: &DefPath| bincode::serialized_size(path).ok()?.checked_mul(2);
+        let mut bytes = self
+            .content
+            .decode_bytes
+            .checked_add(std::mem::size_of::<hirsel_run_schema::ProgramNode>() as u64)?
+            .checked_add(path_bytes(path)?.checked_mul(2)?)?;
+        bytes = bytes.checked_add(
+            ((self.dependencies.len() + 1) * 2 * std::mem::size_of::<String>()) as u64,
+        )?;
+        for dependency in &self.dependencies {
+            bytes = bytes.checked_add(path_bytes(dependency.path())?)?;
+        }
+        bytes.checked_add(2 * "$hirsel/runtime@1".len() as u64)
+    }
     pub(super) fn program(
         &self,
         queries: &FrontRunQueries,

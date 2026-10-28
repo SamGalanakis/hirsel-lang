@@ -38,11 +38,14 @@ pub struct ProgramRevision {
     entry: String,
     digest: [u8; 32],
 }
-impl ProgramRevision {
-    pub fn encode(
-        entry: &str,
-        nodes: impl IntoIterator<Item = ProgramNode>,
-    ) -> Result<Self, RevisionError> {
+/// An immutable normalized semantic graph reusable across rooted revisions.
+/// Construction checks every duplicate, including unreachable declarations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramGraph {
+    nodes: BTreeMap<String, ProgramNode>,
+}
+impl ProgramGraph {
+    pub fn new(nodes: impl IntoIterator<Item = ProgramNode>) -> Result<Self, RevisionError> {
         let mut graph = BTreeMap::new();
         for mut node in nodes {
             node.dependencies.sort();
@@ -57,16 +60,25 @@ impl ProgramRevision {
                 graph.insert(node.identity.clone(), node);
             }
         }
+        Ok(Self { nodes: graph })
+    }
+    pub fn nodes(&self) -> impl ExactSizeIterator<Item = &ProgramNode> {
+        self.nodes.values()
+    }
+    pub fn revision(&self, entry: &str) -> Result<ProgramRevision, RevisionError> {
         let mut closure = BTreeSet::new();
-        let mut pending = vec![entry.to_owned()];
+        let mut pending = vec![entry];
         while let Some(identity) = pending.pop() {
-            if !closure.insert(identity.clone()) {
+            if !closure.insert(identity) {
                 continue;
             }
-            let node = graph
-                .get(&identity)
-                .ok_or(RevisionError::Missing { identity })?;
-            pending.extend(node.dependencies.iter().cloned());
+            let node = self
+                .nodes
+                .get(identity)
+                .ok_or_else(|| RevisionError::Missing {
+                    identity: identity.to_owned(),
+                })?;
+            pending.extend(node.dependencies.iter().map(String::as_str));
         }
         let mut hash = Sha256::new();
         // Every atom is framed by its u64 little-endian byte length. Counts
@@ -81,7 +93,7 @@ impl ProgramRevision {
         atom(&mut hash, entry.as_bytes());
         hash.update((closure.len() as u64).to_le_bytes());
         for identity in closure {
-            let node = &graph[&identity];
+            let node = &self.nodes[identity];
             atom(&mut hash, identity.as_bytes());
             hash.update((node.content.len() as u64).to_le_bytes());
             for field in &node.content {
@@ -92,10 +104,18 @@ impl ProgramRevision {
                 atom(&mut hash, dependency.as_bytes());
             }
         }
-        Ok(Self {
+        Ok(ProgramRevision {
             entry: entry.into(),
             digest: hash.finalize().into(),
         })
+    }
+}
+impl ProgramRevision {
+    pub fn encode(
+        entry: &str,
+        nodes: impl IntoIterator<Item = ProgramNode>,
+    ) -> Result<Self, RevisionError> {
+        ProgramGraph::new(nodes)?.revision(entry)
     }
     pub fn entry(&self) -> &str {
         &self.entry
@@ -107,5 +127,54 @@ impl ProgramRevision {
     }
     pub fn digest(&self) -> [u8; 32] {
         self.digest
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn node(identity: &str, content: &[u8], dependencies: &[&str]) -> ProgramNode {
+        ProgramNode {
+            identity: identity.into(),
+            content: vec![content.to_vec()],
+            dependencies: dependencies.iter().map(|s| (*s).into()).collect(),
+        }
+    }
+    #[test]
+    fn reusable_graph_selects_roots_and_cycles_without_mutating_shared_nodes() {
+        let graph = ProgramGraph::new([
+            node("a", b"first", &["b", "b"]),
+            node("b", b"second", &["a"]),
+            node("unused", b"third", &[]),
+        ])
+        .unwrap();
+        let before = graph.clone();
+        let first = graph.revision("a").unwrap();
+        let second = graph.revision("b").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(first, graph.revision("a").unwrap());
+        assert_eq!(graph, before);
+        let unrelated = ProgramGraph::new([
+            node("unused", b"changed", &[]),
+            node("b", b"second", &["a"]),
+            node("a", b"first", &["b"]),
+        ])
+        .unwrap();
+        assert_eq!(first, unrelated.revision("a").unwrap());
+        let changed =
+            ProgramGraph::new([node("a", b"first", &["b"]), node("b", b"changed", &["a"])])
+                .unwrap();
+        assert_ne!(first, changed.revision("a").unwrap());
+        assert!(matches!(
+            graph.revision("absent"),
+            Err(RevisionError::Missing { .. })
+        ));
+        assert!(matches!(
+            ProgramGraph::new([
+                node("unused", b"third", &[]),
+                node("unused", b"changed", &[]),
+            ]),
+            Err(RevisionError::Conflict { .. })
+        ));
     }
 }

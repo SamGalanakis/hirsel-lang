@@ -1,10 +1,12 @@
 //! Immutable launch facts from the admitted source semantic closure.
 use super::*;
 mod content;
+mod graph_reader;
 mod precompute;
 mod proof_export;
 mod semantic;
 mod source_products;
+pub use graph_reader::FrontSemanticGraph;
 use hirsel_run_schema::{CallForm, CalleeFacts, CodeReach, ProgramRevision};
 pub use precompute::FrontPrecomputeOutput;
 pub use proof_export::{

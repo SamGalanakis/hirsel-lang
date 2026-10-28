@@ -41,7 +41,7 @@ pub use outcome::{
     ToolingLimit, Wait, exit,
 };
 mod program;
-pub use program::{ProgramNode, ProgramRevision, RevisionError};
+pub use program::{ProgramGraph, ProgramNode, ProgramRevision, RevisionError};
 pub const DEPTH_SEMANTICS: &str = hirsel_core_contract::depth::SEMANTICS;
 mod net;
 pub use net::{

@@ -169,6 +169,16 @@ impl PrecomputedSources {
     ) -> Result<hirsel_run_schema::ProgramNode, QueryError> {
         self.run.semantic_node(self.product(path)?)
     }
+    pub fn semantic_graph_decode_bytes(&self) -> Result<u64, QueryError> {
+        self.run.semantic_graph_decode_bytes()
+    }
+    pub fn semantic_graph(
+        &self,
+        allowance: hirsel_engine::runtime::MemoryReservation,
+    ) -> Result<hirsel_engine::FrontSemanticGraph, QueryError> {
+        self.run.semantic_graph(allowance)
+    }
+
     pub fn source_product_bytes(&self, path: &DefPath) -> Result<Option<u64>, QueryError> {
         self.run.source_product_bytes(self.product(path)?)
     }
