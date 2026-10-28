@@ -50,6 +50,7 @@ pub struct CapturedPlatform {
     captured_inputs: CapturedLink,
     runtime_path: PathBuf,
     foreign_paths: Vec<PathBuf>,
+    static_foreign: bool,
 }
 struct SelectedInput {
     name: String,
@@ -111,6 +112,18 @@ impl CapturedPlatform {
             .iter()
             .map(|path| select(path))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut static_foreign = true;
+        for input in &foreign {
+            let blob = blob_record(store, input.content)?;
+            let magic = blob
+                .chunks
+                .first()
+                .map(|chunk| require(store, chunk.clone().into()))
+                .transpose()?;
+            static_foreign &= magic
+                .as_ref()
+                .is_some_and(|bytes| super::super::kit::static_input(bytes));
+        }
         // Keep the original selected absolute names: an ELF without SONAME
         // binds its pathname, which must remain stable across Link requests.
         let runtime_path = reads[0].path.clone();
@@ -237,7 +250,7 @@ impl CapturedPlatform {
             content: input.content.into(),
         };
         let identity = hirsel_codec::digest(
-            "hirsel.selected-link-platform.v2",
+            "hirsel.selected-link-platform.v3",
             "Platform",
             &PlatformIdentity {
                 target: target.digest(),
@@ -261,6 +274,7 @@ impl CapturedPlatform {
             captured_inputs: probe,
             runtime_path,
             foreign_paths,
+            static_foreign,
         })
     }
     /// Owned object, vector capacities, filenames and current-input path buffers.
@@ -317,7 +331,9 @@ impl CapturedPlatform {
         let link = super::super::kit::Link {
             kit: &kit,
             triple: &target.triple,
-            kind: super::super::kit::Kind::Executable { loader },
+            kind: kit
+                .executable_kind(&target.triple, self.static_foreign, loader)
+                .map_err(|error| error.to_string())?,
             objects: &objects,
             runtime: Some(&self.runtime_path),
             unwind: true,
@@ -405,6 +421,21 @@ impl CapturedPlatform {
     ) -> Result<(), String> {
         if self.target != target.digest() {
             return Err("selected platform target differs".into());
+        }
+        if is_static_executable(image)? {
+            let bytes = std::fs::read(image).map_err(error)?;
+            use object::read::elf::FileHeader as _;
+            let header = object::elf::FileHeader64::<object::LittleEndian>::parse(bytes.as_slice())
+                .map_err(|error| error.to_string())?;
+            let machine = match target.triple.as_str() {
+                "x86_64-unknown-linux-gnu" => object::elf::EM_X86_64,
+                "aarch64-unknown-linux-gnu" => object::elf::EM_AARCH64,
+                _ => return Err("unsupported static executable target".into()),
+            };
+            if !self.static_foreign || header.e_machine(object::LittleEndian) != machine {
+                return Err("static executable differs from selected platform".into());
+            }
+            return Ok(());
         }
         let files = self.runtime.materialize(store, target, limits)?;
         let command = files.command(emulator, image);

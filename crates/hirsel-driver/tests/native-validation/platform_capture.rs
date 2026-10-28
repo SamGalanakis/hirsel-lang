@@ -144,7 +144,85 @@ fn selected_platform_closes_runtime_before_keys_and_replays_without_originals() 
                 .unwrap();
             versions.push(selected);
         }
+        let archive = original.join("selected.a");
+        run(Command::new(llvm.join("bin/llvm-ar"))
+            .arg("crs")
+            .arg(&archive)
+            .arg(original.join("leaf.o")));
+        let mut static_links = Vec::new();
+        for (index, foreign) in [vec![], vec![archive], vec![original.join("leaf.o")]]
+            .into_iter()
+            .enumerate()
+        {
+            let selected = CapturedPlatform::capture(
+                &store,
+                &target,
+                PlatformCaptureInputs {
+                    linker,
+                    kit,
+                    runtime_archive: &runtime,
+                    foreign: &foreign,
+                    runtime: RuntimeSelection {
+                        loader: &loader,
+                        auditor: &auditor,
+                        library_path: original.as_os_str(),
+                        emulator,
+                        timeout: Duration::from_secs(20),
+                        events_bytes: 64 << 10,
+                        limits: runtime_limits,
+                    },
+                    limits,
+                },
+            )
+            .unwrap();
+            let output_dir = directory
+                .path()
+                .join(format!("static-{}-{}", target.triple, index));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            let text = match (arm, foreign.is_empty()) {
+                (true, true) => ".globl main\nmain:\n mov x0,#42\n ret\n",
+                (false, true) => ".globl main\nmain:\n mov $42,%eax\n ret\n",
+                (true, false) => {
+                    ".globl main\nmain:\n stp x29,x30,[sp,#-16]!\n bl selected\n ldp x29,x30,[sp],#16\n ret\n"
+                }
+                (false, false) => {
+                    ".globl main\nmain:\n sub $8,%rsp\n call selected@PLT\n add $8,%rsp\n ret\n"
+                }
+            };
+            let main = object(&llvm, &output_dir, &target.triple, "main", text);
+            let plan = selected
+                .plan_inputs(&store, &target, &output_dir, &[main], None)
+                .unwrap();
+            let captured = plan.capture(&store, &selected, limits).unwrap();
+            static_links.push((
+                selected,
+                captured,
+                output_dir.join("program"),
+                if foreign.is_empty() { 42 } else { 43 },
+            ));
+        }
         std::fs::remove_dir_all(&original).unwrap();
+        for (selected, captured, executable, expected) in static_links {
+            captured.link(&store, &executable).unwrap();
+            assert!(is_static_executable(&executable).unwrap());
+            selected
+                .validate_image(
+                    &store,
+                    &target,
+                    &executable,
+                    emulator,
+                    Duration::from_secs(20),
+                    runtime_limits,
+                )
+                .unwrap();
+            let files = selected
+                .runtime()
+                .materialize(&store, &target, runtime_limits)
+                .unwrap();
+            let output = files.command(emulator, &executable).output().unwrap();
+            assert_eq!(output.status.code(), Some(expected), "{output:?}");
+        }
+
         for (selected, expected) in versions.iter().zip([42, 43]) {
             selected
                 .validate_image(

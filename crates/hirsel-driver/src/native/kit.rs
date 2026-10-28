@@ -180,6 +180,19 @@ impl Kit {
         Ok(self.target(triple)?.static_link.is_some())
     }
 
+    pub(crate) fn executable_kind(
+        &self,
+        triple: &str,
+        static_foreign: bool,
+        loader: Option<(PathBuf, PathBuf)>,
+    ) -> Result<Kind, NativeError> {
+        if loader.is_none() && static_foreign && self.has_static(triple)? {
+            Ok(Kind::StaticExecutable)
+        } else {
+            Ok(Kind::Executable { loader })
+        }
+    }
+
     /// `triple`'s stub DSOs, in the loader's search order.
     pub(crate) fn libraries(&self, triple: &str) -> Result<&[PathBuf], NativeError> {
         Ok(&self.target(triple)?.libraries)
@@ -200,6 +213,30 @@ impl Kit {
             file.starts_with(&prefix).then(|| path.clone())
         })
     }
+}
+
+/// Archives and ELF relocatables need no runtime loader. Linker scripts keep
+/// dynamic resolution because their selected leaves can include shared libraries.
+pub(crate) fn static_inputs(paths: &[PathBuf]) -> Result<bool, NativeError> {
+    use std::io::Read;
+    for path in paths {
+        let mut magic = [0; 64];
+        let mut file = std::fs::File::open(path).map_err(|e| failed(e.to_string()))?;
+        let count = file.read(&mut magic).map_err(|e| failed(e.to_string()))?;
+        if !static_input(&magic[..count]) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) fn static_input(bytes: &[u8]) -> bool {
+    use object::read::elf::FileHeader as _;
+    bytes.starts_with(b"!<arch>\n")
+        || bytes.starts_with(b"!<thin>\n")
+        || object::elf::FileHeader64::<object::LittleEndian>::parse(bytes).is_ok_and(|header| {
+            header.is_little_endian() && header.e_type(object::LittleEndian) == object::elf::ET_REL
+        })
 }
 
 /// What a link writes.
@@ -498,7 +535,7 @@ mod tests {
         let link = Link {
             kit: &kit,
             triple: &target.triple,
-            kind: Kind::Executable { loader: None },
+            kind: kit.executable_kind(&target.triple, true, None).unwrap(),
             objects: &objects,
             runtime: Some(&runtime),
             unwind: true,
@@ -595,7 +632,7 @@ int main(void) {
             let link = Link {
                 kit: &kit,
                 triple: &target.triple,
-                kind: Kind::StaticExecutable,
+                kind: kit.executable_kind(&target.triple, true, None).unwrap(),
                 objects: &objects,
                 runtime: Some(&runtime),
                 unwind: true,
@@ -605,6 +642,9 @@ int main(void) {
             let (mut command, _) = link.command(&llvm.join("bin/ld.lld"), &executable).unwrap();
             let linked = command.output().unwrap();
             assert!(linked.status.success(), "{}: {linked:?}", target.triple);
+            assert!(
+                super::super::object_queries::runtime::is_static_executable(&executable).unwrap()
+            );
             let mut command = if target.triple.starts_with("aarch64") {
                 let mut command = Command::new(input("HIRSEL_QEMU_AARCH64"));
                 command.arg(&executable);

@@ -2200,7 +2200,7 @@ fn kit_plan(
     let link = super::kit::Link {
         kit,
         triple: &target.triple,
-        kind: super::kit::Kind::Executable { loader },
+        kind: kit.executable_kind(&target.triple, super::kit::static_inputs(foreign)?, loader)?,
         objects,
         runtime: Some(runtime),
         unwind: true,
@@ -2319,13 +2319,15 @@ fn link_launcher(
     let (kind, runtime) = match output {
         Output::Image(_) => unreachable!("an image links above"),
         Output::Standalone => (
-            super::kit::Kind::Executable { loader: None },
+            kit.executable_kind(&target.triple, super::kit::static_inputs(&foreign)?, None)?,
             runtime_archive(toolchain, &target.triple, archive, debug)?,
         ),
         Output::Launched => (
-            super::kit::Kind::Executable {
-                loader: toolchain.loader(target)?,
-            },
+            kit.executable_kind(
+                &target.triple,
+                super::kit::static_inputs(&foreign)?,
+                toolchain.loader(target)?,
+            )?,
             runtime_archive(toolchain, &target.triple, archive, debug)?,
         ),
     };
@@ -2827,19 +2829,25 @@ fn launcher(
 ) -> Result<Command, NativeError> {
     // At the floor, the release's loader runs the executable with the
     // release's libraries, so nothing installed on the host takes part.
-    let floor = toolchain.glibc_floor.as_ref().map(|floor| {
-        let libraries = floor.join(&target.triple);
-        let loader = if aarch64(target) {
-            "ld-linux-aarch64.so.1"
-        } else {
-            "ld-linux-x86-64.so.2"
-        };
-        [
-            libraries.join(loader).into_os_string(),
-            "--library-path".into(),
-            libraries.into_os_string(),
-        ]
-    });
+    let is_static = super::object_queries::runtime::is_static_executable(executable)
+        .map_err(|error| NativeError::new(StageName::Launch, error))?;
+    let floor = toolchain
+        .glibc_floor
+        .as_ref()
+        .filter(|_| !is_static)
+        .map(|floor| {
+            let libraries = floor.join(&target.triple);
+            let loader = if aarch64(target) {
+                "ld-linux-aarch64.so.1"
+            } else {
+                "ld-linux-x86-64.so.2"
+            };
+            [
+                libraries.join(loader).into_os_string(),
+                "--library-path".into(),
+                libraries.into_os_string(),
+            ]
+        });
     Ok(if aarch64(target) {
         let mut command = Command::new(required_path(
             &toolchain.qemu_aarch64,
@@ -3820,9 +3828,7 @@ impl Toolchain {
         let link = super::kit::Link {
             kit: &kit,
             triple: &target.triple,
-            kind: super::kit::Kind::Executable {
-                loader: self.loader(target)?,
-            },
+            kind: kit.executable_kind(&target.triple, true, self.loader(target)?)?,
             objects,
             runtime: Some(archive),
             unwind: true,

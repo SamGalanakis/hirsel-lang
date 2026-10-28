@@ -281,6 +281,38 @@ fn check(
     Ok(())
 }
 
+/// Static PIE still has PT_DYNAMIC for self relocation. Only interpreter-free
+/// executables without any declared DSO imports can bypass the closed loader.
+pub(crate) fn is_static_executable(image: &Path) -> Result<bool, String> {
+    use object::read::elf::{Dyn as _, ProgramHeader as _};
+    let bytes = std::fs::read(image).map_err(error)?;
+    let header = object::elf::FileHeader64::<object::LittleEndian>::parse(bytes.as_slice())
+        .map_err(|error| error.to_string())?;
+    let endian = object::LittleEndian;
+    if !header.is_little_endian() || header.e_entry(endian) == 0 {
+        return Ok(false);
+    }
+    for segment in header
+        .program_headers(endian, bytes.as_slice())
+        .map_err(|e| e.to_string())?
+    {
+        if segment.p_type(endian) == object::elf::PT_INTERP {
+            return Ok(false);
+        }
+        if let Some(dynamic) = segment
+            .dynamic(endian, bytes.as_slice())
+            .map_err(|e| e.to_string())?
+            && dynamic
+                .iter()
+                .take_while(|entry| entry.d_tag(endian) != object::elf::DT_NULL)
+                .any(|entry| entry.d_tag(endian) == object::elf::DT_NEEDED)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Retain this owner until the child exits. Physical paths exist only for this
 /// materialization; the stored runtime has logical request names and contents.
 pub struct RuntimeFiles {
@@ -295,6 +327,14 @@ impl RuntimeFiles {
     /// launch owner still supplies grants, arguments, replay and observations.
     /// A target emulator, if needed, is supplied explicitly by that owner.
     pub fn command(&self, emulator: Option<&Path>, image: &Path) -> Command {
+        if is_static_executable(image) == Ok(true) {
+            let mut command = Command::new(emulator.unwrap_or(image));
+            if emulator.is_some() {
+                command.arg(image);
+            }
+            command.env_clear();
+            return command;
+        }
         let mut command = Command::new(emulator.unwrap_or(&self.loader));
         if emulator.is_some() {
             command.arg(&self.loader);
