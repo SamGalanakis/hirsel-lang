@@ -16,7 +16,7 @@ use runtime_calls::{resource_free_handle, runtime_call};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
-pub const ABI_VERSION: u32 = 96;
+pub const ABI_VERSION: u32 = 97;
 const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
 /// Incoming mutable parameter storage, resolved through an exact call relation.
 pub const MUTABLE_PARAMETER: u32 = u32::MAX - 1;
