@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 
 const KIND: u32 = 0x4602_0001;
 type Proofs = Vec<(DefId, UniqueInference)>;
-#[derive(serde::Serialize, serde::Deserialize, Eq, PartialEq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
 pub(super) struct Facts {
     pub proofs: Proofs,
     pub reads: Reads,
@@ -76,6 +76,12 @@ impl QueryTask for Task {
                 .as_ref()
                 .is_some_and(|expected| *expected != facts)
             {
+                if std::env::var_os("HIRSEL_TRACE_PRIVATE_INFERENCE").is_some() {
+                    eprintln!(
+                        "private inference cached: {:#?}\nprivate inference recomputed: {facts:#?}",
+                        self.inference.expected.as_ref().unwrap()
+                    );
+                }
                 Err(QueryError::Operational(hirsel_types::OperationalFailure {
                     operation: "verify-cache".into(),
                     message: "private inference differs from its cached result".into(),
@@ -547,7 +553,7 @@ impl QueryEngine {
                         .is_some_and(|m| !m.public)
                         && self
                             .source_facts(path)
-                            .is_some_and(|f| f.body && !f.constant)
+                            .is_some_and(|f| (f.body || f.generator) && !f.constant)
                 })
                 .cloned()
                 .collect();
@@ -589,7 +595,7 @@ impl QueryEngine {
                     .is_some_and(|m| m.public)
                     || self
                         .source_facts(path)
-                        .is_some_and(|f| !f.body || f.constant)
+                        .is_some_and(|f| (!f.body && !f.generator) || f.constant)
                 {
                     continue;
                 }
@@ -604,7 +610,9 @@ impl QueryEngine {
                 };
                 if signature.value.metadata.visibility != hirsel_syntax::Visibility::Private
                     || !matches!(&signature.value.kind, SignatureKind::Function(f) if f.foreign.is_none())
-                    || self.source_facts(path).is_some_and(|f| !f.body)
+                    || self
+                        .source_facts(path)
+                        .is_some_and(|f| !f.body && !f.generator)
                 {
                     continue;
                 }
