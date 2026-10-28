@@ -364,6 +364,44 @@ impl NativeBootstrap {
             &reader,
         )
         .map_err(|e| e.to_string())?;
+        let library_roots = if plan
+            .requested_run
+            .as_ref()
+            .is_some_and(|run| run.record().launch == hirsel_run_schema::LaunchKind::Call)
+        {
+            let (callee, form) = facts
+                .run
+                .entries
+                .get(&facts.run.entry.to_string())
+                .ok_or("native call has no checked Run entry")?;
+            let roots = hirsel_engine::entry_roots(
+                &declarations.program.types,
+                &declarations.program.signatures[&facts.run.entry],
+                hirsel_run_schema::LaunchKind::Call,
+            )
+            .map_err(|e| e.to_string())?;
+            if callee.program != facts.run.revision.digest()
+                || *form
+                    != if roots.is_empty() {
+                        hirsel_run_schema::CallForm::Compute
+                    } else {
+                        hirsel_run_schema::CallForm::Call
+                    }
+            {
+                return Err("native call differs from checked Run entry".into());
+            }
+            vec![
+                source
+                    .bind_call(
+                        &declarations.program,
+                        &facts.run.entry,
+                        &plan.options.target,
+                    )
+                    .map_err(|e| e.to_string())?,
+            ]
+        } else {
+            Vec::new()
+        };
         if let Some(run) = plan.requested_run {
             source
                 .bind_run(&facts.run.entry, run)
@@ -407,13 +445,14 @@ impl NativeBootstrap {
             facts.original_context.clone(),
             &source_paths,
         )?;
-        let instances = InstanceTasks::new(
+        let instances = InstanceTasks::with_library_roots(
             inputs,
             self.store.clone(),
             plan.options,
             plan.policy,
             self.weight,
             admission.instances,
+            &library_roots,
         )?
         .with_store_verification(plan.verify_store)?
         .with_front_lower(front)?;

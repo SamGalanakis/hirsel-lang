@@ -79,7 +79,18 @@ impl InstanceTasks {
         options: crate::native::Options,
         policy: ContentHash,
         weight: MemoryWeight,
+        allowance: MemoryReservation,
+    ) -> Result<Arc<Self>, String> {
+        Self::with_library_roots(source, store, options, policy, weight, allowance, &[])
+    }
+    pub(crate) fn with_library_roots(
+        source: Arc<NativeInstanceInputs>,
+        store: Arc<dyn ResultStore>,
+        options: crate::native::Options,
+        policy: ContentHash,
+        weight: MemoryWeight,
         mut allowance: MemoryReservation,
+        library: &[hirsel_rc::library::Request],
     ) -> Result<Arc<Self>, String> {
         source.retain_metadata(&mut allowance)?;
         let provider = source.provider();
@@ -91,7 +102,7 @@ impl InstanceTasks {
             policy,
             native.clone(),
         );
-        let roots = initial.roots_from(&provider)?;
+        let roots = initial.roots_with_library(&provider, library)?;
         let selection = serde_json::to_vec(
             &roots
                 .iter()

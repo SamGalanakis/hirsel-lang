@@ -634,12 +634,20 @@ impl DemandInstances {
         &mut self,
         source: &impl NativeSourceProvider,
     ) -> Result<Vec<InstanceAddress>, String> {
-        self.root_requests(source, source.declarations())
+        self.roots_with_library(source, &[])
+    }
+    pub(super) fn roots_with_library(
+        &mut self,
+        source: &impl NativeSourceProvider,
+        library: &[hirsel_rc::library::Request],
+    ) -> Result<Vec<InstanceAddress>, String> {
+        self.root_requests(source, source.declarations(), library)
     }
     fn root_requests(
         &mut self,
         engine: &impl NativeSourceProvider,
         declarations: &NativeDeclarations,
+        library: &[hirsel_rc::library::Request],
     ) -> Result<Vec<InstanceAddress>, String> {
         let owners = hirsel_rc::library::owners(
             &declarations.program.types,
@@ -648,12 +656,19 @@ impl DemandInstances {
         .over(&declarations.program.owners);
         let mut layouts = LayoutBuilder::new(&self.target, &owners);
         layouts.prepare_native_controls();
-        let (mut instances, roots) = hirsel_rc::instance::seed_instances(
+        let (mut instances, mut roots) = hirsel_rc::instance::seed_instances(
             &declarations.program,
             &declarations.context,
             &mut layouts,
         )
         .map_err(|e| format!("native root registration: {e:?}"))?;
+        for request in library {
+            let id = hirsel_rc::library::instantiate(&mut layouts, &mut instances, request.clone())
+                .map_err(|e| format!("native library root registration: {e:?}"))?;
+            if !roots.contains(&id) {
+                roots.push(id);
+            }
+        }
         let requires_receipts = engine.receipt_required();
         let receipt_roots = if requires_receipts {
             let inputs = roots

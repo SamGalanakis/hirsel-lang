@@ -49,6 +49,7 @@ pub struct NativeLinkSource {
     foreign_unreplayable: bool,
     foreign_threads: BTreeMap<hirsel_syntax::PackageId, ForeignThreads>,
     callees: Option<hirsel_rt::program::CalleeMetadata>,
+    call_launch: Option<(DefPath, super::link::LaunchKind)>,
     requested_run: Option<(DefPath, Arc<hirsel_run_config::ValidatedRun>)>,
     test_entries: Vec<(DefPath, u64)>,
     metadata_owner: Mutex<Option<Arc<hirsel_engine::runtime::MemoryReservation>>>,
@@ -249,6 +250,7 @@ impl NativeLinkSource {
             foreign_unreplayable: facts.roots.foreign_unreplayable,
             foreign_threads: packed(facts.roots.foreign_threads.clone()),
             callees: facts.callees,
+            call_launch: None,
             requested_run: None,
             test_entries: Vec::new(),
             metadata_owner: Mutex::new(None),
@@ -275,6 +277,7 @@ impl NativeLinkSource {
             foreign_unreplayable: _,
             foreign_threads,
             callees,
+            call_launch,
             requested_run,
             test_entries,
             metadata_owner: _,
@@ -320,6 +323,11 @@ impl NativeLinkSource {
             if let Some(schemas) = &metadata.request_schemas {
                 w.add(schemas.retained_metadata_bytes() as usize);
             }
+        }
+        if let Some((path, super::link::LaunchKind::Call { roots, decoder })) = call_launch {
+            w.path(path);
+            w.flat_vec(roots);
+            w.add(decoder.capacity());
         }
         if let Some((path, _)) = requested_run {
             w.path(path);
@@ -382,12 +390,52 @@ impl NativeLinkSource {
         )
     }
     pub(crate) fn launches(&self) -> BTreeMap<DefPath, super::link::LaunchKind> {
-        self.signatures
+        let mut launches: BTreeMap<_, _> = self
+            .signatures
             .iter()
             .filter_map(|(path, signature)| {
                 super::link::launch_kind(&self.types, signature).map(|kind| (path.clone(), kind))
             })
-            .collect()
+            .collect();
+        if let Some((entry, kind)) = &self.call_launch {
+            launches.insert(entry.clone(), kind.clone());
+        }
+        launches
+    }
+    /// Select the ordinary checked runner decoder as an explicit native root.
+    /// This creates no source Entry authority and runs no source query.
+    pub(crate) fn bind_call(
+        &mut self,
+        program: &hirsel_rc::instance::Program,
+        entry: &DefPath,
+        target: &hirsel_lir::layout_types::TargetSpec,
+    ) -> Result<hirsel_rc::library::Request, NativeError> {
+        if self.metadata_allowance().is_some() || self.call_launch.is_some() {
+            return Err(failed("native call launch metadata is already selected"));
+        }
+        let signature = self
+            .signatures
+            .get(entry)
+            .ok_or_else(|| failed("native call has no checked signature"))?;
+        let roots =
+            hirsel_engine::entry_roots(&self.types, signature, hirsel_run_schema::LaunchKind::Call)
+                .map_err(|e| failed(e.to_string()))?;
+        let request = hirsel_rc::library::runners::replay_main(program, entry)
+            .map_err(|e| failed(format!("callee decoder: {e}")))?;
+        let owners =
+            hirsel_rc::library::owners(&program.types, &program.signatures).over(&program.owners);
+        let layouts = hirsel_layout::layout::LayoutBuilder::new(target, &owners);
+        let key = request
+            .key(&program.types, &layouts)
+            .map_err(|e| failed(format!("callee decoder key: {e:?}")))?;
+        self.call_launch = Some((
+            entry.clone(),
+            super::link::LaunchKind::Call {
+                roots,
+                decoder: hirsel_lir::emission::symbol_name(key.definition(), Some(&key.digest())),
+            },
+        ));
+        Ok(request)
     }
     pub fn bind_run(
         &mut self,
@@ -446,6 +494,28 @@ impl NativeLinkSource {
         Ok(())
     }
     pub fn bind(&self, program: &mut ReadyProgram) -> Result<(), NativeError> {
+        if let Some((entry, super::link::LaunchKind::Call { decoder, .. })) = &self.call_launch {
+            if !program.summaries.iter().any(|unit| {
+                hirsel_lir::emission::symbol_name(&unit.definition, Some(&unit.instance))
+                    == *decoder
+            }) {
+                return Err(failed("native call has no admitted decoder unit"));
+            }
+            let instance = *program
+                .functions
+                .get(entry)
+                .ok_or_else(|| failed("native call has no admitted source instance"))?;
+            let unit = program
+                .summaries
+                .iter_mut()
+                .find(|unit| unit.definition == *entry && unit.instance == instance)
+                .ok_or_else(|| failed("native call has no admitted source unit"))?;
+            unit.glue.entries.insert((entry.clone(), Some(instance)));
+            program.entries.insert(
+                hirsel_lir::emission::function_thunk_name(entry, Some(&instance)),
+                entry.to_string(),
+            );
+        }
         program.bind_source(&self.view())?;
         if let Some(callees) = &self.callees {
             program.bind_callees(callees.clone())?;
