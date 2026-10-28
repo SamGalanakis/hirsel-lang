@@ -108,9 +108,10 @@ impl QueryEngine {
         }
         Ok(files)
     }
-    /// Inspect actual captured input lengths, without body checking or Lower.
+    /// Bound front backing from indexed metadata. Planning must not demand
+    /// syntax, freeze declarations or construct a temporary owner catalog.
     pub fn front_input_footprint(
-        &mut self,
+        &self,
         definitions: &[DefPath],
     ) -> Result<FrontInputFootprint, QueryError> {
         let refused = || {
@@ -119,9 +120,6 @@ impl QueryEngine {
                 message: "source input size overflow or missing syntax archive".into(),
             })
         };
-        for definition in definitions {
-            self.materialize(definition)?;
-        }
         if self
             .result_store
             .as_ref()
@@ -129,24 +127,25 @@ impl QueryEngine {
         {
             return Err(refused());
         }
-        let owners = crate::NativeRecordContext::capture(self);
-        let declarations = self.frozen_declarations();
-        let mut front_inputs = FrontBodyQueries::input_bytes(definitions).ok_or_else(refused)?;
-        let sibling_inputs = self.front_sibling_inputs(definitions)?;
+        let (files, siblings) = self.declarations.sibling_inventory();
+        // Lazy files already own declaration heads and source anchors. Their
+        // eventual syntax capture cannot require more rows than that index.
+        let (lazy_files, lazy_siblings) = self.catalog.sibling_inventory().ok_or_else(refused)?;
+        let files = files.checked_add(lazy_files).ok_or_else(refused)?;
+        let siblings = siblings.checked_add(lazy_siblings).ok_or_else(refused)?;
         let mut index = crate::NativeMetadataWeight::default();
-        index.tree::<FileId, Vec<Reference>>(sibling_inputs.len());
-        front_inputs = front_inputs
-            .checked_add(index.bytes())
-            .ok_or_else(refused)?;
-        for syntax in sibling_inputs.values() {
-            front_inputs = front_inputs
-                .checked_add(
-                    (declarations.siblings(syntax).len() as u64)
-                        .checked_mul(std::mem::size_of::<Reference>() as u64)
-                        .ok_or_else(refused)?,
+        index.tree::<FileId, Vec<Reference>>(files);
+        let front_inputs = FrontBodyQueries::input_bytes(definitions)
+            .and_then(|bytes| bytes.checked_add(index.bytes()))
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    (siblings as u64).checked_mul(std::mem::size_of::<Reference>() as u64)?,
                 )
+            })
+            .ok_or_else(refused)?;
+        let owner_bytes =
+            crate::NativeRecordContext::input_bytes_for_anchors(self.sources.anchors().count())
                 .ok_or_else(refused)?;
-        }
         let source_headers = self
             .sources
             .input_bytes()
@@ -155,7 +154,7 @@ impl QueryEngine {
             .ok_or_else(refused)?
             .checked_add(self.catalog.input_bytes().ok_or_else(refused)?)
             .ok_or_else(refused)?
-            .checked_add(owners.input_bytes().ok_or_else(refused)?)
+            .checked_add(owner_bytes)
             .ok_or_else(refused)?;
         Ok(FrontInputFootprint {
             source_headers,

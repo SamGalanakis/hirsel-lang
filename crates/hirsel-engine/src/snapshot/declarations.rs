@@ -594,6 +594,13 @@ impl DeclarationIndex {
     pub fn headers(&self, path: &DefPath) -> Option<&[ContentHash]> {
         self.rows.get(&DefId::intern(path)).map(|row| &*row.headers)
     }
+    /// Bound the sibling archive index without freezing declaration metadata.
+    pub(crate) fn sibling_inventory(&self) -> (usize, usize) {
+        (
+            self.files.len(),
+            self.files.values().map(|items| items.len()).sum(),
+        )
+    }
     /// Header rows and source placement retained by an observation-only copy.
     /// No item arenas or frozen full-syntax sibling lists participate.
     pub(crate) fn observation_bytes(&self) -> Option<u64> {

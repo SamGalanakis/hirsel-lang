@@ -396,6 +396,16 @@ impl Catalog {
         weight.bytes()
     }
 
+    /// File and candidate bounds available before lazy syntax is materialized.
+    pub(super) fn sibling_inventory(&self) -> Option<(usize, usize)> {
+        Some((
+            self.files.len(),
+            self.candidates
+                .values()
+                .try_fold(0usize, |n, rows| n.checked_add(rows.len()))?,
+        ))
+    }
+
     pub(super) fn input_bytes(&self) -> Option<u64> {
         let mut n = std::mem::size_of::<Self>() as u64;
         for candidates in self.candidates.values() {
@@ -1118,6 +1128,38 @@ impl QueryEngine {
 mod tests {
     use super::*;
     use crate::store::ResultStore;
+
+    #[test]
+    fn front_admission_uses_indexed_heads_when_syntax_is_unavailable() {
+        crate::with_compiler_stack(|| {
+            let store = Arc::new(crate::store::MemStore::default());
+            let create = || {
+                QueryEngine::new(default_environment(), crate::phases::engine_only_adapters())
+                    .with_result_store(store.clone())
+            };
+            let context = default_context();
+            let source = "type Choice = First | Second(u8)\nfn value()->u8{1u8}\n";
+            let mut seed = create();
+            let file = seed.sources.add("admission.hir", source.into()).unwrap();
+            seed.index_source(file, &context).unwrap();
+            let mut engine = create();
+            let file = engine.sources.add("admission.hir", source.into()).unwrap();
+            engine.index_source(file, &context).unwrap();
+            let paths = engine.indexed_definitions();
+            assert!(engine.items.is_empty());
+            // Keep the admitted heads, but deny every way to recover syntax.
+            // Planning still succeeds; only a real syntax consumer refuses.
+            engine.result_store = Some(Arc::new(crate::store::MemStore::default()));
+            engine.adapters.lexer = None;
+            engine.adapters.parser = None;
+            let plan = engine.front_input_footprint(&paths).unwrap();
+            assert!(plan.total().is_some());
+            assert!(matches!(
+                engine.materialize(&paths[0]),
+                Err(QueryError::NotImplemented)
+            ));
+        });
+    }
 
     #[test]
     fn parse_heads_reuse_signature_and_implementation_declarations_and_reject_unknown_kinds() {

@@ -135,6 +135,18 @@ impl NativeRecordContext {
         Some(weight.bytes())
     }
 
+    /// Conservative backing bound before source bindings are captured. Each
+    /// placed anchor contributes at most one row to each of the three maps.
+    pub(crate) fn input_bytes_for_anchors(anchors: usize) -> Option<u64> {
+        let slot = (std::mem::size_of::<(Anchor, (DefPath, u32))>()
+            + std::mem::size_of::<((DefPath, u32), Anchor)>()
+            + std::mem::size_of::<(Anchor, DefId)>()
+            + 18 * std::mem::size_of::<usize>()) as u64;
+        (anchors as u64).checked_mul(slot)?.checked_add(
+            (size_of::<Self>() + size_of::<SourceBindings>() + 4 * size_of::<usize>()) as u64,
+        )
+    }
+
     /// The declaration owning this current source generation. A generated
     /// codec owner is content-bound and can differ from this declaration;
     /// selector ordinals are neither codec occurrences nor source bases.
