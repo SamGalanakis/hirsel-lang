@@ -5,6 +5,7 @@ use std::{
 };
 
 include!("physical_host.rs");
+include!("physical_exclusive.rs");
 
 fn checked(output: std::process::Output) -> std::process::Output {
     assert!(
@@ -16,7 +17,7 @@ fn checked(output: std::process::Output) -> std::process::Output {
     );
     output
 }
-fn overlap(text: &str, width: usize) -> bool {
+fn overlap(text: &str, width: usize, exclusive: &BTreeSet<usize>) -> bool {
     let mut events = vec![];
     let mut present = BTreeMap::new();
     let mut intervals = BTreeMap::new();
@@ -32,29 +33,35 @@ fn overlap(text: &str, width: usize) -> bool {
         let progress: u64 = fields[6].parse().unwrap();
         assert!(progress > 0 && end > start && worker < width);
         workers.insert(worker);
+        if !exclusive.is_empty() && !exclusive.contains(&(cpu as usize)) {
+            continue;
+        }
         intervals.insert((worker, start), (end, progress));
         events.push((start, 1, worker, cpu));
         events.push((end, 0, worker, cpu));
     }
     assert_eq!(workers.len(), width, "every worker must make CPU progress");
     events.sort_unstable();
+    let required = exclusive.len().max(1).min(width);
     for (time, enter, worker, cpu) in events {
         if enter == 1 {
             present.insert(worker, (cpu, time));
         } else {
             present.remove(&worker);
         }
-        if present.len() == width
+        if present.len() >= required
             && present
                 .values()
                 .map(|(cpu, _)| *cpu)
                 .collect::<BTreeSet<_>>()
                 .len()
-                == width
+                >= required
         {
             for (worker, (cpu, start)) in &present {
                 let (end, progress) = intervals[&(*worker, *start)];
-                eprintln!("P W{width} worker={worker} CPU={cpu} [{start},{end}] cpu_ns={progress}");
+                eprintln!(
+                    "overlap W{width} required={required} worker={worker} CPU={cpu} [{start},{end}] cpu_ns={progress}"
+                );
             }
             return true;
         }
@@ -138,19 +145,21 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
                 });
             }
         }
-        let mut child = command.spawn().unwrap();
-        // The exact-CPU executor owns this cpuset. Place only this test's fresh
-        // workers on its distinct admitted CPUs, so OS wake affinity cannot keep
-        // every runnable worker on the creating CPU during the finite control.
+        // Place this test's fresh workers on distinct admitted CPUs. Affinity
+        // alone does not establish that the job holds those CPUs exclusively.
         let mut allowed = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
         assert_eq!(
             unsafe { libc::sched_getaffinity(0, std::mem::size_of_val(&allowed), &mut allowed) },
             0
         );
-        let cpus: Vec<_> = (0..libc::CPU_SETSIZE as usize)
+        let mut cpus: Vec<_> = (0..libc::CPU_SETSIZE as usize)
             .filter(|&cpu| unsafe { libc::CPU_ISSET(cpu, &allowed) })
             .collect();
         assert_eq!(cpus.len(), width);
+        let ownership = exclusive_cpus(&cpus);
+        let exclusive = ownership.as_ref().cloned().unwrap_or_default();
+        cpus.sort_by_key(|cpu| (!exclusive.contains(cpu), *cpu));
+        let mut child = command.spawn().unwrap();
         let before = physical_host_snapshot(child.id(), &cpus);
         let mut threads = PhysicalThreads::default();
         let mut pinned = BTreeSet::new();
@@ -194,6 +203,13 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
         }
         let after = physical_host_snapshot(std::process::id(), &cpus);
         checked(child.wait_with_output().unwrap());
+        if !exclusive.is_empty() {
+            assert_eq!(
+                exclusive_cpus(&cpus),
+                Ok(exclusive.clone()),
+                "CPU ownership changed during the run"
+            );
+        }
         assert_eq!(
             pinned.len(),
             width,
@@ -202,11 +218,18 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
         let samples = fs::read_to_string(&probe).unwrap();
         let rejected = fs::read_to_string(root.join("probe.txt.rejected")).unwrap();
         assert!(
-            overlap(&samples, width),
-            "no switch-free CPU overlap at W={width}\n{before}\n{after}\n{threads:?}\n{samples}\n{rejected}"
+            overlap(&samples, width, &exclusive),
+            "no switch-free CPU overlap at W={width}, exclusive={exclusive:?}\n{before}\n{after}\n{threads:?}\n{samples}\n{rejected}"
         );
-        eprintln!(
-            "CPU {provider} {backend} P({width}): overlapping switch-free intervals on {width} distinct CPUs with positive CPU progress"
-        );
+        if exclusive.len() == width || width == 1 {
+            eprintln!(
+                "CPU {provider} {backend} P({width}): switch-free overlap with positive CPU progress, ownership={ownership:?}"
+            );
+        } else {
+            eprintln!(
+                "CPU {provider} {backend} W{width}: all workers progressed; required overlap={} on exclusive CPUs {exclusive:?}; P({width}) NOT QUALIFIED, ownership={ownership:?}",
+                exclusive.len().max(1)
+            );
+        }
     }
 }
