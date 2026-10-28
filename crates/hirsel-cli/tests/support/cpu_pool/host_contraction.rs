@@ -217,35 +217,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                 );
             }
         }
-        let lifecycle = fs::read_to_string(root.join("contraction.probe.lifecycle")).unwrap();
-        assert_eq!(
-            lifecycle
-                .lines()
-                .filter(|line| line.starts_with("start "))
-                .count(),
-            4
-        );
-        assert_eq!(
-            lifecycle
-                .lines()
-                .filter(|line| line.starts_with("exit "))
-                .count(),
-            4
-        );
-        assert_eq!(
-            lifecycle
-                .lines()
-                .filter(|line| line.starts_with("retire "))
-                .count(),
-            4
-        );
-        assert_eq!(
-            lifecycle
-                .lines()
-                .filter(|line| line.starts_with("shutdown "))
-                .count(),
-            1
-        );
+        check_cpu_lifecycle(&root.join("contraction.probe.lifecycle"), 4, false, 1);
         let observed = qual_observation(&observation);
         let projected = fs::read(&projection).unwrap();
         let parsed = hirsel_free::tape::parse(&fs::read(&tape).unwrap()).unwrap();

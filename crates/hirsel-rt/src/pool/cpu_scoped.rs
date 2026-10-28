@@ -341,6 +341,9 @@ unsafe fn start_at(
             exec.scoped_slot.store(0, Ordering::Release);
             workers.calling = Some(assigned);
             workers.pending.push(None);
+            if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+                probe.event("caller", workers.domain, Arc::as_ptr(&exec) as usize, 0);
+            }
         } else {
             execs
                 .holders
