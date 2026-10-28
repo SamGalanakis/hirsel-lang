@@ -8,6 +8,61 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+type Calls = std::sync::Arc<std::sync::Mutex<BTreeSet<String>>>;
+thread_local! {
+    static CALLS: std::cell::RefCell<Option<Calls>> = const { std::cell::RefCell::new(None) };
+}
+struct CountLower {
+    inner: std::sync::Arc<dyn LoweringPhase>,
+    calls: Calls,
+}
+impl LoweringPhase for CountLower {
+    fn lower(
+        &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        comptime: &Comptime,
+        signature: &hirsel_types::Signature,
+    ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .insert(signature.definition.path().to_string());
+        self.inner.lower(t, m, body, comptime, signature)
+    }
+    fn lower_evaluation(
+        &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+        signature: &hirsel_types::Signature,
+        expression: hirsel_syntax::ExprId,
+        result: hirsel_types::TypeId,
+        constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+    ) -> Result<hirsel_tir::Definition, QueryError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .insert(signature.definition.path().to_string());
+        self.inner
+            .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+    }
+    fn entry_body(&self) -> hirsel_tir::BodyId {
+        self.inner.entry_body()
+    }
+}
+fn counted_adapters() -> PhaseAdapters {
+    let mut adapters = compiler_adapters();
+    let calls = CALLS.with(|calls| calls.borrow().as_ref().unwrap().clone());
+    adapters.lowering = Some(std::sync::Arc::new(CountLower {
+        inner: adapters.lowering.take().unwrap(),
+        calls,
+    }));
+    adapters
+}
+
 /// The definitions lowered when `source` checks under `lowering`, by name.
 fn lowered(source: &str, lowering: LoweringPolicy) -> BTreeSet<String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -32,27 +87,52 @@ fn lowered(source: &str, lowering: LoweringPolicy) -> BTreeSet<String> {
     )
     .unwrap();
     let names = with_compiler_stack(|| {
-        let mut program = load_program_source(&path, None).unwrap();
-        let output = program.check(lowering).unwrap();
-        assert_eq!(output.completion, CheckCompletion::Complete);
-        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-        program
-            .engine
-            // Nested S1 evaluations lower helpers in worker-local caches;
-            // published Lower receipts enumerate only roots. Count physical
-            // adapter calls over all checked definitions, including helpers.
-            .recomputed(QueryKind::Check)
-            .into_iter()
-            .filter(|path| program.engine.lower_adapter_calls(path) != 0)
+        use hirsel_driver::requests::{CompileOperation, CompileResult, CompilerRequests};
+        let calls = Calls::default();
+        CALLS.with(|slot| *slot.borrow_mut() = Some(calls.clone()));
+        let config = CompileConfig {
+            lowering,
+            ..Default::default()
+        };
+        let compiler = COMPILER.with_config(config.clone()).with_phase_adapters(
+            counted_adapters,
+            hirsel_syntax::ContentHash::of_bytes(b"hirsel.check-lowering.physical-calls.v1").0,
+        );
+        let mut requests = CompilerRequests::for_host(compiler, config);
+        let output = requests
+            .execute(&path, CompileOperation::Check { lowering })
+            .unwrap();
+        let CompileResult::Check(checked) = &output.result else {
+            panic!("expected source Check");
+        };
+        assert_eq!(checked.completion, CheckCompletion::Complete);
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        CALLS.with(|slot| slot.borrow_mut().take());
+        let calls = calls.lock().unwrap();
+        // Initializer roots have no original source Check memo. Verify their
+        // owners separately; the original source-body set below stays exact.
+        let initializers: BTreeSet<_> = calls
+            .iter()
+            .filter_map(|name| name.strip_suffix("$generator"))
+            .map(source_name)
+            .collect();
+        assert!(initializers.is_subset(&names(&["clamp", "width$instance"])));
+        calls
+            .iter()
+            .filter(|name| !name.ends_with("$generator"))
             // A generic instance's path ends in its arguments' digest.
-            .map(|path| match path.to_string().split_once("$instance$") {
-                Some((declaration, _)) => format!("{declaration}$instance"),
-                None => path.to_string(),
-            })
+            .map(|path| source_name(path))
             .collect()
     });
     std::fs::remove_dir_all(&dir).unwrap();
     names
+}
+
+fn source_name(path: &str) -> String {
+    match path.split_once("$instance$") {
+        Some((declaration, _)) => format!("{declaration}$instance"),
+        None => path.into(),
+    }
 }
 
 fn names(names: &[&str]) -> BTreeSet<String> {
