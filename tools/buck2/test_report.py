@@ -50,6 +50,23 @@ def dump_owned_stacks():
             break
         print(f'HIRSEL_TEST_STACKS pid={pid} debugger={debugger or "unavailable"}',
               file=sys.stderr, flush=True)
+        try:
+            with Path(f'/proc/{pid}/cmdline').open('rb') as command:
+                # Identify the command/operation without dumping host inputs,
+                # grants or arbitrary application arguments into the log.
+                argv = command.read(4096).split(b'\0')
+            program = Path(os.fsdecode(argv[0])).name
+            operation = os.fsdecode(argv[1]) if len(argv) > 1 else ''
+            if operation.endswith('.py'):
+                operation = Path(operation).name
+            elif operation not in {'check', 'build', 'run', 'export', 'test',
+                                   'bench', 'fmt', 'serve', '-c'}:
+                operation = ''
+            print(f'HIRSEL_TEST_PROCESS pid={pid} ' + json.dumps({
+                'program': program, 'operation': operation,
+            }), file=sys.stderr, flush=True)
+        except OSError:
+            pass  # The owned process may have exited since discovery.
         # Keep useful thread/wait information when the action has no debugger
         # or its sandbox denies ptrace. Never inspect unrelated processes.
         for task in sorted(Path(f'/proc/{pid}/task').glob('*')):

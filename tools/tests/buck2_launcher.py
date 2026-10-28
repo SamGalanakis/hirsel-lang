@@ -285,13 +285,26 @@ print('fixture all-thread stack for pid=' + pid)
         from unittest.mock import patch
         dump = self.stack_reporter()
         output = io.StringIO()
+        original_open = Path.open
+        def process_file(path, *args, **kwargs):
+            if path == Path(f'/proc/{os.getpid()}/cmdline'):
+                return io.BytesIO(b'/private/hirsel\0build\0--input\0hidden-value\0')
+            return original_open(path, *args, **kwargs)
         with patch.dict(dump.__globals__, owned_descendants=lambda: [os.getpid()]), \
              patch.object(dump.__globals__['shutil'], 'which', return_value=None), \
+             patch.object(Path, 'open', process_file), \
              contextlib.redirect_stderr(output):
             dump()
         self.assertIn('debugger=unavailable', output.getvalue())
         self.assertIn(f'HIRSEL_TEST_THREAD tid={os.getpid()} ', output.getvalue())
         self.assertIn('"wchan":', output.getvalue())
+        process = next(line for line in output.getvalue().splitlines()
+                       if line.startswith(f'HIRSEL_TEST_PROCESS pid={os.getpid()} '))
+        description = json.loads(process.split(' ', 2)[2])
+        self.assertEqual(description, {'program': 'hirsel', 'operation': 'build'})
+        self.assertNotIn('hidden-value', process)
+        self.assertNotIn('/private', process)
+
 
     def test_stuck_debugger_is_bounded_by_one_reporting_budget(self):
         import time
