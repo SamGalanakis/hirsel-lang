@@ -1046,7 +1046,7 @@ impl BodyTask {
         }
         let worker = queries.worker();
         let syntax = queries.syntax(input).ok_or(queries.errors.protocol)?;
-        let done = worker.run(Task {
+        let mut done = worker.run(Task {
             index: 0,
             definition: input.definition.path().clone(),
             syntax,
@@ -1056,6 +1056,18 @@ impl BodyTask {
             resolution: None,
             checked: None,
         });
+        if let Some(registration) = &input.registration {
+            registration.explain(&mut done.result, &queries.citations.sources);
+            if let Some(Product::Computed(stage)) = &mut done.resolution {
+                registration.explain(&mut stage.result, &queries.citations.sources);
+            }
+            if let Some(Product::Computed(stage)) = &mut done.checked {
+                registration.explain(&mut stage.result, &queries.citations.sources);
+            }
+            if let Some(Product::Computed(stage)) = &mut done.modes {
+                registration.explain(&mut stage.result, &queries.citations.sources);
+            }
+        }
         for kind in done.recomputed() {
             *queries
                 .work

@@ -11,28 +11,37 @@ pub(crate) fn schema_hook_context(
     start: usize,
     end: usize,
 ) -> Option<(&str, &str, &str)> {
+    schema_hook_contexts(text)
+        .find(|(range, _, _, _)| start >= range.start && end <= range.end)
+        .map(|(_, parent, member, contract)| (parent, member, contract))
+}
+
+pub(crate) fn schema_hook_contexts(
+    text: &str,
+) -> impl Iterator<Item = (std::ops::Range<usize>, &str, &str, &str)> {
     let mut lines = text.split_inclusive('\n');
     let mut offset = 0usize;
-    while let Some(line) = lines.next() {
-        offset += line.len();
-        let Some(context) = line.strip_prefix("// schema-hook ").map(str::trim) else {
-            continue;
-        };
-        let contract = lines.next()?;
-        offset += contract.len();
-        let Some(contract) = contract.strip_prefix("// schema-contract ").map(str::trim) else {
-            continue;
-        };
-        let converter = lines.next()?;
-        let converter_start = offset;
-        offset += converter.len();
-        if start < converter_start || end > offset {
-            continue;
+    std::iter::from_fn(move || {
+        loop {
+            let line = lines.next()?;
+            offset += line.len();
+            let Some(context) = line.strip_prefix("// schema-hook ").map(str::trim) else {
+                continue;
+            };
+            let contract = lines.next()?;
+            offset += contract.len();
+            let Some(contract) = contract.strip_prefix("// schema-contract ").map(str::trim) else {
+                continue;
+            };
+            let converter = lines.next()?;
+            let start = offset;
+            offset += converter.len();
+            let Some((parent, member)) = context.split_once('\t') else {
+                continue;
+            };
+            return Some((start..offset, parent, member, contract));
         }
-        let (parent, member) = context.split_once('\t')?;
-        return Some((parent, member, contract));
-    }
-    None
+    })
 }
 
 fn stage(d: &Diagnostic) -> u8 {
