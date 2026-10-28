@@ -90,6 +90,9 @@ impl QueryEngine {
             || self.private_summary_failure.is_some()
             || !self.private_signature_publications.is_empty()
         {
+            if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
+                eprintln!("source carry refused unsettled: generated={} s1={} active={} signature_stack={} execution_stack={} staged_constants={} staged_values={} private_active={} private_failed={} pending_private={}", self.generated.len(), !self.s1.is_empty(), self.active.len(), self.signature_stack.len(), self.execution_stack.len(), self.staged_constants.len(), self.staged_values.len(), self.private_summary_active, self.private_summary_failure.is_some(), self.private_signature_publications.len());
+            }
             return Err(invalid());
         }
         if self
@@ -265,6 +268,9 @@ impl QueryEngine {
     ) -> Result<SourceIndexState, QueryError> {
         let types = self.source_types()?;
         let required = self.source_index_bytes_with_types(types.retained_bytes())?;
+        if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
+            eprintln!("source carry transfer required={required} allowance={}", allowance.bytes());
+        }
         if allowance.bytes() < required {
             return Err(invalid());
         }
