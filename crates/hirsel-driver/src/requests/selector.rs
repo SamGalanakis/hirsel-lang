@@ -103,6 +103,19 @@ impl CompilerRequests {
         })?;
         selected.output.ready(&completed)
     }
+    /// Actual cumulative work across this selector's source graphs, including
+    /// graphs already evicted. This reads the bounded ledger without observing
+    /// inputs, installing a producer, or retaining an idle runtime.
+    pub fn recompute_counts(
+        &self,
+        queries: &[(hirsel_syntax::DefPath, hirsel_engine::QueryKind)],
+    ) -> Result<
+        Vec<(hirsel_syntax::DefPath, hirsel_engine::QueryKind, u64)>,
+        hirsel_engine::ToolError,
+    > {
+        self.ledger.counts(queries)
+    }
+
     pub fn input_limits(&self) -> InputLimits {
         InputLimits {
             bytes: usize::try_from(self.limits.snapshot_bytes.min(16 << 20)).unwrap_or(usize::MAX),

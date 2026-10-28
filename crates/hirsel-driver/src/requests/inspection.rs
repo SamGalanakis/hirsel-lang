@@ -144,6 +144,31 @@ impl InspectionLedger {
         }
         Ok(())
     }
+    pub fn counts(
+        &self,
+        queries: &[(DefPath, QueryKind)],
+    ) -> Result<Vec<(DefPath, QueryKind, u64)>, ToolError> {
+        let (_, definitions) = self.definitions(
+            &queries
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>(),
+        )?;
+        queries
+            .iter()
+            .zip(definitions)
+            .map(|((path, kind), definition)| {
+                let count = definition
+                    .recomputations
+                    .into_iter()
+                    .find(|(selected, _)| selected == kind)
+                    .map(|(_, count)| count)
+                    .ok_or_else(unavailable)?;
+                Ok((path.clone(), *kind, count))
+            })
+            .collect()
+    }
+
     fn definitions(
         &self,
         paths: &[DefPath],
@@ -368,25 +393,7 @@ impl GraphMeter {
         &self,
         queries: &[(DefPath, QueryKind)],
     ) -> Result<Vec<(DefPath, QueryKind, u64)>, ToolError> {
-        let (_, definitions) = self.ledger.definitions(
-            &queries
-                .iter()
-                .map(|(path, _)| path.clone())
-                .collect::<Vec<_>>(),
-        )?;
-        queries
-            .iter()
-            .zip(definitions)
-            .map(|((path, kind), definition)| {
-                let count = definition
-                    .recomputations
-                    .into_iter()
-                    .find(|(selected, _)| selected == kind)
-                    .map(|(_, count)| count)
-                    .ok_or_else(unavailable)?;
-                Ok((path.clone(), *kind, count))
-            })
-            .collect()
+        self.ledger.counts(queries)
     }
 }
 impl Drop for GraphMeter {

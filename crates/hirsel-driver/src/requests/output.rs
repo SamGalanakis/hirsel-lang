@@ -160,6 +160,9 @@ impl PrecomputedSources {
     pub fn signatures(&self) -> Arc<hirsel_engine::SignatureSnapshot> {
         self.lower.signatures()
     }
+    pub fn sources(&self) -> &SourceMap {
+        self.lower.sources()
+    }
     pub fn semantic_node(
         &self,
         path: &DefPath,
