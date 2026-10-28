@@ -555,5 +555,13 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_sealed_71::native_sealed_scalar_owner_has_one_lifetime_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_sealed_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }
