@@ -821,42 +821,139 @@ fn cpu_save_roots_check_inputs_mapper_locals_results_and_parent_frames() {
         let source = SOURCE.replace("job + 7u64", "{ let kept = [job]; let answer = fn(x: u64) -> u64 uses {} { let child = [x]; child[0] + 7u64 }(job); kept[0] + answer - job }");
         let program = ready_with_specialization(&source, false, false);
         let plan = native::ahead_plan(&program);
-        let (&id, root) = plan.roots.iter().find(|(_, root)| root.cpu.as_ref().is_some_and(|cpu| cpu.mapper.is_some())).unwrap_or_else(|| panic!("{:?}", plan.refusals));
+        let (&id, root) = plan
+            .roots
+            .iter()
+            .find(|(_, root)| root.cpu.as_ref().is_some_and(|cpu| cpu.mapper.is_some()))
+            .unwrap_or_else(|| panic!("{:?}", plan.refusals));
         let cpu = root.cpu.as_ref().unwrap();
         let roots = cpu.roots.as_ref().unwrap();
         assert_eq!(roots.frames.len(), root.graph.bodies.len());
         assert!(roots.parents.len() >= 2, "worker, mapper and a real helper");
-        let parent = roots.parents.iter().find_map(|(&(caller, call), _)| {
-            (caller != id).then_some((caller, call))
-        }).unwrap();
-        let unit = program.units.iter().find(|u| u.unit().header.instance == parent.0).unwrap().unit();
+        let parent = roots
+            .parents
+            .iter()
+            .find_map(|(&(caller, call), _)| (caller != id).then_some((caller, call)))
+            .unwrap();
+        let unit = program
+            .units
+            .iter()
+            .find(|u| u.unit().header.instance == parent.0)
+            .unwrap()
+            .unit();
         let block = unit.terminators.iter().position(|term| matches!(term, hirsel_lir::ir::Terminator::Call { call, .. } if *call == parent.1)).unwrap();
         let point = CpuSavePoint::Terminator(hirsel_lir::ir::BlockId(block as u32));
         let frame = &roots.frames[&parent.0][&point];
-        assert!(frame.values.iter().any(|(_, layout, _)| !hirsel_lir::ahead::scalar_image(&program.table, *layout)) || frame.slots.iter().any(|(_, layout)| !hirsel_lir::ahead::scalar_image(&program.table, *layout)), "parent's kept allocation survives the helper save");
+        assert!(
+            frame
+                .values
+                .iter()
+                .any(|(_, layout, _)| !hirsel_lir::ahead::scalar_image(&program.table, *layout))
+                || frame
+                    .slots
+                    .iter()
+                    .any(|(_, layout)| !hirsel_lir::ahead::scalar_image(&program.table, *layout)),
+            "parent's kept allocation survives the helper save"
+        );
+        let loan = roots
+            .frames
+            .iter()
+            .find_map(|(body, points)| {
+                points
+                    .iter()
+                    .find_map(|(point, frame)| (!frame.loans.is_empty()).then_some((*body, *point)))
+            })
+            .expect("worker's shared mapper loan remains live across its call");
         let all: Vec<_> = program.units.iter().collect();
-        assert!(validate_cpu_workers(&all, &program.table, &program.target, &plan, program.fuel));
-        for kind in 0..9 {
+        assert!(validate_cpu_workers(
+            &all,
+            &program.table,
+            &program.target,
+            &plan,
+            program.fuel
+        ));
+        let mut accepted = Vec::new();
+        for kind in 0..10 {
             let mut bad = plan.clone();
-            let roots = bad.roots.get_mut(&id).unwrap().cpu.as_mut().unwrap().roots.as_mut().unwrap();
+            let roots = bad
+                .roots
+                .get_mut(&id)
+                .unwrap()
+                .cpu
+                .as_mut()
+                .unwrap()
+                .roots
+                .as_mut()
+                .unwrap();
             match kind {
                 0 => roots.input.slot = roots.mapper.slot,
                 1 => roots.mapper.offset += 8,
                 2 => roots.result.0 = hirsel_lir::ir::ValueId(u32::MAX),
-                3 => { roots.frames.get_mut(&parent.0).unwrap().get_mut(&point).unwrap().values.clear(); }
-                4 => { roots.frames.get_mut(&parent.0).unwrap().get_mut(&point).unwrap().slots.clear(); }
-                5 => { roots.parents.remove(&parent); }
-                6 => { roots.frames.remove(&parent.0); }
-                7 => { roots.frames.get_mut(&parent.0).unwrap().remove(&point); }
-                _ => roots.input.layout = cpu.binding.worker.environment,
+                3 => {
+                    roots
+                        .frames
+                        .get_mut(&parent.0)
+                        .unwrap()
+                        .get_mut(&point)
+                        .unwrap()
+                        .values
+                        .clear();
+                }
+                4 => {
+                    roots
+                        .frames
+                        .get_mut(&parent.0)
+                        .unwrap()
+                        .get_mut(&point)
+                        .unwrap()
+                        .slots
+                        .clear();
+                }
+                5 => {
+                    roots.parents.remove(&parent);
+                }
+                6 => {
+                    roots.frames.remove(&parent.0);
+                }
+                7 => {
+                    roots.frames.get_mut(&parent.0).unwrap().remove(&point);
+                }
+                8 => roots.input.layout = cpu.binding.worker.environment,
+                _ => roots
+                    .frames
+                    .get_mut(&loan.0)
+                    .unwrap()
+                    .get_mut(&loan.1)
+                    .unwrap()
+                    .loans
+                    .clear(),
             }
             assert_ne!(bad, plan, "forge {kind} changes actual roots");
-            assert!(!validate_cpu_workers(&all, &program.table, &program.target, &bad, program.fuel), "forged save-root kind {kind}");
+            if validate_cpu_workers(&all, &program.table, &program.target, &bad, program.fuel) {
+                accepted.push(kind);
+            }
         }
+        assert!(
+            accepted.is_empty(),
+            "accepted forged save-root kinds {accepted:?}"
+        );
         for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
-            let objects = native::emit_backend_objects(&program, backend, hirsel_lir::emission::OptLevel::Default, native::Partition::Whole, false, None).unwrap();
+            let objects = native::emit_backend_objects(
+                &program,
+                backend,
+                hirsel_lir::emission::OptLevel::Default,
+                native::Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
             native::check_ahead_objects(&program, &objects).unwrap();
-            assert!(native::continuation::ahead_certificates(&program, &objects).iter().any(|c| c.root == id));
+            assert!(
+                native::continuation::ahead_certificates(&program, &objects)
+                    .iter()
+                    .any(|c| c.root == id)
+            );
         }
     });
 }
+

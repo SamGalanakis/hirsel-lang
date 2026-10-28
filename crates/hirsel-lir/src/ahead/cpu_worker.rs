@@ -341,9 +341,14 @@ pub fn validate_cpu_workers(
                 fuel_points: crate::fuel::fuel_points(worker.unit()),
             },
         );
-        if (cpu.mapper.is_some() && cpu.roots.as_ref().is_none_or(|roots| !super::cpu_roots::check(units, table, &graph, &protocol, roots)))
+        if (cpu.mapper.is_some()
+            && cpu.roots.as_ref().is_none_or(|roots| {
+                !super::cpu_roots::check(units, table, &graph, &protocol, roots)
+            }))
             || (cpu.mapper.is_none() && cpu.roots.is_some())
-            || graph.bodies != proposal.graph.bodies || cpu.spine != spine(worker.unit(), &protocol) {
+            || graph.bodies != proposal.graph.bodies
+            || cpu.spine != spine(worker.unit(), &protocol)
+        {
             return false;
         }
         let Some(wrapper) = table.layout(protocol.environment) else {
@@ -593,8 +598,13 @@ pub(super) fn propose(
     );
     graph.root = u.header.instance;
     let roots = if mapper.is_some() {
-        Some(super::cpu_roots::propose(units, table, &graph, &protocol).ok_or_else(|| no("unproved CPU save roots"))?)
-    } else { None };
+        Some(
+            super::cpu_roots::propose(units, table, &graph, &protocol)
+                .ok_or_else(|| no("unproved CPU save roots"))?,
+        )
+    } else {
+        None
+    };
     graph.identity = ContentHash::of_parts(
         "hirsel.ahead.cpu-worker.v1",
         [

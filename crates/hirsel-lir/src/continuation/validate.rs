@@ -2531,7 +2531,9 @@ pub(super) fn synchronous_source(
 
 /// Reconstruct CPU custody with the continuation import checker's independent
 /// set-based liveness and storage analyses. No producer roots are consulted.
-pub(crate) fn cpu_saved_frames(u: &LirUnit<Ready>) -> BTreeMap<crate::ahead::CpuSavePoint, crate::ahead::LiveOwners> {
+pub(crate) fn cpu_saved_frames(
+    u: &LirUnit<Ready>,
+) -> BTreeMap<crate::ahead::CpuSavePoint, crate::ahead::LiveOwners> {
     use crate::ahead::CpuSavePoint;
     use crate::ahead::LiveOwners;
     let live = Live::compute(u);
@@ -2542,29 +2544,66 @@ pub(crate) fn cpu_saved_frames(u: &LirUnit<Ready>) -> BTreeMap<crate::ahead::Cpu
         let term = &u.terminators[b];
         if let Terminator::Call { call, .. } = *term {
             let (defs, reads) = call_values(u, call);
-            for d in defs { values.remove(&d); }
+            for d in defs {
+                values.remove(&d);
+            }
             values.extend(reads);
         } else {
             match *term {
-                Terminator::Branch { condition: v, .. } | Terminator::Switch { value: v, .. } | Terminator::Isolate { start: v, .. } | Terminator::Return(Some(v)) => { values.insert(v); }
+                Terminator::Branch { condition: v, .. }
+                | Terminator::Switch { value: v, .. }
+                | Terminator::Isolate { start: v, .. }
+                | Terminator::Return(Some(v)) => {
+                    values.insert(v);
+                }
                 _ => {}
             }
         }
         let mut record = |point, before, values: &BTreeSet<ValueId>| {
             let (slots, loans) = storage_before_instruction(u, at, before);
-            out.insert(point, LiveOwners {
-                at,
-                slots: slots.into_iter().map(|s| (s, u.types[u.slots[s.index()].ty.index()].layout)).collect(),
-                values: values.iter().map(|v| (*v, u.types[u.values[v.index()].ty.index()].layout, u.values[v.index()].holding)).collect(),
-                loans: loans.into_iter().collect(),
-            });
+            out.insert(
+                point,
+                LiveOwners {
+                    at,
+                    slots: slots
+                        .into_iter()
+                        .map(|s| (s, u.types[u.slots[s.index()].ty.index()].layout))
+                        .collect(),
+                    values: values
+                        .iter()
+                        .map(|v| {
+                            (
+                                *v,
+                                u.types[u.values[v.index()].ty.index()].layout,
+                                u.values[v.index()].holding,
+                            )
+                        })
+                        .collect(),
+                    loans: loans.into_iter().collect(),
+                },
+            );
         };
         record(CpuSavePoint::Terminator(at), usize::MAX, &values);
-        for (i, inst) in block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate().rev() {
-            for d in inst.defs() { values.remove(&d); }
+        for (i, inst) in block
+            .instructions
+            .get(&u.instructions)
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+            .rev()
+        {
+            for d in inst.defs() {
+                values.remove(&d);
+            }
             values.extend(uses(u, inst));
-            if let Some(f) = inst.failure() { values.extend(live.failure(u, f)); }
-            record(CpuSavePoint::Instruction(block.instructions.start as usize + i), i, &values);
+            if let Some(f) = inst.failure() {
+                values.extend(live.failure(u, f));
+            }
+            record(
+                CpuSavePoint::Instruction(block.instructions.start as usize + i),
+                i,
+                &values,
+            );
         }
     }
     out
