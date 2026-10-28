@@ -118,12 +118,10 @@ fn task_set_signal_suspensions_replay_exact_readiness() {
             &dir.join("reference.tape"),
             &grants,
         );
-        let mut loaded = hirsel_driver::load_program(&manifest).unwrap();
-        loaded
-            .check_for_execution()
+        let prepared = hirsel_driver::request_tir(&manifest, hirsel_engine::Verify::On, None)
             .unwrap_or_else(|error| panic!("{error}"));
         let run = hirsel_engine::RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -137,10 +135,16 @@ fn task_set_signal_suspensions_replay_exact_readiness() {
             ..Default::default()
         };
         world.grants.insert("Signals".into());
-        let live = hirsel_engine::run_observed_checked(&mut loaded.engine, &run, world)
-            .unwrap()
-            .observation
-            .unwrap();
+        let live = hirsel_driver::testing::observe_tir(
+            &prepared,
+            &run,
+            world,
+            hirsel_engine::InterpreterAdapter::default().limits,
+            true,
+        )
+        .unwrap()
+        .observation
+        .unwrap();
         assert_eq!(live.output, b"ready\ncanceled\n");
         assert_eq!(live.exit_code, Some(0));
         assert!(live.failures.is_empty());
@@ -157,8 +161,8 @@ fn task_set_signal_suspensions_replay_exact_readiness() {
             record(&dir.join(backend), None, &tape, &grants);
             let original = fs::read(&tape).unwrap();
             for checked in [false, true] {
-                let observed = hirsel_driver::replay_loaded_observations(
-                    &mut loaded,
+                let observed = hirsel_driver::replay_prepared_observations(
+                    &prepared,
                     &tape,
                     Some(1_000_000),
                     checked,
