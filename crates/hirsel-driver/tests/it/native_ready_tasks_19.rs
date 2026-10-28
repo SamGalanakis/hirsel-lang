@@ -6,7 +6,8 @@ use native::queries::{
     declarations::NativeDeclarations,
     instance::CALLABLE_VALUE_KIND,
     instance_tasks::{
-        CALLABLE_GRAPH_KIND, DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks,
+        CALLABLE_GRAPH_KIND, DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory,
+        InstanceTasks,
     },
     products::{EmissionOptions, NativeSnapshot},
     source_inputs::NativeInstanceInputs,
@@ -49,6 +50,15 @@ impl QueryContext for Pending {
 fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invocations() {
     ready_case(
         "fn other()->u64{9u64}\npub fn main()->u64{7u64}",
+        false,
+        false,
+        false,
+    );
+}
+#[test]
+fn native_ready_tasks_reuse_specialized_callable_dependencies_without_materialization() {
+    ready_case(
+        "fn other()->u64{9u64}\nfn apply(f:fn()->u64 uses {})->u64 uses {f}{f()}\npub fn main()->u64{apply(other)}",
         false,
         false,
         false,

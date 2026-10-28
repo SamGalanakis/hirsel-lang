@@ -231,7 +231,7 @@ impl DemandInstances {
                 .map(|(closure, _)| closure)
                 .collect::<Vec<_>>(),
         )?;
-        operations.pretransfer_adapters = super::super::instance_operations::bind_pretransfer(
+        let bound_pretransfer = super::super::instance_operations::bind_pretransfer(
             &operations,
             &binding.table,
             &self.target,
@@ -349,7 +349,7 @@ impl DemandInstances {
                 .iter()
                 .map(|row| binding.abi(row.3).ok_or("missing callable finalizer ABI"))
                 .collect::<Result<Vec<_>, _>>()?;
-            additional_abis.extend(operations.pretransfer_adapters.iter().map(|a| a.abi));
+            additional_abis.extend(bound_pretransfer.iter().map(|a| a.abi));
             let selected_operations = super::super::instance_operations::InstanceOperations {
                 inventory: Some(&self.seal_inventory),
                 declarations: &operations,
@@ -363,8 +363,7 @@ impl DemandInstances {
                         .adapters
                         .iter()
                         .map(|symbol| {
-                            let mut selected = operations
-                                .pretransfer_adapters
+                            let mut selected = bound_pretransfer
                                 .iter()
                                 .filter(|reference| &reference.adapter == symbol);
                             let reference = selected.next().ok_or(
