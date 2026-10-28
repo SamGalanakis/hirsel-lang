@@ -117,12 +117,10 @@ fn scripted(boundaries: bool) {
             .unwrap();
         let root = scratch.keep();
         let manifest = package(&root);
-        let mut loaded = hirsel_driver::load_program(&manifest).unwrap();
-        loaded
-            .check_for_execution()
+        let prepared = hirsel_driver::request_tir(&manifest, Verify::On, None)
             .unwrap_or_else(|e| panic!("{e}"));
         let run = RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -142,21 +140,16 @@ fn scripted(boundaries: bool) {
                 eprintln!("PUBSUB_30_STARTED {id}/{engine}");
                 // Fixed before execution; default corpus budget remains 1M.
                 const STEPS: u64 = 10_000_000;
-                let result = if engine == "reference" {
-                    run_observed_snapshot_bounded(
-                        &mut loaded.engine,
-                        &run,
-                        simulation.clone(),
-                        STEPS,
-                    )
-                } else {
-                    run_observed_checked_bounded(
-                        &mut loaded.engine,
-                        &run,
-                        simulation.clone(),
-                        STEPS,
-                    )
-                }
+                let result = hirsel_driver::testing::observe_tir(
+                    &prepared,
+                    &run,
+                    simulation.clone(),
+                    hirsel_interp::Limits {
+                        steps: Some(STEPS),
+                        ..Default::default()
+                    },
+                    engine == "checked-h",
+                )
                 .unwrap();
                 fs::write(
                     root.join(format!("{id}-{engine}.receipt")),
@@ -582,31 +575,24 @@ fn pubsub_relay_30_permit_drop_and_binding_controls() {
         )
         .unwrap();
         fs::write(&manifest, config.to_string()).unwrap();
-        let mut loaded = hirsel_driver::load_program(&manifest).unwrap();
-        loaded
-            .check_for_execution()
+        let prepared = hirsel_driver::request_tir(&manifest, Verify::On, None)
             .unwrap_or_else(|e| panic!("{e}"));
         let run = RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
         for checked in [false, true] {
-            let result = if checked {
-                run_observed_checked_bounded(
-                    &mut loaded.engine,
-                    &run,
-                    SimulationConfig::default(),
-                    1_000_000,
-                )
-            } else {
-                run_observed_snapshot_bounded(
-                    &mut loaded.engine,
-                    &run,
-                    SimulationConfig::default(),
-                    1_000_000,
-                )
-            }
+            let result = hirsel_driver::testing::observe_tir(
+                &prepared,
+                &run,
+                SimulationConfig::default(),
+                hirsel_interp::Limits {
+                    steps: Some(1_000_000),
+                    ..Default::default()
+                },
+                checked,
+            )
             .unwrap();
             fs::write(
                 root.join(format!("credits-{checked}.receipt")),
