@@ -82,9 +82,10 @@ fn program_for(
         bytes: 64 << 20,
         operations: 100_000,
     });
-    hirsel_driver::COMPILER
+    let unsafe_ffi = hirsel_driver::COMPILER
         .load_program_inputs(path, &capture, false)
-        .unwrap();
+        .unwrap()
+        .unsafe_ffi;
     let captured = capture.freeze();
     let inputs = captured
         .replace_sources(
@@ -125,17 +126,30 @@ fn program_for(
     if existing.is_none() {
         use hirsel_driver::requests::*;
         let mut requests = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
-        let output = requests
-            .execute_request(&CompileRequest {
-                path: path.to_owned(),
-                inputs: key.inputs.clone(),
-                operation: CompileOperation::Check { lowering },
-            })
-            .unwrap();
-        let CompileResult::Check(output) = &output.result else {
-            panic!("expected fixture Check")
+        let result = requests.execute_request(&CompileRequest {
+            path: path.to_owned(),
+            inputs: key.inputs.clone(),
+            operation: CompileOperation::Check { lowering },
+        });
+        let output = match result {
+            Ok(completed) => {
+                let CompileResult::Check(output) = &completed.result else {
+                    panic!("expected fixture Check")
+                };
+                output.clone()
+            }
+            Err(ToolError::Query {
+                error: hirsel_types::QueryError::Diagnostics(diagnostics),
+                sources,
+                ..
+            }) => CheckOutput {
+                diagnostics: hirsel_engine::select_diagnostics(diagnostics, Some(&sources)),
+                sources,
+                unsafe_ffi,
+                completion: CheckCompletion::Complete,
+            },
+            Err(error) => panic!("fixture Check: {error}"),
         };
-        let output = output.clone();
         if output.completion != CheckCompletion::Complete || !output.diagnostics.is_empty() {
             return Err(output);
         }
