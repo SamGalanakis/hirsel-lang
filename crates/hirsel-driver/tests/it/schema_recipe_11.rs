@@ -1,6 +1,12 @@
 //! Checked cookbook: explicit nested hooks, strict wire errors and owned results.
-use hirsel_driver::{load_program, load_program_source};
-use hirsel_engine::{LoweringPolicy, RunConfiguration, SimulationConfig, with_compiler_stack};
+use hirsel_driver::{
+    load_program_source,
+    requests::{CompileOperation, CompileResult},
+    session::Session,
+};
+use hirsel_engine::{
+    LoweringPolicy, QueryError, RunConfiguration, SimulationConfig, ToolError, with_compiler_stack,
+};
 use std::path::PathBuf;
 
 fn root() -> PathBuf {
@@ -63,11 +69,25 @@ fn reject_missing(direction: &str) {
         let path = root().join(format!(
             "crates/hirsel-driver/tests/fixtures/schema-recipe-11/missing-{direction}.hir"
         ));
-        let mut program = load_program(&path).unwrap();
-        let output = program.check(LoweringPolicy::Comptime).unwrap();
-        assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
-        let errors: Vec<_> = output
-            .diagnostics
+        let mut session = Session::open(&path, hirsel_engine::Verify::On);
+        let (diagnostics, sources) = match session.request(CompileOperation::Check {
+            lowering: LoweringPolicy::Comptime,
+        }) {
+            Ok(completed) => {
+                let CompileResult::Check(output) = &completed.result else {
+                    panic!("expected source Check");
+                };
+                assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
+                (output.diagnostics.clone(), output.sources.clone())
+            }
+            Err(ToolError::Query {
+                error: QueryError::Diagnostics(diagnostics),
+                sources,
+                ..
+            }) => (diagnostics, sources),
+            Err(error) => panic!("expected completed language rejection: {error}"),
+        };
+        let errors: Vec<_> = diagnostics
             .iter()
             .filter(|d| d.severity == hirsel_diag::Severity::Error)
             .collect();
@@ -76,16 +96,15 @@ fn reject_missing(direction: &str) {
         let mut missing = Vec::new();
         for error in errors {
             assert_eq!(error.rule.as_str(), "LANG-4", "{error:?}");
-            let primary = output.sources.slice(error.primary).unwrap();
+            let primary = sources.slice(error.primary).unwrap();
             missing.push(primary.to_owned());
             let origin =
                 format!("comptime derive.schema_{direction}(shape(Outer), schema.strict_policy())");
             assert!(
                 error.secondary.iter().any(|label| {
-                    output.sources.slice(label.span) == Some(origin.as_str())
-                        && output
-                            .sources
-                            .file(output.sources.resolve(label.span).file)
+                    sources.slice(label.span) == Some(origin.as_str())
+                        && sources
+                            .file(sources.resolve(label.span).file)
                             .is_some_and(|file| file.path == path)
                 }),
                 "missing original comptime source span: {error:?}"
