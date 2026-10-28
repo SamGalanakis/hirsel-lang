@@ -20,7 +20,7 @@ use std::sync::{Arc, OnceLock};
 #[derive(Clone, Debug)]
 pub struct View {
     pub d: DefId,
-    input: hirsel_validate::IdentifiedSignature,
+    pub(super) input: Arc<hirsel_validate::IdentifiedSignature>,
 }
 impl View {
     /// A view of `signature`, keeping `previous`'s digest when it is the same view.
@@ -31,12 +31,18 @@ impl View {
             {
                 view.input.clone()
             }
-            _ => hirsel_validate::IdentifiedSignature::new(t.clone(), signature),
+            _ => Arc::new(hirsel_validate::IdentifiedSignature::new(
+                t.clone(),
+                signature,
+            )),
         };
         Self {
             d: input.signature().definition,
             input,
         }
+    }
+    pub(super) fn matches(&self, t: &TypeInterner, signature: &SignatureRef) -> bool {
+        self.input.belongs_to(t) && Arc::ptr_eq(self.input.signature(), signature)
     }
     pub fn signature(&self) -> &SignatureRef {
         self.input.signature()
@@ -94,16 +100,27 @@ impl ViewTable {
         store: &mut ValidatedSignatures,
         old: Option<&ValidatedSignatures>,
     ) -> Self {
-        let _batch = store.publication_batch();
-        let mut sorted: Vec<SignatureRef> = signatures.into_iter().collect();
-        sorted.sort_by(|a, b| a.definition.cmp(&b.definition));
-        let views: Vec<View> = sorted
-            .into_iter()
-            .map(|signature| {
+        Self::from_views(
+            t,
+            signatures.into_iter().map(|signature| {
                 let d = signature.definition;
                 View::new(t, signature, previous.and_then(|p| p.get(d)))
-            })
-            .collect();
+            }),
+            store,
+            old,
+        )
+    }
+    /// Build a universe from already identified immutable products. V still
+    /// checks each declaration's verdict against this universe's exact reads.
+    pub(crate) fn from_views(
+        t: &Arc<TypeInterner>,
+        views: impl IntoIterator<Item = View>,
+        store: &mut ValidatedSignatures,
+        old: Option<&ValidatedSignatures>,
+    ) -> Self {
+        let _batch = store.publication_batch();
+        let mut views: Vec<View> = views.into_iter().collect();
+        views.sort_by_key(|view| view.d);
         let index = views
             .iter()
             .enumerate()

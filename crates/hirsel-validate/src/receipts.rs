@@ -569,19 +569,35 @@ impl VerifierCache {
             owners.insert(site, (path.clone(), occurrence));
             Some(site)
         })?;
-        let mut artifact = Artifact::new(&definition, types, |anchor| owners.get(&anchor).cloned());
-        if let Some(signature) = &overlay {
-            if signature.definition != definition.path {
-                return None;
-            }
-            artifact = artifact.with_overlay(signature.clone());
+        if overlay
+            .as_ref()
+            .is_some_and(|s| s.definition != definition.path)
+        {
+            return None;
         }
-        if artifact.identity != Some(accepted.artifact) {
+        // Decode already bound every anchor and type row. Identify that exact
+        // immutable closure once, including its overlay, before retaining it.
+        let identity = match &overlay {
+            Some(_) => hirsel_product_codec::canonical_bytes(
+                types.clone(),
+                &(&definition, &overlay),
+                |anchor| owners.get(&anchor).cloned(),
+            )
+            .map(|bytes| {
+                ContentHash::of_parts("hirsel.validate.private-artifact.v2", [bytes.as_slice()])
+            }),
+            None => hirsel_product_codec::canonical_bytes(types, &definition, |anchor| {
+                owners.get(&anchor).cloned()
+            })
+            .map(|bytes| ContentHash::of_parts("hirsel.validate.artifact.v1", [bytes.as_slice()])),
+        };
+        if identity != Some(accepted.artifact) {
             return None;
         }
         Some(ReplayArtifact {
             definition,
             overlay,
+            identity: accepted.artifact,
             policy: accepted.policy,
             owners,
         })
@@ -651,15 +667,15 @@ impl VerifierCache {
                     return None;
                 }
 
-                let mut exact = Artifact::new(&replay.definition, types.clone(), |a| {
-                    replay.owners.get(&a).cloned()
-                });
-                if let Some(overlay) = replay.overlay {
-                    exact = exact.with_overlay(overlay);
-                }
-                if exact.identity != Some(accepted.artifact) {
-                    return None;
-                }
+                // replay_artifact independently identified this decoded
+                // closure. Its immutable fields have not changed since then.
+                let exact = Artifact {
+                    definition: &replay.definition,
+                    types: types.clone(),
+                    identity: Some(replay.identity),
+                    owners: replay.owners,
+                    overlay: replay.overlay,
+                };
                 let (report, _, refreshed) =
                     validate_with_receipt(&exact, &*views, replay.policy, Some(self), &mut vec![]);
                 if !report.violations.is_empty() || refreshed.as_ref() != Some(&accepted) {
@@ -762,12 +778,17 @@ fn replay_key(artifact: ContentHash, policy: ContentHash) -> ContentHash {
 struct ReplayRecord {
     artifact: ContentHash,
     policy: ContentHash,
+    #[serde(
+        serialize_with = "hirsel_product_codec::serialize_payload",
+        deserialize_with = "hirsel_product_codec::deserialize_payload"
+    )]
     bytes: Vec<u8>,
 }
 /// Construction is verifier-private. These bytes alone are not acceptance.
 struct ReplayArtifact {
     definition: hirsel_tir::DefinitionRef,
     overlay: Option<hirsel_types::SignatureRef>,
+    identity: ContentHash,
     policy: ContentHash,
     owners: std::collections::BTreeMap<Anchor, (DefPath, u32)>,
 }
@@ -943,6 +964,51 @@ mod tests {
     }
     fn artifact(f: &Fixture) -> Artifact<'_> {
         Artifact::new(&f.definition, session(), |_| Some((path("main"), 0)))
+    }
+
+    #[test]
+    fn replay_record_bulk_bytes_preserve_existing_format_and_decode_limits() {
+        #[derive(Serialize, Deserialize)]
+        struct Original {
+            artifact: ContentHash,
+            policy: ContentHash,
+            bytes: Vec<u8>,
+        }
+        let original = Original {
+            artifact: ContentHash::of_bytes(b"artifact"),
+            policy: ContentHash::of_bytes(b"policy"),
+            bytes: (0..=255).cycle().take(4096).collect(),
+        };
+        let record = ReplayRecord {
+            artifact: original.artifact,
+            policy: original.policy,
+            bytes: original.bytes.clone(),
+        };
+        let bytes = bincode::serialize(&original).unwrap();
+        assert_eq!(bincode::serialize(&record).unwrap(), bytes);
+        let limit = bytes.len() as u64;
+        let options = || {
+            bincode::DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_limit(limit)
+                .reject_trailing_bytes()
+        };
+        let decoded: ReplayRecord = options().deserialize(&bytes).unwrap();
+        assert_eq!(decoded.bytes, original.bytes);
+        assert_eq!(decoded.artifact, original.artifact);
+        assert_eq!(decoded.policy, original.policy);
+        assert!(
+            options()
+                .deserialize::<ReplayRecord>(&bytes[..bytes.len() - 1])
+                .is_err()
+        );
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(options().deserialize::<ReplayRecord>(&trailing).is_err());
+        // An impossible payload length must fail before an allocation/copy.
+        let mut invalid = bytes;
+        invalid[64..72].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(options().deserialize::<ReplayRecord>(&invalid).is_err());
     }
 
     #[test]

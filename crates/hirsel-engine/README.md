@@ -37,7 +37,9 @@ against `snapshot.validation(package)`, the public `ViewTable` with that
 package's private views in place; compile-time evaluation validates a
 materialized owner against `validation_with`. Only the replaced views and the
 verdicts that read them are checked again, and a new snapshot reuses the
-previous one's digests and the verdicts whose reads still hold. Failed headers
+previous one's digests and the verdicts whose reads still hold. Reflection and
+V share one lazily identified immutable product for each public/private view;
+reuse binds both the exact signature allocation and its type interner. Failed headers
 are retried: a snapshot is kept only when every signature normalized.
 The snapshot's stamp follows declaration rows, explicit module inputs and S1
 signature publication/retirement, including the environment and comptime limits.

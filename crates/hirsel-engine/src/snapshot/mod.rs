@@ -35,12 +35,30 @@ pub struct SignatureSnapshot {
     /// Signature inputs are sufficient for P; V builds its universe on demand.
     validation: OnceLock<Arc<ValidationState>>,
     validation_inputs: Mutex<Option<ValidationCandidates>>,
-    representation_digests: DefMap<OnceLock<ValidationDigest>>,
+    /// Each immutable product is identified once, shared by reflection and V.
+    public_views: DefMap<OnceLock<View>>,
+    private_views: DefMap<OnceLock<View>>,
     /// What lookups resolve against, frozen with the signatures.
     lookup: LookupInput,
     /// Local verifier authority is never part of a serialized snapshot/product.
     verifier: Option<Arc<hirsel_validate::VerifierCache>>,
     verifier_policy: ContentHash,
+}
+fn view_products<'a>(
+    types: &TypeInterner,
+    rows: impl Iterator<Item = (DefId, &'a SignatureRef)>,
+    previous: Option<&DefMap<OnceLock<View>>>,
+) -> DefMap<OnceLock<View>> {
+    rows.map(|(d, signature)| {
+        let cell = OnceLock::new();
+        if let Some(view) = previous.and_then(|p| p.get(&d)).and_then(OnceLock::get)
+            && view.matches(types, signature)
+        {
+            let _ = cell.set(view.clone());
+        }
+        (d, cell)
+    })
+    .collect()
 }
 /// Receipt candidates are not source authority. Keep them through deferred
 /// epochs, and release the old universe once this snapshot initializes V.
@@ -97,11 +115,18 @@ impl SignatureSnapshot {
             .into_iter()
             .map(|view| (view.definition, view))
             .collect();
-        let representation_digests = signatures
-            .keys()
-            .chain(private.keys())
-            .map(|d| (*d, OnceLock::new()))
-            .collect();
+        let public_views = view_products(
+            &types,
+            signatures
+                .iter()
+                .filter_map(|(d, s)| s.as_ref().ok().map(|s| (*d, s))),
+            previous.map(|p| &p.public_views),
+        );
+        let private_views = view_products(
+            &types,
+            private.iter().map(|(d, s)| (*d, s)),
+            previous.map(|p| &p.private_views),
+        );
         let candidates = previous
             .map(|p| p.validation_candidates())
             .unwrap_or_default();
@@ -112,7 +137,8 @@ impl SignatureSnapshot {
             private,
             validation: OnceLock::new(),
             validation_inputs: Mutex::new(Some(candidates)),
-            representation_digests,
+            public_views,
+            private_views,
             verifier: None,
             verifier_policy: ContentHash::default(),
             lookup: LookupInput::default(),
@@ -148,12 +174,17 @@ impl SignatureSnapshot {
             let old = previous.map(|p| &p.validated);
             let mut validated =
                 ValidatedSignatures::with_cache(self.verifier.clone(), self.verifier_policy);
-            let views = Arc::new(ViewTable::new(
+            let views = Arc::new(ViewTable::from_views(
                 t,
-                self.signatures
-                    .values()
-                    .filter_map(|s| s.as_ref().ok().cloned()),
-                previous.map(|p| &*p.views),
+                self.signatures.iter().filter_map(|(d, s)| {
+                    s.as_ref().ok().map(|s| {
+                        self.public_views[d]
+                            .get_or_init(|| {
+                                View::new(t, s.clone(), previous.and_then(|p| p.views.get(*d)))
+                            })
+                            .clone()
+                    })
+                }),
                 &mut validated,
                 old,
             ));
@@ -213,10 +244,11 @@ impl SignatureSnapshot {
                 let earlier = previous
                     .and_then(|p| p.packages.get(package))
                     .and_then(|p| p.replacement(*d));
-                owned
-                    .entry(package.clone())
-                    .or_default()
-                    .push(View::new(t, view.clone(), earlier));
+                owned.entry(package.clone()).or_default().push(
+                    self.private_views[d]
+                        .get_or_init(|| View::new(t, view.clone(), earlier))
+                        .clone(),
+                );
             }
             let packages = owned
                 .into_iter()
@@ -405,11 +437,15 @@ impl SignatureSnapshot {
                 Err(error) => return Some(Err(error)),
             }
         };
-        let digest = self
-            .representation_digests
+        let products = if self.private.contains_key(&d) {
+            &self.private_views
+        } else {
+            &self.public_views
+        };
+        let product = products
             .get(&d)?
-            .get_or_init(|| hirsel_validate::digest(&self.types, view));
-        Some(Ok((view, *digest)))
+            .get_or_init(|| View::new(&self.types, view.clone(), None));
+        Some(Ok((product.signature(), product.digest())))
     }
     /// V's verdicts on this snapshot's views.
     pub fn validated(&self) -> &ValidatedSignatures {
@@ -963,6 +999,48 @@ mod tests {
         snapshot.validation_state();
         snapshot
     }
+    #[test]
+    fn reflection_and_validation_share_only_the_exact_immutable_view_product() {
+        let types = TypeInterner::new(None);
+        let signature = constant(&types, "shared", hirsel_types::Primitive::U64);
+        let d = signature.definition;
+        let build = |signature: SignatureRef, previous: Option<&SignatureSnapshot>| {
+            SignatureSnapshot::build(
+                Revision::FIRST,
+                types.clone(),
+                [(d, Ok(signature))],
+                [],
+                previous,
+            )
+        };
+        let first = build(signature.clone(), None);
+        let reflected = first.representation(d).unwrap().unwrap().1;
+        let product = first.public_views[&d].get().unwrap().input.clone();
+        let state = first.validation_state();
+        assert!(Arc::ptr_eq(&product, &state.views.get(d).unwrap().input));
+        assert_eq!(reflected, state.views.get(d).unwrap().digest());
+        let next = build(signature.clone(), Some(&first));
+        let next_state = next.validation_state();
+        assert!(Arc::ptr_eq(
+            &product,
+            &next_state.views.get(d).unwrap().input
+        ));
+
+        let mut changed = (*signature).clone();
+        changed.kind = SignatureKind::Const {
+            ty: types.intern(Type::with_kind(TypeKind::Error)),
+            generics: Default::default(),
+        };
+        let changed = build(Arc::new(changed), Some(&next));
+        let changed_state = changed.validation_state();
+        assert!(!Arc::ptr_eq(
+            &product,
+            &changed_state.views.get(d).unwrap().input
+        ));
+        assert_ne!(reflected, changed_state.views.get(d).unwrap().digest());
+        assert!(!changed_state.views.universe_errors().1.is_empty());
+    }
+
     #[test]
     fn durable_verdicts_recompute_independent_digests_and_reject_changed_views() {
         use hirsel_intern::work::{self, Counter};
