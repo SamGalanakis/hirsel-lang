@@ -3547,8 +3547,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {{
 }
 
 #[test]
-fn f1_external_stop_during_host_wait_replays_exact_terminal_and_projection() {
-    f1_external_stop_matrix("1", 1, &[("1", 1)], Cells::ALL);
+fn f1_external_stop_during_host_wait_replays_exact_terminal_and_projection_record() {
+    f1_external_stop_matrix("1", 1, &[("1", 1)], Cells::level(false));
+}
+
+#[test]
+fn f1_external_stop_during_host_wait_replays_exact_terminal_and_projection_durable() {
+    f1_external_stop_matrix("1", 1, &[("1", 1)], Cells::level(true));
 }
 
 fn f1_external_stop_matrix(
