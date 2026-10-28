@@ -7,6 +7,7 @@ pub(in crate::tasks::ordered) struct Withdrawn {
     task: TaskId,
     ordinal: usize,
     summary: *mut Summary,
+    value: Vec<u8>,
     charges: Stretch,
     complete: bool,
 }
@@ -56,11 +57,19 @@ mod tests {
                 retained: roots.as_ptr(),
             };
             let charges = summarise(budgets, &[Event::Fuel, Event::Alloc(60)]).unwrap();
-            batch.publish(younger, charges.clone(), &raw mut summary);
+            batch
+                .publish(
+                    younger,
+                    charges.clone(),
+                    &raw mut summary,
+                    value.to_le_bytes().to_vec(),
+                )
+                .unwrap();
             for _ in 0..3 {
                 let withdrawn = batch.withdraw(head, &BTreeSet::from([younger]));
                 assert_eq!(withdrawn.len(), 1);
                 assert_eq!(withdrawn[0].charges, charges);
+                assert_eq!(withdrawn[0].value, value.to_le_bytes());
                 assert_eq!(summary.phase, SUMMARY_WITHDRAWN);
                 assert!(batch.summaries.is_empty());
                 assert!(batch.retire_summary(younger, &mut state).is_none());
@@ -70,7 +79,8 @@ mod tests {
                 assert_eq!(summary.retained, roots.as_ptr());
                 batch.restore(withdrawn);
                 assert_eq!(summary.phase, SUMMARY_PUBLISHED);
-                assert_eq!(batch.summaries[&younger], &raw mut summary);
+                assert_eq!(batch.summaries[&younger].0, &raw mut summary);
+                assert_eq!(batch.summaries[&younger].1, value.to_le_bytes());
                 assert_eq!(state, initial, "restoration cannot settle charges");
             }
             assert_eq!(
@@ -80,6 +90,7 @@ mod tests {
             let retired = batch.retire_summary(younger, &mut state).unwrap();
             assert_eq!(retired.result, Ok(()));
             assert_eq!(retired.charges, charges);
+            assert_eq!(retired.record.value, value.to_le_bytes());
             assert_eq!(summary.phase, SUMMARY_RETIRED);
             assert_eq!(
                 state,
@@ -118,7 +129,7 @@ impl Batch {
             .into_iter()
             .map(|(ordinal, charges, complete)| {
                 let task = published[&ordinal];
-                let summary = self.summaries.remove(&task).unwrap();
+                let (summary, value) = self.summaries.remove(&task).unwrap();
                 // SAFETY: all publisher stacks are acknowledged and blocked
                 // from selection until restore returns their prefixes.
                 unsafe {
@@ -129,6 +140,7 @@ impl Batch {
                     task,
                     ordinal,
                     summary,
+                    value,
                     charges,
                     complete,
                 }
@@ -141,7 +153,11 @@ impl Batch {
     pub(in crate::tasks::ordered) fn restore(&mut self, withdrawn: Vec<Withdrawn>) {
         for row in withdrawn {
             assert_eq!(self.owners[&row.task], row.ordinal);
-            assert!(self.summaries.insert(row.task, row.summary).is_none());
+            assert!(
+                self.summaries
+                    .insert(row.task, (row.summary, row.value))
+                    .is_none()
+            );
             if row.complete {
                 self.jobs.publish(row.ordinal, row.charges);
             } else {

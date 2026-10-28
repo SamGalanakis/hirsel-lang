@@ -220,6 +220,45 @@ impl AheadPlan {
     }
 }
 
+/// Check publication recipes for the units in an ordinary object partition.
+/// Private execution additionally requires the complete worker graph check.
+pub fn validate_cpu_summaries(
+    units: &[&ValidatedUnit<Ready>],
+    table: &LayoutTable,
+    plan: &AheadPlan,
+) -> bool {
+    units.iter().all(|worker| {
+        let Some(cpu) = plan
+            .roots
+            .get(&worker.unit().header.instance)
+            .and_then(|root| root.cpu.as_ref())
+        else {
+            return true;
+        };
+        if cpu.mapper.is_none() {
+            return cpu.summary.is_none();
+        }
+        let Some(protocol) = CpuWorkerProtocol::derive(worker, table) else {
+            return false;
+        };
+        let Some((bytes, retained)) = summary_layout(table, protocol.result_layout) else {
+            return false;
+        };
+        let Some(value) = worker.unit().tables.calls[protocol.mapper.index()].result else {
+            return false;
+        };
+        cpu.summary.as_ref()
+            == Some(&CpuSummary {
+                call: protocol.mapper,
+                value,
+                layout: protocol.result_layout,
+                bytes,
+                ordinal: protocol.ordinal,
+                retained,
+            })
+    })
+}
+
 /// Recheck CPU work at each backend's public entry. Pointer matching in the
 /// runtime supplies the actual callback identity; these checks supply its
 /// complete effect-free Ready graph and the worker's retained ownership.

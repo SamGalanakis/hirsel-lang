@@ -435,9 +435,6 @@ impl FnEmitter<'_, '_, '_> {
 impl FnEmitter<'_, '_, '_> {
     /// Borrow the live mapper result into a saved ABI image on success only.
     pub(crate) fn cpu_publish(&mut self, call: hirsel_lir::ir::CallId) -> Emitted {
-        if !self.em.inputs.unit().alternate {
-            return Ok(());
-        }
         let Some(summary) = self
             .em
             .inputs
@@ -448,8 +445,15 @@ impl FnEmitter<'_, '_, '_> {
         else {
             return Ok(());
         };
-        let Some(state) = self.ahead_state else {
-            return self.invalid("CPU summary without its physical state");
+        let (entry, state) = match self.ahead_state {
+            Some(state) => (
+                hirsel_lir::runtime_abi::RuntimeEntry::CpuAheadPublish,
+                state,
+            ),
+            None => (
+                hirsel_lir::runtime_abi::RuntimeEntry::CpuPublish,
+                self.context,
+            ),
         };
         let image = self.stack(summary.layout)?;
         let shape = self.value_shape(summary.value)?;
@@ -492,10 +496,7 @@ impl FnEmitter<'_, '_, '_> {
             self.store_at(value, record, offset);
         }
         self.ahead_flush();
-        let status = self.rt1(
-            hirsel_lir::runtime_abi::RuntimeEntry::CpuAheadPublish,
-            &[state, record],
-        )?;
+        let status = self.rt1(entry, &[state, record])?;
         self.ahead_reload();
         let refused = self.b.ins().icmp_imm(IntCC::NotEqual, status, 0);
         self.b.ins().trapnz(refused, crate::function::TRAP);

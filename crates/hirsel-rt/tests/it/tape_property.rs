@@ -252,8 +252,8 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         Schedule { count: n.wrapping_add(2), choice: n % 2 },
         CpuControl { width: n as u32, action: (n % 3) as u32, count: n, outcome: (n % 32) as u32 };
         CpuSummary(hirsel_rt::io::CpuSummary {
-            version: 1, retirement: n, ordinal: n % 32, descriptor: n as u32,
-            value_bytes: n % 257, retained_count: (n % 1025) as u32,
+            version: 2, retirement: n, ordinal: n % 32, descriptor: n as u32,
+            value_bytes: n % 257, retained_count: (n % 1025) as u32, value: bytes.clone(),
             pieces: vec![hirsel_rt::io::CpuPiece { credit: 0, fuel: n, net: n as i64, envelope: vec![(n, 1)] }],
             level: n, limit: u64::MAX, fuel: u64::MAX, stop: None,
         }),

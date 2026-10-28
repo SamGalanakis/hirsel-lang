@@ -11,7 +11,7 @@ use hirsel_core_contract::handle_scan::*;
 use std::collections::BTreeMap;
 
 const WORK_MAX: usize = 65_536;
-const BYTES_MAX: usize = 1 << 20;
+pub(crate) const BYTES_MAX: usize = 1 << 20;
 
 #[derive(Clone, Debug)]
 pub(super) struct Field {

@@ -709,6 +709,34 @@ fn cpu_saved_summary_checks_live_result_ordinal_and_retained_owner_on_both_emitt
                     ),
                     "forged summary field {field}"
                 );
+                let empty = std::collections::BTreeSet::new();
+                let inputs = hirsel_lir::emission::EmitInputs {
+                    ahead: Some(&forged),
+                    continuation: None,
+                    alternate: false,
+                    index: None,
+                    input: &program.input,
+                    target: &program.target,
+                    layouts: &program.table,
+                    keys: &program.keys,
+                    manifest: &program.manifest,
+                    statics: &program.statics,
+                    inline_instances: &empty,
+                    available_externally: &empty,
+                    callbacks: !program.callbacks.is_empty(),
+                    tracking: program.tracking(),
+                    foreign: &program.foreign_dispatch,
+                    opt: hirsel_lir::emission::OptLevel::Default,
+                    measurement: false,
+                    fuel: program.fuel,
+                    verify_backend: true,
+                };
+                assert!(matches!(hirsel_llvm::emit_object(&all, &inputs),
+                    Err(hirsel_llvm::CodegenError::Object { message })
+                        if message == "invalid CPU result summary recipe"));
+                assert!(matches!(hirsel_cranelift::emit_object(&all, &inputs),
+                    Err(hirsel_cranelift::CodegenError::Object { message })
+                        if message == "invalid CPU result summary recipe"));
             }
             for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
                 let objects = native::emit_backend_objects(

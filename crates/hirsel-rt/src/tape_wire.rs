@@ -1136,6 +1136,7 @@ impl Wire for crate::io::CpuSummary {
         self.descriptor.encode(out);
         self.value_bytes.encode(out);
         self.retained_count.encode(out);
+        self.value.encode(out);
         self.pieces.encode(out);
         self.level.encode(out);
         self.limit.encode(out);
@@ -1150,6 +1151,7 @@ impl Wire for crate::io::CpuSummary {
             descriptor: Wire::decode(input)?,
             value_bytes: Wire::decode(input)?,
             retained_count: Wire::decode(input)?,
+            value: cpu_bounded(input, crate::tasks::ordered::values::BYTES_MAX)?,
             pieces: cpu_bounded(input, crate::budget::stretch::PIECES_MAX)?,
             level: Wire::decode(input)?,
             limit: Wire::decode(input)?,

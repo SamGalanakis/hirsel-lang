@@ -28,7 +28,7 @@ mod terminal_tests;
 #[cfg(test)]
 mod timer_tests;
 mod tuning;
-mod values;
+pub(crate) mod values;
 pub(crate) mod yielding;
 
 use std::cell::RefCell;

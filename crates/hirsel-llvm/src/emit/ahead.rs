@@ -235,9 +235,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// Publish only the successful mapper result, before any instruction can
     /// move or release it. The image and retained table borrow that SSA owner.
     pub(super) fn cpu_publish(&mut self, call: CallId) -> Emitted {
-        if !self.inputs.alternate {
-            return Ok(());
-        }
         let Some(summary) = self
             .inputs
             .ahead
@@ -246,10 +243,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         else {
             return Ok(());
         };
-        let state = self.ahead_state.ok_or_else(|| CodegenError::Invalid {
-            definition: self.definition().clone(),
-            what: "CPU summary without its physical state".into(),
-        })?;
+        let (entry, state) = match self.ahead_state {
+            Some(state) => (RuntimeEntry::CpuAheadPublish, state),
+            None => (RuntimeEntry::CpuPublish, self.context),
+        };
         let image = self.stack(summary.layout)?;
         self.store(
             self.value_shape(summary.value)?,
@@ -305,7 +302,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             );
         }
         self.ahead_flush();
-        let publish = self.runtime(RuntimeEntry::CpuAheadPublish)?;
+        let publish = self.runtime(entry)?;
         let status = self.builder.call(publish, &[state, record]);
         self.ahead_reload();
         let accepted = self.builder.icmp(

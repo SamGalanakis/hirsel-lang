@@ -317,6 +317,14 @@ pub(crate) fn emit(
     Option<String>,
     BTreeMap<String, u64>,
 )> {
+    if inputs
+        .ahead
+        .is_some_and(|plan| !hirsel_lir::ahead::validate_cpu_summaries(units, inputs.layouts, plan))
+    {
+        return Err(CodegenError::Object {
+            message: "invalid CPU result summary recipe".into(),
+        });
+    }
     if inputs.alternate
         && inputs.ahead.is_some_and(|plan| {
             !hirsel_lir::ahead::validate_cpu_workers(

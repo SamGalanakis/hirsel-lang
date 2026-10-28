@@ -60,6 +60,41 @@ const _: () = {
     assert!(std::mem::offset_of!(Growth, capacity) == 80);
 };
 
+/// Publish the same checked result from ordinary serial execution and replay.
+/// # Safety
+/// `ctx` is current. The checked worker owns this record, its initialized
+/// result and its retained roots until return; the descriptor matches the SSA
+/// result layout. This entry is not called from a private alternate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_cpu_publish(ctx: *mut TaskCtx, summary: *mut Summary) -> u8 {
+    if !super::super::engine::on(ctx) {
+        return ACCEPTED;
+    }
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let task = super::super::engine::current(ctx);
+    let owned = super::super::engine::with_driver(ctx, |d| {
+        d.cpu_batch.as_ref().is_some_and(|batch| {
+            !summary.is_null() && batch.owns(task, unsafe { (*summary).ordinal })
+        })
+    });
+    if !owned {
+        return NOT_CERTIFIED;
+    }
+    if unsafe {
+        (*summary).version != VERSION
+            || (*summary).phase != SUMMARY_PENDING
+            || (*summary).value_bytes > 256
+            || (*summary).retained_count > crate::budget::stretch::ENVELOPE_MAX as u32
+    } {
+        return NOT_CERTIFIED;
+    }
+    unsafe { crate::stop::check(ctx, super::super::engine::ahead_summary(ctx, summary)) };
+    unsafe { (*summary).phase = SUMMARY_PUBLISHED };
+    unsafe { crate::stop::check(ctx, super::super::engine::at_head(ctx)) };
+    assert_eq!(unsafe { (*summary).phase }, SUMMARY_RETIRED);
+    ACCEPTED
+}
+
 /// # Safety
 /// Called only by a checked CPU alternate. Once supported, the summary and
 /// its pointed-to value/table must remain in that mapper's owned saved frame

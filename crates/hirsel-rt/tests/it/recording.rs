@@ -487,12 +487,13 @@ fn placement_header_is_diagnostic_validated_and_not_replayed() {
 fn settled_cpu_summary() -> hirsel_rt::io::CpuSummary {
     use hirsel_rt::io::{CpuPiece, CpuSummary};
     CpuSummary {
-        version: 1,
+        version: 2,
         retirement: 0,
         ordinal: 1,
         descriptor: 0,
         value_bytes: 8,
         retained_count: 0,
+        value: 42u64.to_le_bytes().to_vec(),
         pieces: vec![CpuPiece {
             credit: 0,
             fuel: 3,
@@ -644,6 +645,8 @@ fn cpu_summary_replay_checks_all_fields_and_never_consumes_a_mismatch() {
         |s| s.descriptor += 1,
         |s| s.value_bytes += 1,
         |s| s.retained_count += 1,
+        |s| s.value[0] ^= 1,
+        |s| s.value.pop().map(|_| ()).unwrap(),
         |s| s.pieces[0].fuel += 1,
         |s| s.pieces[0].net += 1,
         |s| s.pieces[0].envelope[0].1 += 1,

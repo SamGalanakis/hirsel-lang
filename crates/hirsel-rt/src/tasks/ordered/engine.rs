@@ -2530,13 +2530,26 @@ pub(crate) fn ahead_summary(
     ctx: *mut TaskCtx,
     summary: *mut super::ahead::cpu_handoff::Summary,
 ) -> Stopped<()> {
+    // SAFETY: the checked worker recipe binds the descriptor to the live SSA
+    // result. Publication retains its saved frame and roots until retirement.
+    let value = unsafe {
+        let record = &*summary;
+        let program = super::values::Program::linked(ctx, record.descriptor)
+            .map_err(|error| Stop::Refused(format!("CPU result recipe: {error:?}")))?;
+        if program.extent() as u64 != record.value_bytes {
+            return Err(Stop::Refused("CPU result recipe extent".into()));
+        }
+        program
+            .encode_with_host(record.value, |_, _| None, |_| None)
+            .map_err(|error| Stop::Refused(format!("CPU result encoding: {error:?}")))?
+    };
     let before = stretch(ctx);
     with_current_driver(ctx, |task, driver| {
         driver
             .cpu_batch
             .as_mut()
             .expect("a claimed CPU mapper")
-            .publish(task, before, summary)
+            .publish(task, before, summary, value)
             .map_err(|pause| Stop::Refused(format!("CPU summary bound: {pause:?}")))
     })
 }

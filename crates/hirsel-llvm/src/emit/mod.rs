@@ -566,6 +566,14 @@ fn lower<T>(
     resume: Option<&hirsel_lir::continuation::ContinuationPlans>,
     finish: impl FnOnce(&Module<'_>, &TargetMachine) -> Result<T, CodegenError>,
 ) -> Result<(T, Manifested, Option<crate::debug::DebugPlan>), CodegenError> {
+    if inputs
+        .ahead
+        .is_some_and(|plan| !hirsel_lir::ahead::validate_cpu_summaries(units, inputs.layouts, plan))
+    {
+        return Err(CodegenError::Object {
+            message: "invalid CPU result summary recipe".into(),
+        });
+    }
     check_loaded()?;
     let ownership_plans = if let Some(ownership) = ownership {
         if inputs.alternate || !inputs.available_externally.is_empty() {

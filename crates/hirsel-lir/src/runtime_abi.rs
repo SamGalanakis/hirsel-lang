@@ -626,6 +626,7 @@ pub enum RuntimeEntry {
     CpuAheadEnter,
     CpuAheadAlloc,
     CpuAheadPublish,
+    CpuPublish,
     CpuAheadGrow,
     ReceiptArenaConstruct,
     ReceiptArenaInventoryPaired,
@@ -700,7 +701,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 119] = [
+    pub const ALL: [RuntimeEntry; 120] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -815,6 +816,7 @@ impl RuntimeEntry {
         Self::CpuAheadEnter,
         Self::CpuAheadAlloc,
         Self::CpuAheadPublish,
+        Self::CpuPublish,
         Self::CpuAheadGrow,
         Self::ReceiptConstruct,
         Self::ReceiptArenaInventory,
@@ -1498,6 +1500,11 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::CpuPublish => (
+                "hirsel_rt_v2_cpu_publish",
+                U8,
+                const { &[CTX, p("summary", ptr(N::CpuSummary, 1))] },
+            ),
             Self::CpuAheadPublish => (
                 "hirsel_rt_v2_cpu_ahead_publish",
                 U8,
@@ -1861,6 +1868,7 @@ snapshot_enum!(RuntimeEntry {
     CpuAheadEnter,
     CpuAheadAlloc,
     CpuAheadPublish,
+    CpuPublish,
     CpuAheadGrow,
     ReceiptArenaConstruct,
     ReceiptArenaInventoryPaired,

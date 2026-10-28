@@ -79,6 +79,34 @@ fn run_prefix(
 ) -> crate::host::BodyOutcome {
     let mut run = crate::host::BodyRun::new(width, false);
     run.adapter = adapter;
+    let scan = [
+        hirsel_core_contract::handle_scan::VALUE,
+        hirsel_core_contract::handle_scan::VALUE_BITS,
+        8,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ];
+    let layout = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 8,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 0,
+        flags: 0,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: scan.as_ptr(),
+        scan_words: 8,
+    };
+    let layouts = [&raw const layout];
+    run.config.layouts = layouts.as_ptr();
+    run.config.layout_count = 1;
     run.run(
         |ctx| unsafe {
             (*ctx).run().cpu_grant = Some(hirsel_run_schema::CpuGrant {
@@ -122,7 +150,7 @@ fn run_prefix(
                 ordinal: 0,
                 value: (&raw const value).cast(),
                 value_bytes: 8,
-                descriptor: 0,
+                descriptor: 2,
                 retained_count: 0,
                 retained: std::ptr::null(),
             };
@@ -212,6 +240,7 @@ fn settled_native_summary_records_once_and_replays_at_every_runtime_width() {
     let Request::CpuSummary(summary) = &events[2].request else {
         panic!("summary follows its claim")
     };
+    assert_eq!(summary.value, 42u64.to_le_bytes());
     assert_eq!(summary.ordinal, 0);
     assert_eq!(summary.retirement, 0);
     assert_eq!(summary.pieces.iter().map(|p| p.fuel).sum::<u64>(), 3);

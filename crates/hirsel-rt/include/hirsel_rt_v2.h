@@ -926,6 +926,7 @@ _Static_assert(offsetof(hirsel_rt_v2_cpu_growth, capacity) == 80, "cpu growth ca
  * GROW_BLOCK uses keep/extent/align; GROW_SEQUENCE uses element_size,
  * element_align/capacity; ALLOC_REGION uses region/index/extent/align/flags.
  * Regions are ordinal-local, never shared between saved mappers. */
+uint8_t hirsel_rt_v2_cpu_publish(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_cpu_summary *summary);
 uint8_t hirsel_rt_v2_cpu_ahead_publish(hirsel_rt_v2_ahead_physical *state, hirsel_rt_v2_cpu_summary *summary);
 uint8_t hirsel_rt_v2_cpu_ahead_grow(hirsel_rt_v2_ahead_physical *state, hirsel_rt_v2_cpu_growth *request);
 uint8_t hirsel_rt_v2_host_active(hirsel_rt_v2_ahead_physical *state);

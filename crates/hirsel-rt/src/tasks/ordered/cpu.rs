@@ -22,7 +22,7 @@ pub(super) struct Batch {
     jobs: Jobs,
     retirement: u64,
     pending: BTreeMap<TaskId, (u32, u64)>,
-    summaries: BTreeMap<TaskId, *mut super::ahead::cpu_handoff::Summary>,
+    summaries: BTreeMap<TaskId, (*mut super::ahead::cpu_handoff::Summary, Vec<u8>)>,
     // Recording only. These charges have already passed Jobs and must never
     // be offered to the budget frontier a second time.
     settled_prefixes: BTreeMap<TaskId, Result<Stretch, Pause>>,
@@ -134,6 +134,7 @@ impl Batch {
         task: TaskId,
         before: Stretch,
         summary: *mut super::ahead::cpu_handoff::Summary,
+        value: Vec<u8>,
     ) -> Result<(), Pause> {
         let job = self.owners[&task];
         let recorded = match self.settled_prefixes.remove(&task) {
@@ -145,7 +146,7 @@ impl Batch {
             None => before.clone(),
         };
         assert!(self.recorded_prefixes.insert(task, recorded).is_none());
-        assert!(self.summaries.insert(task, summary).is_none());
+        assert!(self.summaries.insert(task, (summary, value)).is_none());
         self.jobs.pause(job, before);
         Ok(())
     }
@@ -155,7 +156,9 @@ impl Batch {
         task: TaskId,
         state: &mut Settled,
     ) -> Option<RetiredSummary> {
-        let &summary = self.summaries.get(&task)?;
+        let (summary, value) = self.summaries.get(&task)?;
+        let summary = *summary;
+        let value = value.clone();
         let (charges, result) = self.jobs.retire_published_at(self.owners[&task], state);
         if result.is_ok() {
             self.summaries.remove(&task);
@@ -165,7 +168,7 @@ impl Batch {
         }
         let settled = self.jobs.settled();
         let record = crate::io::CpuSummary {
-            version: 1,
+            version: 2,
             retirement: self.retirement,
             ordinal: self.owners[&task] as u64,
             // SAFETY: the mapper's saved frame still owns the borrowed record.
@@ -173,6 +176,7 @@ impl Batch {
             descriptor: unsafe { (*summary).descriptor },
             value_bytes: unsafe { (*summary).value_bytes },
             retained_count: unsafe { (*summary).retained_count },
+            value,
             pieces: crate::io::CpuSummary::pieces(&self.recorded_prefixes[&task]),
             level: settled.level,
             limit: settled.limit,
@@ -651,6 +655,7 @@ mod tests {
                     9,
                     summarise(budgets, &[Event::Fuel, Event::Alloc(60)]).unwrap(),
                     &raw mut summary,
+                    value.to_le_bytes().to_vec(),
                 )
                 .unwrap();
             for _ in 0..3 {
@@ -750,6 +755,7 @@ mod tests {
                     9,
                     summarise(budgets, &[Charge::Fuel, Charge::Alloc(48)]).unwrap(),
                     &raw mut summaries[1],
+                    Vec::new(),
                 )
                 .unwrap();
             batch
@@ -757,6 +763,7 @@ mod tests {
                     7,
                     summarise(budgets, &[Charge::Fuel, Charge::Alloc(32)]).unwrap(),
                     &raw mut summaries[0],
+                    Vec::new(),
                 )
                 .unwrap();
             assert_eq!(state.level, 0);

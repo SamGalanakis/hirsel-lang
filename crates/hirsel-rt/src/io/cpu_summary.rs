@@ -20,6 +20,8 @@ pub struct CpuSummary {
     pub descriptor: u32,
     pub value_bytes: u64,
     pub retained_count: u32,
+    /// Initialized fields in recipe order, excluding padding and addresses.
+    pub value: Vec<u8>,
     pub pieces: Vec<CpuPiece>,
     pub level: u64,
     pub limit: u64,
@@ -41,10 +43,11 @@ impl CpuSummary {
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.version != 1
+        if self.version != 2
             || self.ordinal >= 32
             || self.value_bytes > 256
             || self.retained_count > ENVELOPE_MAX as u32
+            || self.value.len() > super::super::tasks::ordered::values::BYTES_MAX
             || self.pieces.is_empty()
             || self.pieces.len() > PIECES_MAX
             || self.pieces[0].credit != 0
@@ -74,12 +77,13 @@ mod tests {
     #[test]
     fn cpu_summary_decoder_enforces_version_and_original_summary_bounds() {
         let summary = CpuSummary {
-            version: 1,
+            version: 2,
             retirement: 0,
             ordinal: 0,
             descriptor: 0,
             value_bytes: 8,
             retained_count: 0,
+            value: 42u64.to_le_bytes().to_vec(),
             pieces: vec![CpuPiece {
                 credit: 0,
                 fuel: 3,
@@ -92,7 +96,7 @@ mod tests {
             stop: None,
         };
         for change in [
-            (|s: &mut CpuSummary| s.version = 2) as fn(&mut CpuSummary),
+            (|s: &mut CpuSummary| s.version = 1) as fn(&mut CpuSummary),
             |s| s.ordinal = 32,
             |s| s.value_bytes = 257,
             |s| s.retained_count = ENVELOPE_MAX as u32 + 1,

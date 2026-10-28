@@ -22,7 +22,7 @@ pub use cpu_mapper::{
 pub use cpu_roots::{CpuCaptureRoot, CpuSavePoint, CpuSaveRoots};
 pub use cpu_worker::{
     CpuMapperBinding, CpuSummary, CpuWorkerGraph, CpuWorkerProtocol, cpu_mapper_candidates,
-    cpu_owned_layout, validate_cpu_workers,
+    cpu_owned_layout, validate_cpu_summaries, validate_cpu_workers,
 };
 pub use host_return::{HostReturnGraph, LiveOwners, ReadContinuation, Spine, read_metadata_name};
 pub use plan::{
