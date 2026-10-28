@@ -3,30 +3,6 @@
 //! neither this representation's storage size nor an allocation allowance.
 use super::*;
 use crate::memo::retained::Weight;
-/// Empty BTree sets can keep an allocated root after removals. Release it
-/// before excluding empty lint facts from the retained allocation debit.
-/// Nonempty trees keep the ordinary conservative node/path layout bound.
-pub(super) fn dead_arms(uses: &mut crate::tools::DeadArmUse) -> u64 {
-    let mut weight = crate::NativeMetadataWeight::default();
-    if uses.errors.is_empty() {
-        uses.errors.clear();
-    } else {
-        weight.tree::<DefPath, ()>(uses.errors.len());
-        for path in &uses.errors {
-            weight.path(path);
-        }
-    }
-    if uses.constructed.is_empty() {
-        uses.constructed.clear();
-    } else {
-        weight.tree::<(DefPath, u32), ()>(uses.constructed.len());
-        for (path, _) in &uses.constructed {
-            weight.path(path);
-        }
-    }
-    weight.bytes()
-}
-
 pub(super) fn definition(weight: &mut Weight, summary: &DefinitionSummary) {
     weight.add(size_of_val(&*summary.frames));
     for frame in &summary.frames {
@@ -141,47 +117,6 @@ mod tests {
             diagnostic_phases: vec![],
         }
     }
-    #[test]
-    fn dead_arm_debit_covers_physical_allocations_and_releases_empty_roots() {
-        for count in [0, 1, 16] {
-            let paths = (0..count.max(1))
-                .map(|index| DefPath::core(&format!("error{index}")))
-                .collect::<Vec<_>>();
-            let ((uses, bound), allocations) = crate::test_alloc::measured(|| {
-                let mut uses = crate::tools::DeadArmUse::default();
-                for (index, path) in paths.iter().enumerate() {
-                    uses.errors.insert(path.clone());
-                    uses.constructed.insert((path.clone(), index as u32));
-                }
-                if count == 0 {
-                    uses.errors.remove(&paths[0]);
-                    uses.constructed.remove(&(paths[0].clone(), 0));
-                }
-                let bound = dead_arms(&mut uses);
-                let (repeated, sizing) =
-                    crate::test_alloc::measured_independent(|| dead_arms(&mut uses));
-                assert_eq!(repeated, bound);
-                assert_eq!(sizing.allocations, 0);
-                assert_eq!(sizing.live, 0);
-                (uses, bound)
-            });
-            assert!(allocations.live >= 0);
-            assert!(
-                allocations.live as u64 <= bound,
-                "count={count}, live={}, bound={bound}",
-                allocations.live
-            );
-            assert_eq!(uses.errors.len(), count as usize);
-            assert_eq!(uses.constructed.len(), count as usize);
-            if count == 0 {
-                assert_eq!(allocations.live, 0);
-                assert_eq!(bound, 0);
-            } else {
-                assert!(bound > 0);
-            }
-        }
-    }
-
     #[test]
     fn compact_front_metadata_owns_interned_definition_identity() {
         let checked = Arc::new(CheckedSummary {

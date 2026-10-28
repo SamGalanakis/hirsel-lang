@@ -12,9 +12,11 @@ use std::sync::{
 
 mod carry;
 mod compact_store;
+mod lint_facts;
 mod retained;
 use carry::CarryChanges;
 pub use carry::FrontCarry;
+use lint_facts::LintFacts;
 mod source;
 mod storage;
 pub use source::FrontInputFootprint;
@@ -85,7 +87,7 @@ struct FrontOutcome {
     diagnostic_phases: Vec<(Diagnostic, String)>,
     checked: CheckedProduct,
     /// The package dead-arm lint's facts of a checked body.
-    dead_arms: Option<crate::tools::DeadArmUse>,
+    dead_arms: Option<LintFacts>,
     // Only active consumers own a decoded body. The settled query retains its
     // canonical archive and compact source facts, including when hold_bytes=0.
     body: Weak<QueryOutput<AnalyzedBody>>,
@@ -134,7 +136,7 @@ impl FrontOutcome {
             reads,
             diagnostic_phases,
             checked,
-            dead_arms,
+            dead_arms: dead_arms.map(LintFacts::capture),
             body,
             diagnostics,
             lowering,
@@ -334,7 +336,7 @@ impl FrontBodyQueries {
         let Some(uses) = uses else {
             return Some(());
         };
-        let bytes = retained::dead_arms(uses);
+        let bytes = LintFacts::capture_bytes(uses);
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         *retention = retention.checked_sub(bytes)?;
         Some(())
@@ -348,7 +350,8 @@ impl FrontBodyQueries {
             .unwrap_or_else(|e| e.into_inner())
             .get(&query.address.0)?
             .dead_arms
-            .clone()
+            .as_ref()
+            .map(LintFacts::materialize)
     }
 
     /// Actual phase invocations, including failed or discarded producers.
@@ -816,7 +819,9 @@ impl FrontBodyQueries {
 // The address maps are frozen at capture. Sorted slices keep their exact
 // lookup keys without retaining insertion capacity or B-tree nodes.
 fn index_value<'a, K: Ord, V>(rows: &'a [(K, V)], key: &K) -> Option<&'a V> {
-    let at = rows.binary_search_by(|(candidate, _)| candidate.cmp(key)).ok()?;
+    let at = rows
+        .binary_search_by(|(candidate, _)| candidate.cmp(key))
+        .ok()?;
     Some(&rows[at].1)
 }
 

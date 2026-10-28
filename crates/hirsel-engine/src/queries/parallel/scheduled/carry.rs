@@ -294,13 +294,14 @@ impl BodyTask {
             return;
         }
         let keys = queries.table_keys.lock().unwrap_or_else(|e| e.into_inner());
+        let dead_arms = outcome.dead_arms.as_ref().map(LintFacts::materialize);
         let facts = FactsRef {
             summary: outcome
                 .summary
                 .as_ref()
                 .map(|s| s.materialize(&outcome.checked, &outcome.reads)),
             checked: &outcome.checked,
-            dead_arms: &outcome.dead_arms,
+            dead_arms: &dead_arms,
             diagnostics: &outcome.diagnostics,
             diagnostic_phases: &outcome.diagnostic_phases,
             lowering: &outcome.lowering,
@@ -542,7 +543,7 @@ impl BodyTask {
             reads,
             diagnostic_phases: facts.diagnostic_phases,
             checked: facts.checked,
-            dead_arms: facts.dead_arms,
+            dead_arms: facts.dead_arms.map(LintFacts::capture),
             body: Weak::new(),
             diagnostics: facts.diagnostics,
             lowering: facts.lowering,
