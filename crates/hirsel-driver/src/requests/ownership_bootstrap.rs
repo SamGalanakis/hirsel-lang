@@ -164,7 +164,7 @@ impl OwnershipBootstrap {
         let output_allowance = plan
             .admission
             .compilation
-            .split(plan.admission.compilation.bytes() / 6)
+            .split(plan.admission.compilation.bytes() / 5)
             .unwrap();
         let query = QueryId {
             kind: KIND,
