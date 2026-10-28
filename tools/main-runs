@@ -57,7 +57,7 @@ ROWS = RUNS / 'runs.jsonl'
 PASSED = (event_logs.PASS, event_logs.SKIP, event_logs.OMITTED)
 PERF_MARKER = 'PERF_COUNTS_RECORD '
 # The run's own settings, which the tool tests never inherit.
-RUN_VARIABLES = ('HIRSEL_BUCK2_CONFIG', 'HIRSEL_BUCK2_LOG_DIR', 'HIRSEL_PRIORITY', 'HIRSEL_MAIN_RUNS', 'HIRSEL_TEST_BATCH_SIZE')
+RUN_VARIABLES = ('HIRSEL_BUCK2_CONFIG', 'HIRSEL_BUCK2_LOG_DIR', 'HIRSEL_PRIORITY', 'HIRSEL_MAIN_RUNS', 'HIRSEL_TEST_BATCH_SIZE', 'HIRSEL_TEST_BATCH_CONCURRENCY')
 
 
 def say(message):
@@ -127,7 +127,18 @@ def exception_tables():
 
 
 def rows():
-    return [json.loads(line) for line in ROWS.read_text().splitlines() if line.strip()] if ROWS.exists() else []
+    # Observation status is archival evidence, not an attribution input. Keep
+    # only the fields tick/attribute use, releasing each decoded row in turn.
+    history = []
+    if ROWS.exists():
+        with ROWS.open() as source:
+            for line in source:
+                if line.strip():
+                    row = json.loads(line)
+                    history.append({key: row[key] for key in
+                                    ('sha', 'tier', 'stages', 'reds', 'configuration_error', 'start', 'report') if key in row})
+                    del row
+    return sorted(history, key=lambda row: row.get('start', 0))
 
 
 def checkout(tree, sha):
@@ -268,13 +279,18 @@ def filtered_population(result):
 
 def lifecycle(known, observations, selections, revisions):
     """Every exception's observations survive suppression; absence stays unknown."""
-    entries = []
+    entries, by_identity, by_binary = [], {}, {}
+    for observation in observations:
+        by_identity.setdefault(observation['identity'], []).append(observation)
+        if observation['scope'] == 'target':
+            binary = re.sub(r'-shard-\d+$', '', observation['target'])
+            by_binary.setdefault(binary, []).append(observation)
     for identity, row in known.items():
-        exact = [o for o in observations if o['identity'] == identity]
+        exact = by_identity.get(identity, [])
         # A binary-wide exception covers its shards as it does for red suppression.
         target_scope = '::' not in identity and not identity.startswith(('conformance/', 'stage: '))
-        matched = ([o for o in observations if o['scope'] == 'target' and
-                    (o['target'] == identity or re.sub(r'-shard-\d+$', '', o['target']) == identity)]
+        matched = ([o for o in by_binary.get(re.sub(r'-shard-\d+$', '', identity), [])
+                    if o['target'] == identity or re.sub(r'-shard-\d+$', '', o['target']) == identity]
                    if target_scope else exact)
         recoveries = []
         if target_scope:
@@ -300,8 +316,7 @@ def lifecycle(known, observations, selections, revisions):
                           and o['provenance']['execution'] == 'fresh'
                           and (o['provenance'].get('command_succeeded') is True or o['status'] == event_logs.FAIL)
                           and sum(other['stage'] == o['stage'] for other in exact) == 1]
-        context = ([] if target_scope else [o for o in observations if o['scope'] == 'target'
-                   and identity.startswith(re.sub(r'-shard-\d+$', '', o['target']) + '::')])
+        context = [] if target_scope else by_binary.get(identity.split('::')[0], []) if '::' in identity else []
         states = sorted({o['state'] for o in matched}) or ['unobserved']
         entries.append(dict(identity=identity, reason=row[1], owner=row[2], date=row[3],
                             states=states, context=context, recovery_stages=sorted(set(recoveries)), observations=matched))
@@ -324,20 +339,43 @@ def run_stages(directory, log, tier):
         logs = directory / 'logs' / re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
         logs.mkdir(parents=True, exist_ok=True)
         env = ({k: v for k, v in os.environ.items() if k not in RUN_VARIABLES} if isolated
-               else os.environ | {'HIRSEL_BUCK2_LOG_DIR': str(logs), 'HIRSEL_TEST_BATCH_SIZE': '32'})
+               else os.environ | {'HIRSEL_BUCK2_LOG_DIR': str(logs), 'HIRSEL_TEST_BATCH_SIZE': '32',
+                                  'HIRSEL_TEST_BATCH_CONCURRENCY': '8'})
         log.write(f'\n== {name}\n')
         log.flush()
-        offset = log.tell()
         started = time.monotonic()
-        status = subprocess.run(command, cwd=TREE, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
-        selections[-1].update(exit_status=status, seconds=round(time.monotonic() - started, 3))
+        attempts = []
+        for attempt in range(2):
+            attempt_logs = logs if attempt == 0 else logs / 'retry'
+            if attempt:
+                attempt_logs.mkdir(exist_ok=True)
+                env = env | {'HIRSEL_BUCK2_LOG_DIR': str(attempt_logs)}
+            offset = log.tell()
+            status = subprocess.run(command, cwd=TREE, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
+            reason, expired = None, False
+            if status:
+                with open(log.name, errors='replace') as output:
+                    output.seek(offset)
+                    for line in output:
+                        expired |= 'artifact that has expired in the RE CAS' in line
+                        reason = reason or infra_reason(details=line)
+                reason = ('expired RE CAS artifact' if expired else infra_reason(status) or reason)
+            attempts.append(dict(exit_status=status, infrastructure_reason=reason))
+            if not expired or attempt or isolated:
+                break
+            # `kill` addresses only this checkout/isolation's daemon. `killall`
+            # would kill sibling lanes' daemons on the shared host.
+            restarted = subprocess.run([str(TREE / '.buck2/bin/buck2'), 'kill'], cwd=TREE, env=env,
+                                       stdout=log, stderr=subprocess.STDOUT).returncode
+            if restarted:
+                attempts[-1]['restart_exit_status'] = restarted
+                break
+        selections[-1].update(exit_status=status, seconds=round(time.monotonic() - started, 3),
+                              infrastructure_reason=reason, attempts=attempts)
         say(f'{"pass" if status == 0 else "FAIL"}  {name} ({time.monotonic() - started:.0f} s)')
-        reason = None
-        if status:
-            with open(log.name, errors='replace') as output:
-                output.seek(offset)
-                reason = infra_reason(status) or next((r for line in output if (r := infra_reason(details=line))), None)
-        selections[-1]['infrastructure_reason'] = reason
+        # A retried invocation supersedes its expired infrastructure attempt;
+        # keep both logs and attempt verdicts, but judge only the final attempt.
+        logs = attempt_logs
         failed, infra = False, False
         for events in sorted(logs.glob('*.pb.zst')):
             try:
@@ -381,6 +419,7 @@ def run_stages(directory, log, tier):
                         or ids and all(i in known for i in ids)):
                     reds[f'{name}: {target}'] = dict(stage=name, target=target, ids=ids[:20],
                                                     kind='infra' if test_reason else 'code', reason=test_reason)
+            del results
         expected = {arg.split(':')[-1] for arg in command if arg.startswith(('//:', 'root//:'))} if 'test' in command else set()
         observed = {o['target'] for o in observations if o['stage'] == name and o['scope'] == 'target'}
         for target in sorted(expected - observed):
@@ -442,7 +481,7 @@ def attribute(sha, reds, history):
     A red is compared with the last run that ran its stage (a row without a
     stage list ran them all): a code red it had keeps its culprit, a new one's
     culprit is among the commits since it. Infra never carries lane blame."""
-    owners = []
+    owners, changes = [], {}
     for key, red in sorted(reds.items()):
         previous = next((r for r in reversed(history) if red['stage'] in r.get('stages', [red['stage']])), None)
         kind = red.get('kind', 'code')
@@ -452,10 +491,14 @@ def attribute(sha, reds, history):
         if old := (previous or {}).get('reds', {}).get(key):
             red.update(culprit=old.get('culprit'), lane=old.get('lane'), since=old.get('since', previous['sha']))
             continue
-        commits = git('rev-list', '--reverse', f'{previous["sha"] if previous else sha + "~10"}..{sha}').split()
-        changed = {c: git('diff-tree', '--no-commit-id', '--name-only', '-r', c).split() for c in commits}
+        base = previous['sha'] if previous else sha + '~10'
+        if base not in changes:
+            commits = git('rev-list', '--reverse', f'{base}..{sha}').split()
+            changed = {c: git('diff-tree', '--no-commit-id', '--name-only', '-r', c).split() for c in commits}
+            changes[base] = commits, changed, lanes(commits)
+        commits, changed, owners_by_commit = changes[base]
         found = culprit(red, commits, changed)
-        red.update(culprit=found, lane=lanes(commits).get(found), since=sha)
+        red.update(culprit=found, lane=owners_by_commit.get(found), since=sha)
         owners.append(f'- {key} -> {red["lane"] or "unowned"}' + (f' ({found})' if found else ''))
     return owners
 
@@ -512,14 +555,21 @@ def run(sha, tier):
                     kind='configuration', reason=configuration_error)}
             ran, skipped, perf = [], [], None
             status = dict(version=1, configuration_error=configuration_error, known=[], observations=[], selections=[], tables={})
+    return publish(sha, tier, directory, start, reds, ran, skipped, perf, status, configuration_error)
+
+
+def publish(sha, tier, directory, start, reds, ran, skipped, perf, status,
+            configuration_error=None, *, update_main=True, finished=None):
+    """Publish completed observations, including offline recovery of an old run."""
     report = RUNS / 'reports' / f'{directory.name}.md'
-    owners = attribute(sha, reds, rows())
+    history = [row for row in rows() if row.get('start', 0) < start]
+    owners = attribute(sha, reds, history)
     pushed, perf_checks = [], []
     ratchet_checks = []
     for name, update in (('Regenerate the API index.', api_index),
                          ('Ratchet the instruction budgets main measured.', ratchet(perf, ratchet_checks) if perf else None)):
         try:
-            if not configuration_error and update and (commit := push_to_main(name, update)):
+            if update_main and not configuration_error and update and (commit := push_to_main(name, update)):
                 pushed.append(f'{commit[:12]} {name}')
                 if name == 'Ratchet the instruction budgets main measured.':
                     for item in ratchet_checks:
@@ -527,7 +577,7 @@ def run(sha, tier):
                         perf_checks.append(dict(item, measured_sha=sha, pushed=commit))
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, KeyError, ValueError) as error:
             pushed.append(f'{name} failed: {error}')
-    minutes = (time.time() - start) / 60
+    minutes = ((time.time() if finished is None else finished) - start) / 60
     infra = sum(red.get('kind') == 'infra' for red in reds.values())
     configurations = sum(red.get('kind') == 'configuration' for red in reds.values())
     lines = [f'# {tier} main run {sha[:12]}: {len(reds) - infra - configurations} code reds, {infra} infra reds, {configurations} configuration errors', '',
@@ -566,16 +616,28 @@ def run(sha, tier):
               f'(pushed {item["pushed"][:12]})' for item in perf_checks]
     report.parent.mkdir(exist_ok=True)
     report.write_text('\n'.join(lines) + '\n')
-    (RUNS / 'latest.md').write_text(report.read_text())
+    # Recovery may append an older run after a newer publication. Serialize
+    # publishers and compare run timestamps before replacing latest.md.
+    with (RUNS / 'publish.lock').open('a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not any(row.get('start', 0) > start for row in rows()):
+            latest = RUNS / 'latest.md.tmp'
+            latest.write_text(report.read_text())
+            latest.replace(RUNS / 'latest.md')
+        append_row(sha, tier, ran, start, minutes, reds, report, perf_checks, status, configuration_error)
+    say(f'{tier} {sha[:12]}: {len(reds)} reds in {minutes:.0f} min; report {report}')
+    return 1 if configuration_error else 0
+
+
+def append_row(sha, tier, ran, start, minutes, reds, report, perf_checks, status, configuration_error):
     # Keep lane-blame history unchanged; versioned observation status is additive.
     code_reds = {key: {k: v for k, v in red.items() if k not in ('kind', 'reason')}
                  for key, red in reds.items() if red.get('kind', 'code') == 'code'}
     with open(ROWS, 'a') as out:
-        out.write(json.dumps(dict(sha=sha, tier=tier, stages=ran, start=start, minutes=round(minutes), reds=code_reds,
-                                  report=str(report), perf_checks=perf_checks, exception_status=status,
-                                  configuration_error=configuration_error)) + '\n')
-    say(f'{tier} {sha[:12]}: {len(reds)} reds in {minutes:.0f} min; report {report}')
-    return 1 if configuration_error else 0
+        json.dump(dict(sha=sha, tier=tier, stages=ran, start=start, minutes=round(minutes), reds=code_reds,
+                       report=str(report), perf_checks=perf_checks, exception_status=status,
+                       configuration_error=configuration_error), out)
+        out.write('\n')
 
 
 if __name__ == '__main__':

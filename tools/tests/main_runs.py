@@ -13,6 +13,8 @@ import sys
 import shutil
 import subprocess
 import tempfile
+import threading
+import tracemalloc
 import unittest
 from unittest.mock import patch
 
@@ -442,6 +444,138 @@ class BoundedTests(unittest.TestCase):
                 tool['run_stages'](directory, log, 'fast')
         self.assertEqual(environments[0]['HIRSEL_TEST_BATCH_SIZE'], '32')
         self.assertNotIn('HIRSEL_TEST_BATCH_SIZE', environments[1])
+        self.assertEqual(environments[0]['HIRSEL_TEST_BATCH_CONCURRENCY'], '8')
+        self.assertNotIn('HIRSEL_TEST_BATCH_CONCURRENCY', environments[1])
+
+
+class ReportMemory(unittest.TestCase):
+    def test_history_retains_attribution_without_accumulating_archival_status(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        peaks = []
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'runs.jsonl'
+            for count in (2, 4, 8):
+                with path.open('w') as out:
+                    for n in range(count):
+                        json.dump(dict(sha=str(n), start=n, tier='fast', stages=['tests'],
+                                       reds={'tests: binary': dict(culprit='abc', lane='owner', since='base')},
+                                       exception_status=dict(observations=['x' * 200000])), out)
+                        out.write('\n')
+                with patch.dict(tool['rows'].__globals__, ROWS=path):
+                    tracemalloc.start()
+                    history = tool['rows']()
+                    peaks.append(tracemalloc.get_traced_memory()[1])
+                    tracemalloc.stop()
+                self.assertEqual(len(history), count)
+                self.assertEqual(history[-1]['reds']['tests: binary']['lane'], 'owner')
+                self.assertTrue(all('exception_status' not in row for row in history))
+            self.assertLess(peaks[-1], peaks[0] * 1.5)
+
+    def test_publish_streams_json_and_preserves_newer_latest_and_history_order(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            status, histories = empty_status(), []
+            def attribute(sha, reds, history):
+                histories.append(history)
+                return []
+            with patch.dict(tool['publish'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
+                            attribute=attribute, push_to_main=lambda *args: self.fail('offline publication builds nothing')), \
+                    patch('json.dumps', side_effect=AssertionError('must stream the row')):
+                for start in (20, 10):
+                    tool['publish'](str(start), 'fast', root / f'run-{start}', start,
+                                    {}, ['tests'], [], None, status, update_main=False, finished=start + 60)
+                self.assertIn('main run 20:', (root / 'latest.md').read_text())
+                self.assertTrue((root / 'reports/run-10.md').exists())
+                self.assertEqual([row['sha'] for row in tool['rows']()], ['10', '20'])
+                self.assertEqual(histories, [[], []])
+            with (root / 'runs.jsonl').open() as source:
+                rows = [json.loads(line) for line in source]
+            self.assertEqual(rows[-1]['exception_status'], status)
+            self.assertEqual(rows[-1]['minutes'], 1)
+
+    def test_decoder_streams_irrelevant_actions_and_joins_late_execution(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        events = tool['event_logs']
+        result = {'Event': {'data': {'Instant': {'data': {'TestResult': dict(
+            name='root//:binary', status=events.FAIL, details='test broken ... FAILED', duration_us=1000)}}}}}
+        run = {'Event': {'data': {'SpanEnd': {'data': {'TestRun': {
+            'suite': {'target_label': {'label': {'name': 'binary'}}, 'suite_name': 'binary'},
+            'command_report': {'status': {'Failure': {}}, 'details': {
+                'signed_exit_code': 1, 'command_kind': {'command': {'LocalCommand': {}}}}},
+        }}}}}}
+        def lines(_):
+            yield json.dumps(result)
+            for _ in range(1000):
+                yield json.dumps({'Event': {'irrelevant_action': 'x' * 4000}})
+            yield json.dumps(run)
+        with patch.object(events, 'lines', lines), \
+                patch('subprocess.run', side_effect=AssertionError('must stream Buck output')):
+            tracemalloc.start()
+            decoded = events.test_results('fixture', history=events.NoTestHistory(), all_results=True)
+            peak = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+        self.assertLess(peak, 500000)
+        self.assertEqual(tool['failing_ids'](decoded[0][0], decoded[0][1]['details']), ['binary::broken'])
+        self.assertEqual(decoded[0][1]['provenance']['execution'], 'fresh')
+
+
+class ExpiredArtifacts(unittest.TestCase):
+    def test_retry_once_with_only_own_daemon_and_final_attempt_evidence(self):
+        for final in (0, 1):
+            with self.subTest(final=final), tempfile.TemporaryDirectory() as temporary:
+                tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+                directory, calls = Path(temporary), []
+                command = ['fixture-stage']
+                def execute(arguments, **kwargs):
+                    calls.append((arguments, kwargs))
+                    if len(calls) == 1 or final and len(calls) == 3:
+                        kwargs['stdout'].write('Your build requires an artifact that has expired in the RE CAS\n')
+                        kwargs['stdout'].flush()
+                        return subprocess.CompletedProcess(arguments, 1)
+                    return subprocess.CompletedProcess(arguments, 0)
+                with patch.dict(tool['run_stages'].__globals__, stage_plan=lambda _: {},
+                                exception_tables=lambda: ({}, {}, {}),
+                                stages=lambda stage, _: stage('tests', command)), \
+                        patch('subprocess.run', side_effect=execute):
+                    with (directory / 'run.log').open('w') as log:
+                        reds, _, _, _, status = tool['run_stages'](directory, log, 'fast')
+                self.assertEqual([args for args, _ in calls], [command, [str(ROOT / '.buck2/bin/buck2'), 'kill'], command])
+                self.assertEqual(calls[1][1]['cwd'], ROOT)
+                self.assertEqual(calls[2][1]['env']['HIRSEL_BUCK2_LOG_DIR'], str(directory / 'logs/tests/retry'))
+                self.assertEqual(len(status['selections'][0]['attempts']), 2)
+                self.assertEqual(reds['stage: tests']['kind'] if final else reds, 'infra' if final else {})
+
+
+class RollingBatches(unittest.TestCase):
+    def test_replenishes_small_batches_without_exceeding_original_request_cap(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        events = tool['event_logs']
+        release, lock = threading.Event(), threading.Lock()
+        active, peak, ran, overlapped = 0, 0, [], []
+        targets = [f'//:t-{i}' for i in range(8)]
+        def execute(arguments, **kwargs):
+            nonlocal active, peak
+            selected = [arg for arg in arguments if arg in targets]
+            with lock:
+                active += len(selected)
+                peak = max(peak, active)
+                ran.extend(selected)
+            if targets[0] in selected:
+                overlapped.append(release.wait(2))
+            if targets[4] in selected:
+                release.set()
+            with lock:
+                active -= len(selected)
+            return subprocess.CompletedProcess(arguments, int(targets[6] in selected), ''.join(selected), '')
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, HIRSEL_BUCK2_LOG_DIR=temporary):
+            result = events.run(['test', *targets, '--', '--timeout', '1800'], runner=execute,
+                                batch_size=4, batch_concurrency=2)
+        self.assertEqual(overlapped, [True])
+        self.assertCountEqual(ran, targets)
+        self.assertLessEqual(peak, 4)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, ''.join(targets))
 
 
 class PerfChecks(unittest.TestCase):

@@ -151,8 +151,7 @@ class Results(unittest.TestCase):
             events.append({'Event': {'timestamp': [101, 0], 'data': {'Instant': {'data': {'TestResult': {
                 'name': 'root//:binary', 'status': status, 'details': 'test case ... ok', 'duration_us': 1000,
             }}}}}})
-        with patch.object(logs.subprocess, 'run', return_value=subprocess.CompletedProcess(
-                [], 0, '\n'.join(json.dumps(event) for event in events))):
+        with patch.object(logs, 'lines', return_value=iter(json.dumps(event) for event in events)):
             return logs.test_results('synthetic.pb.zst', history=logs.NoTestHistory(), all_results=all_results)
 
     def test_fresh_cache_local_absent_and_ambiguous_provenance(self):

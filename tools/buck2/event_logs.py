@@ -1,4 +1,5 @@
 """Shared, bounded Buck2 event history for landing, main's hourly run and pool audits."""
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 import csv
 from datetime import datetime, timezone
@@ -154,12 +155,12 @@ def lines(path, buck2=None):
         if not ready:
             return
         if not path.name.endswith('.pb.zst'):
-            with path.open() as source:
+            with path.open(errors='replace') as source:
                 yield from source
             return
         with tempfile.TemporaryFile(mode='w+') as errors:
             proc = subprocess.Popen([str(buck2 or BUCK2), 'log', 'show', str(path.resolve())],
-                                    cwd=ROOT, stdout=subprocess.PIPE, stderr=errors, text=True)
+                                    cwd=ROOT, stdout=subprocess.PIPE, stderr=errors, text=True, errors='replace')
             try:
                 yield from proc.stdout
                 status = proc.wait()
@@ -234,13 +235,15 @@ def test_results(event_log, *, history=None, all_results=False):
     Provenance is unknown unless one owning TestRun supplies execution/cache
     evidence; absent/ambiguous command evidence must not imply a fresh pass.
     """
-    events = subprocess.run([str(BUCK2), 'log', 'show', str(event_log)], cwd=ROOT, check=True,
-                            stdout=subprocess.PIPE, text=True, errors='replace').stdout
     results, rows, observed, executions = {}, [], [], {}
-    # TestResult alone does not prove execution: cached output contains the
-    # original libtest success lines too. Join the owning TestRun's report.
-    for line in events.splitlines():
+    pending = []
+    # Decode once, retaining test records only. Build/action events can dwarf
+    # the test output; never buffer Buck's entire JSON decoder output.
+    for line in lines(event_log):
         event = json.loads(line).get('Event', {})
+        result = event.get('data', {}).get('Instant', {}).get('data', {}).get('TestResult')
+        if result:
+            pending.append((event.get('timestamp'), result))
         run = event.get('data', {}).get('SpanEnd', {}).get('data', {}).get('TestRun')
         if not run:
             continue
@@ -263,14 +266,8 @@ def test_results(event_log, *, history=None, all_results=False):
             suite=suite.get('suite_name'), report_status=report.get('status'),
             signed_exit_code=details.get('signed_exit_code'),
             command_succeeded='Success' in report.get('status', {}) and details.get('signed_exit_code', 0) == 0))
-    for line in events.splitlines():
-        if '"TestResult"' not in line:
-            continue
-        event = json.loads(line).get('Event', {})
-        result = event.get('data', {}).get('Instant', {}).get('data', {}).get('TestResult')
-        if not result:
-            continue
-        stamp = event.get('timestamp')
+    # Results can precede their TestRun; resolve provenance after EOF.
+    for stamp, result in pending:
         date = (datetime.fromtimestamp(stamp[0] + stamp[1] / 1e9, timezone.utc) if stamp
                 else datetime.now(timezone.utc)).isoformat()
         name = result['name'].removeprefix('root//:').split(' ')[0]
@@ -321,15 +318,24 @@ def test_batches(command, size):
         yield command[:targets[0]] + command[start:min(start + size, targets[-1] + 1)] + command[targets[-1] + 1:]
 
 
-def run(arguments, *, buck2=None, runner=None, batch_size=None, **kwargs):
+def run(arguments, *, buck2=None, runner=None, batch_size=None, batch_concurrency=None, **kwargs):
     """Run Buck2, retaining every build/test unless its caller owns the log."""
     runner = runner or subprocess.run
     size = int(os.environ.get('HIRSEL_TEST_BATCH_SIZE', '0')) if batch_size is None else batch_size
     if size < 0:
         raise ValueError('HIRSEL_TEST_BATCH_SIZE must be nonnegative')
-    if size:
-        results = [run(batch, buck2=buck2, runner=runner, batch_size=0, **kwargs)
-                   for batch in test_batches(arguments, size)]
+    concurrency = int(os.environ.get('HIRSEL_TEST_BATCH_CONCURRENCY', '1')) if batch_concurrency is None else batch_concurrency
+    if concurrency < 1:
+        raise ValueError('HIRSEL_TEST_BATCH_CONCURRENCY must be positive')
+    if size and arguments and arguments[0] == 'test':
+        workers = min(concurrency, size)
+        batches = test_batches(arguments, max(1, size // workers))
+        def execute(batch):
+            return run(batch, buck2=buck2, runner=runner, batch_size=0, **kwargs)
+        # Up to `size` prepared requests, replenished in small groups instead
+        # of waiting for the slowest of 32 before admitting any next test.
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(execute, batches))
         def combined(stream):
             values = [getattr(result, stream, None) for result in results]
             values = [value for value in values if value is not None]
