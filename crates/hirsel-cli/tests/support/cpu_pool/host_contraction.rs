@@ -109,6 +109,27 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                                 .then(|| (fields[1].to_owned(), fields[5].to_owned()))
                         });
                     if let Some(claim) = claim {
+                        struct Thaw(std::path::PathBuf);
+                        impl Drop for Thaw {
+                            fn drop(&mut self) {
+                                let _ = fs::write(&self.0, "0");
+                            }
+                        }
+                        // Keep the claimed mapper live across one refresh
+                        // interval without spending more fuel or CPU budget.
+                        let thaw = Thaw(group.join("cgroup.freeze"));
+                        fs::write(&thaw.0, "1").unwrap();
+                        while !fs::read_to_string(group.join("cgroup.events"))
+                            .unwrap()
+                            .lines()
+                            .any(|line| line == "frozen 1")
+                        {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "owned CPU cgroup did not freeze"
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
                         let before = fs::read_to_string(group.join("cpu.max")).unwrap();
                         assert_eq!(before.trim(), "400000 100000");
                         fs::write(group.join("cpu.max"), "100000 100000").unwrap();
@@ -128,6 +149,8 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                                 }),
                             "claimed mapper finished before owned quota contraction: {after}"
                         );
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        drop(thaw);
                         return (
                             claim,
                             rows,
