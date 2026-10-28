@@ -647,5 +647,29 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_result_71::awaiting_one_child_transfers_equal_resource_fields_at_the_same_physical_offset": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_result_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_result_71::scope_exit_discards_unjoined_resource_results_in_the_actual_child": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_result_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_result_71::failed_child_cleans_equal_resources_without_creating_a_parent_result_credit": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_result_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }
