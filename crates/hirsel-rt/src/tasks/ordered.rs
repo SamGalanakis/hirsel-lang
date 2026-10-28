@@ -126,6 +126,8 @@ pub(crate) enum Command {
     Send {
         sender: u64,
         image: RefCell<Vec<u8>>,
+        #[cfg(feature = "ownership-trace")]
+        binding: Option<crate::ownership_trace::QueueBinding>,
     },
     MutexTake {
         word: u64,
@@ -651,7 +653,12 @@ impl Backend<Command> for Objects<'_> {
                     s.sync.write(*word, image.as_ptr(), image.len() as u64);
                     (Outcome::image(0, Vec::new()), Next::Yield)
                 }
-                Command::Send { sender, image } => {
+                Command::Send {
+                    sender,
+                    image,
+                    #[cfg(feature = "ownership-trace")]
+                    binding,
+                } => {
                     let channel = s.channels.channel(*sender, true);
                     let mut image = image.borrow_mut();
                     let observed = if events::enabled(s) {
@@ -674,9 +681,13 @@ impl Backend<Command> for Objects<'_> {
                         (s.channels.send(channel, image.as_mut_ptr()), None)
                     };
                     #[cfg(feature = "ownership-trace")]
-                    let (status, pending) =
-                        s.channels
-                            .send_observed(channel, image.as_mut_ptr(), early, task);
+                    let (status, pending) = s.channels.send_observed(
+                        channel,
+                        image.as_mut_ptr(),
+                        early,
+                        task,
+                        *binding,
+                    );
                     (
                         Outcome {
                             status,
@@ -1297,6 +1308,8 @@ mod tests {
         // A later operation on this channel cannot pass the uncommitted close.
         let conflicting = Command::Send {
             sender,
+            #[cfg(feature = "ownership-trace")]
+            binding: None,
             image: RefCell::new([bytes(1), bytes(9)].concat()),
         }
         .operation(footprint(1, true));
@@ -1378,6 +1391,8 @@ mod tests {
                 empty(),
                 Command::Send {
                     sender,
+                    #[cfg(feature = "ownership-trace")]
+                    binding: None,
                     image: RefCell::new([bytes(1), bytes(99)].concat())
                 }
                 .operation(footprint(1, true)),
@@ -1761,6 +1776,8 @@ mod tests {
             empty(),
             Command::Send {
                 sender,
+                #[cfg(feature = "ownership-trace")]
+                binding: None,
                 image: RefCell::new(image),
             }
             .operation(footprint(1, true)),

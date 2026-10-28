@@ -190,8 +190,16 @@ pub(super) fn sent(
             #[cfg(not(feature = "ownership-trace"))]
             let status = unsafe { cell.send(state, message, false) }.0;
             #[cfg(feature = "ownership-trace")]
-            let status =
-                unsafe { cell.send_observed(state, message, false, (*ctx).ownership_task) }.0;
+            let status = unsafe {
+                cell.send_observed(
+                    state,
+                    message,
+                    false,
+                    (*ctx).ownership_task,
+                    (*ctx).ownership_queue.take(),
+                )
+            }
+            .0;
             let version = cell.next_event();
             let outcome = if status == crate::channels::DONE {
                 "send"
@@ -290,6 +298,14 @@ pub(super) unsafe fn receive_begun(
                 replay.as_ref().map(|object| object.token()),
                 |writer| {
                     let (status, outcome) = if let Some(cause) = cause {
+                        #[cfg(feature = "ownership-trace")]
+                        unsafe {
+                            cell.canceled_observed(
+                                (*ctx).ownership_task,
+                                &mut (*ctx).ownership_queue,
+                                crate::channels::CANCELED + cause,
+                            );
+                        }
                         (
                             crate::channels::CANCELED + cause,
                             canceled_outcome.as_deref().unwrap(),
@@ -302,7 +318,12 @@ pub(super) unsafe fn receive_begun(
                             }
                             #[cfg(feature = "ownership-trace")]
                             {
-                                cell.receive_observed(&mut state, message, (*ctx).ownership_task)
+                                cell.receive_observed(
+                                    &mut state,
+                                    message,
+                                    (*ctx).ownership_task,
+                                    &mut (*ctx).ownership_queue,
+                                )
                             }
                         } {
                             Ok(true) => (crate::channels::DONE, "msg"),

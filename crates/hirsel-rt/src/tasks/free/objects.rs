@@ -697,6 +697,14 @@ pub(crate) unsafe fn channel_receive(
         replay.as_ref().map(|object| object.token()),
         |writer| {
             let (status, outcome) = if let Some(cause) = cause {
+                #[cfg(feature = "ownership-trace")]
+                unsafe {
+                    cell.canceled_observed(
+                        (*ctx).ownership_task,
+                        &mut (*ctx).ownership_queue,
+                        crate::channels::CANCELED + cause,
+                    );
+                }
                 (
                     crate::channels::CANCELED + cause,
                     canceled.as_deref().unwrap(),
@@ -709,7 +717,12 @@ pub(crate) unsafe fn channel_receive(
                     }
                     #[cfg(feature = "ownership-trace")]
                     {
-                        cell.receive_observed(&mut state, message, (*ctx).ownership_task)
+                        cell.receive_observed(
+                            &mut state,
+                            message,
+                            (*ctx).ownership_task,
+                            &mut (*ctx).ownership_queue,
+                        )
                     }
                 } {
                     Ok(true) => (crate::channels::DONE, "msg"),

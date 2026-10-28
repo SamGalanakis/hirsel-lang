@@ -4381,11 +4381,22 @@ unsafe fn receive_ready(
     slot: *mut u8,
 ) -> Option<u32> {
     if let Some(cause) = s.canceled_task(task, shield) {
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            let ctx = s.task(task).ctx;
+            s.channels.payload(channel).canceled_observed(
+                (*ctx).ownership_task,
+                &mut (*ctx).ownership_queue,
+                crate::channels::CANCELED + cause,
+            );
+        }
         return Some(crate::channels::CANCELED + cause);
     }
     // SAFETY: caller contract.
     #[cfg(feature = "ownership-trace")]
     let owner = handle(task, s.task(task).generation);
+    #[cfg(feature = "ownership-trace")]
+    let owner_ctx = s.task(task).ctx;
     match unsafe {
         #[cfg(not(feature = "ownership-trace"))]
         {
@@ -4393,7 +4404,8 @@ unsafe fn receive_ready(
         }
         #[cfg(feature = "ownership-trace")]
         {
-            s.channels.receive_observed(channel, slot, owner)
+            s.channels
+                .receive_observed(channel, slot, owner, &mut (*owner_ctx).ownership_queue)
         }
     } {
         Ok(true) => Some(crate::channels::DONE),
@@ -4562,7 +4574,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
         #[cfg(feature = "ownership-trace")]
         {
             t.channels
-                .send_observed(channel, message, false, (*ctx).ownership_task)
+                .send_observed(
+                    channel,
+                    message,
+                    false,
+                    (*ctx).ownership_task,
+                    (*ctx).ownership_queue.take(),
+                )
                 .0
         }
     });
@@ -4706,10 +4724,20 @@ unsafe fn free_receive(ctx: *mut TaskCtx, channel: u32, message: *mut u8) -> u32
     }
     // SAFETY: the context is live.
     let (status, outcome) = match unsafe { observed_cancel(ctx) } {
-        Some(cause) => (
-            crate::channels::CANCELED + cause,
-            format!("canceled {cause}"),
-        ),
+        Some(cause) => {
+            #[cfg(feature = "ownership-trace")]
+            role::with_role(ctx, |s| unsafe {
+                s.channels.payload(channel).canceled_observed(
+                    (*ctx).ownership_task,
+                    &mut (*ctx).ownership_queue,
+                    crate::channels::CANCELED + cause,
+                );
+            });
+            (
+                crate::channels::CANCELED + cause,
+                format!("canceled {cause}"),
+            )
+        }
         // SAFETY: caller contract.
         None => match role::with_role(ctx, |t| unsafe {
             #[cfg(not(feature = "ownership-trace"))]
@@ -4718,8 +4746,12 @@ unsafe fn free_receive(ctx: *mut TaskCtx, channel: u32, message: *mut u8) -> u32
             }
             #[cfg(feature = "ownership-trace")]
             {
-                t.channels
-                    .receive_observed(channel, message, (*ctx).ownership_task)
+                t.channels.receive_observed(
+                    channel,
+                    message,
+                    (*ctx).ownership_task,
+                    &mut (*ctx).ownership_queue,
+                )
             }
         }) {
             Ok(true) => (crate::channels::DONE, "msg".into()),

@@ -8061,6 +8061,8 @@ mod tests {
                             .clone();
                         let op = Command::Send {
                             sender: endpoints[0],
+                            #[cfg(feature = "ownership-trace")]
+                            binding: None,
                             image: std::cell::RefCell::new(
                                 [1u64.to_ne_bytes(), 77u64.to_ne_bytes()].concat(),
                             ),

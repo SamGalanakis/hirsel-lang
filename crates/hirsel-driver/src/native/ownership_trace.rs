@@ -6,7 +6,9 @@ use hirsel_lir::emission::{EmitInputs, site_code};
 use hirsel_lir::ir::{ConstructorKind, Inst};
 use hirsel_lir::ownership_trace::native::LeafPlan;
 use hirsel_lir::stage::ObjectArtifact;
-use hirsel_run_schema::ownership_trace::native::{DropMember, LocalCalls, Metadata, Units};
+use hirsel_run_schema::ownership_trace::native::{
+    ChannelBinding, ChannelDirection, DropMember, LocalCalls, Metadata, Units,
+};
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -130,6 +132,10 @@ pub(crate) fn emit_relocated(
     // Runtime frames include implicit finalizers as well as ordinary calls.
     // Source classification cannot remove a physical target from decoding.
     let calls = hirsel_lir::ownership_trace::native::physical_calls(selected).map_err(failed)?;
+    let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+        &program.table,
+        &program.finalizers,
+    );
     let mut units = BTreeMap::new();
     for unit in selected {
         let original = plans
@@ -226,7 +232,22 @@ pub(crate) fn emit_relocated(
             };
             let metadata = Metadata {
                 action: marker.kind,
-                channel: None,
+                channel: plan
+                    .channel_binding(body, inputs.layouts, marker.id)
+                    .map_err(failed)?
+                    .map(|binding| {
+                        Ok::<_, NativeError>(ChannelBinding {
+                            direction: if binding.send {
+                                ChannelDirection::Send
+                            } else {
+                                ChannelDirection::Receive
+                            },
+                            descriptor: registry.index(binding.payload).ok_or_else(|| {
+                                failed("channel payload has no linked descriptor")
+                            })?,
+                        })
+                    })
+                    .transpose()?,
                 optional_carrier: plan.optional_carrier(inputs.layouts, marker.id),
                 empty_environment: plan
                     .empty_environment(body, inputs.layouts, marker.id)
@@ -339,10 +360,6 @@ pub(crate) fn emit_relocated(
                 .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
         }
     };
-    let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-        &program.table,
-        &program.finalizers,
-    );
     let glue = super::emit_glue(program, backend, &registry)?;
     Ok(LeafObjects {
         objects: vec![object, glue],

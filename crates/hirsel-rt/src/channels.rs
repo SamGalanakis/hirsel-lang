@@ -282,11 +282,21 @@ impl ChannelCell {
         slot: *mut u8,
         early: bool,
         task: u64,
+        binding: Option<crate::ownership_trace::QueueBinding>,
     ) -> (u32, Option<u64>) {
         let item = state.sent;
         let result = unsafe { self.send(state, slot, early) };
         if let Some(record) = self.ownership.get() {
             record.sent(task, item, result.0, result.1.is_some());
+            if let Some(binding) = binding {
+                record.transfer(
+                    task,
+                    binding,
+                    item,
+                    hirsel_run_schema::ownership_trace::native::ChannelDirection::Send,
+                    result.0,
+                );
+            }
         }
         result
     }
@@ -296,17 +306,53 @@ impl ChannelCell {
         state: &mut ChannelState,
         slot: *mut u8,
         task: u64,
+        binding: &mut Option<crate::ownership_trace::QueueBinding>,
     ) -> Result<bool, u32> {
         let item = state.received;
         let result = unsafe { self.receive(state, slot) };
         if let Some(record) = self.ownership.get() {
             match result {
-                Ok(true) => record.received(task, item, DONE),
-                Err(status) => record.received(task, item, status),
+                Ok(true) => {
+                    record.received(task, item, DONE);
+                    if let Some(binding) = binding.take() {
+                        record.transfer(
+                            task,
+                            binding,
+                            item,
+                            hirsel_run_schema::ownership_trace::native::ChannelDirection::Receive,
+                            DONE,
+                        );
+                    }
+                }
+                Err(status) => {
+                    record.received(task, item, status);
+                    if let Some(binding) = binding.take() {
+                        record.transfer(
+                            task,
+                            binding,
+                            item,
+                            hirsel_run_schema::ownership_trace::native::ChannelDirection::Receive,
+                            status,
+                        );
+                    }
+                }
                 Ok(false) => (),
             }
         }
         result
+    }
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) fn canceled_observed(
+        &self,
+        task: u64,
+        binding: &mut Option<crate::ownership_trace::QueueBinding>,
+        status: u32,
+    ) {
+        if let Some(record) = self.ownership.get()
+            && let Some(binding) = binding.take()
+        {
+            record.canceled(task, binding, status);
+        }
     }
     #[cfg(feature = "ownership-trace")]
     pub(crate) fn close_observed(
@@ -663,6 +709,8 @@ impl Channels {
                 false,
                 #[cfg(feature = "ownership-trace")]
                 None,
+                #[cfg(feature = "ownership-trace")]
+                None,
             )
         }
         .0
@@ -686,6 +734,8 @@ impl Channels {
                 true,
                 #[cfg(feature = "ownership-trace")]
                 None,
+                #[cfg(feature = "ownership-trace")]
+                None,
             )
         }
     }
@@ -696,6 +746,7 @@ impl Channels {
         slot: *mut u8,
         early: bool,
         #[cfg(feature = "ownership-trace")] task: Option<u64>,
+        #[cfg(feature = "ownership-trace")] binding: Option<crate::ownership_trace::QueueBinding>,
     ) -> (u32, Option<PendingSend>) {
         let cell = self.payload(channel);
         let mut state = cell.lock();
@@ -703,7 +754,7 @@ impl Channels {
         let (status, pending) = unsafe { cell.send(&mut state, slot, early) };
         #[cfg(feature = "ownership-trace")]
         let (status, pending) = match task {
-            Some(task) => unsafe { cell.send_observed(&mut state, slot, early, task) },
+            Some(task) => unsafe { cell.send_observed(&mut state, slot, early, task, binding) },
             None => unsafe { cell.send(&mut state, slot, early) },
         };
         cell.next_event();
@@ -729,8 +780,9 @@ impl Channels {
         slot: *mut u8,
         early: bool,
         task: u64,
+        binding: Option<crate::ownership_trace::QueueBinding>,
     ) -> (u32, Option<PendingSend>) {
-        unsafe { self.send_inner(channel, slot, early, Some(task)) }
+        unsafe { self.send_inner(channel, slot, early, Some(task), binding) }
     }
 
     /// Retirement step 3: clear pending AND touch the channel immediately
@@ -820,9 +872,10 @@ impl Channels {
         channel: u32,
         slot: *mut u8,
         task: u64,
+        binding: &mut Option<crate::ownership_trace::QueueBinding>,
     ) -> Result<bool, u32> {
         let cell = self.payload(channel);
-        unsafe { cell.receive_observed(&mut cell.lock(), slot, task) }
+        unsafe { cell.receive_observed(&mut cell.lock(), slot, task, binding) }
     }
 
     /// Reserve recycling lists before a native recording phase.

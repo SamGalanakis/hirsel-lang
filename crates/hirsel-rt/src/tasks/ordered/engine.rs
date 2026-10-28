@@ -1308,6 +1308,8 @@ pub(crate) unsafe fn channel_send(
     let operation = Command::Send {
         sender,
         image: std::cell::RefCell::new(image),
+        #[cfg(feature = "ownership-trace")]
+        binding: unsafe { (*ctx).ownership_queue.take() },
     }
     .operation(footprint(ctx, Kind::Sender, sender, true));
     let returned = submit(ctx, operation)?.expect("send requires its outcome");

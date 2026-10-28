@@ -5,14 +5,14 @@
 use crate::TaskCtx;
 use hirsel_run_schema::ownership_trace::{
     Buffer,
-    native::{Log, Row, VERSION},
+    native::{ChannelDirection, Log, Row, VERSION},
 };
 use std::sync::{
     Arc, Weak,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-pub const ABI_VERSION: u32 = 97;
+pub const ABI_VERSION: u32 = 98;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 
@@ -20,6 +20,12 @@ const LIMIT: usize = 65_536;
 #[derive(Clone, Copy)]
 pub(crate) struct SpawnBinding {
     pub(crate) task: u64,
+    pub(crate) frame: u64,
+    pub(crate) marker: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct QueueBinding {
     pub(crate) frame: u64,
     pub(crate) marker: u32,
 }
@@ -251,6 +257,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_event(
                 observer.failed.store(true, Ordering::Relaxed);
             }
         }
+        if action == 8
+            && unsafe {
+                (*ctx)
+                    .ownership_queue
+                    .replace(QueueBinding { frame, marker })
+            }
+            .is_some()
+        {
+            observer.failed.store(true, Ordering::Relaxed);
+        }
         observer.record(Row::Event {
             task: unsafe { (*ctx).ownership_task },
             frame,
@@ -440,6 +456,35 @@ impl QueueRecord {
             item,
             status,
             pending,
+        });
+    }
+    pub(crate) fn transfer(
+        &self,
+        task: u64,
+        binding: QueueBinding,
+        item: u64,
+        direction: ChannelDirection,
+        status: u32,
+    ) {
+        self.record(Row::QueueTransfer {
+            task: canonical(task),
+            frame: binding.frame,
+            marker: binding.marker,
+            queue: self.queue,
+            layout: self.layout,
+            item,
+            direction,
+            status,
+        });
+    }
+    pub(crate) fn canceled(&self, task: u64, binding: QueueBinding, status: u32) {
+        self.record(Row::QueueCanceled {
+            task: canonical(task),
+            frame: binding.frame,
+            marker: binding.marker,
+            queue: self.queue,
+            layout: self.layout,
+            status,
         });
     }
     pub(crate) fn received(&self, task: u64, item: u64, status: u32) {
