@@ -544,6 +544,18 @@ impl FnEmitter<'_, '_, '_> {
             CpuGrowthPlace::Address(_) => self.load_ptr(place.unwrap().ptr),
             CpuGrowthPlace::Copy { value, .. } => self.get1(value)?,
         };
+        let done =
+            if matches!(recipe.place, CpuGrowthPlace::Address(_)) && recipe.capacity.is_none() {
+                let slow = self.b.create_block();
+                let done = self.b.create_block();
+                let tracked = self.is_tracked(old);
+                self.b.set_cold_block(slow);
+                self.b.ins().brif(tracked, slow, &[], done, &[]);
+                self.b.switch_to_block(slow);
+                Some(done)
+            } else {
+                None
+            };
         let environment = self.load_ty(
             types::I64,
             state,
@@ -601,6 +613,10 @@ impl FnEmitter<'_, '_, '_> {
         match recipe.place {
             CpuGrowthPlace::Copy { result, .. } => self.define1(result, grown)?,
             CpuGrowthPlace::Address(_) => self.store_at(grown, place.unwrap().ptr, 0),
+        }
+        if let Some(done) = done {
+            self.b.ins().jump(done, &[]);
+            self.b.switch_to_block(done);
         }
         Ok(true)
     }

@@ -373,6 +373,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             CpuGrowthPlace::Address(_) if recipe.capacity.is_some() => 1,
             CpuGrowthPlace::Address(_) => 4,
         };
+        let done = if kind == 4 {
+            let slow = self.module.append_block(self.function);
+            let done = self.module.append_block(self.function);
+            let tracked = crate::runtime::is_tracked(&self.builder, old);
+            self.builder.cold_cond_br(tracked, slow, done);
+            self.builder.position(slow);
+            Some(done)
+        } else {
+            None
+        };
         let environment = self.builder.load(
             self.module.ptr_type(),
             self.builder.offset(
@@ -454,6 +464,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         if let (Some(state), Some((unique, untracked))) = (self.sequence_state_at(place), kept) {
             self.builder.store(unique, state.unique, 1);
             self.builder.store(untracked, state.untracked, 1);
+        }
+        if let Some(done) = done {
+            self.builder.br(done);
+            self.builder.position(done);
         }
         Ok(true)
     }
