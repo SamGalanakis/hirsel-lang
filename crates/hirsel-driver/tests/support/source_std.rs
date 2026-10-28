@@ -6,7 +6,7 @@ use hirsel_engine::{
     store::MemStore,
 };
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
 
@@ -92,20 +92,24 @@ fn compiler_for(
         bytes: 64 << 20,
         operations: 100_000,
     });
-    let unsafe_ffi = hirsel_driver::COMPILER
-        .load_program_inputs(path, &capture, false)
-        .unwrap()
-        .unsafe_ffi;
+    let (unsafe_ffi, primary) = {
+        let program = hirsel_driver::COMPILER
+            .load_program_inputs(path, &capture, false)
+            .unwrap();
+        (
+            program.unsafe_ffi.clone(),
+            program
+                .engine
+                .sources
+                .file(program.primary)
+                .unwrap()
+                .path
+                .clone(),
+        )
+    };
     let captured = capture.freeze();
     let inputs = captured
-        .replace_sources(
-            &[(
-                std::fs::canonicalize(path).unwrap(),
-                Arc::<[u8]>::from(&b""[..]),
-            )]
-            .into(),
-            64 << 20,
-        )
+        .replace_sources(&[(primary, Arc::<[u8]>::from(&b""[..]))].into(), 64 << 20)
         .unwrap();
     let config = CompileConfig {
         lowering,
@@ -169,6 +173,85 @@ fn compiler_for(
     Ok((compiler, inputs, captured))
 }
 
+/// A source fixture owns one immutable input capture and one admitted selector.
+/// Each overlay is a new request. Carry and source-index reuse remain inside the
+/// compiler; returned TIR retains its own old snapshot across later overlays.
+#[allow(dead_code)]
+pub struct TirFixture {
+    path: PathBuf,
+    primary: PathBuf,
+    inputs: FrozenInputs,
+    entry: hirsel_syntax::DefPath,
+    requests: hirsel_driver::requests::CompilerRequests,
+}
+#[allow(dead_code)]
+impl TirFixture {
+    pub fn new(path: &Path) -> Result<Self, ToolError> {
+        hirsel_engine::with_compiler_stack(|| {
+            let (compiler, _, inputs) =
+                compiler_for(path, LoweringPolicy::Reachable, ComptimeLimits::default()).map_err(
+                    |output| ToolError::Query {
+                        error: hirsel_types::QueryError::Diagnostics(output.diagnostics),
+                        phase: None,
+                        sources: output.sources,
+                    },
+                )?;
+            let program = compiler.load_program_inputs(path, &inputs, false)?;
+            let entry = program.entry.clone();
+            let primary = program
+                .engine
+                .sources
+                .file(program.primary)
+                .ok_or(ToolError::SourceTooLarge)?
+                .path
+                .clone();
+            drop(program);
+            Ok(Self {
+                path: path.to_owned(),
+                primary,
+                inputs,
+                entry,
+                requests: hirsel_driver::requests::CompilerRequests::for_host(
+                    compiler.clone(),
+                    compiler.configuration(),
+                ),
+            })
+        })
+    }
+    pub fn tir(
+        &mut self,
+        replacement: Option<&str>,
+        name: Option<&str>,
+    ) -> Result<Arc<hirsel_driver::requests::TirExecution>, ToolError> {
+        use hirsel_driver::requests::*;
+        let mut entry = self.entry.clone();
+        if let Some(name) = name {
+            entry.0.name = name.into();
+        }
+        let inputs = if let Some(source) = replacement {
+            self.inputs.replace_sources(
+                &[(self.primary.clone(), Arc::<[u8]>::from(source.as_bytes()))].into(),
+                self.requests.input_limits().bytes,
+            )?
+        } else {
+            self.inputs.clone()
+        };
+        let output = self.requests.execute_request(&CompileRequest {
+            path: self.path.clone(),
+            inputs,
+            operation: CompileOperation::Tir {
+                definition: Some(entry),
+            },
+        })?;
+        let CompileResult::Tir(tir) = &output.result else {
+            return Err(ToolError::Runtime(
+                "source fixture returned another operation".into(),
+            ));
+        };
+        Ok(tir.clone())
+    }
+}
+
 /// Checked immutable TIR for one exact source overlay and selected function.
 #[allow(dead_code)]
 pub fn tir(
@@ -176,45 +259,5 @@ pub fn tir(
     replacement: Option<&str>,
     name: Option<&str>,
 ) -> Result<Arc<hirsel_driver::requests::TirExecution>, ToolError> {
-    use hirsel_driver::requests::*;
-    let (compiler, _, inputs) =
-        compiler_for(path, LoweringPolicy::Reachable, ComptimeLimits::default()).map_err(
-            |output| ToolError::Query {
-                error: hirsel_types::QueryError::Diagnostics(output.diagnostics),
-                phase: None,
-                sources: output.sources,
-            },
-        )?;
-    let mut requests = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
-    let program = compiler.load_program_inputs(path, &inputs, false)?;
-    let mut entry = program.entry.clone();
-    if let Some(name) = name {
-        entry.0.name = name.into();
-    }
-    drop(program);
-    let inputs = if let Some(source) = replacement {
-        inputs.replace_sources(
-            &[(
-                std::fs::canonicalize(path)?,
-                Arc::<[u8]>::from(source.as_bytes()),
-            )]
-            .into(),
-            requests.input_limits().bytes,
-        )?
-    } else {
-        inputs
-    };
-    let output = requests.execute_request(&CompileRequest {
-        path: path.to_owned(),
-        inputs,
-        operation: CompileOperation::Tir {
-            definition: Some(entry),
-        },
-    })?;
-    let CompileResult::Tir(tir) = &output.result else {
-        return Err(ToolError::Runtime(
-            "source fixture returned another operation".into(),
-        ));
-    };
-    Ok(tir.clone())
+    TirFixture::new(path)?.tir(replacement, name)
 }

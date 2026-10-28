@@ -156,3 +156,61 @@ fn shared_fixture_keys_limits_lowering_and_source_revision() {
     });
     source_replacements_check_current_roots_without_sharing_mutable_requests();
 }
+
+#[test]
+fn prepared_source_edits_keep_frozen_inputs_old_outputs_and_error_recovery() {
+    with_compiler_stack(|| {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("hirsel.json");
+        let source = root.path().join("main.hir");
+        let ok = "pub fn main()->Result[(),()]{Ok(())}";
+        std::fs::write(&source, ok).unwrap();
+        std::fs::write(&path, r#"{"schema":1,"package":{"name":"source_edits","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let check = |input: std::sync::Arc<hirsel_driver::requests::TirExecution>, returned| {
+            let config = RunConfiguration {
+                entry: input.entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            for checked in [false, true] {
+                let result = hirsel_driver::testing::observe_tir(
+                    &input,
+                    &config,
+                    SimulationConfig::default(),
+                    InterpreterAdapter::default().limits,
+                    checked,
+                )
+                .unwrap();
+                assert_eq!(result.outcome.unwrap(), RunOutcome::Returned(returned));
+            }
+        };
+        let mut fixture = source_std::TirFixture::new(&path).unwrap();
+        let first = fixture.tir(None, None).unwrap();
+        drop(fixture);
+        check(first, hirsel_run_schema::Returned::Ok);
+        let mut fixture = source_std::TirFixture::new(&path).unwrap();
+        std::fs::write(&source, "this disk edit is outside the captured fixture").unwrap();
+        check(
+            fixture.tir(None, None).unwrap(),
+            hirsel_run_schema::Returned::Ok,
+        );
+        check(
+            fixture
+                .tir(Some("pub fn main()->Result[(),()]{Error(())}"), None)
+                .unwrap(),
+            hirsel_run_schema::Returned::Error,
+        );
+        assert!(matches!(
+            fixture.tir(Some("pub fn main()->Result[(),()]{missing}"), None),
+            Err(ToolError::Query {
+                error: QueryError::Diagnostics(_),
+                ..
+            })
+        ));
+        let recovered = fixture
+            .tir(Some("pub fn main()->Result[(),()]{Error(())}"), None)
+            .unwrap();
+        drop(fixture);
+        check(recovered, hirsel_run_schema::Returned::Error);
+    });
+}
