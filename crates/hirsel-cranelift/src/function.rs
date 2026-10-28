@@ -1625,7 +1625,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         match deferred {
             Deferred::Failure { block, failure } => {
                 self.b.switch_to_block(block);
-                self.ahead_barrier()?;
+                self.ahead_failure_barrier()?;
                 let edge = self.failure_edge(failure)?;
                 if edge.rule.as_deref() == Some("MEM-9") {
                     let site = self.anchor_code(edge.anchor)?;
@@ -1739,7 +1739,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.failure_begin_for(rule, site, true)
     }
     fn failure_begin_for(&mut self, rule: &str, site: u64, forward: bool) -> Emitted {
-        self.ahead_barrier()?;
+        self.ahead_failure_barrier()?;
         let (kind, rule) = self.failure_code(rule)?;
         let (site, operation) = self.failure_sites_for(site, forward);
         let context = self.context;
@@ -1949,6 +1949,24 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 .is_some()
             && match terminator {
                 Terminator::Jump(_) | Terminator::Call { .. } => false,
+                // Checked mapper returns transfer private data; explicit cleanup
+                // retains its barriers before this owner-free control edge.
+                Terminator::Return(_)
+                    if self
+                        .em
+                        .inputs
+                        .unit()
+                        .ahead
+                        .and_then(|plan| {
+                            plan.cpu_ordinal(
+                                self.unit.header.instance,
+                                self.em.inputs.unit().layouts,
+                            )
+                        })
+                        .is_some() =>
+                {
+                    false
+                }
                 Terminator::Branch {
                     condition: value, ..
                 }

@@ -40,9 +40,15 @@ impl FnEmitter<'_, '_, '_> {
         }
     }
     pub(crate) fn ahead_barrier(&mut self) -> Emitted {
+        self.ahead_barrier_reason(4)
+    }
+    pub(crate) fn ahead_failure_barrier(&mut self) -> Emitted {
+        self.ahead_barrier_reason(hirsel_lir::runtime_abi::AHEAD_FAILURE_BARRIER)
+    }
+    fn ahead_barrier_reason(&mut self, reason: u32) -> Emitted {
         if let Some(state) = self.ahead_state {
             self.ahead_flush();
-            let reason = self.b.ins().iconst(types::I32, 4);
+            let reason = self.b.ins().iconst(types::I32, i64::from(reason));
             self.ahead_helper(true, &[state, reason])?;
             self.ahead_reload();
         }

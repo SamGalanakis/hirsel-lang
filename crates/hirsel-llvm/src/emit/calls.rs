@@ -123,6 +123,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 .is_some()
             && match terminator {
                 Terminator::Jump(_) | Terminator::Call { .. } => false,
+                // Checked mapper returns transfer private data; explicit cleanup
+                // retains its barriers before this owner-free control edge.
+                Terminator::Return(_)
+                    if self
+                        .inputs
+                        .ahead
+                        .and_then(|plan| {
+                            plan.cpu_ordinal(self.unit.header.instance, self.inputs.layouts)
+                        })
+                        .is_some() =>
+                {
+                    false
+                }
                 Terminator::Branch {
                     condition: value, ..
                 }
@@ -947,7 +960,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let here = self.builder.current();
             let record = self.module.append_block(self.function);
             self.builder.position(record);
-            self.ahead_barrier()?;
+            self.ahead_failure_barrier()?;
             let begin = self.runtime(RuntimeEntry::FailureBegin)?;
             let (site, operation) =
                 self.failure_sites_for(self.anchor_code(site.anchor)?, site.forward_caller);

@@ -16,6 +16,9 @@ pub const ABI_VERSION: u32 = 96;
 /// Original CPU worker capture in the runtime's fixed native record prefix.
 /// The runtime asserts this existing offset; no Rust service frame is read.
 pub const AHEAD_WORKER_ENVIRONMENT_OFFSET: u64 = 40;
+/// A canonical barrier about to record a checked failure and release its owners.
+/// Bit 2 retains ordinary barrier admission; bit 7 labels physical probe evidence.
+pub const AHEAD_FAILURE_BARRIER: u32 = 4 | 128;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;

@@ -264,7 +264,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let here = self.builder.current();
         let block = self.module.append_block(self.function);
         self.builder.position(block);
-        self.ahead_barrier()?;
+        self.ahead_failure_barrier()?;
         if edge.rule.as_deref() == Some("MEM-9") {
             let stop = self.runtime(RuntimeEntry::UncheckedAddOverflow)?;
             let site = self.anchor_code(edge.anchor)?;

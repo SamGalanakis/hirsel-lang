@@ -34,6 +34,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
     }
     pub(super) fn ahead_barrier(&mut self) -> Emitted {
+        self.ahead_barrier_reason(4)
+    }
+    pub(super) fn ahead_failure_barrier(&mut self) -> Emitted {
+        self.ahead_barrier_reason(hirsel_lir::runtime_abi::AHEAD_FAILURE_BARRIER)
+    }
+    fn ahead_barrier_reason(&mut self, reason: u32) -> Emitted {
         let Some(state) = self.ahead_state else {
             return Ok(());
         };
@@ -41,7 +47,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let helper = self.ahead_helper(true)?;
         self.builder.call(
             helper,
-            &[state, self.module.const_int(self.module.int_type(32), 4)],
+            &[
+                state,
+                self.module
+                    .const_int(self.module.int_type(32), reason.into()),
+            ],
         );
         self.ahead_reload();
         Ok(())

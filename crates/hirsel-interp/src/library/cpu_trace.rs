@@ -58,6 +58,20 @@ pub(super) fn scalar(result: &OperationResult) -> Result<Vec<u8>, Error> {
                     )?;
                 }
             }
+            Value::Sequence {
+                kind: hirsel_types::BuiltinType::Inline,
+                elements,
+                arena: None,
+            } => {
+                for element in elements {
+                    encode(
+                        element
+                            .as_ref()
+                            .ok_or_else(|| invalid("moved CPU inline element"))?,
+                        bytes,
+                    )?;
+                }
+            }
             Value::Tuple(fields) | Value::Box(fields) => {
                 for field in fields {
                     encode(
@@ -116,5 +130,37 @@ impl Library {
             trace.event_fuel.push(trace.fuel);
             trace.events.push(CpuBoundary { task, phase });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn sequence_result_bytes_distinguish_dynamic_lengths_from_fixed_inline_content() {
+        let inline = Value::Sequence {
+            kind: hirsel_types::BuiltinType::Inline,
+            elements: vec![Some(Value::Bool(true)), Some(Value::Bool(false))].into(),
+            arena: None,
+        };
+        assert_eq!(
+            scalar(&OperationResult::returned(inline.clone())).unwrap(),
+            [1, 0, 0, 0, 1, 0]
+        );
+        let list = Value::Sequence {
+            kind: hirsel_types::BuiltinType::List,
+            elements: vec![Some(inline)].into(),
+            arena: None,
+        };
+        assert_eq!(
+            scalar(&OperationResult::returned(list)).unwrap(),
+            [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+        );
+        let moved = Value::Sequence {
+            kind: hirsel_types::BuiltinType::Array,
+            elements: vec![None].into(),
+            arena: None,
+        };
+        assert!(scalar(&OperationResult::returned(moved)).is_err());
     }
 }
