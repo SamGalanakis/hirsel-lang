@@ -233,14 +233,19 @@ impl HeaderProducts {
 
 impl QueryEngine {
     pub(crate) fn adopt_completed_headers(&mut self) {
-        if let Some(headers) = self
-            .snapshot
-            .as_ref()
-            .filter(|(stamp, _)| *stamp == self.snapshot_stamp())
-            .and_then(|(_, snapshot)| snapshot.header_products())
-            .cloned()
-        {
+        let Some((stamp, snapshot)) = &self.snapshot else {
+            return;
+        };
+        let current = *stamp == self.snapshot_stamp();
+        let Some(headers) = snapshot.header_products().cloned() else {
+            return;
+        };
+        if current {
             self.adopt_header_products(&headers);
+        } else {
+            for (id, product) in headers.completed() {
+                self.account_header_work(id, product);
+            }
         }
     }
     pub(crate) fn adopt_header_products(&mut self, headers: &header_products::HeaderProducts) {
@@ -248,13 +253,16 @@ impl QueryEngine {
             self.adopt_header_product(id, product);
         }
     }
-    fn adopt_header_product(&mut self, id: DefId, product: &HeaderProduct) {
+    fn account_header_work(&mut self, id: DefId, product: &HeaderProduct) {
         if !product.accounted.swap(true, Ordering::Relaxed) {
             *self
                 .recomputes
                 .entry((id.path().clone(), QueryKind::Signature))
                 .or_default() += product.recomputes;
         }
+    }
+    fn adopt_header_product(&mut self, id: DefId, product: &HeaderProduct) {
+        self.account_header_work(id, product);
         let Some(entry) = &product.entry else {
             return;
         };
