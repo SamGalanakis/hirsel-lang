@@ -167,6 +167,7 @@ struct SourceProducts {
     )>,
     sources: SourceMap,
     store: Arc<RequestStore>,
+    initial_operation: Mutex<Option<hirsel_engine::store::StoreOperation>>,
     errors: RuntimeErrors,
     meter: Arc<GraphMeter>,
 }
@@ -239,6 +240,15 @@ impl GraphProducts for SourceProducts {
         &self,
         operation: &CompileOperation,
     ) -> Result<(Vec<QueryId>, CompilerReadiness), ToolError> {
+        let mut store_operation = self
+            .initial_operation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .unwrap_or_else(|| self.store.operation_scope());
+        if let Some(native) = &self.native {
+            store_operation.join(native.store_operation());
+        }
         let roots = match operation {
             CompileOperation::NativeOwnership(_) => {
                 vec![
@@ -359,7 +369,7 @@ impl GraphProducts for SourceProducts {
         Ok((
             roots,
             CompilerReadiness {
-                read_scope: store.read_scope(),
+                read_scope: Some(store_operation),
                 materialize: Arc::new(move |products| {
                     if store.exhausted() {
                         return Err(ToolError::Runtime(
@@ -1160,8 +1170,7 @@ pub(super) fn install(
         Ok(store) => Arc::new(store),
         Err(error) => return Err(loading.failed(ToolError::Io(error))),
     };
-    let _read_scope = store.read_scope();
-    let _publication = store.publication_scope();
+    let store_operation = store.operation_scope();
     // Host requests select tools against this graph's admitted provider before
     // loading source inputs. Explicit selectors never acquire ambient tools.
     let selected_toolchain = match (&request.operation, toolchain, host_toolchain) {
@@ -2263,6 +2272,7 @@ pub(super) fn install(
         storage,
         sources,
         store,
+        initial_operation: Mutex::new(Some(store_operation)),
         errors,
         meter,
     });

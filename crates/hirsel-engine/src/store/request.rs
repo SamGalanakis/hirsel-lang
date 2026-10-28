@@ -67,6 +67,7 @@ impl std::fmt::Debug for RequestStore {
 }
 impl RequestStore {
     pub fn new(backend: Arc<dyn ResultStore>, memory: MemoryReservation) -> Self {
+        let backend = backend.for_operation().unwrap_or(backend);
         Self::admitted(
             backend,
             Arc::new(Admission {
@@ -87,6 +88,7 @@ impl RequestStore {
         parent: &std::path::Path,
         disk_bytes: u64,
     ) -> std::io::Result<Self> {
+        let backend = backend.for_operation().unwrap_or(backend);
         let admission = Arc::new(Admission {
             memory,
             used: AtomicU64::new(0),
@@ -301,6 +303,30 @@ mod tests {
     }
     fn address() -> Address {
         Address(ContentHash::of_bytes(b"request transport"))
+    }
+    #[test]
+    fn shared_directory_requests_abort_independently_and_publish_after_join() {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = Arc::new(DirStore::new(directory.path().join("cache")));
+        let physical = backend.local_product_store().unwrap();
+        let budget = ProcessBudget::new(128 << 10);
+        let first = RequestStore::new(backend.clone(), budget.reserve(64 << 10).unwrap());
+        let second = RequestStore::new(backend, budget.reserve(64 << 10).unwrap());
+        let cancelled = first.operation_scope();
+        let completed = second.operation_scope();
+        let rejected = first.put_content(domain(), b"cancelled").unwrap();
+        let accepted = second.put_content(domain(), b"completed").unwrap();
+        {
+            let _producer = second.publication_scope();
+            assert_eq!(&*second.get_content(accepted).unwrap(), b"completed");
+        }
+        assert!(physical.get(accepted).is_none());
+        drop(cancelled);
+        completed.finish().unwrap();
+        assert!(physical.get(rejected).is_none());
+        assert_eq!(&*physical.get(accepted).unwrap(), b"completed");
+        drop((first, second));
+        assert_eq!(budget.reserved(), 0);
     }
     #[test]
     fn request_associations_charge_their_physical_tree_and_replacements_keep_its_grant() {

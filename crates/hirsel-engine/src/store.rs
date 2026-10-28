@@ -54,6 +54,26 @@ impl EntryKey {
 /// A content-keyed byte store. Implementations never fail a compile: a
 /// missing, unreadable or corrupt entry is a miss.
 pub trait ResultStore: Send + Sync {
+    /// Independent operation handle for a provider with mutable physical
+    /// epoch state. Nested producers use the returned provider directly.
+    fn for_operation(&self) -> Option<Arc<dyn ResultStore>> {
+        None
+    }
+    /// Own every selected provider epoch and installed-root pin until query
+    /// completion and materialization. Drop aborts the unpublished tail.
+    fn operation_scope(&self) -> StoreOperation {
+        StoreOperation {
+            requests: [
+                self.local_product_store().map(|store| store.request()),
+                self.verifier()
+                    .and_then(|cache| cache.publication_request()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            reads: self.read_scope().into_iter().collect(),
+        }
+    }
     /// Coalesce ordinary product and verifier cache publication while an
     /// admitted producer runs. Storage's existing bounded batches spill under
     /// pressure; a scope never changes query validity or verifier authority.
@@ -165,6 +185,29 @@ pub trait ResultStore: Send + Sync {
     }
     /// The provider name the run config selects it by (`dir@1`, ...).
     fn name(&self) -> &'static str;
+}
+
+/// The caller joins producers and materializes the result before finishing.
+/// Completed pressure prefixes remain durable on abort, as in Request.
+pub struct StoreOperation {
+    requests: Vec<hirsel_artifact_store::Request>,
+    reads: Vec<Box<dyn Send + Sync>>,
+}
+impl StoreOperation {
+    pub fn join(&mut self, mut other: Self) {
+        self.requests.append(&mut other.requests);
+        self.reads.append(&mut other.reads);
+    }
+    pub fn finish(mut self) -> std::io::Result<()> {
+        // Cache publication failure leaves live admitted transport intact.
+        let mut result = Ok(());
+        for request in self.requests.drain(..) {
+            if let Err(error) = request.finish() {
+                result = Err(error);
+            }
+        }
+        result
+    }
 }
 
 struct PublicationScope {

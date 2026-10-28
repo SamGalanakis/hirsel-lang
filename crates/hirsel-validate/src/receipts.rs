@@ -263,6 +263,20 @@ impl Default for VerifierCache {
     }
 }
 impl VerifierCache {
+    /// Keep the trusted namespace while giving an independent compiler
+    /// operation its own physical epoch. A shared ordinary root joins the
+    /// supplied operation handle; transported/hosted owners already have one.
+    pub fn for_operation(self: &Arc<Self>, shared: Option<&Store>) -> Arc<Self> {
+        match &self.0 {
+            Backend::Directory(store) => Arc::new(Self::directory_store(
+                shared
+                    .filter(|shared| shared.root() == store.root())
+                    .cloned()
+                    .unwrap_or_else(|| store.for_operation()),
+            )),
+            _ => self.clone(),
+        }
+    }
     /// Use the same immutable output containers as ordinary query products.
     /// The verifier's domain and address associations remain separately owned.
     pub fn directory(root: PathBuf) -> Self {

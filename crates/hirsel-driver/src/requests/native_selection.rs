@@ -93,6 +93,9 @@ pub(super) struct NativeSelection {
     runtime_limits: object_queries::runtime::RuntimeLimits,
 }
 impl NativeSelection {
+    pub(super) fn store_operation(&self) -> hirsel_engine::store::StoreOperation {
+        self.store.operation_scope()
+    }
     pub fn new(
         program: &mut LoadedProgram,
         source: NativeSourceInputs,

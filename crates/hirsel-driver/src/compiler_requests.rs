@@ -24,11 +24,7 @@ pub trait CompilerRequestsExt {
 impl CompilerRequestsExt for Compiler {
     fn precompute_package(&self, manifest: &Path, output: &Path) -> Result<(), ToolError> {
         use crate::requests::{CompileOperation, CompileResult, CompilerRequests};
-        use hirsel_engine::{
-            Verify,
-            memo::Retention,
-            store::{DirStore, ResultStore},
-        };
+        use hirsel_engine::{Verify, memo::Retention, store::DirStore};
         let mut config = self.configuration();
         if config.verify == Verify::Off {
             return Err(ToolError::Runtime(
@@ -36,7 +32,6 @@ impl CompilerRequestsExt for Compiler {
             ));
         }
         let store = std::sync::Arc::new(DirStore::new(output.to_path_buf()));
-        let publication = store.local_product_store().map(|store| store.request());
         config.store = store;
         config.retention = Retention::Batch;
         config.hold_bytes = 0;
@@ -51,29 +46,12 @@ impl CompilerRequestsExt for Compiler {
                 "precompute source product is unavailable".into(),
             ));
         }
-        if let Some(publication) = publication {
-            publication
-                .finish()
-                .map_err(|error| ToolError::Runtime(error.to_string()))?;
-        }
         Ok(())
     }
     fn check_path(&self, path: &Path) -> Result<CheckOutput, ToolError> {
         let config = self.configuration();
         let compiler = self.clone().with_config(config.clone());
-        let publication = config
-            .store
-            .local_product_store()
-            .map(|store| store.request());
-        let output = Session::open_with_compiler(path, compiler).check();
-        if output
-            .as_ref()
-            .is_ok_and(|output| output.completion == hirsel_engine::CheckCompletion::Complete)
-            && let Some(publication) = publication
-        {
-            let _ = publication.finish();
-        }
-        output
+        Session::open_with_compiler(path, compiler).check()
     }
     fn check_safe_path(
         &self,
@@ -87,17 +65,6 @@ impl CompilerRequestsExt for Compiler {
     > {
         let config = self.configuration();
         let compiler = self.clone().with_config(config.clone());
-        let publication = config
-            .store
-            .local_product_store()
-            .map(|store| store.request());
-        let output = Session::open_with_compiler(path, compiler).check_safe();
-        if output.as_ref().is_ok_and(|(checked, _)| {
-            checked.completion == hirsel_engine::CheckCompletion::Complete
-        }) && let Some(publication) = publication
-        {
-            let _ = publication.finish();
-        }
-        output
+        Session::open_with_compiler(path, compiler).check_safe()
     }
 }

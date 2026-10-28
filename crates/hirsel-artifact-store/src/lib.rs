@@ -427,6 +427,16 @@ fn word(bytes: &[u8], at: usize) -> Option<u32> {
 }
 
 impl Store {
+    /// Start an independent operation over the same physical namespace. Only
+    /// clones of this handle join its epochs and pins. Independent operations
+    /// share capacity policy and counters, never finish or abort authority.
+    pub fn for_operation(&self) -> Self {
+        Self {
+            packed: Arc::default(),
+            regions: Arc::default(),
+            ..self.clone()
+        }
+    }
     pub fn new(root: PathBuf) -> Self {
         Self::with_durability(root, Durability::Strict)
     }
@@ -900,9 +910,8 @@ fn checked_content(region: Arc<Region>, reference: Reference) -> Option<Bytes> {
 }
 fn checked_container(bytes: Bytes, reference: Reference) -> Option<Bytes> {
     let checks = bytes.region.checks();
-    let slot = checks.map(|checks| {
-        &checks.records[reference.output.0.0[0] as usize % checks.records.len()]
-    });
+    let slot = checks
+        .map(|checks| &checks.records[reference.output.0.0[0] as usize % checks.records.len()]);
     if let Some(checked) = slot.and_then(std::sync::OnceLock::get)
         && checked.range == bytes.range
         && checked.reference == reference

@@ -3,6 +3,31 @@ use super::*;
 const DOMAIN: Domain = Domain { kind: 1, schema: 1 };
 
 #[test]
+fn independent_operation_handles_never_share_finish_abort_or_pins() {
+    let directory = tempfile::tempdir().unwrap();
+    let physical = Store::rebuildable(directory.path().to_owned());
+    let first = physical.for_operation();
+    let second = physical.for_operation();
+    let first_request = first.request();
+    let second_request = second.request();
+    let missing = DOMAIN.reference(b"completed").unwrap();
+    assert!(first.get(missing).is_none());
+    assert!(second.get(missing).is_none());
+    let rejected = first.put(DOMAIN, b"cancelled").unwrap();
+    let completed = second.put(DOMAIN, b"completed").unwrap();
+    let joined = second.clone().request();
+    joined.finish().unwrap();
+    assert!(physical.get(completed).is_none());
+    drop(first_request);
+    second_request.finish().unwrap();
+    assert!(physical.get(rejected).is_none());
+    assert_eq!(&*physical.get(completed).unwrap(), b"completed");
+    let next = first.request();
+    assert_eq!(&*first.get(completed).unwrap(), b"completed");
+    next.finish().unwrap();
+}
+
+#[test]
 fn checked_views_bind_the_mapping_range_and_complete_reference() {
     let directory = tempfile::tempdir().unwrap();
     let writer = Store::rebuildable(directory.path().to_owned());

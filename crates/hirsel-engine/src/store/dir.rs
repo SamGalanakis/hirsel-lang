@@ -196,6 +196,20 @@ impl DirStore {
 }
 
 impl ResultStore for DirStore {
+    fn for_operation(&self) -> Option<std::sync::Arc<dyn ResultStore>> {
+        let physical = self.physical.as_ref().map(|store| store.for_operation());
+        Some(std::sync::Arc::new(Self {
+            root: self.root.clone(),
+            verifier: self.verifier.for_operation(physical.as_ref()),
+            physical,
+            read_only: self
+                .read_only
+                .iter()
+                .map(|store| store.for_operation())
+                .collect(),
+            cap: self.cap,
+        }))
+    }
     fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {
         if self.read_only.is_empty() {
             return None;

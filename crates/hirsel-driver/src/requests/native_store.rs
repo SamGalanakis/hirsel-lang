@@ -45,14 +45,7 @@ pub(super) fn capture(
             )));
         }
     };
-    let publication = cache.publication_scope();
-    let reads = cache.read_scope();
-    let backend = Arc::new(NativeStore {
-        source,
-        cache,
-        _publication: publication,
-        _reads: reads,
-    });
+    let backend = Arc::new(NativeStore { source, cache });
     let allowance = budget.reserve(transport).map_err(|error| {
         ToolError::Runtime(format!(
             "native object transport exceeds the shared process budget: {error}",
@@ -66,8 +59,6 @@ pub(super) fn capture(
 struct NativeStore {
     source: Arc<dyn ResultStore>,
     cache: Arc<dyn ResultStore>,
-    _publication: Option<Box<dyn Send + Sync>>,
-    _reads: Option<Box<dyn Send + Sync>>,
 }
 impl ResultStore for NativeStore {
     fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
