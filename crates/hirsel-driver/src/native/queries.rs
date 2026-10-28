@@ -432,6 +432,7 @@ pub mod optimizer;
 mod ownership_closure;
 pub mod ownership_compilation;
 pub mod ownership_tasks;
+pub mod preparation;
 pub mod products;
 pub mod ready;
 pub mod ready_source;
