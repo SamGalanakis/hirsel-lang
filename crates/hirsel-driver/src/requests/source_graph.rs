@@ -790,6 +790,7 @@ impl Plan {
         needs_batch: bool,
         footprint: FrontInputFootprint,
         run_input_bytes: u64,
+        semantic_queries: usize,
         native_catalogue_bytes: u64,
         inspection_bytes: u64,
         source_index_bytes: u64,
@@ -957,21 +958,31 @@ impl Plan {
         // task grants cannot spend the scheduler's bookkeeping allocation.
         // The storage root polls one retained recipe continuation itself;
         // recipe identities do not allocate independent scheduler nodes.
-        let per_definition = 4
-            + 2 * usize::from(needs_run)
-            + 2 * usize::from(needs_native)
-            + usize::from(needs_ownership);
+        // Native source factories expose one selected whole-program Run,
+        // independently of all per-definition semantic producers. Reserving a
+        // whole-program Run for every source would reserve thousands of roots
+        // this graph cannot request, before admitting any actual compiler work.
+        let selected_native = needs_native || needs_ownership;
+        let per_definition = if selected_native {
+            5
+        } else {
+            4 + 2 * usize::from(needs_run)
+        };
         let roots = 2
             + usize::from(needs_safe)
             + usize::from(needs_export)
             + usize::from(needs_export && needs_native)
             + usize::from(needs_storage)
             + usize::from(needs_batch)
-            + 2 * usize::from(needs_native || needs_ownership);
+            + 2 * usize::from(selected_native)
+            + usize::from(selected_native);
         let inventory = definitions
             .len()
             .checked_mul(per_definition)
             .and_then(|entries| entries.checked_add(roots))
+            .and_then(|entries| {
+                entries.checked_add(if selected_native { semantic_queries } else { 0 })
+            })
             .ok_or_else(|| uninstalled())?;
         let default_capacity =
             AdmittedRuntime::default_query_capacity(config.jobs, limits.runtime_bytes)
@@ -1258,6 +1269,7 @@ pub(super) fn install(
                        definitions: &[DefPath],
                        footprint,
                        run_input_bytes,
+                       semantic_queries,
                        native_catalogue_bytes| {
         let inspection_bytes =
             GraphMeter::input_bytes(definitions, program.engine.memo_snapshot().len())
@@ -1302,6 +1314,7 @@ pub(super) fn install(
             matches!(request.operation, CompileOperation::TirBatch { .. }),
             footprint,
             run_input_bytes,
+            semantic_queries,
             native_catalogue_bytes,
             inspection_bytes,
             source_index_bytes,
@@ -1313,6 +1326,9 @@ pub(super) fn install(
         &definitions,
         footprint,
         run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),
+        run_inputs
+            .as_ref()
+            .map_or(0, |inputs| inputs.semantic_query_count()),
         native_catalogue
             .as_ref()
             .map_or(0, |inputs| inputs.input_bytes()),
@@ -1456,6 +1472,9 @@ pub(super) fn install(
         &definitions,
         footprint,
         run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),
+        run_inputs
+            .as_ref()
+            .map_or(0, |inputs| inputs.semantic_query_count()),
         native_catalogue
             .as_ref()
             .map_or(0, |inputs| inputs.input_bytes()),
@@ -2066,11 +2085,11 @@ pub(super) fn install(
     }
     if let Some((_, source)) = &native_sources {
         inventory.insert((source.query().kind, source.query().address.0));
+        for query in source.run_query_inventory() {
+            inventory.insert((query.kind, query.address.0));
+        }
         for path in &definitions {
-            for query in [source.run_query(path), source.definition_query(path)]
-                .into_iter()
-                .flatten()
-            {
+            for query in [source.definition_query(path)].into_iter().flatten() {
                 inventory.insert((query.kind, query.address.0));
             }
         }

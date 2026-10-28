@@ -125,6 +125,23 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                         errors,
                     )
                     .unwrap();
+                assert!(native.run_query(&entry).is_some());
+                for path in &paths {
+                    if path != &entry {
+                        assert!(
+                            native.run_query(path).is_none(),
+                            "unselected whole-program Run: {path}"
+                        );
+                    }
+                    assert!(
+                        native.definition_query(path).is_some(),
+                        "source catalogue was pruned: {path}"
+                    );
+                }
+                assert!(
+                    native.run_query_inventory().count() > paths.len(),
+                    "core semantic producers remain in the inventory"
+                );
                 runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
                 runtime
                     .register_local(FRONT_LOWER_KIND, lower.factory())

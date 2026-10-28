@@ -363,8 +363,8 @@ impl OwnershipSelection {
     }
     pub fn queries(&self, definitions: &[DefPath]) -> Vec<QueryId> {
         let mut queries = vec![self.query(), self.source.query()];
+        queries.extend(self.source.run_query_inventory());
         for path in definitions {
-            queries.extend(self.source.run_query(path));
             queries.extend(self.source.definition_query(path));
         }
         queries

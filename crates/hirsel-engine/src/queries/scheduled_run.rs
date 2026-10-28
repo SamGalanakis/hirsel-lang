@@ -80,6 +80,10 @@ impl FrontRunInputs {
     pub fn input_bytes(&self) -> u64 {
         self.required
     }
+    /// All source and core semantic addresses in this exact input namespace.
+    pub fn semantic_query_count(&self) -> usize {
+        self.inputs.len()
+    }
 }
 
 /// One immutable input namespace, shared across selected Run roots. Each task
@@ -247,6 +251,26 @@ impl FrontRunQueries {
     pub fn query(&self, path: &DefPath) -> Option<QueryId> {
         self.ids.get(path).copied()
     }
+    /// A native source request has one whole-program Run root. Its complete
+    /// source/core semantic namespace remains independently demandable.
+    pub(crate) fn with_selected_run_root(
+        mut self: Arc<Self>,
+        entry: &DefPath,
+    ) -> Result<Arc<Self>, QueryError> {
+        let this = Arc::get_mut(&mut self)
+            .ok_or_else(|| operational("Run root selection requires an unshared view"))?;
+        if !this.ids.contains_key(entry) {
+            return Err(operational(
+                "selected Run root is outside its source namespace",
+            ));
+        }
+        this.ids.retain(|path, _| path == entry);
+        Ok(self)
+    }
+    pub fn query_inventory(&self) -> impl Iterator<Item = QueryId> + '_ {
+        self.semantic_ids.values().chain(self.ids.values()).copied()
+    }
+
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
     }

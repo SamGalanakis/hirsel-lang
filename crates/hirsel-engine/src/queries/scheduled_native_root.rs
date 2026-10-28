@@ -161,6 +161,11 @@ impl FrontNativeQueries {
     pub fn run_query(&self, path: &DefPath) -> Option<QueryId> {
         self.run.query(path)
     }
+    /// Every admitted semantic address, including core, and the one Run root.
+    pub fn run_query_inventory(&self) -> impl Iterator<Item = QueryId> + '_ {
+        self.run.query_inventory()
+    }
+
     /// Actual IDs from the selected source catalogue captured by this root.
     pub fn definition_query(&self, path: &DefPath) -> Option<QueryId> {
         self.definitions.query(path)
@@ -612,7 +617,10 @@ impl QueryEngine {
         }
         let required = FrontNativeQueries::header_bytes(&all)
             .ok_or_else(|| invalid("native root input overflow"))?;
-        let run = plan.run.with_source_roots(seeds.clone())?;
+        let run = plan
+            .run
+            .with_source_roots(seeds.clone())?
+            .with_selected_run_root(&plan.entry)?;
         let definitions = plan
             .definitions
             .with_selection(run.clone(), plan.entry.clone())?;
