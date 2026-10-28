@@ -5,7 +5,7 @@ use bincode::Options;
 
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0037,
-    schema: 2,
+    schema: 3,
 };
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Record {

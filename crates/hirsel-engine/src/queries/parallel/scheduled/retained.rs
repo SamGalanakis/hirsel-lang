@@ -83,9 +83,12 @@ fn metadata_inner(
             w.reads(&summary.reads);
         });
     }
-    if let Some((summary, reads)) = checked_product {
+    if let Some((summary, reads, dependencies)) = checked_product {
         weight.arc(summary, checked);
         weight.reads(reads);
+        weight.arc(dependencies, |weight, dependencies| {
+            weight.flat_vec(dependencies)
+        });
     }
     if let Some(keys) = table_keys {
         weight.arc(keys, |w, keys| keys.retained(w));
@@ -131,7 +134,7 @@ mod tests {
         let reads = Arc::new(Reads::empty());
         let mut short = outcome(reads.clone(), checked.clone());
         short.summary = None;
-        let selected = Some((checked, reads));
+        let selected = Some((checked, reads, Arc::new(Vec::new())));
         let mut long = short.clone();
         long.definition = DefPath::core(&"long".repeat(4096));
         assert_eq!(
@@ -166,7 +169,7 @@ mod tests {
         });
         let reads = Arc::new(Reads::empty());
         let output = outcome(reads.clone(), checked.clone());
-        let selected = Some((checked.clone(), reads.clone()));
+        let selected = Some((checked.clone(), reads.clone(), Arc::new(Vec::new())));
         let original = output.summary.as_ref().unwrap().clone();
         let compact = FrontSummary::capture(original.clone(), &selected, &reads);
         assert!(matches!(compact, FrontSummary::Checked { .. }));
@@ -227,7 +230,7 @@ mod tests {
         let second = outcome(reads.clone(), checked.clone());
         let bytes = metadata(
             &second,
-            &Some((checked.clone(), reads.clone())),
+            &Some((checked.clone(), reads.clone(), Arc::new(Vec::new()))),
             None,
             &[(key, reads)],
         )

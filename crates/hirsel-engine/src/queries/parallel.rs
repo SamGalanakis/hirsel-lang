@@ -118,6 +118,7 @@ pub(crate) struct Completed {
     pub(crate) modes: Option<Product<AnalyzedBody>>,
     pub(crate) result: Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
     pub(crate) phase: QueryKind,
+    pub(crate) checked_provider_reads: Option<Vec<SignatureDependency>>,
     signature_reads: Arc<Reads>,
 }
 
@@ -237,11 +238,13 @@ impl Worker<'_> {
             modes: None,
             result: Err(QueryError::NotImplemented),
             phase: QueryKind::Resolve,
+            checked_provider_reads: None,
             signature_reads: task.signature_reads.clone(),
         };
         let owner = DefId::intern(&task.definition);
         // A checked memo already includes the complete resolution reads. A
         // partial hit needs no resolver work, but remains the same task path.
+        let mut resolution_provider_reads = None;
         let checked = if let Some(entry) = task.checked {
             Product::Hit(entry)
         } else {
@@ -268,6 +271,7 @@ impl Worker<'_> {
                     ),
                     None => Err(QueryError::NotImplemented),
                 };
+                resolution_provider_reads = Some(stage.detail.signatures.clone());
                 stage.complete(result, products);
                 Product::Computed(stage)
             };
@@ -313,6 +317,7 @@ impl Worker<'_> {
                 observed: Observed::default(),
                 unavailable: None,
             };
+            let initial_signatures = stage.detail.signatures.len();
             let mut provider = WorkerRecorder::new(self, owner, &mut stage);
             let mut result = match self.checker {
                 Some(adapter) => adapter.check(
@@ -334,6 +339,13 @@ impl Worker<'_> {
                             .or_else(|| self.citations.arm_insertion(owner, site))
                     },
                 );
+            }
+            if let Some(mut signatures) = resolution_provider_reads {
+                signatures.extend_from_slice(&stage.detail.signatures[initial_signatures..]);
+                if let Ok(output) = &result {
+                    signatures.extend_from_slice(&output.dependencies);
+                }
+                done.checked_provider_reads = Some(signatures);
             }
             stage.complete(result, PhaseProducts::default());
             Product::Computed(stage)

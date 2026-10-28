@@ -155,12 +155,22 @@ impl CompactCompleted {
         rows
     }
 
-    pub(super) fn checked_product(&self) -> Option<(Arc<CheckedSummary>, Arc<Reads>)> {
+    pub(super) fn checked_product(
+        &self,
+    ) -> Option<(
+        Arc<CheckedSummary>,
+        Arc<Reads>,
+        Arc<Vec<SignatureDependency>>,
+    )> {
         let stage = self.checked.as_ref()?;
         if !stage.consistent || stage.error.is_some() {
             return None;
         }
-        Some((self.checked_summary.as_ref()?.clone(), stage.reads.clone()))
+        Some((
+            self.checked_summary.as_ref()?.clone(),
+            stage.reads.clone(),
+            Arc::new(stage.detail.signatures.clone()),
+        ))
     }
 
     pub(super) fn outcome(&self) -> &PublishedResult {

@@ -25,6 +25,7 @@ pub struct AcceptedFrontRegistration {
     original: (hirsel_span::Anchor, u32, ContentHash),
     generated: (FileId, Span),
     schema_origins: Vec<(std::ops::Range<usize>, hirsel_diag::Label)>,
+    checked_prefix: Vec<SignatureDependency>,
     _allowance: Arc<MemoryReservation>,
     retained: u64,
 }
@@ -107,6 +108,9 @@ impl AcceptedFrontRegistration {
     }
     pub fn retained_bytes(&self) -> u64 {
         self.retained
+    }
+    pub(crate) fn checked_prefix(&self) -> &[SignatureDependency] {
+        &self.checked_prefix
     }
     pub(crate) fn text(&self) -> &str {
         self.output
@@ -210,7 +214,10 @@ impl QueryEngine {
             self.generated
                 .insert(definition.clone(), GeneratedSource { file, text, site });
             let mut recording = Recording {
-                reads: DependencyReads::default(),
+                reads: DependencyReads {
+                    signatures: output.dependencies().to_vec(),
+                    ..Default::default()
+                },
                 observed: Observed::inheriting(Some(output.reads())),
             };
             let syntax = self
@@ -247,6 +254,7 @@ impl QueryEngine {
             for (_, bytes) in reads.allocations() {
                 weight.add(bytes);
             }
+            weight.flat_vec(&recording.reads.signatures);
             let retained = weight.bytes();
             // The caller admits an output ceiling before generation. Keep only
             // the measured successful product through source/view clones; the
@@ -271,6 +279,7 @@ impl QueryEngine {
                 original: (snapshot.anchor, snapshot.occurrence, snapshot.text_hash),
                 generated: (file, site),
                 schema_origins,
+                checked_prefix: recording.reads.signatures,
                 _allowance: retained_allowance,
                 retained,
             }))

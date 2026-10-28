@@ -28,7 +28,11 @@ const FAILURE: Domain = Domain {
     schema: 1,
 };
 type Key = ContentHash;
-type CheckedProduct = Option<(Arc<CheckedSummary>, Arc<Reads>)>;
+type CheckedProduct = Option<(
+    Arc<CheckedSummary>,
+    Arc<Reads>,
+    Arc<Vec<SignatureDependency>>,
+)>;
 enum FrontSummary {
     Checked {
         definition: DefId,
@@ -38,7 +42,7 @@ enum FrontSummary {
 }
 impl FrontSummary {
     fn shareable(summary: &PublishedSummary, checked: &CheckedProduct, reads: &Reads) -> bool {
-        checked.as_ref().is_some_and(|(value, _)| {
+        checked.as_ref().is_some_and(|(value, _, _)| {
             summary.storage.is_none()
                 && summary
                     .checked
@@ -63,7 +67,7 @@ impl FrontSummary {
         match self {
             Self::Owned(summary) => summary.clone(),
             Self::Checked { definition, text } => {
-                let (checked, _) = checked.as_ref().expect("captured checked summary");
+                let (checked, _, _) = checked.as_ref().expect("captured checked summary");
                 Arc::new(PublishedSummary {
                     definition: *definition,
                     text: *text,
@@ -211,6 +215,7 @@ pub struct FrontBodyOutput {
 pub struct FrontCheckedOutput {
     pub(crate) table_keys: Arc<crate::table_keys::TableKeyUse>,
     pub summary: Arc<CheckedSummary>,
+    pub dependencies: Arc<Vec<SignatureDependency>>,
     pub reads: Arc<Reads>,
     _snapshot: Arc<FrontBodyQueries>,
 }
@@ -428,7 +433,7 @@ impl FrontBodyQueries {
         if let Some(summary) = &mut outcome.summary {
             intern(&mut Arc::make_mut(summary).reads)?;
         }
-        if let Some((_, reads)) = checked {
+        if let Some((_, reads, _)) = checked {
             intern(reads)?;
         }
         for (_, reads) in memos {
@@ -760,7 +765,7 @@ impl FrontBodyQueries {
         let (key, outcome) = outcomes
             .iter()
             .find(|(_, outcome)| outcome.reference == reference)?;
-        let (summary, reads) = outcome.checked.as_ref()?;
+        let (summary, reads, dependencies) = outcome.checked.as_ref()?;
         Some(FrontCheckedOutput {
             table_keys: self
                 .table_keys
@@ -769,6 +774,7 @@ impl FrontBodyQueries {
                 .get(key)?
                 .clone(),
             summary: summary.clone(),
+            dependencies: dependencies.clone(),
             reads: reads.clone(),
             _snapshot: self.clone(),
         })
@@ -1089,7 +1095,7 @@ impl BodyTask {
             crate::memo::MemoKey::new(QueryKind::Modes, definition),
             restored.outcome.reads.clone(),
         )];
-        if let Some((_, reads)) = &restored.checked {
+        if let Some((_, reads, _)) = &restored.checked {
             memo_rows.push((
                 crate::memo::MemoKey::new(QueryKind::Check, definition),
                 reads.clone(),
@@ -1209,6 +1215,16 @@ impl BodyTask {
             checked: None,
         });
         if let Some(registration) = &input.registration {
+            if let Some(provider_reads) = done.checked_provider_reads.take()
+                && let Some(Product::Computed(stage)) = &mut done.checked
+            {
+                let mut dependencies = registration.checked_prefix().to_vec();
+                dependencies.extend(provider_reads);
+                stage.detail.signatures = dependencies.clone();
+                if let Ok(output) = &mut stage.result {
+                    Arc::make_mut(output).dependencies = dependencies;
+                }
+            }
             registration.explain(&mut done.result, &queries.citations.sources);
             if let Some(Product::Computed(stage)) = &mut done.resolution {
                 registration.explain(&mut stage.result, &queries.citations.sources);

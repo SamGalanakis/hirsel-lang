@@ -220,6 +220,16 @@ impl PrecomputedSources {
     ) -> Result<hirsel_engine::FrontLowerDependencies, QueryError> {
         self.lower.settled_dependencies(path, allowance)
     }
+    pub fn checked_dependency_decode_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {
+        self.lower.settled_checked_dependency_decode_bytes(path)
+    }
+    pub fn checked_dependencies(
+        &self,
+        path: &DefPath,
+        allowance: hirsel_engine::runtime::MemoryReservation,
+    ) -> Result<hirsel_engine::FrontLowerDependencies, QueryError> {
+        self.lower.settled_checked_dependencies(path, allowance)
+    }
     pub fn definition_decode_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {
         self.lower.settled_definition_decode_bytes(path)
     }

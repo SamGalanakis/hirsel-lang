@@ -746,7 +746,11 @@ pub(super) fn capture_mode(
 
 pub(super) struct FrozenMode {
     pub(super) outcome: ModeResult,
-    pub(super) checked: Option<(Arc<CheckedSummary>, Arc<Reads>)>,
+    pub(super) checked: Option<(
+        Arc<CheckedSummary>,
+        Arc<Reads>,
+        Arc<Vec<SignatureDependency>>,
+    )>,
     pub(super) table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
     /// The package lint's facts of the checked body, under `signature`.
     pub(super) dead_arms: Option<crate::tools::DeadArmUse>,
@@ -792,7 +796,11 @@ pub(super) fn restore_frozen_mode(
         table_keys = Some(Arc::new(crate::table_keys::TableKeyUse::capture(&typed)));
         dead_arms = Some(super::dead_arms::body_use(types, signature, &typed));
         let (summary, growth) = summarize(types, &typed);
-        (Arc::new(CheckedSummary { summary, growth }), reads.clone())
+        (
+            Arc::new(CheckedSummary { summary, growth }),
+            reads.clone(),
+            Arc::new(checked.dependencies),
+        )
     });
     let result = record.output.map(|output| {
         Arc::new(QueryOutput {
@@ -1261,6 +1269,18 @@ impl QueryEngine {
         }
         let path = accepted.definition();
         let mut text = self.key_text(path, kind)?;
+        if kind == QueryKind::Modes {
+            let dependencies = bincode::serialize(accepted.checked_prefix())
+                .map_err(|_| QueryError::NotImplemented)?;
+            text = ContentHash::of_parts(
+                "hirsel.generated-mode.inputs.v2",
+                [
+                    text.0.as_slice(),
+                    accepted.text().as_bytes(),
+                    dependencies.as_slice(),
+                ],
+            );
+        }
         if kind == QueryKind::Lower {
             text = ContentHash::of_parts(
                 "hirsel.generated-lower.inputs.v1",

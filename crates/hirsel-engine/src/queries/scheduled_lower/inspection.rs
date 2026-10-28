@@ -106,3 +106,39 @@ impl FrontLowerQueries {
         })
     }
 }
+
+impl FrontLowerQueries {
+    pub fn settled_checked_dependency_decode_bytes(
+        &self,
+        path: &DefPath,
+    ) -> Result<u64, QueryError> {
+        let output = self
+            .front
+            .checked_definition(path)
+            .ok_or(QueryError::NotImplemented)?;
+        (size_of::<FrontLowerDependencies>() as u64)
+            .checked_add(size_of_val(output.dependencies.as_slice()) as u64)
+            .ok_or(QueryError::NotImplemented)
+    }
+    pub fn settled_checked_dependencies(
+        self: &Arc<Self>,
+        path: &DefPath,
+        allowance: MemoryReservation,
+    ) -> Result<FrontLowerDependencies, QueryError> {
+        if self.settled_checked_dependency_decode_bytes(path)? > allowance.bytes() {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "checked dependency inspection".into(),
+                message: "captured ordered dependencies exceed caller working admission".into(),
+            }));
+        }
+        let output = self
+            .front
+            .checked_definition(path)
+            .ok_or(QueryError::NotImplemented)?;
+        Ok(FrontLowerDependencies {
+            dependencies: output.dependencies.as_ref().clone(),
+            _owner: self.clone(),
+            _allowance: allowance,
+        })
+    }
+}

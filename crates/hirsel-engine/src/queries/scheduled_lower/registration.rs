@@ -10,7 +10,7 @@ const INPUT: Domain = Domain {
 };
 const OUTPUT: Domain = Domain {
     kind: 0x4601_0006,
-    schema: 1,
+    schema: 2,
 };
 const FAILURE: Domain = Domain {
     kind: 0x4601_0007,
@@ -32,6 +32,7 @@ struct Stored {
 struct Data {
     text: Result<String, QueryError>,
     reads: Reads,
+    dependencies: Vec<SignatureDependency>,
     depth: DepthEvidence<Span>,
     acceptance: Option<hirsel_validate::ExecutionReceipt>,
     _allowance: Option<MemoryReservation>,
@@ -52,6 +53,9 @@ impl FrontRegistrationOutput {
     }
     pub fn reads(&self) -> &Reads {
         &self.data.reads
+    }
+    pub fn dependencies(&self) -> &[SignatureDependency] {
+        &self.data.dependencies
     }
     pub fn depth(&self) -> &DepthEvidence<Span> {
         &self.data.depth
@@ -142,10 +146,11 @@ impl FrontRegistrationQueries {
                 memos::optional(Some(input.implementation)),
             );
             source.merge(&input.instance_reads);
+            let mut dependencies = Vec::new();
             let text = if source.depth.borrow().limit() == 0 {
                 Err(source.overflow(input.site))
             } else {
-                self.compute(input, &mut source).await
+                self.compute(input, &mut source, &mut dependencies).await
             };
             if let Some(reference) = source.refusal.get() {
                 return Err(reference);
@@ -162,6 +167,7 @@ impl FrontRegistrationQueries {
             Arc::new(Data {
                 text,
                 reads: observed,
+                dependencies,
                 depth,
                 acceptance,
                 _allowance: None,
@@ -172,7 +178,13 @@ impl FrontRegistrationQueries {
             .records
             .encode_with_decode_bytes(
                 &self.lower.anchors,
-                &(input.definition, &data.text, &data.reads, &data.depth),
+                &(
+                    input.definition,
+                    &data.text,
+                    &data.reads,
+                    &data.depth,
+                    &data.dependencies,
+                ),
             )
             .ok_or(self.errors.resource)?;
         if bytes.len() as u64 > self.weight.scratch {
@@ -192,6 +204,7 @@ impl FrontRegistrationQueries {
             weight.add(bytes);
         }
         weight.add(size_of_val(&*data.depth.first));
+        weight.flat_vec(&data.dependencies);
         if let Some(acceptance) = &data.acceptance {
             weight.add(
                 acceptance
@@ -286,11 +299,12 @@ impl FrontRegistrationQueries {
             None
         };
         let bytes = self.lower.store.get_content(stored.output)?;
-        let (definition, text, reads, depth): (
+        let (definition, text, reads, depth, dependencies): (
             DefId,
             Result<String, QueryError>,
             Reads,
             DepthEvidence<Span>,
+            Vec<SignatureDependency>,
         ) = self.lower.records.decode(&self.lower.anchors, &bytes)?;
         if definition != input.definition
             || text.is_err()
@@ -314,6 +328,7 @@ impl FrontRegistrationQueries {
         Some(Data {
             text,
             reads,
+            dependencies,
             depth,
             acceptance,
             _allowance: None,
@@ -352,7 +367,12 @@ impl FrontRegistrationQueries {
             .store
             .put_query(key.2, &key, entry.action(&key), &entry.encode_for(&key));
     }
-    async fn compute(&self, input: &Input, source: &mut Source) -> Result<String, QueryError> {
+    async fn compute(
+        &self,
+        input: &Input,
+        source: &mut Source,
+        dependencies: &mut Vec<SignatureDependency>,
+    ) -> Result<String, QueryError> {
         let bytes = self
             .lower
             .store
@@ -386,6 +406,17 @@ impl FrontRegistrationQueries {
             ..
         } = prepared.result?;
         let checked = checked?;
+        let (_, signature) = self
+            .lower
+            .front
+            .native_input(input.definition.path())
+            .ok_or(QueryError::NotImplemented)?;
+        dependencies.extend_from_slice(&signature.dependencies);
+        dependencies.push(SignatureDependency {
+            definition: input.definition,
+            fingerprint: signature.value.fingerprint,
+        });
+        dependencies.extend_from_slice(&detail.signatures);
         source.execution_signatures(detail.signatures.iter());
         let mut observed = ReadsBuilder::new();
         let staged = crate::comptime::prepare_staged_types(

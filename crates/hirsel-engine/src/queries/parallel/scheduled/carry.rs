@@ -219,7 +219,7 @@ impl serde::Serialize for FactsRef<'_> {
                         reads: if self
                             .checked
                             .as_ref()
-                            .is_some_and(|(_, reads)| reads.as_ref() == summary.reads.as_ref())
+                            .is_some_and(|(_, reads, _)| reads.as_ref() == summary.reads.as_ref())
                         {
                             None
                         } else {
@@ -265,7 +265,7 @@ impl TryFrom<PackedFacts> for Facts {
                 text,
                 reads,
             }) => {
-                let (checked, checked_reads) =
+                let (checked, checked_reads, _) =
                     facts.checked.as_ref().ok_or("missing checked summary")?;
                 let reads = reads.unwrap_or_else(|| checked_reads.clone());
                 Some(Arc::new(PublishedSummary {
@@ -315,9 +315,10 @@ impl FactsRef<'_> {
                 w.reads(&summary.reads);
             });
         }
-        if let Some((summary, reads)) = self.checked {
+        if let Some((summary, reads, dependencies)) = self.checked {
             w.arc(summary, retained::checked);
             w.reads(reads);
+            w.arc(dependencies, |w, dependencies| w.flat_vec(dependencies));
         }
         w.vec(self.diagnostics, Weight::diagnostic);
         w.vec(self.diagnostic_phases, |w, (diagnostic, phase)| {
@@ -594,7 +595,7 @@ impl BodyTask {
         // The wire codec gives repeated Arcs independent allocations. Join
         // equal checked facts before selecting the compact retained shape;
         // the complete decoded peak was admitted before this normalization.
-        if let Some((checked, checked_reads)) = &mut facts.checked {
+        if let Some((checked, checked_reads, _)) = &mut facts.checked {
             if checked_reads.as_ref() == reads.as_ref() {
                 *checked_reads = reads.clone();
             }
@@ -857,7 +858,7 @@ mod tests {
                         reads: reads.clone(),
                         text: Default::default(),
                     })),
-                    checked: Some((checked, reads)),
+                    checked: Some((checked, reads, Arc::new(Vec::new()))),
                     dead_arms: None,
                     diagnostics: vec![Diagnostic::error(
                         const { hirsel_diag::RuleId::of("CARRY-1") },
