@@ -93,7 +93,7 @@ bridge!(
 pub(crate) mod tests {
     unsafe extern "C" fn target(out: *mut u64, a: u64, b: u64, c: u64, d: u64, e: u64) -> u64 {
         let marker = 0u64;
-        // SAFETY: the control owns seven output words across the synchronous call.
+        // SAFETY: the control owns six output words across the synchronous call.
         unsafe {
             out.write((&raw const marker) as u64);
             for (i, value) in [a, b, c, d, e].into_iter().enumerate() {
