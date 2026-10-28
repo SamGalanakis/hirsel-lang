@@ -76,7 +76,11 @@ impl<T> Queued<T> {
     #[cfg(feature = "tsan")]
     pub unsafe fn tsan_unclaimed(&self) -> *const T {
         let frame = self.0.as_ref().expect("one queue token");
-        unsafe { frame.saved.with(|saved| saved.as_ref().expect("a saved frame") as *const T) }
+        unsafe {
+            frame
+                .saved
+                .with(|saved| saved.as_ref().expect("a saved frame") as *const T)
+        }
     }
 
     /// Consume publication ownership before touching the image. The successful
