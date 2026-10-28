@@ -326,6 +326,7 @@ impl DemandInstances {
                 &provider,
                 &graph,
                 &source.declarations().program,
+                &self.target,
                 |key| inventory_keys.contains(&(key.definition().clone(), key.digest())),
             )?);
             self.receipt_sources.extend(sources);
@@ -864,6 +865,7 @@ impl DemandInstances {
                 &provider,
                 graph,
                 &inputs.declarations().program,
+                &self.target,
                 |selected| selected == &key.instance,
             )?);
             let mut matching = Vec::new();

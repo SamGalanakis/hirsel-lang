@@ -98,6 +98,20 @@ impl SourceInput {
         Ok(())
     }
 
+    /// Reopen the original lexical environments without acquiring this body's
+    /// allocation inventory. A selected child can be compiled independently of
+    /// its caller, including a caller with ordinary mutation or no receipt ABI.
+    pub fn closure_environments(
+        &self,
+        request: &Request,
+        types: &TypeInterner,
+        parameters: &[u32],
+        mut substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
+    ) -> Result<Vec<SourceEnvironment>, SourceError> {
+        self.check_closed_environments(request, types, &mut substitute)?;
+        self.environment_recipes(request, types, parameters, substitute)
+    }
+
     pub(super) fn environment_recipes(
         &self,
         request: &Request,
@@ -156,5 +170,67 @@ impl SourceInput {
                 })
             })
             .collect()
+    }
+}
+
+impl SourceInput {
+    /// Derive the selected native code and complete ordinary base from reopened
+    /// source, before native discovery or candidate units supply either shape.
+    pub fn native_environment(
+        &self,
+        environment: &SourceEnvironment,
+        selected: &Request,
+        types: &TypeInterner,
+        layouts: &mut hirsel_layout::layout::LayoutBuilder<'_>,
+    ) -> Result<SourceClosure, SourceError> {
+        if selected.declaration().entry() != environment.entry()
+            || selected.profiles() != environment.profiles()
+            || environment.entry().reference().definition != *self.definition.path.path()
+            || environment.entry().source_identity() != self.source
+            || environment.entry().implementation_revision() != self.revision
+        {
+            return Err(SourceError::Malformed(
+                "native environment selects another original child",
+            ));
+        }
+        let (native, layout) = crate::instance::receipt_closure_binding(
+            types,
+            &self.definition,
+            environment.entry(),
+            layouts,
+        )
+        .map_err(|error| SourceError::Type(format!("original native environment: {error:?}")))?;
+        let SourceEntryKind::Closure { context, .. } = environment.entry().kind() else {
+            return Err(SourceError::Malformed(
+                "native environment is not an original closure",
+            ));
+        };
+        let context = match context {
+            hirsel_types::CaptureContext::Scoped => SourceClosureContext::Scoped,
+            hirsel_types::CaptureContext::OwningScoped => SourceClosureContext::OwningScoped,
+            hirsel_types::CaptureContext::Escaping => SourceClosureContext::Escaping,
+            hirsel_types::CaptureContext::Task => SourceClosureContext::Task,
+        };
+        let captures = environment
+            .entry()
+            .captures()
+            .iter()
+            .map(|capture| match capture.usage {
+                hirsel_types::UseKind::Borrow => hirsel_lir::ir::CaptureUse::Borrow,
+                hirsel_types::UseKind::Copy => hirsel_lir::ir::CaptureUse::Copy,
+                hirsel_types::UseKind::Take => hirsel_lir::ir::CaptureUse::Take,
+                hirsel_types::UseKind::Mut => hirsel_lir::ir::CaptureUse::Mut,
+            })
+            .collect();
+        let result = SourceClosure {
+            original: environment.entry().reference().clone(),
+            instance: selected.aware_key().unwrap_or(&native).digest(),
+            context,
+            base_layout: hirsel_lir::LayoutKeys::rooted(layouts.table(), layout).0,
+            payload: environment.payload().clone(),
+            captures,
+        };
+        result.check_structure().map_err(SourceError::Malformed)?;
+        Ok(result)
     }
 }

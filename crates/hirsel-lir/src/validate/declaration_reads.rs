@@ -58,6 +58,39 @@ hirsel_codec::snapshot_struct!(ReceiptRead {
     output
 });
 
+#[derive(Clone, Debug)]
+struct EnvironmentRead {
+    definition: DefPath,
+    instance: ContentHash,
+    output: Option<crate::sealed_payload_source::SourceEnvironments>,
+}
+hirsel_codec::snapshot_struct!(EnvironmentRead {
+    definition,
+    instance,
+    output
+});
+fn environment_read(
+    declarations: &dyn OperationDeclarations,
+    definition: &DefPath,
+    instance: ContentHash,
+) -> Option<EnvironmentRead> {
+    let output = declarations.seal_environments(definition, instance);
+    if output
+        .iter()
+        .flat_map(|sources| sources.constructions.iter().chain(sources.entry.iter()))
+        .any(|environment| {
+            environment.original.definition != *definition || environment.check_structure().is_err()
+        })
+    {
+        return None;
+    }
+    Some(EnvironmentRead {
+        definition: definition.clone(),
+        instance,
+        output,
+    })
+}
+
 fn receipt_read(
     declarations: &dyn OperationDeclarations,
     definition: &DefPath,
@@ -97,6 +130,13 @@ fn source_read(
     let witness = declarations.seal_source_witness(definition, instance)?;
     let events = declarations.seal_events(definition, instance)?;
     let payloads = declarations.seal_payloads(definition, instance)?;
+    let environments = declarations.seal_environments(definition, instance);
+    for environment in environments
+        .iter()
+        .flat_map(|sources| sources.constructions.iter().chain(sources.entry.iter()))
+    {
+        environment.check_structure().ok()?;
+    }
     if witness.definition != *definition
         || witness.instance != instance
         || witness
@@ -108,6 +148,7 @@ fn source_read(
                 &events,
                 &payloads,
             )
+            .with_environments(environments.as_ref())
     {
         return None;
     }
@@ -233,6 +274,7 @@ pub(super) struct Reads {
     sealed: Vec<SealedRead>,
     descriptors: Vec<DescriptorRead>,
     receipts: Vec<ReceiptRead>,
+    environments: Vec<EnvironmentRead>,
 }
 hirsel_codec::snapshot_struct!(Reads {
     invocation_required,
@@ -245,7 +287,8 @@ hirsel_codec::snapshot_struct!(Reads {
     unavailable_payloads,
     sealed,
     descriptors,
-    receipts
+    receipts,
+    environments
 });
 
 fn invocation_identity(rows: Option<&[crate::invocations::ReferenceInvocation]>) -> ContentHash {
@@ -275,7 +318,10 @@ impl Reads {
         declarations: &dyn OperationDeclarations,
         target: &TargetSpec,
     ) -> bool {
-        self.receipts.iter().all(|read| {
+        self.environments.iter().all(|read| {
+            environment_read(declarations, &read.definition, read.instance)
+                .is_some_and(|current| current.output == read.output)
+        }) && self.receipts.iter().all(|read| {
             receipt_read(declarations, &read.definition, read.instance)
                 .is_some_and(|current| current.output == read.output)
         }) && self.sealed.iter().all(|read| {
@@ -341,6 +387,8 @@ struct Observations {
     unavailable_payloads: BTreeSet<(DefPath, ContentHash)>,
     pretransfer: bool,
     receipts: BTreeMap<(DefPath, ContentHash), Option<ReceiptSource>>,
+    environments:
+        BTreeMap<(DefPath, ContentHash), Option<crate::sealed_payload_source::SourceEnvironments>>,
 }
 pub(super) struct Observed<'a> {
     declarations: &'a (dyn OperationDeclarations + Sync),
@@ -429,7 +477,16 @@ impl<'a> Observed<'a> {
         } else {
             None
         };
+        let environments = reads
+            .environments
+            .iter()
+            .map(|((definition, instance), output)| {
+                let read = environment_read(self.declarations, definition, *instance)?;
+                (read.output == *output).then_some(read)
+            })
+            .collect::<Option<Vec<_>>>()?;
         Some(Reads {
+            environments,
             receipts,
             sealed,
             descriptors,
@@ -493,6 +550,20 @@ impl OperationDeclarations for Observed<'_> {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .receipts
+            .insert((definition.clone(), instance), output.clone());
+        output
+    }
+
+    fn seal_environments(
+        &self,
+        definition: &DefPath,
+        instance: ContentHash,
+    ) -> Option<crate::sealed_payload_source::SourceEnvironments> {
+        let output = self.declarations.seal_environments(definition, instance);
+        self.reads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .environments
             .insert((definition.clone(), instance), output.clone());
         output
     }

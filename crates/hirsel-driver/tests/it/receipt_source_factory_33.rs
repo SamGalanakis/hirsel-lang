@@ -212,6 +212,23 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                 .join(name);
             let mut program = load_program(&path).unwrap();
             program.check_for_execution().unwrap();
+            let store = program
+                .engine
+                .product_store()
+                .unwrap_or_else(|| Arc::new(store::MemStore::default()));
+            let mut discovery = NativeDiscoveryCache::new(program.engine.types().clone(), store);
+            let declarations =
+                hirsel_driver::native::queries::declarations::NativeDeclarations::collect(
+                    &mut program.engine,
+                    &mut discovery,
+                    &[],
+                )
+                .unwrap();
+            let owners = hirsel_rc::library::owners(
+                &declarations.program.types,
+                &declarations.program.signatures,
+            )
+            .over(&declarations.program.owners);
             let input = program.engine.export_native_input().unwrap();
             let validated = program.engine.import_native_input(input).unwrap();
             let input = validated.snapshot();
@@ -235,6 +252,8 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
             };
             let graph = named_graph(&provider, roots.clone(), &mut cases).unwrap();
             graph.recheck(&provider, roots, &mut cases).unwrap();
+            let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+            let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &owners);
             let mut owned = 0;
             let mut closed_entries = 0;
             let mut projected = 0;
@@ -306,17 +325,108 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                     .iter()
                     .map(|p| p.ordinal)
                     .collect::<Vec<_>>();
-                let expected = source_input
+                let mut expected = source_input
                     .derive_request(request, &input.types, &parameters, substitute)
                     .unwrap_or_else(|error| {
                         panic!("{name}: {:?}: {error:?}", request.ordinary_key())
                     });
                 assert_eq!(expected.environments().len(), request.closures().len());
                 expected.source().check().unwrap();
+                let mut native = Vec::new();
                 for environment in expected.environments() {
+                    let child = graph
+                        .requests
+                        .iter()
+                        .find(|child| {
+                            child.declaration().entry() == environment.entry()
+                                && child.profiles() == environment.profiles()
+                        })
+                        .unwrap();
+                    let selected = source_input
+                        .native_environment(environment, child, &input.types, &mut layouts)
+                        .unwrap();
+                    assert_eq!(selected.original, *child.source().reference());
+                    assert_eq!(
+                        selected.instance,
+                        child.aware_key().map_or_else(
+                            || hirsel_rc::instance::receipt_closure_binding(
+                                &input.types,
+                                original.definition(),
+                                environment.entry(),
+                                &mut layouts
+                            )
+                            .unwrap()
+                            .0
+                            .digest(),
+                            |key| key.digest()
+                        )
+                    );
+                    assert_eq!(
+                        selected.captures.len(),
+                        environment.entry().captures().len()
+                    );
+                    let restored = hirsel_codec::from_text::<
+                        hirsel_lir::sealed_payload_source::SourceClosure,
+                    >(&hirsel_codec::to_text(&selected))
+                    .unwrap();
+                    assert_eq!(selected, restored);
+                    assert!(
+                        source_input
+                            .native_environment(environment, request, &input.types, &mut layouts)
+                            .is_err()
+                    );
+                    native.push(selected);
                     projected += environment.payload().recipe.inputs.iter().filter(|input|
                         matches!(&input.producer, hirsel_lir::sealed_payload_source::PayloadProducer::Projected { path, .. } if !path.is_empty())
                     ).count();
+                }
+                expected.bind_native_environments(native, None).unwrap();
+                let seal = expected.source();
+                seal.check().unwrap();
+                for mutation in 0..6 {
+                    let mut changed = seal.clone();
+                    let Some(environment) = changed
+                        .environments
+                        .as_mut()
+                        .unwrap()
+                        .constructions
+                        .first_mut()
+                    else {
+                        break;
+                    };
+                    match mutation {
+                        0 => {
+                            environment.instance =
+                                hirsel_syntax::ContentHash::of_bytes(b"foreign child")
+                        }
+                        1 => environment.original.body += 1,
+                        2 => environment.payload.recipe.source.body += 1,
+                        3 => {
+                            environment.base_layout =
+                                hirsel_syntax::ContentHash::of_bytes(b"foreign base")
+                        }
+                        4 => {
+                            if environment.captures.is_empty() {
+                                environment
+                                    .captures
+                                    .push(hirsel_lir::ir::CaptureUse::Borrow);
+                            } else {
+                                environment.captures.pop();
+                            }
+                        }
+                        5 => {
+                            if let Some(input) = environment.payload.recipe.inputs.first_mut() {
+                                input.capture_slot = None;
+                            } else {
+                                environment.base_layout = hirsel_syntax::ContentHash([0; 32]);
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    assert!(
+                        changed.check().is_err(),
+                        "source environment mutation {mutation}"
+                    );
                 }
                 closed_entries += request.closures().len();
                 // Reopening only the parent cannot authorize changed child captures.

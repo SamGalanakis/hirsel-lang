@@ -251,6 +251,16 @@ impl OperationDeclarations for OperationRegistry {
             .get(&(definition.clone(), instance))
             .map(|source| source.payloads.clone())
     }
+    fn seal_environments(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+        instance: hirsel_syntax::ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::SourceEnvironments> {
+        self.seal_sources
+            .get(&(definition.clone(), instance))
+            .and_then(|source| source.environments.clone())
+    }
+
     fn seal_descriptor_for_source(
         &self,
         definition: &hirsel_syntax::DefPath,

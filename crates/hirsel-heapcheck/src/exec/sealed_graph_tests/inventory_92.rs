@@ -248,6 +248,7 @@ fn seal_inventory_92_uncalled_body_inventory_does_not_belong_to_an_empty_scope()
         }],
     );
     c.seal_sources.push(SourceSeal {
+        environments: None,
         reference: hirsel_lir::invocations::ReferenceBody {
             definition: unused.header.definition.clone(),
             instance: unused.header.instance,

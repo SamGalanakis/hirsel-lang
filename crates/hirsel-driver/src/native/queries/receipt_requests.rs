@@ -271,6 +271,13 @@ impl OperationDeclarations for Declarations {
     ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>> {
         self.ordinary.seal_payloads(definition, instance)
     }
+    fn seal_environments(
+        &self,
+        definition: &DefPath,
+        instance: ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::SourceEnvironments> {
+        self.ordinary.seal_environments(definition, instance)
+    }
     fn seal_descriptor(
         &self,
         source: &NativeType,

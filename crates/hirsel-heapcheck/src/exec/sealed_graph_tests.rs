@@ -256,6 +256,7 @@ fn config(p: &mut Program<Rc>, shape: u32, allocations: &[u32], full: bool) -> C
     );
     Config {
         seal_sources: vec![SourceSeal {
+            environments: None,
             reference,
             witness,
             events,

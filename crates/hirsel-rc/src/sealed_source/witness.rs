@@ -62,6 +62,7 @@ pub struct SourceExpectation {
     events: Vec<SourceEvent>,
     payloads: Vec<SourcePayload>,
     environments: Vec<SourceEnvironment>,
+    native_environments: Option<SourceEnvironments>,
 }
 
 impl SourceInput {
@@ -364,6 +365,7 @@ impl SourceInput {
             events,
             payloads,
             environments: vec![],
+            native_environments: None,
         })
     }
 }
@@ -389,7 +391,51 @@ impl SourceExpectation {
             events,
             payloads: vec![],
             environments: vec![],
+            native_environments: None,
         }
+    }
+
+    pub fn bind_native_environments(
+        &mut self,
+        environments: Vec<SourceClosure>,
+        entry: Option<SourceClosure>,
+    ) -> Result<(), SourceError> {
+        if self.native_environments.is_some()
+            || environments.len() != self.environments.len()
+            || environments
+                .iter()
+                .zip(&self.environments)
+                .any(|(native, original)| {
+                    native.original != *original.entry().reference()
+                        || native.payload != *original.payload()
+                })
+        {
+            return Err(SourceError::Malformed(
+                "native environments differ from the original inventory",
+            ));
+        }
+        for environment in &environments {
+            environment
+                .check_structure()
+                .map_err(SourceError::Malformed)?;
+        }
+        if entry.as_ref().is_some_and(|entry| {
+            entry.original.body != self.body
+                || entry.instance != self.witness.instance
+                || entry.original.definition != self.witness.definition
+                || entry.check_structure().is_err()
+        }) {
+            return Err(SourceError::Malformed(
+                "native capture entry differs from original body",
+            ));
+        }
+        let sources = SourceEnvironments {
+            entry,
+            constructions: environments,
+        };
+        self.witness = self.witness.clone().with_environments(Some(&sources));
+        self.native_environments = Some(sources);
+        Ok(())
     }
 
     pub fn witness(&self) -> &SealSourceWitness {
@@ -405,6 +451,7 @@ impl SourceExpectation {
             witness: self.witness.clone(),
             events: self.events.clone(),
             payloads: self.payloads.clone(),
+            environments: self.native_environments.clone(),
         }
     }
     pub fn events(&self) -> &[SourceEvent] {
@@ -490,6 +537,21 @@ impl<D: OperationDeclarations> OperationDeclarations for SourceDeclarations<D> {
     fn invocation_body(&self, definition: &DefPath, instance: ContentHash) -> Option<u32> {
         self.registry.invocation_body(definition, instance)
     }
+    fn seal_environments(
+        &self,
+        definition: &DefPath,
+        instance: ContentHash,
+    ) -> Option<SourceEnvironments> {
+        self.sources
+            .get(&(definition.clone(), instance))
+            .and_then(|source| source.native_environments.clone())
+            .or_else(|| {
+                self.fallback
+                    .then(|| self.registry.seal_environments(definition, instance))
+                    .flatten()
+            })
+    }
+
     fn seal_descriptor(
         &self,
         root: &NativeType,

@@ -44,7 +44,8 @@ pub(in crate::native) fn capture(
             .bind_receipt_request(id, request, layouts)
             .map_err(|e| format!("batch source receipt: {e:?}"))?;
     }
-    let expectations = super::seal_inventory::current(&provider, &graph, program, |_| true)?;
+    let expectations =
+        super::seal_inventory::current(&provider, &graph, program, layouts.target(), |_| true)?;
     Ok(hirsel_rc::import::SourceData {
         expectations,
         receipts,

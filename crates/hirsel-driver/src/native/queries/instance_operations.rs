@@ -83,6 +83,16 @@ impl OperationDeclarations for InstanceOperations<'_> {
             .map(|source| source.payloads().to_vec())
             .or_else(|| self.declarations.seal_payloads(definition, instance))
     }
+    fn seal_environments(
+        &self,
+        definition: &DefPath,
+        instance: ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::SourceEnvironments> {
+        self.inventory
+            .and_then(|sources| sources.get(&(definition.clone(), instance)))
+            .and_then(|source| source.source().environments)
+            .or_else(|| self.declarations.seal_environments(definition, instance))
+    }
     fn seal_descriptor(
         &self,
         source: &NativeType,

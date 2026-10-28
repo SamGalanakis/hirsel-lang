@@ -157,6 +157,14 @@ pub trait OperationDeclarations {
     ) -> Option<Vec<crate::sealed_payload_source::SourcePayload>> {
         None
     }
+    fn seal_environments(
+        &self,
+        _: &DefPath,
+        _: hirsel_syntax::ContentHash,
+    ) -> Option<crate::sealed_payload_source::SourceEnvironments> {
+        None
+    }
+
     /// Independently reconstruct the logical/physical association from type
     /// declarations. This supplies no original-body or producer authority.
     fn seal_descriptor(

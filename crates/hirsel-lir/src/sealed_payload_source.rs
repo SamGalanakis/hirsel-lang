@@ -5,6 +5,8 @@ use crate::ir::SourceAnchor;
 use crate::operation::NativeType;
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 
+mod environment;
+pub use environment::{SourceClosure, SourceClosureContext, SourceEnvironments};
 mod profile;
 mod receipt;
 pub use profile::{
@@ -188,6 +190,20 @@ impl SealSourceWitness {
     }
 }
 
+impl SealSourceWitness {
+    pub fn with_environments(mut self, environments: Option<&SourceEnvironments>) -> Self {
+        if let Some(environments) = environments {
+            let bytes = hirsel_codec::to_text(environments);
+            self.expectations = hirsel_syntax::ContentHash::of_parts(
+                "hirsel.seal-source.original-environments.v1",
+                [self.expectations.0.as_slice(), bytes.as_bytes()],
+            );
+            self.inventory_rule = 2;
+        }
+        self
+    }
+}
+
 /// Original-source storage inventory associated through the independently
 /// selected instance body. These are input data, never V/C authority supplied
 /// by a candidate unit or its source-anchor table.
@@ -197,13 +213,14 @@ pub struct SourceSeal {
     pub witness: SealSourceWitness,
     pub events: Vec<SourceEvent>,
     pub payloads: Vec<SourcePayload>,
+    pub environments: Option<SourceEnvironments>,
 }
 snapshot_struct!(SourceSeal {
     reference,
     witness,
     events,
     payloads
-});
+} trailing_optional environments);
 impl SourceSeal {
     pub fn check(&self) -> Result<(), &'static str> {
         if self.reference.definition != self.witness.definition
@@ -219,6 +236,31 @@ impl SourceSeal {
         {
             return Err("sealed source inventory names another reference body");
         }
+        if self
+            .environments
+            .iter()
+            .flat_map(|sources| &sources.constructions)
+            .any(|environment| {
+                environment.check_structure().is_err()
+                    || environment.original.definition != self.reference.definition
+                    || environment.payload.recipe.source.body != self.reference.body
+            })
+        {
+            return Err("sealed source environments name another original body");
+        }
+        if self
+            .environments
+            .as_ref()
+            .and_then(|sources| sources.entry.as_ref())
+            .is_some_and(|entry| {
+                entry.check_structure().is_err()
+                    || entry.original.definition != self.reference.definition
+                    || entry.original.body != self.reference.body
+                    || entry.instance != self.reference.instance
+            })
+        {
+            return Err("sealed source capture entry names another original body");
+        }
         if self.witness
             != SealSourceWitness::from_expectations(
                 self.witness.source,
@@ -228,6 +270,7 @@ impl SourceSeal {
                 &self.events,
                 &self.payloads,
             )
+            .with_environments(self.environments.as_ref())
         {
             return Err("sealed source inventory differs from its source observation");
         }
