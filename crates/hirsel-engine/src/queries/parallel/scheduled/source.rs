@@ -11,24 +11,41 @@ pub(super) struct SiblingArchives {
 }
 impl crate::snapshot::DeclarationSiblings for SiblingArchives {
     fn siblings(&self, syntax: &ItemSyntax) -> Result<Arc<[Arc<ItemSyntax>]>, QueryError> {
-        let refusal = || {
+        let refusal = |detail: &str| {
             QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "front source transport".into(),
-                message: "missing or invalid sibling syntax archive".into(),
+                message: format!("{}: {detail}", syntax.item.definition),
             })
         };
-        let file = self.sources.anchor(syntax.anchor).ok_or_else(refusal)?.0;
-        let references = self.files.get(&file).ok_or_else(refusal)?;
+        let file = self
+            .sources
+            .anchor(syntax.anchor)
+            .ok_or_else(|| refusal("missing source anchor"))?
+            .0;
+        let references = self
+            .files
+            .get(&file)
+            .ok_or_else(|| refusal("missing sibling file inventory"))?;
         references
             .iter()
             .map(|reference| {
-                let bytes = self.store.get_content(*reference).ok_or_else(refusal)?;
+                let bytes = self
+                    .store
+                    .get_content(*reference)
+                    .ok_or_else(|| refusal("missing sibling content"))?;
                 let (mut syntax, occurrence): (ItemSyntax, u32) = self
                     .records
                     .decode(&*self.owners, &bytes)
-                    .ok_or_else(refusal)?;
-                let (owner, base) = self.sources.anchor(syntax.anchor).ok_or_else(refusal)?;
-                let text = self.sources.file(owner).ok_or_else(refusal)?.text();
+                    .ok_or_else(|| refusal("invalid sibling codec"))?;
+                let (owner, base) = self
+                    .sources
+                    .anchor(syntax.anchor)
+                    .ok_or_else(|| refusal("missing sibling anchor"))?;
+                let text = self
+                    .sources
+                    .file(owner)
+                    .ok_or_else(|| refusal("missing sibling source"))?
+                    .text();
                 // Structural validation also checks that every span uses this
                 // item's anchor. Resolve its file/base once for the whole tree.
                 if !syntax.structurally_valid(|span| {
@@ -38,7 +55,7 @@ impl crate::snapshot::DeclarationSiblings for SiblingArchives {
                     )
                     .is_some()
                 }) {
-                    return Err(refusal());
+                    return Err(refusal("invalid sibling spans"));
                 }
                 syntax.occurrence = occurrence;
                 Ok(Arc::new(syntax))
@@ -63,6 +80,34 @@ impl FrontInputFootprint {
     }
 }
 impl QueryEngine {
+    pub(super) fn front_sibling_inputs(
+        &self,
+        definitions: &[DefPath],
+    ) -> Result<BTreeMap<FileId, Arc<ItemSyntax>>, QueryError> {
+        let mut files = BTreeMap::new();
+        for definition in definitions {
+            let syntax = self.snapshot(definition)?;
+            let file = self
+                .sources
+                .anchor(syntax.anchor)
+                .ok_or(QueryError::NotImplemented)?
+                .0;
+            files.entry(file).or_insert(syntax);
+        }
+        // Private generator constants share their declaration's written file.
+        // That file can be absent from the ordinary P inputs during bootstrap.
+        for syntax in self.items.values().flatten() {
+            if generation::generator(syntax).is_some() {
+                let file = self
+                    .sources
+                    .anchor(syntax.anchor)
+                    .ok_or(QueryError::NotImplemented)?
+                    .0;
+                files.entry(file).or_insert_with(|| syntax.clone());
+            }
+        }
+        Ok(files)
+    }
     /// Inspect actual captured input lengths, without body checking or Lower.
     pub fn front_input_footprint(
         &mut self,
@@ -87,19 +132,20 @@ impl QueryEngine {
         let owners = crate::NativeRecordContext::capture(self);
         let declarations = self.frozen_declarations();
         let mut front_inputs = FrontBodyQueries::input_bytes(definitions).ok_or_else(refused)?;
-        let mut files = BTreeSet::new();
-        for definition in definitions {
-            let syntax = self.snapshot(definition)?;
-            let file = self.sources.anchor(syntax.anchor).ok_or_else(refused)?.0;
-            if files.insert(file) {
-                front_inputs = front_inputs
-                    .checked_add(
-                        (declarations.siblings(&syntax).len() as u64)
-                            .checked_mul(std::mem::size_of::<Reference>() as u64)
-                            .ok_or_else(refused)?,
-                    )
-                    .ok_or_else(refused)?;
-            }
+        let sibling_inputs = self.front_sibling_inputs(definitions)?;
+        let mut index = crate::NativeMetadataWeight::default();
+        index.tree::<FileId, Vec<Reference>>(sibling_inputs.len());
+        front_inputs = front_inputs
+            .checked_add(index.bytes())
+            .ok_or_else(refused)?;
+        for syntax in sibling_inputs.values() {
+            front_inputs = front_inputs
+                .checked_add(
+                    (declarations.siblings(syntax).len() as u64)
+                        .checked_mul(std::mem::size_of::<Reference>() as u64)
+                        .ok_or_else(refused)?,
+                )
+                .ok_or_else(refused)?;
         }
         let source_headers = self
             .sources

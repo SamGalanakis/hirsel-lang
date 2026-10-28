@@ -1357,6 +1357,69 @@ impl QueryEngine {
         let input_records = crate::NativeRecords::new(self.types.clone(), store.clone());
         let declarations = self.frozen_declarations();
         let mut siblings = BTreeMap::new();
+        let sibling_inputs = self.front_sibling_inputs(definitions)?;
+        let mut sibling_index = crate::NativeMetadataWeight::default();
+        sibling_index.tree::<FileId, Vec<Reference>>(sibling_inputs.len());
+        required = required
+            .checked_add(sibling_index.bytes())
+            .ok_or_else(refusal)?;
+        for (file, original) in sibling_inputs {
+            if let std::collections::btree_map::Entry::Vacant(slot) = siblings.entry(file) {
+                let written = declarations.siblings(&original);
+                required = required
+                    .checked_add(
+                        (written.len() as u64)
+                            .checked_mul(std::mem::size_of::<Reference>() as u64)
+                            .ok_or_else(refusal)?,
+                    )
+                    .ok_or_else(refusal)?;
+                if required > allowance.bytes() {
+                    return Err(refusal());
+                }
+                let mut refs = Vec::with_capacity(written.len());
+                for sibling in written.iter() {
+                    // Item resolution reads variant spellings from siblings.
+                    // Retain written callable/constant fallback whenever the
+                    // provider does not already have the corresponding kind.
+                    let written_value = matches!(
+                        sibling.item.kind,
+                        hirsel_syntax::ItemKind::Function { .. }
+                            | hirsel_syntax::ItemKind::Const { .. }
+                    );
+                    let normalized_value = self
+                        .signatures
+                        .get(&DefId::intern(&sibling.item.definition))
+                        .filter(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+                        .and_then(|entry| entry.result().ok())
+                        .is_some_and(|output| {
+                            matches!(
+                                output.value.kind,
+                                hirsel_types::SignatureKind::Function(_)
+                                    | hirsel_types::SignatureKind::Const { .. }
+                            )
+                        });
+                    let variant = matches!(
+                        &sibling.item.kind,
+                        hirsel_syntax::ItemKind::Type {
+                            body: hirsel_syntax::TypeBody::Variants(_),
+                            ..
+                        }
+                    );
+                    if !variant && (!written_value || normalized_value) {
+                        continue;
+                    }
+                    let bytes = input_records
+                        .encode(&*anchors, &(sibling, sibling.occurrence))
+                        .ok_or_else(refusal)?;
+                    refs.push(
+                        store
+                            .put_content(SOURCE_INPUT, &bytes)
+                            .ok_or_else(refusal)?,
+                    );
+                }
+                slot.insert(refs);
+            }
+        }
         let mut selected = Vec::new();
         for definition in definitions {
             let registration = registrations
@@ -1416,58 +1479,6 @@ impl QueryEngine {
             let syntax = store
                 .put_content(SOURCE_INPUT, &bytes)
                 .ok_or_else(refusal)?;
-            let original = self.snapshot(definition)?;
-            let file = self.sources.anchor(original.anchor).ok_or_else(refusal)?.0;
-            if let std::collections::btree_map::Entry::Vacant(slot) = siblings.entry(file) {
-                let mut refs = Vec::new();
-                for sibling in declarations.siblings(&original).iter() {
-                    // Item resolution reads variant spellings from siblings.
-                    // Retain written callable/constant fallback whenever the
-                    // provider does not already have the corresponding kind.
-                    let written_value = matches!(
-                        sibling.item.kind,
-                        hirsel_syntax::ItemKind::Function { .. }
-                            | hirsel_syntax::ItemKind::Const { .. }
-                    );
-                    let normalized_value = self
-                        .signatures
-                        .get(&DefId::intern(&sibling.item.definition))
-                        .filter(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
-                        .and_then(|entry| entry.result().ok())
-                        .is_some_and(|output| {
-                            matches!(
-                                output.value.kind,
-                                hirsel_types::SignatureKind::Function(_)
-                                    | hirsel_types::SignatureKind::Const { .. }
-                            )
-                        });
-                    let variant = matches!(
-                        &sibling.item.kind,
-                        hirsel_syntax::ItemKind::Type {
-                            body: hirsel_syntax::TypeBody::Variants(_),
-                            ..
-                        }
-                    );
-                    if !variant && (!written_value || normalized_value) {
-                        continue;
-                    }
-                    let bytes = input_records
-                        .encode(&*anchors, &(sibling, sibling.occurrence))
-                        .ok_or_else(refusal)?;
-                    required = required
-                        .checked_add(std::mem::size_of::<Reference>() as u64)
-                        .ok_or_else(refusal)?;
-                    if required > allowance.bytes() {
-                        return Err(refusal());
-                    }
-                    refs.push(
-                        store
-                            .put_content(SOURCE_INPUT, &bytes)
-                            .ok_or_else(refusal)?,
-                    );
-                }
-                slot.insert(refs);
-            }
             selected.push((
                 definition.clone(),
                 syntax,
