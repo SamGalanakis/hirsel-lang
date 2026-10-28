@@ -886,10 +886,12 @@ impl Plan {
                 "compiler immutable input inventory exceeds snapshot admission".into(),
             )
         })?;
-        // Source indexing is an optional reuse cache. Never let it reject an
-        // otherwise admissible graph or consume the producers' main grants.
-        let source_index_bytes = if source_index_bytes <= slack / 32 {
-            source_index_bytes
+        // Headers and private proofs can grow after this metadata-only plan.
+        // Retain their source index within the existing optional-cache cap,
+        // rather than freezing the smaller pre-demand size as its allowance.
+        // A source already above the cap never consumes producer grants.
+        let source_index_bytes = if source_index_bytes != 0 && source_index_bytes <= slack / 32 {
+            slack / 32
         } else {
             0
         };
@@ -1240,12 +1242,9 @@ pub(super) fn install(
         return Err(loading.failed(error));
     }
     let launch_entry = program.launch_entry().cloned();
-    let inference = loading.lend_runtime();
-    let inference = match program.engine.prepare_private_inference(inference) {
-        Ok(inference) => inference,
-        Err(error) => return Err(loading.failed(program.error(error))),
-    };
-    loading.return_runtime(inference);
+    program
+        .engine
+        .admit_private_inference(loading.lend_runtime());
     // Capturing the footprint and the Run and native inputs can still name a
     // specialization (GEN-6); select again until no new root appears.
     let mut definitions = selected_definitions(&mut program.engine);
@@ -1378,6 +1377,11 @@ pub(super) fn install(
         Ok(generators) => generators,
         Err(error) => return Err(loading.failed(program.error(error))),
     };
+    let inference = match program.engine.release_private_inference_admission() {
+        Ok(allowance) => allowance,
+        Err(error) => return Err(loading.failed(program.error(error))),
+    };
+    loading.return_runtime(inference);
     let bootstrap = if generators.is_empty() {
         None
     } else {
@@ -1446,17 +1450,9 @@ pub(super) fn install(
         Some(bootstrap)
     };
     let registrations = bootstrap.as_ref().map_or(&[][..], |b| b.registrations());
-    // Accepted registrations can change private inference and its signature
-    // snapshot. Settle that inference before capturing Run and native inputs.
-    let runtime = loading.lend_runtime();
-    let runtime = match program
+    program
         .engine
-        .prepare_private_inference_with_registrations(runtime, registrations)
-    {
-        Ok(runtime) => runtime,
-        Err(error) => return Err(loading.failed(program.error(error))),
-    };
-    loading.return_runtime(runtime);
+        .admit_private_inference(loading.lend_runtime());
     // Registration changes the source namespace. Capture every final consumer
     // against the same accepted views, including Run and ownership catalogues.
     if bootstrap.is_some() {
@@ -1517,6 +1513,11 @@ pub(super) fn install(
             .map_or(0, |inputs| inputs.input_bytes()),
     )?;
     let sources = program.engine.sources.clone();
+    let inference = match program.engine.release_private_inference_admission() {
+        Ok(allowance) => allowance,
+        Err(error) => return Err(loading.failed(program.error(error))),
+    };
+    loading.return_runtime(inference);
     let GraphAdmission {
         runtime,
         source,
@@ -1527,6 +1528,7 @@ pub(super) fn install(
         transport,
         mut run,
     } = loading.finish(plan.snapshots)?;
+    program.engine.admit_private_inference(runtime);
     let mut check = check;
     let mut source = source;
     let source_index_allowance = source
@@ -2145,6 +2147,10 @@ pub(super) fn install(
             "compiler query inventory exceeds its planned admission".into(),
         ));
     }
+    let runtime = program
+        .engine
+        .release_private_inference_admission()
+        .map_err(query_error)?;
     let native_budget = runtime.bytes();
     let mut runtime =
         AdmittedRuntime::with_query_capacity(config.jobs, runtime, errors, plan.query_capacity)

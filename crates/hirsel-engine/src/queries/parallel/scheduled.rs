@@ -1438,6 +1438,13 @@ impl QueryEngine {
             if !seen.insert(definition.clone()) {
                 continue;
             }
+            if self
+                .source_facts(&definition)
+                .is_some_and(|facts| facts.specializes)
+                && self.materialize(&definition).is_err()
+            {
+                continue;
+            }
             // A source carry can own an exact selection receipt before its
             // expression arenas are materialized. Validate that receipt below;
             // absent With syntax in a body-free head cannot invalidate it.
@@ -1509,6 +1516,12 @@ impl QueryEngine {
         // Settle them before capturing any immutable syntax, keys or receipts.
         self.prepare_private_summaries();
         let anchors = Arc::new(crate::NativeRecordContext::capture(self));
+        required = required
+            .checked_add(anchors.input_bytes().ok_or_else(refusal)?)
+            .ok_or_else(refusal)?;
+        if required > allowance.bytes() {
+            return Err(refusal());
+        }
         let input_records = crate::NativeRecords::new(self.types.clone(), store.clone());
         let declarations = self.frozen_declarations();
         let mut siblings = BTreeMap::new();

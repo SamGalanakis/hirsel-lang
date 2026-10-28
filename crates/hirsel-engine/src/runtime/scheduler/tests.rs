@@ -774,6 +774,63 @@ fn affine_wait_releases_single_worker_and_resumes_rc_state_without_replay() {
     assert_eq!(rt.stats().claims, 2);
     assert_eq!(rt.stats().active, 0);
 }
+
+#[test]
+fn compiler_caller_drives_affine_dependencies_and_destroys_them_before_returning() {
+    let exercise = |on_compiler: bool| {
+        let budget = ProcessBudget::new(4 << 20);
+        let mut rt = AdmittedRuntime::with_metadata(
+            Jobs::ONE,
+            budget.reserve(4 << 20).unwrap(),
+            errors(),
+            STACK,
+            Some(16),
+            true,
+        )
+        .unwrap();
+        install(&mut rt, &[(0, Spec::deps(&[]))]);
+        let (events, rx) = mpsc::channel();
+        rt.register_local(
+            2,
+            Arc::new(AffineFactory {
+                dependency: query(0),
+                events,
+                barrier: None,
+            }),
+        )
+        .unwrap();
+        let request = rt.request(&[local_query(1)]);
+        let completion = rt.completion();
+        if on_compiler {
+            completion.wait(request);
+        }
+        assert_eq!(
+            rt.poll(request),
+            Poll::Ready(Ok(vec![product(local_query(1))]))
+        );
+        let events: Vec<_> = rx.try_iter().collect();
+        let home = events[0].2;
+        assert_eq!(home == std::thread::current().id(), on_compiler);
+        assert_eq!(
+            events,
+            [
+                LocalEvent::Create,
+                LocalEvent::Poll(1),
+                LocalEvent::Poll(2),
+                LocalEvent::Drop
+            ]
+            .map(|event| (local_query(1), event, home))
+        );
+        let cancelled = rt.request(&[local_query(2)]);
+        rt.cancel(cancelled);
+        completion.wait(cancelled);
+        assert_eq!(rt.poll(cancelled), Poll::Ready(Err(errors().cancelled)));
+        rt.shutdown();
+        assert_eq!(budget.reserved(), 0);
+    };
+    crate::with_compiler_stack(|| exercise(true));
+    exercise(false);
+}
 #[test]
 fn all_affine_workers_waiting_can_run_shared_send_dependency_and_keep_home_ownership() {
     let mut rt = runtime(2, 8 << 20);
@@ -1530,7 +1587,8 @@ fn explicit_query_inventory_uses_the_same_grant_beyond_the_default_partition() {
     let budget = ProcessBudget::new(bytes);
     let reservation = budget.reserve(bytes).unwrap();
     let mut rt =
-        AdmittedRuntime::with_metadata(Jobs::ONE, reservation, errors(), STACK, Some(3)).unwrap();
+        AdmittedRuntime::with_metadata(Jobs::ONE, reservation, errors(), STACK, Some(3), false)
+            .unwrap();
     install(
         &mut rt,
         &[
@@ -1562,7 +1620,8 @@ fn explicit_query_inventory_refuses_empty_overflow_and_insufficient_grants() {
                 budget.reserve(bytes).unwrap(),
                 errors(),
                 STACK,
-                Some(entries)
+                Some(entries),
+                false,
             )
             .is_err()
         );

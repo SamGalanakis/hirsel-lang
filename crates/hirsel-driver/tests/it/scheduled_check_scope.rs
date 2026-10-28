@@ -301,3 +301,55 @@ fn front_capture_registers_nested_closed_specializations_and_refuses_generators(
         );
     });
 }
+
+#[test]
+fn source_requests_discover_closed_instances_from_lazy_declarations() {
+    use hirsel_driver::requests::{
+        CompileOperation, CompileResult, CompilerRequests, RequestLimits,
+    };
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"scope","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        std::fs::write(
+            directory.path().join("main.hir"),
+            "signature Source { size width }\nimplementation five: Source { size width = 5 }\n\
+             fn inner[A: implementation Source]() -> u64 uses {} { A.width }\n\
+             fn outer[A: implementation Source]() -> u64 uses {} { inner with (A = A)() + 1u64 }\n\
+             pub fn main() -> u64 { outer with (A = five)() }\n",
+        )
+        .unwrap();
+        let store = Arc::new(MemStore::default());
+        for jobs in [1, 2] {
+            let config = CompileConfig {
+                store: store.clone(),
+                jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                hold_bytes: 0,
+                ..Default::default()
+            };
+            let mut requests = CompilerRequests::new(
+                COMPILER.with_config(config.clone()).with_owned_engines(),
+                config,
+                ProcessBudget::new(512 << 20),
+                RequestLimits {
+                    runtime_bytes: 256 << 20,
+                    snapshot_bytes: 128 << 20,
+                    transport_bytes: 64 << 20,
+                },
+            );
+            let output = requests
+                .execute(
+                    &manifest,
+                    CompileOperation::Check {
+                        lowering: LoweringPolicy::Comptime,
+                    },
+                )
+                .unwrap();
+            let CompileResult::Check(checked) = &output.result else {
+                panic!("expected Check");
+            };
+            assert_eq!(checked.completion, CheckCompletion::Complete);
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        }
+    });
+}

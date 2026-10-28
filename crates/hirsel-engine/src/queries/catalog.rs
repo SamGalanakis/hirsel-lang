@@ -43,6 +43,7 @@ pub(crate) struct SourceFacts {
     pub(crate) body: bool,
     pub(crate) constant: bool,
     pub(crate) execution: bool,
+    pub(crate) specializes: bool,
     pub(crate) comptime: Vec<(u32, u32, u32)>,
     pub(crate) fact: bool,
     pub(crate) associations: Vec<(u8, u32, u32)>,
@@ -90,6 +91,7 @@ impl SourceFacts {
             body: constant || matches!(item.kind, ItemKind::Function { body: Some(_), .. }),
             constant,
             execution: constant || !comptime.is_empty(),
+            specializes: crate::families::closes(syntax),
             comptime,
             fact: matches!(
                 item.kind,
@@ -954,6 +956,11 @@ impl QueryEngine {
     }
     pub(crate) fn materialize(&mut self, path: &DefPath) -> Result<(), QueryError> {
         if !self.items.contains_key(path)
+            && let Some(owner) = hirsel_check_protocol::fact::fact_owner(path)
+        {
+            return self.materialize(&owner);
+        }
+        if !self.items.contains_key(path)
             && let Some((base, bindings)) = hirsel_types::specialization_parts(path)
         {
             return self.materialize_specialization(path, &base, &bindings);
@@ -1128,6 +1135,34 @@ impl QueryEngine {
 mod tests {
     use super::*;
     use crate::store::ResultStore;
+
+    #[test]
+    fn source_roots_include_unexecuted_declarations_without_demanding_headers() {
+        crate::with_compiler_stack(|| {
+            let store = Arc::new(crate::store::MemStore::default());
+            let create = || {
+                QueryEngine::new(default_environment(), crate::phases::engine_only_adapters())
+                    .with_result_store(store.clone())
+            };
+            let context = default_context();
+            let source = "type Choice = First | Second(u8)\nfn unused()->u8{1u8}\n";
+            let mut seed = create();
+            let file = seed.sources.add("roots.hir", source.into()).unwrap();
+            seed.index_source(file, &context).unwrap();
+            let mut engine = create();
+            let file = engine.sources.add("roots.hir", source.into()).unwrap();
+            engine.index_source(file, &context).unwrap();
+            let indexed = engine.indexed_definitions();
+            engine.adapters.lexer = None;
+            engine.adapters.parser = None;
+            engine.adapters.signature = None;
+            let roots = engine.front_source_roots();
+            assert_eq!(roots, indexed);
+            assert!(roots.iter().any(|p| p.0.name == "unused"));
+            assert!(engine.items.is_empty());
+            assert!(engine.signatures.is_empty());
+        });
+    }
 
     #[test]
     fn front_admission_uses_indexed_heads_when_syntax_is_unavailable() {
@@ -1368,6 +1403,7 @@ mod tests {
                             body: false,
                             constant: false,
                             execution: false,
+                            specializes: false,
                             comptime: vec![],
                             fact: false,
                             associations: vec![],

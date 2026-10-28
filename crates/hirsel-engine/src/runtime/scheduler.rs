@@ -158,6 +158,7 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     changed: Condvar,
+    caller: Mutex<()>,
 }
 
 /// Runtime for one immutable engine input snapshot. Factories validate S0 reads
@@ -170,17 +171,26 @@ pub struct AdmittedRuntime {
     shared: Arc<Shared>,
     workers: Vec<JoinHandle<()>>,
     reservation: Option<MemoryReservation>,
+    caller_stack: Option<u64>,
 }
 
 /// A host completion wait independent of the runtime's outer ownership lock.
 /// Clone while holding that lock, then release it before waiting. This handle
-/// neither polls nor consumes a result; cancellation and shutdown wake it too.
+/// does not consume a result; cancellation and shutdown wake it too. A compiler
+/// runtime without workers drives its admitted graph on a compiler stack here.
 #[derive(Clone)]
 pub struct RuntimeCompletion {
     shared: Arc<Shared>,
+    caller_stack: Option<u64>,
 }
 impl RuntimeCompletion {
     pub fn wait(&self, request: RequestId) {
+        if let Some(stack) = self.caller_stack {
+            let _caller = self.shared.caller.lock().unwrap_or_else(|e| e.into_inner());
+            if !self.shared.lock().request_complete(request.0) {
+                crate::with_compiler_stack(|| run_worker(self.shared.clone(), 0, stack, true));
+            }
+        }
         let mut state = self.shared.lock();
         while !state.request_complete(request.0) && !state.stopped {
             state = self
@@ -216,6 +226,8 @@ impl AdmittedRuntime {
     /// Reserve scheduler rows for the immutable query inventory within the
     /// supplied runtime grant. Worker stacks and task working memory use its
     /// remainder; this never obtains an additional process reservation.
+    /// A one-worker compiler runs on its caller. If no additional worker can
+    /// start, completion waits drive the same admitted graph on the caller.
     pub fn with_query_capacity(
         jobs: Jobs,
         reservation: MemoryReservation,
@@ -228,6 +240,7 @@ impl AdmittedRuntime {
             errors,
             COMPILER_STACK_BYTES,
             Some(entries),
+            true,
         )
     }
     /// Conservative allocation bound shared by admission planning and the
@@ -271,7 +284,7 @@ impl AdmittedRuntime {
         errors: RuntimeErrors,
         stack: usize,
     ) -> std::io::Result<Self> {
-        Self::with_metadata(jobs, reservation, errors, stack, None)
+        Self::with_metadata(jobs, reservation, errors, stack, None, false)
     }
     fn with_metadata(
         jobs: Jobs,
@@ -279,6 +292,7 @@ impl AdmittedRuntime {
         errors: RuntimeErrors,
         stack: usize,
         entries: Option<usize>,
+        compiler: bool,
     ) -> std::io::Result<Self> {
         let budget = reservation.bytes();
         let (count, working) = runtime_layout(jobs, budget, stack).ok_or_else(|| {
@@ -314,24 +328,43 @@ impl AdmittedRuntime {
                 origin: Instant::now(),
             }),
             changed: Condvar::new(),
+            caller: Mutex::new(()),
         });
         let mut runtime = Self {
             shared,
             workers: Vec::new(),
             reservation: Some(reservation),
+            caller_stack: (compiler && jobs == Jobs::ONE).then_some(stack as u64),
         };
         for worker in 0..count {
+            if runtime.caller_stack.is_some() {
+                break;
+            }
             let shared = runtime.shared.clone();
             match std::thread::Builder::new()
                 .name("hirsel-query".into())
                 .stack_size(stack)
-                .spawn(move || run_worker(shared, worker, stack as u64))
+                .spawn(move || run_worker(shared, worker, stack as u64, false))
             {
                 Ok(handle) => runtime.workers.push(handle),
                 Err(error) => {
+                    if compiler {
+                        hirsel_intern::jobs::warn_spawn_failure(
+                            &error,
+                            runtime.workers.len().max(1),
+                        );
+                        if runtime.workers.is_empty() {
+                            runtime.caller_stack = Some(stack as u64);
+                        }
+                    }
                     let mut state = runtime.shared.lock();
-                    state.stacks = runtime.workers.len() as u64 * stack as u64;
-                    if runtime.workers.is_empty() {
+                    state.stacks = runtime
+                        .workers
+                        .len()
+                        .max(usize::from(runtime.caller_stack.is_some()))
+                        as u64
+                        * stack as u64;
+                    if runtime.workers.is_empty() && runtime.caller_stack.is_none() {
                         return Err(error);
                     }
                     break;
@@ -340,7 +373,11 @@ impl AdmittedRuntime {
         }
         {
             let mut state = runtime.shared.lock();
-            state.stats.workers = runtime.workers.len();
+            state.stats.workers = runtime
+                .workers
+                .len()
+                .max(usize::from(runtime.caller_stack.is_some()));
+            state.stacks = state.stats.workers as u64 * stack as u64;
             state.account();
         }
         Ok(runtime)
@@ -408,6 +445,7 @@ impl AdmittedRuntime {
     pub fn completion(&self) -> RuntimeCompletion {
         RuntimeCompletion {
             shared: self.shared.clone(),
+            caller_stack: self.caller_stack,
         }
     }
     pub fn wait(&mut self, request: RequestId) -> OutcomeList {
@@ -437,6 +475,7 @@ impl AdmittedRuntime {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
+        let _caller = self.shared.caller.lock().unwrap_or_else(|e| e.into_inner());
         let mut state = self.shared.lock();
         state.nodes.clear();
         state.ready.clear();
@@ -515,6 +554,9 @@ impl QueryRuntime for AdmittedRuntime {
         request
     }
     fn poll(&mut self, request: RequestId) -> Poll<OutcomeList> {
+        if self.caller_stack.is_some() {
+            self.completion().wait(request);
+        }
         let mut state = self.shared.lock();
         if request.0 & REFUSED_REQUEST != 0 {
             return Poll::Ready(Err(state.errors.resource));
@@ -889,7 +931,7 @@ fn thread_cpu_ns() -> u64 {
 // ownership and destruction on its creating thread. Unlike Tokio, the shared
 // query claim/edge table here decides readiness, with a bounded local map and
 // home cleanup queue rather than an unbounded remote spawn queue.
-fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
+fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
     enum Work {
         Send(Box<dyn QueryTask>),
         Local(Arc<dyn LocalQueryFactory>),
@@ -1006,6 +1048,13 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                         shared.changed.notify_all();
                         continue;
                     }
+                }
+                if caller && state.ready.is_empty() {
+                    debug_assert!(
+                        locals.is_empty(),
+                        "idle caller retains a local continuation"
+                    );
+                    return;
                 }
                 state = shared
                     .changed

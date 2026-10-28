@@ -1,8 +1,8 @@
-//! Private module proofs use the ordinary S5 runtime and canonical read codec.
+//! Private module proofs run on the demanding compiler worker with the canonical read codec.
 //! The SCC/fixed-point algorithm remains the Modes adapter's implementation.
 use super::*;
 use crate::runtime::*;
-use crate::store::{Entry as StoredEntry, EntryKey, Reference, VariantRef};
+use crate::store::{Entry as StoredEntry, EntryKey, VariantRef};
 use std::sync::{Mutex, OnceLock};
 
 const KIND: u32 = 0x4602_0001;
@@ -18,7 +18,6 @@ struct Input {
     reads: Arc<Reads>,
 }
 struct Inference {
-    query: QueryId,
     key: EntryKey,
     inputs: Vec<Input>,
     base: Reads,
@@ -31,113 +30,53 @@ struct Inference {
     checker: Arc<dyn CheckerPhase>,
     modes: Arc<dyn ModesPhase>,
     environment: ContentHash,
-    result: Mutex<Option<Result<Facts, QueryError>>>,
     expected: Option<Facts>,
     complete: bool,
-    reference: Reference,
     store: Option<Arc<dyn crate::store::ResultStore>>,
     records: crate::NativeRecords,
-    weight: MemoryWeight,
-}
-struct Factory(Arc<Inference>);
-impl QueryFactory for Factory {
-    fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
-        if query != self.0.query {
-            return Err(self.0.reference);
-        }
-        Ok(Box::new(Task {
-            inference: self.0.clone(),
-            terminal: None,
-        }))
-    }
-}
-struct Task {
-    inference: Arc<Inference>,
-    terminal: Option<Result<ProductRef, Reference>>,
-}
-impl QueryTask for Task {
-    fn id(&self) -> QueryId {
-        self.inference.query
-    }
-    fn weight(&self) -> MemoryWeight {
-        self.inference.weight
-    }
-    fn poll(&mut self, _: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(terminal) = self.terminal {
-            return match terminal {
-                Ok(product) => QueryPoll::Complete(product),
-                Err(reference) => QueryPoll::Failed(reference),
-            };
-        }
-        let result = self.inference.compute().and_then(|facts| {
-            if self
-                .inference
-                .expected
-                .as_ref()
-                .is_some_and(|expected| *expected != facts)
-            {
-                Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                    operation: "verify-cache".into(),
-                    message: "private inference differs from its cached result".into(),
-                }))
-            } else {
-                Ok(facts)
-            }
-        });
-        let product = result.as_ref().ok().and_then(|facts| {
-            let bytes = self
-                .inference
-                .records
-                .encode(&*self.inference.citations.owners, facts)?;
-            let record =
-                crate::store::product_domain(QueryKind::PrivateInference).reference(&bytes)?;
-            if self.inference.complete
-                && let Some(store) = &self.inference.store
-            {
-                let variant =
-                    VariantRef::publish(&**store, &self.inference.key, facts.reads.clone(), &bytes);
-                if let Some(variant) = variant {
-                    let mut entry = StoredEntry::load(&**store, &self.inference.key);
-                    entry.insert(variant);
-                    store.put_query(
-                        self.inference.key.2,
-                        &self.inference.key,
-                        entry.action(&self.inference.key),
-                        &entry.encode_for(&self.inference.key),
-                    );
-                }
-            }
-            Some(ProductRef {
-                address: self.inference.query.address,
-                action: crate::store::query_action(
-                    &self.inference.key,
-                    self.inference.key.1,
-                    &facts.reads,
-                ),
-                record,
-            })
-        });
-        let result = if product.is_none() && result.is_ok() {
-            Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "private inference transport".into(),
-                message: "cannot encode module proof facts".into(),
-            }))
-        } else {
-            result
-        };
-        *self
-            .inference
-            .result
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(result);
-        self.terminal = Some(product.ok_or(self.inference.reference));
-        match product {
-            Some(product) => QueryPoll::Complete(product),
-            None => QueryPoll::Failed(self.inference.reference),
-        }
-    }
 }
 impl Inference {
+    fn produce(&self) -> Result<Facts, QueryError> {
+        let facts = self.compute()?;
+        if self
+            .expected
+            .as_ref()
+            .is_some_and(|expected| *expected != facts)
+        {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "verify-cache".into(),
+                message: "private inference differs from its cached result".into(),
+            }));
+        }
+        let transport = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "private inference transport".into(),
+                message: "cannot encode module proof facts".into(),
+            })
+        };
+        let bytes = self
+            .records
+            .encode(&*self.citations.owners, &facts)
+            .ok_or_else(transport)?;
+        crate::store::product_domain(QueryKind::PrivateInference)
+            .reference(&bytes)
+            .ok_or_else(transport)?;
+        if self.complete
+            && let Some(store) = &self.store
+            && let Some(variant) =
+                VariantRef::publish(&**store, &self.key, facts.reads.clone(), &bytes)
+        {
+            let mut entry = StoredEntry::load(&**store, &self.key);
+            entry.insert(variant);
+            store.put_query(
+                self.key.2,
+                &self.key,
+                entry.action(&self.key),
+                &entry.encode_for(&self.key),
+            );
+        }
+        Ok(facts)
+    }
     fn record_reads<'a>(
         &self,
         reads: &mut ReadsBuilder,
@@ -396,8 +335,8 @@ impl QueryEngine {
             inferred.insert(id, proof);
         }
     }
-    /// Settle module inference before immutable front inputs are captured,
-    /// lending and returning the caller's existing process/runtime partition.
+    /// Demand the selected source modules' settled inference products within
+    /// the caller's existing process partition. No runtime is constructed.
     pub fn prepare_private_inference(
         &mut self,
         reservation: MemoryReservation,
@@ -422,7 +361,7 @@ impl QueryEngine {
         self.private_summary_active = true;
         self.private_summary_failure = None;
         let result = self
-            .infer_on_runtime(reservation, registrations)
+            .infer_private(reservation, registrations)
             .and_then(|reservation| {
                 // Normalization may visit other modules before their proofs have
                 // settled. Publish and verify those signatures only after all
@@ -468,9 +407,9 @@ impl QueryEngine {
             .map(|error| (self.graph.revision(), error.clone()));
         result
     }
-    fn infer_on_runtime(
+    fn infer_private(
         &mut self,
-        mut reservation: MemoryReservation,
+        reservation: MemoryReservation,
         registrations: &[Arc<AcceptedFrontRegistration>],
     ) -> Result<MemoryReservation, QueryError> {
         let Some(modes) = self
@@ -723,19 +662,6 @@ impl QueryEngine {
             };
             // The same per-module fixed point runs with declarations captured
             // by the existing worker. It never enters a scalar body query.
-            let reference = crate::store::Domain {
-                kind: KIND,
-                schema: 1,
-            }
-            .reference(b"private inference")
-            .ok_or(QueryError::NotImplemented)?;
-            let errors = RuntimeErrors {
-                resource: reference,
-                cycle: reference,
-                cancelled: reference,
-                protocol: reference,
-                panicked: reference,
-            };
             let working = reservation
                 .bytes()
                 .saturating_sub(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + 16384);
@@ -753,11 +679,7 @@ impl QueryEngine {
                     message: "module inputs exceed the retained partition".into(),
                 }));
             }
-            let inference = Arc::new(Inference {
-                query: QueryId {
-                    kind: KIND,
-                    address: hirsel_artifact_store::Address(key.0),
-                },
+            let inference = Inference {
                 key,
                 inputs,
                 base: base.finish().map_err(|_| QueryError::NotImplemented)?,
@@ -778,13 +700,11 @@ impl QueryEngine {
                     .ok_or(QueryError::NotImplemented)?,
                 modes: modes.clone(),
                 environment: self.environment_value(),
-                result: Mutex::new(None),
                 // Written-only bootstrap has a different proof inventory.
                 // Compare the settled cache after generated registrations
                 // restore the full module, as required for publication below.
                 expected: expected.filter(|_| complete),
                 complete,
-                reference,
                 store: self.result_store.clone(),
                 records: crate::NativeRecords::new(
                     self.types.clone(),
@@ -792,43 +712,8 @@ impl QueryEngine {
                         .clone()
                         .unwrap_or_else(|| Arc::new(crate::store::NoneStore)),
                 ),
-                weight: MemoryWeight {
-                    stack: 0,
-                    scratch: working / 2,
-                    retained: working / 2,
-                },
-            });
-            let mut runtime = AdmittedRuntime::with_query_capacity(
-                hirsel_intern::jobs::Jobs::new(1),
-                reservation,
-                errors,
-                2,
-            )
-            .map_err(|e| {
-                QueryError::Operational(hirsel_types::OperationalFailure {
-                    operation: "private inference admission".into(),
-                    message: e.to_string(),
-                })
-            })?;
-            runtime
-                .register(KIND, Arc::new(Factory(inference.clone())))
-                .map_err(|_| QueryError::NotImplemented)?;
-            let request = runtime.request(&[inference.query]);
-            let completed = runtime.wait(request);
-            reservation = runtime
-                .shutdown_with_reservation()
-                .expect("one runtime reservation");
-            let facts = inference
-                .result
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take()
-                .unwrap_or_else(|| {
-                    Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                        operation: "private inference".into(),
-                        message: format!("admitted module proof did not complete: {completed:?}"),
-                    }))
-                })?;
+            };
+            let facts = crate::with_compiler_stack(|| inference.produce())?;
             for input in &inference.inputs {
                 *self
                     .recomputes

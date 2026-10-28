@@ -210,9 +210,9 @@ fn map_with_state_spawn<T: Send, R: Send, S>(
         .collect()
 }
 
-/// Resource pressure is operational, not a source-language diagnostic. Keep
-/// repeated frontiers (and resident compiler requests) from flooding stderr.
-fn warn_spawn_failure(error: &std::io::Error, remaining: usize) {
+/// Report compiler worker resource pressure once per process, shared by the
+/// frontier mapper and the admitted query runtime.
+pub fn warn_spawn_failure(error: &std::io::Error, remaining: usize) {
     static WARNED: AtomicBool = AtomicBool::new(false);
     if !WARNED.swap(true, Ordering::Relaxed) {
         use std::io::Write;

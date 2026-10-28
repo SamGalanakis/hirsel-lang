@@ -345,11 +345,9 @@ impl Task {
     }
 }
 impl QueryEngine {
-    /// Settle headers and capture the existing source-language root set. This
-    /// includes unexecuted declarations and excludes registry-only bodies.
-    /// It performs no body checking, lowering or compile-time execution.
+    /// Enumerate required source declarations from the index, including
+    /// unexecuted declarations and fact helpers, without demanding headers.
     pub fn front_source_roots(&mut self) -> Vec<DefPath> {
-        let _ = self.signature_inputs();
         // The source-only index restores every declaration but no legacy
         // growth controller. Its pending set therefore contains only edited
         // declarations, never the complete source Check obligation set.
@@ -359,8 +357,6 @@ impl QueryEngine {
         for path in roots.clone() {
             if self.source_facts(&path).is_some_and(|facts| facts.fact) {
                 let helper = hirsel_check_protocol::fact::fact_path(&path);
-                let _ = self.materialize(&path);
-                let _ = self.item_signature(&helper);
                 roots.insert(helper);
             }
         }

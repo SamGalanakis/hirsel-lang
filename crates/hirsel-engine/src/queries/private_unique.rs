@@ -6,6 +6,25 @@ use hirsel_types::{SignatureKind, UniqueInference};
 mod scheduled;
 
 impl QueryEngine {
+    /// Lend the host's existing partition to demand inference. Installing the
+    /// allowance does not normalize a header or compute private facts.
+    pub fn admit_private_inference(&mut self, allowance: crate::runtime::MemoryReservation) {
+        assert!(self.private_inference_allowance.is_none());
+        self.private_inference_hosted = true;
+        self.private_inference_allowance = Some(Ok(allowance));
+    }
+
+    /// Return the partition before the host admits its query executor.
+    pub fn release_private_inference_admission(
+        &mut self,
+    ) -> Result<crate::runtime::MemoryReservation, QueryError> {
+        self.private_inference_allowance.take().unwrap_or_else(|| {
+            Err(self
+                .current_private_summary_failure()
+                .cloned()
+                .unwrap_or(QueryError::NotImplemented))
+        })
+    }
     pub(super) fn attach_private_summary(
         &self,
         signature: &mut hirsel_types::Signature,
@@ -50,7 +69,14 @@ impl QueryEngine {
         if !self.private_summary_active
             && self.private_summary_revision != Some(self.graph.revision())
         {
-            self.standalone_private_inference();
+            match self.private_inference_allowance.take() {
+                Some(Ok(allowance)) => {
+                    self.private_inference_allowance =
+                        Some(self.prepare_private_inference(allowance));
+                }
+                Some(Err(error)) => self.private_inference_allowance = Some(Err(error)),
+                None => self.standalone_private_inference(),
+            }
         }
     }
 
