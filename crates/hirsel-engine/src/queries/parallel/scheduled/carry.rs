@@ -558,6 +558,7 @@ impl BodyTask {
         // to check existence, even though Check needs only these compact facts.
         // A later actual body demand owns materialization and its association.
         timings::count(Count::StoreHits);
+        timings::count(Count::StoreModeHits);
         Some(Ok(ProductRef {
             address: self.query.address,
             action,
