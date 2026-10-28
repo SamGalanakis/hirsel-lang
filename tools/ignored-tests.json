@@ -563,5 +563,45 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_queue_cleanup_71::receiver_close_retires_two_equal_queued_resources_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_queue_cleanup_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_queue_cleanup_71::receiver_close_preserves_the_remaining_fifo_item_after_a_resource_receive": {
+    "source": "crates/hirsel-driver/tests/it/ownership_queue_cleanup_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_queue_cleanup_71::receiver_close_distinguishes_equal_resource_fields_at_the_same_physical_offset": {
+    "source": "crates/hirsel-driver/tests/it/ownership_queue_cleanup_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_resource_selection_71::empty_resource_channel_endpoints_do_not_own_their_potential_payloads": {
+    "source": "crates/hirsel-driver/tests/it/ownership_resource_selection_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_resource_selection_71::resource_channel_transfers_two_equal_tokens_without_recreating_their_lineage": {
+    "source": "crates/hirsel-driver/tests/it/ownership_resource_selection_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }
