@@ -54,6 +54,11 @@ impl FrontStorageQueries {
             })
         })
     }
+    // A composed recipe uses its parent's execution grant. Its retained
+    // products and the bounded task frame remain charged to this owner.
+    pub(crate) fn fits_poll(&self, parent: MemoryWeight) -> bool {
+        self.weight.scratch <= parent.scratch && self.weight.stack <= parent.stack
+    }
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(StorageFactory(self.clone()))
     }
@@ -84,29 +89,31 @@ impl FrontStorageQueries {
 struct StorageFactory(Arc<FrontStorageQueries>);
 impl QueryFactory for StorageFactory {
     fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
-        let path = self
+        if id.kind != FRONT_STORAGE_KIND || !self.0.inputs.contains_key(&id.address.0) {
+            return Err(self.0.errors.protocol);
+        }
+        let terminal = self
             .0
-            .inputs
+            .completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .get(&id.address.0)
-            .filter(|_| id.kind == FRONT_STORAGE_KIND)
-            .ok_or(self.0.errors.protocol)?
-            .clone();
+            .map(|outcome| outcome.product);
         Ok(Box::new(StorageTask {
             owner: self.0.clone(),
             id,
-            path,
             admitted: false,
-            terminal: None,
+            terminal,
         }))
     }
 }
 struct StorageTask {
     owner: Arc<FrontStorageQueries>,
     id: QueryId,
-    path: DefPath,
     admitted: bool,
     terminal: Option<Result<ProductRef, Reference>>,
 }
+const _: () = assert!(std::mem::size_of::<StorageTask>() + 2 * std::mem::size_of::<usize>() <= 512);
 impl QueryTask for StorageTask {
     fn id(&self) -> QueryId {
         self.id
@@ -137,7 +144,10 @@ impl QueryTask for StorageTask {
             *retention -= bound;
             self.admitted = true;
         }
-        let Some(front) = self.owner.front.query(&self.path) else {
+        let Some(path) = self.owner.inputs.get(&self.id.address.0) else {
+            return finish(Err(self.owner.errors.protocol));
+        };
+        let Some(front) = self.owner.front.query(path) else {
             return finish(Err(self.owner.errors.protocol));
         };
         let selected = match cx.read(front) {
@@ -147,7 +157,7 @@ impl QueryTask for StorageTask {
                 if self.owner.front.outcome(product.record).is_some() {
                     self.run(product)
                 } else {
-                    let Some(body) = self.owner.front.body_query(&self.path) else {
+                    let Some(body) = self.owner.front.body_query(path) else {
                         return finish(Err(self.owner.errors.protocol));
                     };
                     match cx.read(body) {
@@ -165,6 +175,10 @@ impl QueryTask for StorageTask {
 impl StorageTask {
     fn run(&self, product: ProductRef) -> Result<ProductRef, Reference> {
         let owner = &self.owner;
+        let path = owner
+            .inputs
+            .get(&self.id.address.0)
+            .ok_or(owner.errors.protocol)?;
         let body = owner
             .front
             .outcome(product.record)
@@ -178,12 +192,12 @@ impl StorageTask {
         reads.merge(&body.outcome.reads);
         let mut provider = FrozenProvider::for_definition(
             &owner.front.snapshot,
-            DefId::intern(&self.path),
+            DefId::intern(path),
             &owner.front.citations,
             &mut reads,
         );
         let result = (|| {
-            let signature = provider.signature(DefId::intern(&self.path))?;
+            let signature = provider.signature(DefId::intern(path))?;
             let modes = owner
                 .front
                 .modes
@@ -215,7 +229,7 @@ impl StorageTask {
         let reads = Arc::new(reads.finish().map_err(|_| owner.errors.protocol)?);
         let bytes = owner
             .records
-            .encode(&owner.anchors, &(&self.path, &result, &*reads))
+            .encode(&owner.anchors, &(path, &result, &*reads))
             .ok_or(owner.errors.resource)?;
         if bytes.len() as u64 > owner.weight.retained {
             return Err(owner.errors.resource);

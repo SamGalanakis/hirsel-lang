@@ -144,6 +144,7 @@ impl QueryFactory for Factory {
             seen: BTreeSet::new(),
             bodies: BTreeMap::new(),
             current: None,
+            recipe: None,
             reads: ReadsBuilder::new(),
             waiting: None,
             input: None,
@@ -163,6 +164,7 @@ struct Task {
     seen: BTreeSet<DefPath>,
     bodies: BTreeMap<hirsel_types::storage::StorageCallable, StorageBody>,
     current: Option<Current>,
+    recipe: Option<Box<dyn QueryTask>>,
     reads: ReadsBuilder,
     waiting: Option<QueryId>,
     input: Option<ProductRef>,
@@ -276,15 +278,34 @@ impl Task {
                         "missing actual storage producer for {path}"
                     )))));
                 };
-                let product = match self.read(cx, query) {
-                    Poll::Pending => {
+                if self.recipe.is_none() {
+                    self.recipe = match owner.recipes.factory().create(query) {
+                        Ok(recipe) => Some(recipe),
+                        Err(error) => return Poll::Ready(Err(error)),
+                    };
+                }
+                let recipe = self.recipe.as_mut().unwrap();
+                if recipe.id() != query {
+                    return Poll::Ready(Err(owner.errors.protocol));
+                }
+                // The root owns one recipe continuation. Its reads are still
+                // actual runtime reads; Pending releases this root's execution
+                // grant instead of allocating a scheduler node per definition.
+                let product = match recipe.poll(cx) {
+                    QueryPoll::Waiting(dependencies) => {
+                        let [dependency] = dependencies.as_slice() else {
+                            return Poll::Ready(Err(owner.errors.protocol));
+                        };
+                        self.waiting = Some(*dependency);
                         self.pending.insert(path.clone());
                         self.seen.remove(&path);
                         return Poll::Pending;
                     }
-                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                    Poll::Ready(Ok(product)) => product,
+                    QueryPoll::Failed(error) => return Poll::Ready(Err(error)),
+                    QueryPoll::Complete(product) => product,
                 };
+                self.recipe = None;
+                self.waiting = None;
                 let Some(output) = owner.recipes.outcome(product) else {
                     return Poll::Ready(Err(owner.errors.protocol));
                 };
@@ -545,6 +566,11 @@ impl QueryEngine {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontStorageGraphQueries>, QueryError> {
+        if !recipes.fits_poll(weight) {
+            return Err(invalid(
+                "storage recipe exceeds its parent execution admission",
+            ));
+        }
         if !Arc::ptr_eq(&lower.signatures(), &self.signature_inputs()) {
             return Err(invalid(
                 "storage and Lower require the same signature snapshot",

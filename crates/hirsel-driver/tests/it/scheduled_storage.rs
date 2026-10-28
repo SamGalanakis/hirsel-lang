@@ -1,6 +1,19 @@
 use hirsel_driver::*;
 use hirsel_engine::{runtime::*, store::MemStore, *};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
+#[derive(Default)]
+struct RecipeClaims(AtomicU64);
+impl RuntimeObserver for RecipeClaims {
+    fn record(&self, event: RuntimeEvent) {
+        if matches!(event, RuntimeEvent::Claim(query) if query.kind == FRONT_STORAGE_KIND) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
 #[test]
 fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
@@ -46,6 +59,8 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
                     errors,
                 )
                 .unwrap();
+                let recipe_claims = Arc::new(RecipeClaims::default());
+                runtime.observe(recipe_claims.clone()).unwrap();
                 let front = program
                     .engine
                     .front_body_queries(
@@ -85,6 +100,25 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
                         errors,
                     )
                     .unwrap();
+                assert!(
+                    program
+                        .engine
+                        .front_storage_graph_queries(
+                            &program.entry,
+                            front.clone(),
+                            growth.clone(),
+                            recipes.clone(),
+                            lower.clone(),
+                            MemoryWeight {
+                                scratch: weight.scratch - 1,
+                                ..weight
+                            },
+                            budget.reserve(8 << 20).unwrap(),
+                            errors,
+                        )
+                        .is_err(),
+                    "a composed recipe cannot exceed its parent's scratch grant"
+                );
                 let graph = program
                     .engine
                     .front_storage_graph_queries(
@@ -175,6 +209,11 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
                         .collect::<Vec<_>>()
                 );
                 assert!(recipes.executions() > 0, "actual source recipes demanded");
+                assert_eq!(
+                    recipe_claims.0.load(Ordering::Relaxed),
+                    0,
+                    "the storage root owns recipe continuations, not scheduler nodes"
+                );
                 let again = runtime.request(&[graph.query()]);
                 let graph_product = runtime.wait(again).unwrap()[0];
                 let held = graph.outcome(graph_product).unwrap();

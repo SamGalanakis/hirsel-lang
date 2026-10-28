@@ -935,8 +935,7 @@ impl Plan {
         let per_definition = 4
             + 2 * usize::from(needs_run)
             + 2 * usize::from(needs_native)
-            + usize::from(needs_ownership)
-            + usize::from(needs_storage);
+            + usize::from(needs_ownership);
         let roots = 2
             + usize::from(needs_safe)
             + usize::from(needs_export)
@@ -2032,13 +2031,8 @@ pub(super) fn install(
             }
         }
     }
-    if let Some((recipes, graph)) = &storage {
+    if let Some((_, graph)) = &storage {
         inventory.insert((graph.query().kind, graph.query().address.0));
-        for path in &definitions {
-            if let Some(query) = recipes.query(path) {
-                inventory.insert((query.kind, query.address.0));
-            }
-        }
     }
     if let Some(query) = run.as_ref().and_then(|run| run.batch_query()) {
         inventory.insert((query.kind, query.address.0));
@@ -2114,10 +2108,7 @@ pub(super) fn install(
             .register(super::proof_export::KIND, export.factory())
             .map_err(registration)?;
     }
-    if let Some((recipes, graph)) = &storage {
-        runtime
-            .register(hirsel_engine::FRONT_STORAGE_KIND, recipes.factory())
-            .map_err(registration)?;
+    if let Some((_, graph)) = &storage {
         runtime
             .register(hirsel_engine::FRONT_STORAGE_GRAPH_KIND, graph.factory())
             .map_err(registration)?;
