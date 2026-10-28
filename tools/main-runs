@@ -236,7 +236,7 @@ def stages(stage, tier, *, planning=False):
 def failing_ids(target, details):
     """What failed in a test: libtest cases as `binary::case`, corpus cases by path."""
     binary = re.sub(r'-shard-\d+$', '', target)
-    cases = re.findall(r'^test (\S+)(?: - should panic)? \.\.\. FAILED$', details, re.M)
+    cases = re.findall(r'^test (\S+)(?: - should panic)? \.\.\. FAILED(?: <[0-9.]+s>)?$', details, re.M)
     cases += re.findall(r'^---- (\S+) stdout ----$', details, re.M)
     ids = [f'{binary}::{case}' for case in cases] + re.findall(r'^(conformance/\S+\.hir): ', details, re.M)
     return list(dict.fromkeys(ids + re.findall(r'"path"\s*:\s*"(conformance/[^"]+\.hir)"', details)))

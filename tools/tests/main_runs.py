@@ -142,6 +142,27 @@ class Lifecycle(unittest.TestCase):
                 self.assertEqual(observation['state'], 'infrastructure' if code == 137 else 'failure')
                 self.assertFalse(observation['complete'])
 
+    def test_timed_failure_uses_its_case_exception_without_suppressing_a_new_failure(self):
+        result = self.result([('known_case', 'FAILED')])
+        result['details'] = result['details'].replace('... FAILED\n', '... FAILED <0.123s>\n')
+        command = ['buck2', 'test', '//:binary-shard-1']
+        reds, _ = self.observe([('binary-shard-1', result)], ['binary::known_case'], command=command)
+        self.assertEqual(reds, {})
+        result['details'] = result['details'].replace('known_case', 'new_case')
+        reds, _ = self.observe([('binary-shard-1', result)], ['binary::known_case'], command=command)
+        self.assertEqual(reds['workspace tests: binary-shard-1']['ids'], ['binary::new_case'])
+
+    def test_expired_cas_upload_is_infrastructure_with_no_executed_bodies(self):
+        result = dict(status=self.events.FAIL,
+                      details='---- STDOUT ----\n\n---- STDERR ----\n'
+                              'Your build requires an artifact that has expired in the RE CAS and Buck does not have it.\n',
+                      provenance=dict(execution='fresh', command_succeeded=False, signed_exit_code=None))
+        reds, status = self.observe([('binary', result)], [])
+        self.assertEqual(reds['workspace tests: binary']['kind'], 'infra')
+        observation = next(o for o in status['observations'] if o['scope'] == 'target')
+        self.assertEqual(observation['state'], 'infrastructure')
+        self.assertFalse(observation['complete'])
+
     def test_stage_exception_runs_and_preserves_failure_recovery_and_infrastructure(self):
         identity = 'stage: cost coverage'
         known = {identity: [identity, 'missing measured rows', 'lane', '2026-10-22']}
