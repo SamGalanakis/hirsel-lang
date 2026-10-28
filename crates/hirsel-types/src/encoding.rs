@@ -78,7 +78,7 @@ fn encode_signature(
         tasks_capability,
         scope_capability,
         heap,
-    } = roles;
+    } = &**roles;
     e.atom(b"hirsel.signature.encoding.v16");
     e.path(definition.path());
     e.tag(match visibility {

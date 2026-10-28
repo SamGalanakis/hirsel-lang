@@ -878,7 +878,7 @@ fn a_function_reference_derives_its_instantiated_error_channel() {
             vec![],
             TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
         );
-        signature.metadata.roles.result_type = Some(path("Result"));
+        std::sync::Arc::make_mut(&mut signature.metadata.roles).result_type = Some(path("Result"));
         let SignatureKind::Function(function) = &mut signature.kind else {
             unreachable!()
         };

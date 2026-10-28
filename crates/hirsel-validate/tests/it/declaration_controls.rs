@@ -1395,7 +1395,7 @@ fn a_lookup_going_from_missing_to_present_invalidates() {
 fn a_change_in_heap_role_selection_invalidates() {
     let heap = |arena: &str| {
         let mut s = function_signature(arena, vec![], TypeKind::Tuple(vec![].into()));
-        s.metadata.roles.heap = Some(HeapRole {
+        std::sync::Arc::make_mut(&mut s.metadata.roles).heap = Some(HeapRole {
             arena: path(arena),
             operation: path("heap"),
         });

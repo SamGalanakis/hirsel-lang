@@ -625,27 +625,29 @@ impl Weight<'_> {
         if let Some(path) = constant_alias {
             self.def_path(path);
         }
-        let hirsel_types::NominalRoles {
-            unsafe_capability,
-            result_type,
-            tasks_capability,
-            scope_capability,
-            heap,
-        } = roles;
-        for path in [
-            unsafe_capability,
-            result_type,
-            tasks_capability,
-            scope_capability,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            self.def_path(path);
-        }
-        if let Some(hirsel_types::HeapRole { arena, operation }) = heap {
-            self.def_path(arena);
-            self.def_path(operation);
+        if self.shared_allocation(std::sync::Arc::as_ptr(roles) as usize, arc_bytes(&**roles)) {
+            let hirsel_types::NominalRoles {
+                unsafe_capability,
+                result_type,
+                tasks_capability,
+                scope_capability,
+                heap,
+            } = &**roles;
+            for path in [
+                unsafe_capability,
+                result_type,
+                tasks_capability,
+                scope_capability,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                self.def_path(path);
+            }
+            if let Some(hirsel_types::HeapRole { arena, operation }) = heap {
+                self.def_path(arena);
+                self.def_path(operation);
+            }
         }
         self.flat_vec(schema);
         match kind {

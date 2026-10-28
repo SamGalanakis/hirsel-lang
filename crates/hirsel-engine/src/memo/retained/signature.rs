@@ -8,6 +8,11 @@ pub(crate) fn retained_signature_payload_bytes(signature: &SignatureRef) -> u64 
         count_shared_repeats: true,
         ..Default::default()
     };
+    signature_payload(&mut weight, signature);
+    weight.bytes
+}
+
+pub(super) fn signature_payload(weight: &mut Weight<'_>, signature: &SignatureRef) {
     weight.signature(signature);
     // These owned containers are outside the old diagnostic signature visitor.
     weight.vec(&signature.metadata.implementations, |w, binder| {
@@ -35,7 +40,6 @@ pub(crate) fn retained_signature_payload_bytes(signature: &SignatureRef) -> u64 
         SignatureKind::Implementation(implementation) => weight.flat_vec(&implementation.members),
         SignatureKind::Const { .. } | SignatureKind::Function(_) | SignatureKind::Type(_) => (),
     }
-    weight.bytes
 }
 
 #[cfg(test)]
@@ -43,6 +47,35 @@ mod tests {
     use super::*;
     use hirsel_types::*;
     use std::sync::Arc;
+    #[test]
+    fn source_headers_charge_shared_roles_once_with_a_complete_allocation_bound() {
+        let owner = hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("role_header"));
+        let ((headers, bound), allocations) = crate::test_alloc::measured(|| {
+            let roles = Arc::new(NominalRoles {
+                result_type: Some(hirsel_syntax::DefPath::core(&"Result".repeat(64))),
+                ..Default::default()
+            });
+            let headers = std::array::from_fn::<_, 4, _>(|_| Arc::new(Signature {
+                definition: owner,
+                metadata: SignatureMetadata { roles: roles.clone(), ..Default::default() },
+                kind: SignatureKind::Const { ty: TypeId::DANGLING, generics: vec![] },
+                fingerprint: Default::default(),
+            }));
+            let (bound, inspection) = crate::test_alloc::measured_independent(|| {
+                let mut names = super::super::NameAllocations::<64>::default();
+                let mut weight = Weight { count_shared_repeats: true, source_names: Some(&mut names), ..Default::default() };
+                for header in &headers { signature_payload(&mut weight, header); }
+                weight.bytes
+            });
+            assert_eq!(inspection.allocations, 0);
+            assert!(bound < headers.iter().map(retained_signature_payload_bytes).sum());
+            (headers, bound)
+        });
+        assert!(allocations.live as u64 <= bound, "{} > {bound}", allocations.live);
+        let (_, released) = crate::test_alloc::measured(|| drop(headers));
+        assert_eq!(-released.live, allocations.live);
+    }
+
     #[test]
     fn retained_headers_cover_owned_binders_members_rules_and_shared_generics_without_allocating() {
         let owner = hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("source.header"));

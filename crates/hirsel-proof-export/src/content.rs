@@ -573,7 +573,8 @@ mod tests {
                         arena: role.clone(),
                         operation: role.clone(),
                     }),
-                };
+                }
+                .into();
                 signature.metadata.recursive_group = Some(ContentHash([9; 32]));
             }
             let signature = Arc::new(signature.clone());

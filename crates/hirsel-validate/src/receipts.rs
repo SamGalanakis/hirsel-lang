@@ -1629,11 +1629,7 @@ mod tests {
         assert!(attempt(&MissingHeap(&current)).is_none());
         for field in ["arena", "operation"] {
             let mut changed = current.clone();
-            let role = changed
-                .get_mut(path("0provider"))
-                .unwrap()
-                .metadata
-                .roles
+            let role = std::sync::Arc::make_mut(&mut changed.get_mut(path("0provider")).unwrap().metadata.roles)
                 .heap
                 .as_mut()
                 .unwrap();

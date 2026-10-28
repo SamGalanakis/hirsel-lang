@@ -1368,9 +1368,9 @@ mod expansion_tests {
             foreign: None,
         })));
         let mut unmarked = (*nominal(Some(function), vec![])).clone();
-        unmarked.metadata.roles.result_type = None;
+        std::sync::Arc::make_mut(&mut unmarked.metadata.roles).result_type = None;
         let mut marked = unmarked.clone();
-        marked.metadata.roles.result_type = Some(path("Result"));
+        std::sync::Arc::make_mut(&mut marked.metadata.roles).result_type = Some(path("Result"));
         let plain = memo.expansion(&unmarked, &vec![].into()).unwrap();
         let error = memo.expansion(&marked, &vec![].into()).unwrap();
         assert_ne!(

@@ -159,7 +159,8 @@ fn type_signature(
                     arena: core("Arena"),
                     operation: core("$intrinsic.heap"),
                 }),
-            },
+            }
+            .into(),
             ..Default::default()
         },
         fingerprint: ast::ContentHash::of_bytes(name.as_bytes()),

@@ -938,7 +938,13 @@ impl QueryEngine {
             return None;
         }
         let variant = self.stored_variant(path, QueryKind::Signature)?;
-        let record: SignatureRecord = self.decode_record(&variant.payload)?;
+        let mut record: SignatureRecord = self.decode_record(&variant.payload)?;
+        if let Ok(output) = &mut record.output {
+            let roles = self.frozen_declarations().metadata().nominal_roles();
+            if output.value.metadata.roles == roles {
+                Arc::make_mut(&mut output.value).metadata.roles = roles;
+            }
+        }
         if record
             .output
             .as_ref()

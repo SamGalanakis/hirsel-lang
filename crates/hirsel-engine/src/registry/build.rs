@@ -1360,7 +1360,7 @@ impl Builder {
                 } else {
                     Visibility::Public
                 },
-                roles: super::nominal_roles(),
+                roles: super::nominal_roles().into(),
                 schema: self.schema,
                 ..Default::default()
             },

@@ -27,6 +27,7 @@ fn metadata(weight: &mut Weight, value: &Metadata) {
         tasks_capability,
         scope_capability,
         heap,
+        nominal_role_cache,
     } = value;
     weight.map(definitions, |w, path, _| w.path(path));
     weight.vec(declarations, |w, site| w.path(&site.definition));
@@ -48,6 +49,24 @@ fn metadata(weight: &mut Weight, value: &Metadata) {
     if let Some(heap) = heap {
         weight.path(&heap.arena);
         weight.path(&heap.operation);
+    }
+    if let Some(roles) = nominal_role_cache.get() {
+        weight.arc(roles);
+        for path in [
+            &roles.unsafe_capability,
+            &roles.result_type,
+            &roles.tasks_capability,
+            &roles.scope_capability,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            weight.path(path);
+        }
+        if let Some(heap) = &roles.heap {
+            weight.path(&heap.arena);
+            weight.path(&heap.operation);
+        }
     }
 }
 impl ModuleInputs {

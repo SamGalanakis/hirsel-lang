@@ -1583,7 +1583,7 @@ impl<'a> Checker<'a> {
         // Canonical heap identity can also be supplied by a referenced snapshot.
         // This preserves the independent validator's typed-heap fixture boundary.
         if roles.heap.is_none() {
-            roles.heap = self.signatures.first_heap();
+            std::sync::Arc::make_mut(&mut roles).heap = self.signatures.first_heap();
         }
         structural_authority(store, t, &roles, generics, &mut |_, path| {
             Ok::<_, hirsel_types::QueryError>(

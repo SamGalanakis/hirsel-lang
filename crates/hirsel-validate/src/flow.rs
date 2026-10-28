@@ -1840,7 +1840,7 @@ impl Checker<'_> {
                     else {
                         continue;
                     };
-                    (function, arguments, hirsel_types::NominalRoles::default())
+                    (function, arguments, std::sync::Arc::default())
                 }
             };
             let store = self.t;

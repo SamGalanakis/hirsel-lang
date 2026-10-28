@@ -235,7 +235,8 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
             tasks_capability: Some(path("Tasks")),
             scope_capability: Some(path("Scope")),
             heap: None,
-        },
+        }
+        .into(),
         ..Default::default()
     };
     assert_ne!(

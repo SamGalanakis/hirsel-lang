@@ -641,13 +641,7 @@ fn normalize_inner(
                 .get(&item.definition.0.package)
                 .and_then(|p| p.wrappers.get(&item.definition))
                 .copied(),
-            roles: NominalRoles {
-                unsafe_capability: input.metadata.unsafe_capability.clone(),
-                result_type: input.metadata.result_type.clone(),
-                tasks_capability: input.metadata.tasks_capability.clone(),
-                scope_capability: input.metadata.scope_capability.clone(),
-                heap: input.metadata.heap.clone(),
-            },
+            roles: input.metadata.nominal_roles(),
         },
 
         definition: DefId::intern(&item.definition),

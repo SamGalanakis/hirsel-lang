@@ -895,7 +895,7 @@ impl Snapshot<Cx> for SignatureMetadata {
             constant_alias: Snapshot::read(r)?,
             unsafe_ffi: Snapshot::read(r)?,
             wrapper: Snapshot::read(r)?,
-            roles: Snapshot::read(r)?,
+            roles: NominalRoles::read(r)?.into(),
             schema: Snapshot::read(r)?,
             recursive_group: if r.next_kind() == hirsel_codec::Next::Bytes {
                 Some(Snapshot::read(r)?)

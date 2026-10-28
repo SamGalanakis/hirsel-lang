@@ -259,9 +259,7 @@ fn signature_entry_bytes(
     match &entry.memo.value {
         Ok(output) => {
             weight.add(arc_bytes(&**output));
-            weight.bytes = weight
-                .bytes
-                .checked_add(retained_signature_payload_bytes(&output.value))?;
+            super::signature::signature_payload(&mut weight, &output.value);
             weight.cloned_vectors = compact_output;
             weight.vec(&output.diagnostics, Weight::diagnostic);
             weight.flat_vec(&output.dependencies);

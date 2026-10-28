@@ -4865,7 +4865,7 @@ fn builtin_handle_authority_is_checked_inside_generic_callable_results() {
         ..Default::default()
     };
     let mut owner = function_signature("main", vec![], TypeKind::Tuple(vec![].into()));
-    owner.metadata.roles = roles.clone();
+    owner.metadata.roles = roles.clone().into();
     f.signatures.insert(id("main"), owner);
     let callback = |result, authority| FunctionType {
         state_promises: Default::default(),
@@ -5039,7 +5039,7 @@ fn heap_allocator_evidence_requires_the_declared_result_and_canonical_arena() {
         ..Default::default()
     };
     let mut arena = function_signature("Arena", vec![], TypeKind::Tuple(vec![].into()));
-    arena.metadata.roles = roles.clone();
+    arena.metadata.roles = roles.clone().into();
     arena.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
         format: None,
@@ -5066,7 +5066,7 @@ fn heap_allocator_evidence_requires_the_declared_result_and_canonical_arena() {
     });
     // Ordinary Arena producer cannot establish the ambient heap refinement.
     let callee = f.signatures.get_mut(&path("callee")).unwrap();
-    callee.metadata.roles = roles;
+    callee.metadata.roles = roles.into();
     let SignatureKind::Function(fun) = &mut callee.kind else {
         unreachable!()
     };

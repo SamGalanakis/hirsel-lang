@@ -39,6 +39,33 @@ pub struct Metadata {
     pub tasks_capability: Option<ast::DefPath>,
     pub scope_capability: Option<ast::DefPath>,
     pub heap: Option<HeapRole>,
+    pub nominal_role_cache: std::sync::OnceLock<std::sync::Arc<NominalRoles>>,
+}
+impl Metadata {
+    /// Share one immutable registry-role selection across this metadata's headers.
+    /// Public input fields remain authoritative if a caller edits them afterward.
+    pub fn nominal_roles(&self) -> std::sync::Arc<NominalRoles> {
+        let make = || NominalRoles {
+            unsafe_capability: self.unsafe_capability.clone(),
+            result_type: self.result_type.clone(),
+            tasks_capability: self.tasks_capability.clone(),
+            scope_capability: self.scope_capability.clone(),
+            heap: self.heap.clone(),
+        };
+        let roles = self
+            .nominal_role_cache
+            .get_or_init(|| std::sync::Arc::new(make()));
+        if roles.unsafe_capability == self.unsafe_capability
+            && roles.result_type == self.result_type
+            && roles.tasks_capability == self.tasks_capability
+            && roles.scope_capability == self.scope_capability
+            && roles.heap == self.heap
+        {
+            roles.clone()
+        } else {
+            std::sync::Arc::new(make())
+        }
+    }
 }
 /// Persistent semantic declaration metadata. Locations/build manifest maps stay outside.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -54,7 +81,7 @@ pub struct SignatureMetadata {
     pub unsafe_ffi: bool,
     /// The trusted safe-wrapper declaration of the package manifest (PROG-4).
     pub wrapper: Option<ForeignWrapper>,
-    pub roles: NominalRoles,
+    pub roles: std::sync::Arc<NominalRoles>,
     /// Intrinsic declaration constraints, supplied by the declaring registry.
     /// Ordinary declarations have no schema constraints.
     pub schema: Vec<SchemaConstraint>,
@@ -86,7 +113,7 @@ impl Default for SignatureMetadata {
             track_caller: false,
             unsafe_ffi: false,
             wrapper: None,
-            roles: NominalRoles::default(),
+            roles: std::sync::Arc::default(),
             schema: vec![],
             recursive_group: None,
             implementations: vec![],
@@ -275,4 +302,26 @@ pub fn schema_failure(
         }
     }
     failures.into_iter().min_by(|(a, _), (b, _)| a.cmp(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nominal_role_selection_shares_equal_headers_and_observes_metadata_edits() {
+        let mut metadata = Metadata {
+            result_type: Some(ast::DefPath::core("Result")),
+            ..Default::default()
+        };
+        let first = metadata.nominal_roles();
+        assert!(std::sync::Arc::ptr_eq(&first, &metadata.nominal_roles()));
+        let mut changed = metadata.clone();
+        changed.result_type = Some(ast::DefPath::core("Other"));
+        assert_ne!(first, changed.nominal_roles());
+        assert_eq!(first.result_type, metadata.result_type);
+        metadata.result_type = None;
+        assert_eq!(metadata.nominal_roles().result_type, None);
+        assert_eq!(first.result_type, Some(ast::DefPath::core("Result")));
+    }
 }

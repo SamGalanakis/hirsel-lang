@@ -456,7 +456,7 @@ pub(crate) fn arena_slot(f: &mut Fixture, storage: Storage) -> u32 {
         ..Default::default()
     };
     let mut arena = function_signature("Arena", vec![], TypeKind::Tuple(vec![].into()));
-    arena.metadata.roles = roles;
+    arena.metadata.roles = roles.into();
     arena.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
         format: None,

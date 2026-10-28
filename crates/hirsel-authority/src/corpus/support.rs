@@ -101,7 +101,8 @@ fn type_signature(
                     arena: path("Arena"),
                     operation: path("$intrinsic.heap"),
                 }),
-            },
+            }
+            .into(),
             ..Default::default()
         },
         fingerprint: ast::ContentHash::of_bytes(name.as_bytes()),

@@ -1085,16 +1085,8 @@ hash_component!(hash_changes_with_wrapper_metadata, |s| s.metadata.wrapper =
         kind: WrapperKind::Pure,
         deterministic: true,
     }));
-hash_component!(hash_changes_with_unsafe_nominal_role, |s| s
-    .metadata
-    .roles
-    .unsafe_capability =
-    Some(def("Unsafe")));
-hash_component!(hash_changes_with_result_nominal_role, |s| s
-    .metadata
-    .roles
-    .result_type =
-    Some(def("Result")));
+hash_component!(hash_changes_with_unsafe_nominal_role, |s| std::sync::Arc::make_mut(&mut s.metadata.roles).unsafe_capability = Some(def("Unsafe")));
+hash_component!(hash_changes_with_result_nominal_role, |s| std::sync::Arc::make_mut(&mut s.metadata.roles).result_type = Some(def("Result")));
 hash_component!(hash_changes_with_drop_allocation, |s| {
     let old = function(s).result;
     let ty = session().intern(Type {

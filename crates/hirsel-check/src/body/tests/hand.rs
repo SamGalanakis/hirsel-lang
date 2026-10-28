@@ -369,7 +369,8 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
                 roles: NominalRoles {
                     result_type: Some(definition.clone()),
                     ..Default::default()
-                },
+                }
+                .into(),
                 ..Default::default()
             },
             kind: SignatureKind::Type(TypeDefinition {
@@ -511,7 +512,8 @@ fn heap_requires_its_complete_private_producer_contract() {
             *body = Some(root);
         }
         for mut signature in super::support::heap_signatures() {
-            fixture.signature.metadata.roles.heap = signature.metadata.roles.heap.clone();
+            std::sync::Arc::make_mut(&mut fixture.signature.metadata.roles).heap =
+                signature.metadata.roles.heap.clone();
             if let SignatureKind::Function(f) = &mut signature.kind {
                 match mutation {
                     0 => f.allocation = Allocation::MayAllocate,
