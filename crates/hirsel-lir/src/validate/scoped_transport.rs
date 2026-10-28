@@ -585,6 +585,19 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                         reject(report, at, result, "callable used as data");
                     }
                 }
+                // Local copies preserve their source's invocation restriction.
+                // The propagation above keeps return, owning-carrier, mutable
+                // hand-back and retaining-call sinks independently forbidden.
+                // Share/Dup change aliasing or credits, not the value's bound.
+                Inst::Copy { result: value, .. } | Inst::Share { value } | Inst::Dup { value } => {
+                    if n[value.index()]
+                        .values()
+                        .flat_map(|roots| &roots.scoped)
+                        .any(|origin| callable_origins.contains(origin))
+                    {
+                        reject(report, at, value, "owning callable copy");
+                    }
+                }
                 Inst::SeqLen { value, .. } => {
                     // The length reads storage without retaining it. Callable
                     // origins cannot be reinterpreted as data observations.

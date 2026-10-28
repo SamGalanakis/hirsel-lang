@@ -1097,3 +1097,54 @@ fn shared_174_copy_acquires_a_root_but_borrowed_reads_keep_the_view() {
         }
     }
 }
+
+#[test]
+fn invocation_local_data_copies_are_bounded_and_copied_results_cannot_escape() {
+    for escape in [false, true] {
+        let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::BLK)], escape.then_some(l::BLK));
+        contract(
+            &mut t,
+            vec![ParameterPath {
+                parameter: 0,
+                fields: vec![],
+            }],
+        );
+        let slot = t.slot(l::BLK, SlotKind::Parameter(0), ROOT);
+        let parameter = t.version_of(slot);
+        t.param(parameter);
+        let address = t.at(ENTRY, slot, &[], &[]);
+        let copied = t.owned(l::BLK);
+        let failure = t.fails();
+        t.builder.push(
+            ENTRY,
+            Inst::Copy {
+                result: copied,
+                address,
+                reaching: parameter,
+                failure,
+            },
+        );
+        t.builder.push(ENTRY, Inst::Share { value: copied });
+        if escape {
+            t.builder.ret(ENTRY, Some(copied));
+        } else {
+            t.release(ENTRY, copied, &[]);
+            t.builder.ret(ENTRY, None);
+        }
+        let errors = check(t);
+        if escape {
+            assert!(
+                errors.iter().any(|error| matches!(
+                    error,
+                    K::ScopedRetention {
+                        operation: "return or error payload",
+                        ..
+                    }
+                )),
+                "{errors:?}"
+            );
+        } else {
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+    }
+}
