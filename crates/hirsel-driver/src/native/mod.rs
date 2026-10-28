@@ -203,6 +203,12 @@ pub(crate) fn settled_callee_metadata(
     facts: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
     runtime: &hirsel_interp::aggregate::RuntimeTypes,
 ) -> Result<hirsel_rt::program::CalleeMetadata, NativeError> {
+    if facts.is_empty() {
+        return Ok(hirsel_rt::program::CalleeMetadata {
+            facts,
+            request_schemas: None,
+        });
+    }
     let failed = |error: String| NativeError::new(StageName::Launch, error);
     let schemas = hirsel_interp::library::runners::core_schema(runtime, "GrantSet")
         .and_then(|grants| {
