@@ -87,6 +87,15 @@ impl NativePreparationQueries {
         if weight.retained < size_of::<Task>() as u64 {
             return Err("native preparation continuation exceeds admission".into());
         }
+        let mut metadata = NativeMetadataWeight::default();
+        metadata.add(size_of::<Self>() + 2 * size_of::<usize>());
+        metadata.tree::<ContentHash, Entry>(definitions.len());
+        for path in definitions {
+            metadata.path(path);
+        }
+        let owner = allowance
+            .split(metadata.bytes())
+            .ok_or("native preparation namespace exceeds admission")?;
         let mut entries = BTreeMap::new();
         for path in definitions {
             let dependency = source
@@ -108,12 +117,6 @@ impl NativePreparationQueries {
                 return Err("duplicate native preparation source".into());
             }
         }
-        let mut metadata = NativeMetadataWeight::default();
-        metadata.add(size_of::<Self>() + 2 * size_of::<usize>());
-        metadata.map(&entries, |w, _, entry| w.path(&entry.path));
-        let owner = allowance
-            .split(metadata.bytes())
-            .ok_or("native preparation namespace exceeds admission")?;
         Ok(Arc::new(Self {
             source,
             entries,
@@ -164,6 +167,30 @@ impl NativePreparationQueries {
         if front.product.source.definition != entry.path {
             return Err(self.errors.protocol);
         }
+        let mut buffer = [0u8; 1024];
+        let len = {
+            let mut writer = std::io::Cursor::new(&mut buffer[..]);
+            serde_json::to_writer(
+                &mut writer,
+                &(
+                    source_product.address.0,
+                    source_product.action.0,
+                    source_product.record,
+                ),
+            )
+            .map_err(|_| self.errors.resource)?;
+            writer.position() as usize
+        };
+        let bytes = &buffer[..len];
+        if bytes.len() as u64 > self.weight.scratch {
+            return Err(self.errors.resource);
+        }
+        let allowance = self
+            .allowance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .split(copied_bytes(&front.product))
+            .ok_or(self.errors.resource)?;
         let declaration =
             super::source::source_declaration(&front.product).map_err(|_| self.errors.protocol)?;
         let anchors = front.product.contracts.as_ref().map_or_else(
@@ -177,45 +204,10 @@ impl NativePreparationQueries {
             .iter()
             .map(crate::native::adapt::requirement)
             .collect::<Vec<_>>();
-        let mut metadata = NativeMetadataWeight::default();
-        metadata.add(size_of::<NativePreparedSource>() + 2 * size_of::<usize>());
-        if let Some(declaration) = &declaration {
-            metadata.flat_vec(&declaration.entry_parameters);
-            metadata.arc(&declaration.declaration);
-            metadata.path(&declaration.declaration.definition);
-            metadata.flat_vec(&declaration.declaration.caller_bodies);
-            metadata.vec(
-                &declaration.declaration.scoped_parameters,
-                |w, parameters| {
-                    w.vec(parameters, |w, parameter| w.flat_vec(&parameter.fields));
-                },
-            );
-        }
-        metadata.flat_vec(&anchors);
-        metadata.vec(&requirements, |w, requirement| {
-            w.path(&requirement.owner);
-            w.path(&requirement.callee);
-            w.flat_vec(&requirement.arguments);
-        });
-        let allowance = self
-            .allowance
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .split(metadata.bytes())
-            .ok_or(self.errors.resource)?;
-        let bytes = serde_json::to_vec(&(
-            source_product.address.0,
-            source_product.action.0,
-            source_product.record,
-        ))
-        .map_err(|_| self.errors.protocol)?;
-        if bytes.len() as u64 > self.weight.scratch {
-            return Err(self.errors.resource);
-        }
         let record = self
             .store
-            .put_content(OUTPUT, &bytes)
-            .filter(|reference| OUTPUT.reference(&bytes) == Some(*reference))
+            .put_content(OUTPUT, bytes)
+            .filter(|reference| OUTPUT.reference(bytes) == Some(*reference))
             .ok_or(self.errors.resource)?;
         let product = ProductRef {
             address: entry.query.address,
@@ -244,6 +236,43 @@ impl NativePreparationQueries {
             .associate_product(product.address, product.action, product.record);
         Ok(product)
     }
+}
+fn copied_bytes(source: &hirsel_engine::NativeDiscoveryProduct) -> u64 {
+    fn vector<T>(weight: &mut NativeMetadataWeight, len: usize) {
+        weight.add(len.saturating_mul(size_of::<T>()));
+    }
+    // These projections clone vectors or collect exact-size slice iterators.
+    // Reserve their requested layouts before allocating any copied view.
+    let mut weight = NativeMetadataWeight::default();
+    weight.add(size_of::<NativePreparedSource>() + 2 * size_of::<usize>());
+    if let Some(contracts) = &source.contracts {
+        weight.add(
+            size_of::<hirsel_layout::instance::InstanceDeclaration>() + 2 * size_of::<usize>(),
+        );
+        weight.path(&source.source.definition);
+        vector::<hirsel_types::TypeId>(&mut weight, contracts.entry_parameters.len());
+        vector::<hirsel_tir::BodyId>(&mut weight, contracts.caller_bodies.len());
+        vector::<Vec<hirsel_lir::abi_types::ParameterPath>>(
+            &mut weight,
+            contracts.scoped_parameters.len(),
+        );
+        for parameters in &contracts.scoped_parameters {
+            vector::<hirsel_lir::abi_types::ParameterPath>(&mut weight, parameters.len());
+            for (_, fields) in parameters {
+                vector::<u32>(&mut weight, fields.len());
+            }
+        }
+        vector::<hirsel_span::Anchor>(&mut weight, contracts.source_anchors.len());
+    } else {
+        vector::<hirsel_span::Anchor>(&mut weight, 1);
+    }
+    vector::<Requirement>(&mut weight, source.requirements.edges.len());
+    for edge in &source.requirements.edges {
+        weight.path(&edge.owner);
+        weight.path(&edge.callee);
+        vector::<hirsel_types::GenericArgument>(&mut weight, edge.arguments.len());
+    }
+    weight.bytes()
 }
 fn query(source: QueryId) -> QueryId {
     QueryId {
