@@ -2262,32 +2262,63 @@ fn evicted_lower_receipts_preserve_program_reuse_and_edit_invalidation() {
 #[test]
 fn evicted_generated_lowerings_preserve_cold_semantic_content() {
     with_compiler_stack(|| {
+        use hirsel_driver::requests::{CompileOperation, CompileResult, CompilerRequests};
         let source = r#"type Point { x:u64 }
 fn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String] { Ok(codegen.body("fn(p:standalone@0/Point)->u64 uses {} { p.x + 12u64 }")) }
 fn sum(p:Point)->u64 uses {} = comptime gen(shape(Point))
 "#;
-        let mut candidate = engine(Arc::new(store::NoneStore)).with_config(CompileConfig {
-            hold_bytes: 0,
+        let fixture = crate::image_fixture::Fixture::new();
+        let source_path = fixture.0.join("generated-held.hir");
+        std::fs::write(&source_path, source).unwrap();
+        let manifest = fixture.0.join("hirsel.json");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"generated-held.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"sum"}}"#).unwrap();
+        let root = path("sum");
+        let config = |hold_bytes| CompileConfig {
+            hold_bytes,
             jobs: hirsel_intern::jobs::Jobs::ONE,
             ..CompileConfig::for_memory_cap(None)
-        });
-        let file = candidate
-            .sources
-            .add("generated-held.hir", source.into())
+        };
+        let mut reference =
+            CompilerRequests::for_host(COMPILER.with_config(config(256 << 20)), config(256 << 20));
+        let expected = reference
+            .execute(
+                &manifest,
+                CompileOperation::Tir {
+                    definition: Some(root.clone()),
+                },
+            )
             .unwrap();
-        candidate.parse_file(file, &default_context()).unwrap();
-        let mut reference = engine(Arc::new(store::NoneStore));
-        let file = reference
-            .sources
-            .add("generated-held.hir", source.into())
-            .unwrap();
-        reference.parse_file(file, &default_context()).unwrap();
-        let root = path("sum");
-        let cold = reference.semantic_program_revision(&root).unwrap();
-        drop(candidate.lower_to_tir(&root).unwrap());
+        let CompileResult::Tir(expected) = &expected.result else {
+            panic!("expected TIR");
+        };
+        let cold = expected.revision.clone();
+        let mut candidate = CompilerRequests::for_host(COMPILER.with_config(config(0)), config(0));
+        let operation = || CompileOperation::Tir {
+            definition: Some(root.clone()),
+        };
+        let warm = candidate.execute(&manifest, operation()).unwrap();
+        let CompileResult::Tir(input) = &warm.result else {
+            panic!("expected TIR");
+        };
+        let held = Arc::downgrade(&input.definition);
+        drop(warm);
+        assert!(
+            held.upgrade().is_none(),
+            "zero hold keeps no settled generated TIR"
+        );
         for _ in 0..2 {
-            assert_eq!(candidate.semantic_program_revision(&root).unwrap(), cold);
-            assert_eq!(candidate.lower_hold_stats().bytes, 0);
+            let output = candidate.execute(&manifest, operation()).unwrap();
+            let CompileResult::Tir(input) = &output.result else {
+                panic!("expected TIR");
+            };
+            assert_eq!(input.revision, cold);
+            assert_eq!(output.work.hold_bytes, 0);
+            let held = Arc::downgrade(&input.definition);
+            drop(output);
+            assert!(
+                held.upgrade().is_none(),
+                "only in-flight ownership survives"
+            );
         }
     });
 }
