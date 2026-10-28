@@ -1,5 +1,5 @@
 //! Source GEN-5 over every required checked root. Native reachability never
-//! selects this root set. Pending reads retain the frontier and bounded edges;
+//! selects this root set. Pending reads retain the frontier and compact facts;
 //! factories and output inspection execute no compiler phase.
 use super::*;
 use crate::runtime::*;
@@ -8,14 +8,14 @@ use std::{sync::Mutex, task::Poll};
 pub const FRONT_GROWTH_KIND: u32 = 0x4600_0008;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0009,
-    schema: 1,
+    schema: 2,
 };
 const FAILURE: Domain = Domain {
     kind: 0x4600_000c,
     schema: 1,
 };
 struct Data {
-    growth: Arc<ParameterGrowth>,
+    facets: Arc<SourceGrowthFacets>,
     diagnostics: Arc<Vec<Diagnostic>>,
     reads: Arc<Reads>,
 }
@@ -38,7 +38,7 @@ pub struct FrontGrowthQueries {
 }
 #[derive(Clone)]
 pub struct FrontGrowthOutput {
-    pub growth: Arc<ParameterGrowth>,
+    pub facets: Arc<SourceGrowthFacets>,
     pub diagnostics: Arc<Vec<Diagnostic>>,
     pub reads: Arc<Reads>,
     _owner: Arc<FrontGrowthQueries>,
@@ -59,6 +59,15 @@ impl FrontGrowthQueries {
                 (definitions.len() as u64).checked_mul(std::mem::size_of::<QueryId>() as u64)?,
             )
     }
+    fn producer(&self) -> SourceGrowthProducer<'_> {
+        SourceGrowthProducer {
+            records: &self.records,
+            source: &self.items,
+            store: &*self.store,
+            namespace: self.query.address,
+            scratch: self.weight.scratch,
+        }
+    }
     pub fn failure(&self, reference: Reference) -> Option<QueryError> {
         self.failure
             .lock()
@@ -76,7 +85,7 @@ impl FrontGrowthQueries {
         let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
         let (selected, data) = completed.as_ref()?;
         (*selected == product).then(|| FrontGrowthOutput {
-            growth: data.growth.clone(),
+            facets: data.facets.clone(),
             diagnostics: data.diagnostics.clone(),
             reads: data.reads.clone(),
             _owner: self.clone(),
@@ -89,11 +98,17 @@ impl QueryFactory for Factory {
         if id != self.0.query {
             return Err(self.0.errors.protocol);
         }
+        let fact_bytes = (self.0.roots.len() as u64)
+            .saturating_mul(std::mem::size_of::<SourceGrowthFact>() as u64);
+        if fact_bytes > self.0.output_budget {
+            return Err(self.0.errors.resource);
+        }
         Ok(Box::new(Task {
             queries: self.0.clone(),
             selected: vec![None; self.0.roots.len()],
             cursor: 0,
-            edges: Vec::new(),
+            facts: Vec::with_capacity(self.0.roots.len()),
+            fact_bytes,
             table_keys: BTreeMap::new(),
             required: BTreeMap::new(),
             reads: ReadsBuilder::new(),
@@ -105,7 +120,8 @@ struct Task {
     queries: Arc<FrontGrowthQueries>,
     selected: Vec<Option<Result<ProductRef, Reference>>>,
     cursor: usize,
-    edges: Vec<crate::GrowthEdge>,
+    facts: Vec<SourceGrowthFact>,
+    fact_bytes: u64,
     table_keys: BTreeMap<DefPath, Arc<crate::table_keys::TableKeyUse>>,
     required: BTreeMap<DefPath, BTreeSet<usize>>,
     reads: ReadsBuilder,
@@ -172,14 +188,24 @@ impl Task {
                 checked.table_keys,
             );
             self.reads.merge(&checked.reads);
-            self.edges
-                .extend(checked.summary.growth.edges.iter().cloned());
-            if (self.edges.len() as u64)
-                .saturating_mul(std::mem::size_of::<crate::GrowthEdge>() as u64)
-                > self.queries.output_budget
-            {
+            let observed = selected
+                .map(|product| product.action.0)
+                .unwrap_or(reference.output.0);
+            let Some(fact) = self.queries.producer().fact_observed(
+                self.queries.roots[self.cursor].address,
+                checked.summary,
+                reference,
+                observed,
+            ) else {
+                return Poll::Ready(Err(self.queries.errors.resource));
+            };
+            self.fact_bytes = self.fact_bytes.saturating_add(
+                fact.input_bytes() - std::mem::size_of::<SourceGrowthFact>() as u64,
+            );
+            if self.fact_bytes > self.queries.output_budget {
                 return Poll::Ready(Err(self.queries.errors.resource));
             }
+            self.facts.push(fact);
             self.cursor += 1;
         }
         if self.cursor < self.selected.len() {
@@ -222,31 +248,48 @@ impl Task {
                 return Err(reference);
             }
         };
-        let growth = ParameterGrowth {
-            edges: std::mem::take(&mut self.edges).into(),
-        };
+        let facts = std::mem::take(&mut self.facts);
+        let facets = queries
+            .producer()
+            .settle(&facts)
+            .ok_or(queries.errors.resource)?;
+        drop(facts);
         let diagnostics = crate::select_diagnostics(
             table_diagnostics
                 .into_iter()
-                .chain(crate::growing_sites(&growth.edges).into_iter().map(|site| {
-                    Diagnostic::error(
-                        const { RuleId::of("GEN-5") },
-                        site,
-                        "a recursive instantiation cycle grows its type arguments",
-                    )
-                }))
+                .chain(
+                    facets
+                        .components
+                        .iter()
+                        .flat_map(|component| component.growing.iter().copied())
+                        .map(|site| {
+                            Diagnostic::error(
+                                const { RuleId::of("GEN-5") },
+                                site,
+                                "a recursive instantiation cycle grows its type arguments",
+                            )
+                        }),
+                )
                 .collect(),
             Some(&queries.sources),
         );
+        let outputs: Vec<_> = facets
+            .components
+            .iter()
+            .map(|component| component.product.record)
+            .collect();
         let bytes = queries
             .records
-            .encode(&*queries.items, &(&growth, &diagnostics, &reads))
+            .encode(
+                &*queries.items,
+                &(facets.membership.record, &outputs, &diagnostics, &reads),
+            )
             .ok_or(queries.errors.resource)?;
         if bytes.len() as u64 > queries.weight.scratch {
             return Err(queries.errors.resource);
         }
         let data = Arc::new(Data {
-            growth: Arc::new(growth),
+            facets: Arc::new(facets),
             diagnostics: Arc::new(diagnostics),
             reads: queries
                 .front
@@ -260,12 +303,15 @@ impl Task {
             &data,
             |w,
              Data {
-                 growth,
+                 facets,
                  diagnostics,
                  reads,
              }| {
-                w.arc(growth, |w, growth| {
-                    w.add(std::mem::size_of_val(&*growth.edges))
+                w.arc(facets, |w, facets| {
+                    w.vec(&facets.components, |w, component| {
+                        w.add(std::mem::size_of_val(&*component.members));
+                        w.add(std::mem::size_of_val(&*component.growing));
+                    });
                 });
                 w.arc(diagnostics, |w, diagnostics| {
                     w.vec(diagnostics, |w, diagnostic| w.diagnostic(diagnostic))
@@ -280,18 +326,11 @@ impl Task {
             .store
             .put_content(OUTPUT, &bytes)
             .ok_or(queries.errors.resource)?;
-        // Canonical required member outputs, not completion order or type IDs,
-        // identify the actual source-growth computation.
-        let mut members = Vec::new();
-        for selected in self.selected.iter().flatten() {
-            match selected {
-                Ok(product) => members.extend(product.record.output.0.0),
-                Err(reference) => members.extend(reference.output.0.0),
-            }
-        }
+        // Downstream growth observes settled facets, not every checked body.
+        // Current source observations remain mandatory transaction evidence.
         let action = hirsel_artifact_store::Action(ContentHash::of_parts(
-            "hirsel.front.source-growth.action.v1",
-            [queries.query.address.0.0.as_slice(), members.as_slice()],
+            "hirsel.front.source-growth.action.v2",
+            [queries.query.address.0.0.as_slice(), bytes.as_slice()],
         ));
         let product = ProductRef {
             address: queries.query.address,

@@ -14,11 +14,12 @@ fn parameter(id: DefId) -> (DefId, GenericParameterRef) {
 }
 
 fn context() -> (QueryEngine, NativeRecordContext, Vec<DefId>, Vec<Span>) {
+    context_with("fn a(){}\nfn b(){}\nfn c(){}\n")
+}
+
+fn context_with(text: &str) -> (QueryEngine, NativeRecordContext, Vec<DefId>, Vec<Span>) {
     let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
-    let file = engine
-        .sources
-        .add("components.hir", "fn a(){}\nfn b(){}\nfn c(){}\n".into())
-        .unwrap();
+    let file = engine.sources.add("components.hir", text.into()).unwrap();
     let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
     let context = crate::default_context();
     let parsed = hirsel_parser::parse(file, tokens, &context, &mut engine.sources);
@@ -260,4 +261,100 @@ fn independently_selected_roots_sharing_a_lexical_owner_all_contribute() {
         ..producer
     };
     assert!(bounded.settle(&[]).is_none());
+}
+
+#[test]
+fn reordered_sources_preserve_canonical_settled_component_bytes() {
+    let mut previous = None;
+    for text in ["fn a(){}\nfn b(){}\n", "fn b(){}\nfn a(){}\n"] {
+        let (engine, source, ids, sites) = context_with(text);
+        let store = crate::store::MemStore::default();
+        let records = NativeRecords::new(
+            engine.types().clone(),
+            Arc::new(crate::store::MemStore::default()),
+        );
+        let producer = SourceGrowthProducer {
+            records: &records,
+            source: &source,
+            store: &store,
+            namespace: Address(ContentHash::of_bytes(b"canonical source order")),
+            scratch: 8 << 20,
+        };
+        let reads = ReadsBuilder::new().finish().unwrap();
+        let selected = FACT.reference(b"accepted checked output").unwrap();
+        let facts: Vec<_> = (0..2)
+            .map(|i| {
+                producer
+                    .fact(
+                        Address(ids[i].path().fingerprint()),
+                        summary(
+                            ids[i],
+                            vec![(parameter(ids[i]), parameter(ids[1 - i]), true, sites[i])],
+                        ),
+                        &reads,
+                        selected,
+                    )
+                    .unwrap()
+            })
+            .collect();
+        let facets = producer.settle(&facts).unwrap();
+        assert_eq!(facets.components.len(), 1);
+        let component = &facets.components[0];
+        let owners: Vec<_> = component
+            .growing
+            .iter()
+            .map(|site| source.record_owner(site.anchor).unwrap().0.0.name)
+            .collect();
+        assert_eq!(owners, ["a", "b"]);
+        if let Some(previous) = previous {
+            assert_eq!(component.product.record, previous);
+        }
+        previous = Some(component.product.record);
+    }
+}
+
+#[test]
+fn stored_component_bytes_cannot_silence_an_unexecuted_growing_cycle() {
+    let (engine, source, ids, sites) = context();
+    let store = crate::store::MemStore::default();
+    let records = NativeRecords::new(
+        engine.types().clone(),
+        Arc::new(crate::store::MemStore::default()),
+    );
+    let producer = SourceGrowthProducer {
+        records: &records,
+        source: &source,
+        store: &store,
+        namespace: Address(ContentHash::of_bytes(b"untrusted growth bytes")),
+        scratch: 8 << 20,
+    };
+    let reads = ReadsBuilder::new().finish().unwrap();
+    let fact = producer
+        .fact(
+            Address(ids[0].path().fingerprint()),
+            summary(
+                ids[0],
+                vec![(parameter(ids[0]), parameter(ids[0]), true, sites[0])],
+            ),
+            &reads,
+            FACT.reference(b"accepted checked output").unwrap(),
+        )
+        .unwrap();
+    let facets = producer.settle(std::slice::from_ref(&fact)).unwrap();
+    let component = &facets.components[0];
+    let forged = records
+        .encode(&source, &(&component.members, Vec::<Span>::new()))
+        .unwrap();
+    let reference = store.put_content(SETTLED, &forged).unwrap();
+    store.associate_product(
+        component.product.address,
+        component.product.action,
+        reference,
+    );
+    let actual = producer.settle(&[fact]).unwrap();
+    assert_eq!(&*actual.components[0].growing, &[sites[0]]);
+    assert_eq!(
+        actual.components[0].product.record,
+        component.product.record
+    );
 }
