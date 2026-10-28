@@ -96,38 +96,25 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
                 ),
             )
             .unwrap();
-        let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+        let checked = engine.parse_file(file, &default_context()).unwrap();
         assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
-        let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-        let mut declarations =
-            NativeDeclarations::collect(&mut engine, &mut discovery, &[]).unwrap();
-        let paths = declarations
-            .context
-            .sources
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        let reader = engine
-            .native_original_reader(&paths, store.clone())
+        let mut inspect = entry_path(&default_context());
+        inspect.0.name = "inspect".into();
+        let facts = crate::native_front_fixture::products(&mut engine, &[inspect.clone()]).unwrap();
+        let front_context = facts.original_context.clone();
+        let products: std::collections::BTreeMap<_, _> = facts
+            .originals
+            .iter()
+            .map(|product| (product.definition.clone(), (**product).clone()))
+            .collect();
+        let reader = facts
+            .original_context
+            .reader(
+                facts.originals.iter().map(|product| (**product).clone()),
+                store.clone(),
+            )
             .unwrap();
-        let front_context = Arc::new(engine.native_original_context(&paths).unwrap());
-        let records = NativeRecords::new(engine.types().clone(), store.clone());
-        let mut products = std::collections::BTreeMap::new();
-        for path in &paths {
-            let front = Front::new(&reader);
-            let original = front.original(path).unwrap();
-            let bytes = records.encode(&engine, original.definition()).unwrap();
-            products.insert(
-                path.clone(),
-                NativeOriginalProduct {
-                    definition: path.clone(),
-                    implementation_revision: original.implementation_revision(),
-                    signature: original.definition().signature_hash,
-                    body: store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap(),
-                    verified: original.output().cloned(),
-                },
-            );
-        }
+        let declarations = NativeDeclarations::from_front(facts).unwrap();
         let front = Front::new(&reader);
         let mut inspect = entry_path(&default_context());
         inspect.0.name = "inspect".into();
@@ -146,7 +133,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
         }];
         let mut read = inspect.clone();
         read.0.name = if forward { "forward_again" } else { "forward" }.into();
-        let original = declarations.body(&mut engine, &read).unwrap();
+        let original = reader.read(&read).unwrap().definition().clone();
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let owners = hirsel_rc::library::owners(
             &declarations.program.types,
@@ -403,19 +390,18 @@ pub fn inspect(root:List[u64])->u64 {forward(root)+forward_again(root)}
                 ),
             )
             .unwrap();
-        let checked = check_progress(&mut changed, file, &default_context()).unwrap();
+        let checked = changed.parse_file(file, &default_context()).unwrap();
         assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
-        let mut discovery = NativeDiscoveryCache::new(changed.types().clone(), store.clone());
-        let declarations = NativeDeclarations::collect(&mut changed, &mut discovery, &[]).unwrap();
-        let paths = declarations
-            .context
-            .sources
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        let reader = changed
-            .native_original_reader(&paths, store.clone())
+        let facts =
+            crate::native_front_fixture::products(&mut changed, &[inspect.clone()]).unwrap();
+        let reader = facts
+            .original_context
+            .reader(
+                facts.originals.iter().map(|product| (**product).clone()),
+                store.clone(),
+            )
             .unwrap();
+        let declarations = NativeDeclarations::from_front(facts).unwrap();
         let changed = NativeInstanceInputs::from_products(declarations, reader).unwrap();
         let stale = demand
             .instance_from(&mut changed.provider(), &address, &options)
