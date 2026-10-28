@@ -213,6 +213,9 @@ fn run_growth_with_sharing(
                 return crate::STATUS_OK;
             }
             if refuse {
+                // Observe settled state at an explicit budget boundary. The
+                // accepted allocation may still belong to a private lease.
+                assert_eq!(engine::host_segment_barrier(ctx), Ok(true));
                 let state = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
                 for _ in 0..3 {
                     assert_eq!(request.block, old, "refusal retains the input owner");
@@ -491,6 +494,7 @@ fn run_region_storage(
             crate::stop::set_running(std::ptr::null_mut());
             crate::tasks::role::enter(ctx);
             assert_eq!(serve(ctx, &raw mut *native), Ok(!refuse));
+            assert_eq!(engine::host_segment_barrier(ctx), Ok(true));
             let state = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
             assert_eq!(state.level, crate::region::SEGMENT_SIZE as u64);
             if refuse {
@@ -598,6 +602,7 @@ fn run_region_storage(
                         )
                         .unwrap()
                 });
+                assert_eq!(engine::host_segment_barrier(ctx), Ok(true));
                 let before_growth =
                     engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled.level);
                 let before_segments = (*ctx).pool().active_bytes();
@@ -606,6 +611,7 @@ fn run_region_storage(
                 crate::tasks::role::enter(ctx);
                 let blocked = held.is_some();
                 assert_eq!(serve(ctx, &raw mut *native), Ok(!blocked));
+                assert_eq!(engine::host_segment_barrier(ctx), Ok(true));
                 let charged = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
                 if blocked {
                     for _ in 0..3 {

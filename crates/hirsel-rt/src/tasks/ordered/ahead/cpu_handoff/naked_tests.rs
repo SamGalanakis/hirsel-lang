@@ -184,17 +184,23 @@ fn run_prefix(
                     assert!(matches!(
                         (nonhead, allocation),
                         (true, engine::CpuAllocation::Summarized)
-                            | (false, engine::CpuAllocation::Settled)
+                            | (false, engine::CpuAllocation::Leased)
                     ));
                 }
                 if let Some(head) = head {
+                    engine::fuel_out(ctx);
                     engine::with_driver(ctx, |d| d.frontier = Some(head));
+                    engine::fuel_in(ctx);
                 }
                 crate::tasks::role::release(ctx);
                 crate::stop::set_running(ctx);
             }
             let before_publication =
                 engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
+            assert_eq!(
+                before_publication, initial,
+                "allocation leases stay private"
+            );
             (*ctx).view.compiled.fuel -= 3;
             crate::fiber::switch(&raw mut native.physical.idle_sp, sp);
             assert_eq!(native.physical.reason, 16);

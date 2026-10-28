@@ -151,8 +151,27 @@ fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool, nonhead:
                     );
                     assert_eq!(serve(ctx, &raw mut *native), Ok(false));
                 }
+                // The real dispatcher captures a saved younger prefix before
+                // promotion. Return its unused lease on that same frontier.
+                engine::fuel_out(ctx);
                 engine::with_driver(ctx, |d| d.frontier = Some(head));
                 assert_eq!(serve(ctx, &raw mut *native), Ok(false));
+            } else {
+                let projected = engine::with_driver(ctx, |d| {
+                    assert_eq!(d.frontier.as_ref().unwrap().settled, initial);
+                    let mut state = initial;
+                    state.settle(&d.stretches[&task]).unwrap();
+                    state
+                });
+                assert_eq!(projected.level, initial.level + bytes);
+                assert_eq!(projected.fuel, initial.fuel - 3);
+                if refuse {
+                    // A physical retry, rather than each allocation, closes
+                    // the head lease and settles this admitted prefix once.
+                    assert_eq!(serve(ctx, &raw mut *native), Ok(false));
+                } else {
+                    assert_eq!(engine::host_segment_barrier(ctx), Ok(true));
+                }
             }
             let admitted = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
             assert_eq!(admitted.level, initial.level + bytes);

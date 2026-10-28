@@ -88,21 +88,41 @@ fn ordered_replay_width(width: usize) {
 fn ordered_allocation_memory_fixture(width: usize, backend: &str, root: &std::path::Path) {
     let root = root.join(format!("memory-{backend}"));
     fs::create_dir(&root).unwrap();
+    let mut delay_result = 1u64;
+    for i in 0..2_000_000 {
+        delay_result = delay_result
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(i);
+        delay_result ^= delay_result >> 29;
+    }
     let source = format!(
         r#"
 pub fn main(rt: Io) -> Result[(), GrantError] {{
   let tasks = io.tasks(rt)?
   let rows = core@1/cpu.map_scoped(tasks, {width}u32,
-    fn() -> List[u64] uses {{}} {{ [1u64] }},
+    fn() -> List[u64] uses {{}} {{ [1u64, 2u64] }},
     fn(take job: u64) -> unique List[u64] uses {{}} {{
       let mut out = [job]
       list.reserve(mut out, 128u64)
-      let mut pressure = [job]
-      list.reserve(mut pressure, 262144u64)
-      list.push(mut out, pressure[0] + 7u64)
+      if job == 1u64 {{
+        list.reserve(mut out, 65536u64)
+        let mut delay = job
+        for i in 0u64..2000000u64 {{
+          delay = int.wrapping_add(int.wrapping_mul(delay, 6364136223846793005u64), i)
+          delay = delay ^ (delay >> 29u64)
+        }}
+        out[0] = (delay ^ {delay_result}u64) + job
+      }}
+      if job == 2u64 {{
+        let mut pressure = [job]
+        list.reserve(mut pressure, 262144u64)
+        list.push(mut out, pressure[0] + 7u64)
+      }} else {{
+        list.push(mut out, job + 7u64)
+      }}
       take out
     }})
-  failure.check(rows == Ok([[1u64, 8u64]]), Bounds())
+  failure.check(rows == Ok([[1u64, 8u64], [2u64, 9u64]]), Bounds())
   Ok(())
 }}
 "#
@@ -138,12 +158,30 @@ pub fn main(rt: Io) -> Result[(), GrantError] {{
         .events
         .iter()
         .find_map(|event| match &event.request {
-            hirsel_rt::io::Request::CpuSummary(summary) => Some(summary),
+            hirsel_rt::io::Request::CpuSummary(summary) if summary.ordinal == 1 => Some(summary),
             _ => None,
         })
         .unwrap();
-    for grant_only in [false, true] {
-        ordered_allocation_memory_cut(&executable, &root, &grants, summary, grant_only);
+    let job_fuel: u64 = recording
+        .events
+        .iter()
+        .filter_map(|event| match &event.request {
+            hirsel_rt::io::Request::CpuSummary(summary) => summary.native.as_ref(),
+            _ => None,
+        })
+        .flat_map(|summary| &summary.pieces)
+        .map(|piece| piece.fuel)
+        .sum();
+    for fueled in [false, true] {
+        if fueled {
+            authority["budgets"] = serde_json::json!({
+                "provider": "budgets.limits@2", "fuel": job_fuel + 65536
+            });
+        }
+        fs::write(&grants, authority.to_string()).unwrap();
+        for grant_only in [false, true] {
+            ordered_allocation_memory_cut(&executable, &root, &grants, summary, grant_only);
+        }
     }
 }
 
@@ -159,8 +197,9 @@ fn ordered_allocation_memory_cut(
     let piece = &native.pieces[0];
     let start = native.level.checked_add_signed(-piece.net).unwrap();
     let peak = piece.envelope.last().unwrap().1 as u64;
-    // Small mapper allocations fit; the temporary large reserve does not.
-    // Leave room for publisher slab padding in the physical batch ledger too.
+    // The older job retains a large result while the younger job allocates.
+    // Half the younger peak fits above that settled prefix, so its cut is
+    // inside job 1 rather than in publisher backing or the older job.
     let limit = start + peak / 2;
     let mut reference = None;
     for reorder in ["off", "auto"] {
@@ -170,9 +209,10 @@ fn ordered_allocation_memory_cut(
         if grant_only {
             authority["io"]["cpu"]["max_batch_bytes"] = serde_json::json!(limit);
         } else {
-            authority["budgets"] = serde_json::json!({
-                "provider": "budgets.limits@2", "memory_bytes": limit
-            });
+            if authority["budgets"].is_null() {
+                authority["budgets"] = serde_json::json!({"provider": "budgets.limits@2"});
+            }
+            authority["budgets"]["memory_bytes"] = serde_json::json!(limit);
         }
         let limited = root.join("memory-cut.json");
         fs::write(&limited, authority.to_string()).unwrap();
@@ -205,11 +245,18 @@ fn ordered_allocation_memory_cut(
             .unwrap();
         assert_eq!(
             terminal["task"],
-            serde_json::json!([0]),
+            serde_json::json!([1]),
             "limit {limit}, start {start}, peak {peak}, grant-only {grant_only}, {reorder}: {native:?}\n{}",
             std::str::from_utf8(&canonical).unwrap()
         );
         let mut recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
+        assert!(
+            recording.events.iter().any(|event| matches!(
+                &event.request,
+                hirsel_rt::io::Request::CpuSummary(summary) if summary.ordinal == 0
+            )),
+            "job 0 must retire before the selected job 1 cut"
+        );
         let binding = recording.binding.as_mut().unwrap();
         binding.admitted_at = 0;
         binding.placement = None;

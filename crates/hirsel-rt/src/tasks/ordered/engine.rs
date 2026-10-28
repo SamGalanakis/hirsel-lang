@@ -206,27 +206,38 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
 }
 
 fn capture_fuel(ctx: *mut TaskCtx) {
+    let (task, driver) = fuel_state(ctx);
+    retire_allocation_lease(driver, task);
+    capture_charges(ctx, task, driver);
+}
+
+fn capture_frees(ctx: *mut TaskCtx, task: TaskId, driver: &mut Driver) {
+    let freed = unsafe { (*ctx).ordered_freed.replace(0) };
+    if freed == 0 {
+        return;
+    }
+    let budgets = driver.budgets;
+    driver
+        .stretches
+        .entry(task)
+        .or_insert_with(|| Stretch::new(budgets))
+        .free(freed);
+    if let Some(lease) = driver.cpu_allocation_leases.get_mut(&task)
+        && lease.speculative
+    {
+        // Unspent reservation is not allocated storage. Return it before a
+        // free can credit bytes from an older, already settled allocation.
+        lease.freed = lease.freed.saturating_add(freed);
+    } else if let Some(frontier) = &mut driver.frontier {
+        frontier.credit_speculative(task, freed);
+    }
+}
+
+fn capture_charges(ctx: *mut TaskCtx, task: TaskId, driver: &mut Driver) {
     let word = unsafe { (*ctx).view.compiled.fuel };
     unsafe { (*ctx).ordered_charge_trace.capture(word) };
     let remaining = word.max(0) as u64;
-    let (task, driver) = fuel_state(ctx);
-    // A lease is valid only within this uninterrupted charge prefix. Captures
-    // precede every save and canonical boundary that can change its frontier.
-    driver.cpu_allocation_leases.remove(&task);
-    let budgets = driver.budgets;
-    let freed = unsafe { (*ctx).ordered_freed.replace(0) };
-    if freed != 0 {
-        driver
-            .stretches
-            .entry(task)
-            .or_insert_with(|| Stretch::new(budgets))
-            .free(freed);
-        // A free may be older settled storage; only currently reserved
-        // speculative bytes can replenish the speculative allowance.
-        if let Some(frontier) = &mut driver.frontier {
-            frontier.credit_speculative(task, freed);
-        }
-    }
+    capture_frees(ctx, task, driver);
     let grant = driver
         .fuel_grants
         .insert(task, remaining)
@@ -235,14 +246,13 @@ fn capture_fuel(ctx: *mut TaskCtx) {
         .saturating_sub(remaining)
         .saturating_add(u64::from(word < 0));
     if consumed != 0 {
+        let budgets = driver.budgets;
         driver
             .stretches
             .entry(task)
             .or_insert_with(|| Stretch::new(budgets))
             .fuel_points(consumed);
     }
-    // A negative word denotes the failed point already counted above. Clear
-    // it before a pause, so saving this frame cannot charge that point twice.
     if word < 0 {
         unsafe { (*ctx).heap().set_fuel(0) };
     }
@@ -331,7 +341,7 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 /// request and logical budget untouched; only head promotion can resume it.
 pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
     unsafe { super::ahead::barrier(ctx) };
-    if lease_cpu_allocation(ctx, bytes) {
+    if lease_cpu_allocation(ctx, bytes).is_some() {
         unsafe {
             (*ctx)
                 .ordered_charge_trace
@@ -2524,72 +2534,132 @@ pub(crate) enum CpuAllocation {
     Leased,
 }
 
-/// Consume a conservative head lease. Refill checks the accumulated prefix
-/// against both limits, but does not settle it or introduce a receipt piece.
-/// Fuel-bearing prefixes retain the exact allocation/fuel interleaving below.
-fn lease_cpu_allocation(ctx: *mut TaskCtx, bytes: u64) -> bool {
+pub(super) struct AllocationLease {
+    remaining: u64,
+    speculative: bool,
+    freed: u64,
+}
+
+fn retire_allocation_lease(driver: &mut Driver, task: TaskId) {
+    if let Some(lease) = driver.cpu_allocation_leases.remove(&task)
+        && lease.speculative
+    {
+        let frontier = driver.frontier.as_mut().expect("live lease frontier");
+        frontier.free_speculative(task, lease.remaining);
+        frontier.credit_speculative(task, lease.freed);
+    }
+}
+
+/// Allocation consumes private capacity. Refills bound a head prefix by its
+/// run/grant room and reserve a younger prefix's speculative capacity in one
+/// batch. Actual charges retain the bounded envelope and exact fuel offsets.
+fn lease_cpu_allocation(ctx: *mut TaskCtx, bytes: u64) -> Option<CpuAllocation> {
     with_current_driver(ctx, |task, driver| {
-        if driver.budgets.fuel || !driver.memory || !driver.head_ready(task) {
-            return false;
+        if !driver.memory {
+            return None;
         }
-        let limit = driver
-            .cpu_batch
-            .as_ref()
-            .and_then(|batch| batch.limit(task))
-            .unwrap_or(u64::MAX);
-        let budgets = driver.budgets;
-        let freed = unsafe { (*ctx).ordered_freed.replace(0) };
-        if freed != 0 {
-            driver
+        let nonhead = driver.frontier.as_ref().unwrap().head() != Some(task);
+        if !nonhead && !driver.head_ready(task) {
+            return None;
+        }
+        if driver.budgets.fuel {
+            capture_charges(ctx, task, driver);
+        } else {
+            capture_frees(ctx, task, driver);
+        }
+        if driver.budgets.fuel && nonhead {
+            let frontier = driver.frontier.as_ref().unwrap();
+            let fuel = frontier
+                .logged_fuel(task)
+                .saturating_add(driver.stretches.get(&task).map_or(0, Stretch::fuel_charges));
+            if fuel > frontier.settled.fuel {
+                return None;
+            }
+        }
+        if driver.budgets.fuel
+            && driver
                 .stretches
-                .entry(task)
-                .or_insert_with(|| Stretch::new(budgets))
-                .free(freed);
-            driver
-                .frontier
-                .as_mut()
-                .unwrap()
-                .credit_speculative(task, freed);
+                .get(&task)
+                .is_some_and(|prefix| prefix.allocation_pauses(bytes))
+        {
+            return None;
         }
-        let lease = driver.cpu_allocation_leases.entry(task).or_default();
-        if *lease < bytes {
+        let covered = driver
+            .cpu_allocation_leases
+            .get_mut(&task)
+            .is_some_and(|lease| {
+                if lease.speculative == nonhead && lease.remaining >= bytes {
+                    lease.remaining -= bytes;
+                    true
+                } else {
+                    false
+                }
+            });
+        if !covered {
+            retire_allocation_lease(driver, task);
+            let limit = driver
+                .cpu_batch
+                .as_ref()
+                .and_then(|batch| batch.limit(task))
+                .unwrap_or(u64::MAX);
             let mut state = driver.frontier.as_ref().unwrap().settled;
             state.limit = state.limit.min(limit);
             if let Some(prefix) = driver.stretches.get(&task)
                 && state.settle(prefix).is_err()
             {
-                *lease = 0;
-                return false;
+                return None;
             }
             let room = state.limit.saturating_sub(state.level);
             if bytes > room {
-                *lease = 0;
-                return false;
+                return None;
             }
-            *lease = room.min(bytes.max(64 * 1024));
+            let mut capacity = room.min(bytes.max(64 * 1024));
+            if nonhead {
+                let prefix_fuel = driver.stretches.get(&task).map_or(0, Stretch::fuel_charges);
+                let frontier = driver.frontier.as_mut().unwrap();
+                let fuel = frontier.logged_fuel(task).saturating_add(prefix_fuel);
+                if frontier.reserve(task, capacity, fuel).is_err() {
+                    capacity = bytes;
+                    if frontier.reserve(task, capacity, fuel).is_err() {
+                        return None;
+                    }
+                }
+            }
+            driver.cpu_allocation_leases.insert(
+                task,
+                AllocationLease {
+                    remaining: capacity - bytes,
+                    speculative: nonhead,
+                    freed: 0,
+                },
+            );
         }
-        *lease -= bytes;
+        let budgets = driver.budgets;
         driver
             .stretches
             .entry(task)
             .or_insert_with(|| Stretch::new(budgets))
             .alloc(bytes)
-            .expect("unfueled lease coalesces its allocation envelope");
-        true
+            .expect("preflighted bounded allocation envelope");
+        Some(if nonhead {
+            CpuAllocation::Summarized
+        } else {
+            CpuAllocation::Leased
+        })
     })
 }
 
 /// An idle allocation records a non-head charge in its bound job's Stretch.
 /// Physical refusal retains that admission; retry never appends it again.
 pub(crate) fn ahead_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<CpuAllocation> {
-    if lease_cpu_allocation(ctx, bytes) {
+    if let Some(admission) = lease_cpu_allocation(ctx, bytes) {
         unsafe {
             (*ctx)
                 .ordered_charge_trace
                 .capture((*ctx).view.compiled.fuel);
             (*ctx).ordered_charge_trace.allocation(bytes);
         }
-        return Ok(CpuAllocation::Leased);
+        return Ok(admission);
     }
     let task = current(ctx);
     let nonhead = with_driver(ctx, |d| {

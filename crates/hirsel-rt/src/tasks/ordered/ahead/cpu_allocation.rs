@@ -49,6 +49,7 @@ impl Request {
     /// Logical admission is independent of the storage provider. Idle only;
     /// an admitted charge survives any number of physical backing refusals.
     pub(super) fn admit(&mut self, ctx: *mut TaskCtx, bytes: u64) -> Stopped<bool> {
+        let retry = self.phase != REQUESTED;
         if self.phase == REQUESTED {
             self.phase = match super::super::engine::ahead_allocation(ctx, bytes)? {
                 super::super::engine::CpuAllocation::Paused => return Ok(false),
@@ -57,7 +58,7 @@ impl Request {
                 super::super::engine::CpuAllocation::Leased => LEASED,
             };
         }
-        if self.phase == SUMMARIZED {
+        if self.phase == SUMMARIZED || (retry && self.phase == LEASED) {
             let task = super::super::engine::current(ctx);
             if super::super::engine::with_driver(ctx, |d| d.head_ready(task)) {
                 assert!(super::super::engine::host_segment_barrier(ctx)?);

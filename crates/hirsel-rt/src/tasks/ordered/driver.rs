@@ -54,7 +54,7 @@ pub(crate) struct Driver {
     pub(super) fuel_initialized: bool,
     pub(super) fuel_grants: BTreeMap<TaskId, u64>,
     pub(super) stretches: BTreeMap<TaskId, crate::budget::stretch::Stretch>,
-    pub(super) cpu_allocation_leases: BTreeMap<TaskId, u64>,
+    pub(super) cpu_allocation_leases: BTreeMap<TaskId, super::engine::AllocationLease>,
     pub(super) cpu_batch: Option<super::cpu::Batch>,
     pub(super) cpu_withdrawal: Option<super::ahead::cpu_withdrawal::Withdrawal>,
     pub(super) spawn_ordinals: BTreeMap<TaskId, u32>,

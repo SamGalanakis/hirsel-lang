@@ -245,6 +245,7 @@ fn withdrawal(published: bool, diagnostic: bool) {
                 !cpu_withdrawal::acknowledged(ctx),
                 "a running owner cannot acknowledge roots"
             );
+            assert_eq!(engine::host_segment_barrier(ctx), Ok(true));
             let charged = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
             crate::fiber::switch(&raw mut (*child_native).physical.idle_sp, child_sp);
             // A physical switch-out folds the old view before after_save.
