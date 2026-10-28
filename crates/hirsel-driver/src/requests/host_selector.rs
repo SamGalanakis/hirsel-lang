@@ -178,6 +178,17 @@ pub(super) struct InstalledGraph {
 struct OutputOwner {
     _products: Arc<dyn GraphProducts>,
 }
+type OutputLeases = Arc<Mutex<Vec<Weak<dyn Send + Sync>>>>;
+struct OutputLease {
+    _owner: Arc<dyn Send + Sync>,
+}
+fn lease_output(leases: &OutputLeases, owner: Arc<dyn Send + Sync>) -> Arc<dyn Send + Sync> {
+    let owner: Arc<dyn Send + Sync> = Arc::new(OutputLease { _owner: owner });
+    let mut leases = leases.lock().unwrap_or_else(|error| error.into_inner());
+    leases.retain(|lease| lease.strong_count() != 0);
+    leases.push(Arc::downgrade(&owner));
+    owner
+}
 /// One hot-graph retention authority per process budget. Releasing an idle
 /// graph drops its runtime/stacks outside the index lock. Live leases and
 /// externally held source products keep their independent admitted owners.
@@ -346,6 +357,7 @@ const ADMISSION_STALL: std::time::Duration = std::time::Duration::from_secs(600)
 pub(super) struct GraphSelections {
     retention: Arc<GraphBudget>,
     live: Vec<Weak<InstalledGraph>>,
+    outputs: OutputLeases,
 }
 impl Drop for GraphSelections {
     fn drop(&mut self) {
@@ -358,6 +370,7 @@ impl GraphSelections {
         Self {
             retention: GraphBudget::shared(budget),
             live: vec![],
+            outputs: Arc::new(Mutex::new(vec![])),
         }
     }
     pub fn select(
@@ -384,7 +397,15 @@ impl GraphSelections {
             None => {
                 // Graphs only the hot index holds are idle, not this
                 // selection's own outputs.
-                let may_wait = self.live.iter().all(|graph| graph.strong_count() <= 1);
+                let no_active_graphs = self.live.iter().all(|graph| graph.strong_count() <= 1);
+                let may_wait = no_active_graphs && {
+                    let mut outputs = self
+                        .outputs
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    outputs.retain(|output| output.strong_count() != 0);
+                    outputs.is_empty()
+                };
                 let graph = install(&self.retention, may_wait)?;
                 if graph.path != request.path || graph.inputs != request.inputs {
                     return Err(ToolError::Runtime(
@@ -398,14 +419,19 @@ impl GraphSelections {
         let (roots, mut output) = graph.products.select(&request.operation).map_err(|error| {
             retain_error(
                 error,
-                Arc::new(OutputOwner {
-                    _products: graph.products.clone(),
-                }),
+                lease_output(
+                    &self.outputs,
+                    Arc::new(OutputOwner {
+                        _products: graph.products.clone(),
+                    }),
+                ),
             )
         })?;
         let read_scope = output.read_scope.take();
         let ready_graph = graph.clone();
         let failed_graph = graph.clone();
+        let ready_outputs = self.outputs.clone();
+        let failed_outputs = self.outputs.clone();
         self.retention.keep(graph.clone());
         Ok(hirsel_engine::requests::SelectedRequest {
             runtime: graph.runtime.clone(),
@@ -432,14 +458,17 @@ impl GraphSelections {
                             completed.work.clone(),
                             completed.result.clone(),
                         )
-                        .retain_owner(owner),
+                        .retain_owner(lease_output(&ready_outputs, owner)),
                     ))
                 }),
                 failure: Arc::new(move |reference| {
                     let owner: Arc<dyn Send + Sync> = Arc::new(OutputOwner {
                         _products: failed_graph.products.clone(),
                     });
-                    retain_error((output.failure)(reference), owner)
+                    retain_error(
+                        (output.failure)(reference),
+                        lease_output(&failed_outputs, owner),
+                    )
                 }),
             },
         })
@@ -807,6 +836,57 @@ mod tests {
             "detached source retains its original grant"
         );
         drop(detached_sources);
+        assert_eq!(budget.reserved(), 0);
+
+        // The source-only output survives after the idle runtime is reclaimed.
+        // A later request by this same selector must refuse admission instead
+        // of waiting for the output its own caller is holding.
+        let budget = ProcessBudget::new(bytes + 2);
+        let mut selector = GraphSelections::new(&budget);
+        let active = selector
+            .select(&request, |owner, _| create(owner, &request))
+            .unwrap();
+        let held = (active.output.materialize)(&[]).unwrap();
+        drop(active);
+        let mut changed = request.clone();
+        changed.path = "after-held-output.hir".into();
+        std::thread::scope(|scope| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let selector = &mut selector;
+            let changed = &changed;
+            let create = &create;
+            let worker = scope.spawn(move || {
+                let result = selector
+                    .select(changed, |owner, may_wait| {
+                        let loading = owner.begin(
+                            RequestLimits {
+                                runtime_bytes: bytes,
+                                snapshot_bytes: 2,
+                                transport_bytes: 0,
+                            },
+                            may_wait,
+                        )?;
+                        drop(loading);
+                        create(owner, changed)
+                    })
+                    .map(|_| ());
+                tx.send(result).unwrap();
+            });
+            let result = rx.recv_timeout(std::time::Duration::from_secs(2));
+            drop(held);
+            if result.is_err() {
+                // Release the held source before joining even on the old
+                // blocking implementation; this regression cannot hang CI.
+                let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+            }
+            worker.join().unwrap();
+            assert!(
+                result
+                    .expect("own output caused admission to wait")
+                    .is_err()
+            );
+        });
+        drop(selector);
         assert_eq!(budget.reserved(), 0);
     }
 
