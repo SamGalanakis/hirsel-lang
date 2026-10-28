@@ -179,15 +179,32 @@ fn read(cx: &mut dyn QueryContext, ids: &[QueryId]) -> Result<Vec<ProductRef>, Q
 }
 
 impl<S: ObjectTaskSnapshot> ObjectTask<S> {
+    fn read_codegen(
+        &self,
+        cx: &mut dyn QueryContext,
+        ids: &[QueryId],
+    ) -> Result<Vec<ProductRef>, QueryPoll> {
+        let Some(execution) = self.snapshot.execution_query() else {
+            return read(cx, ids);
+        };
+        let execution = match cx.read(execution) {
+            Poll::Ready(Err(error)) => return Err(QueryPoll::Failed(error)),
+            Poll::Ready(Ok(_)) => return read(cx, ids),
+            Poll::Pending => execution,
+        };
+        // Ready producers can run while the complete execution root waits.
+        // Every pending read belongs to this continuation. Execution still
+        // selects the first failure and gates all backend work/publication.
+        let mut waiting = vec![execution];
+        for id in ids {
+            if cx.read(*id).is_pending() && !waiting.contains(id) {
+                waiting.push(*id);
+            }
+        }
+        Err(QueryPoll::Waiting(waiting))
+    }
     fn compute(&self, cx: &mut dyn QueryContext) -> Result<ProductRef, QueryPoll> {
         let failed = QueryPoll::Failed;
-        if matches!(
-            self.request,
-            ObjectTaskRequest::Codegen { .. } | ObjectTaskRequest::WholeCodegen { .. }
-        ) && let Some(query) = self.snapshot.execution_query()
-        {
-            read(cx, &[query])?;
-        }
         let product = match &self.request {
             ObjectTaskRequest::WholeCodegen { key, .. } => {
                 let ids = key
@@ -195,7 +212,7 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     .iter()
                     .map(|unit| unit.owner.ready_query_id())
                     .collect::<Vec<_>>();
-                let settled = read(cx, &ids)?;
+                let settled = self.read_codegen(cx, &ids)?;
                 for product in &settled {
                     let ready = self.snapshot.ready_descriptor(*product).map_err(failed)?;
                     if ready.product != *product || !ready.optimizer_reads.is_empty() {
@@ -212,7 +229,7 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     .product
             }
             ObjectTaskRequest::Codegen { key, ready, .. } => {
-                let own = read(cx, &[*ready])?[0];
+                let own = self.read_codegen(cx, &[*ready])?[0];
                 let descriptor = self.snapshot.ready_descriptor(own).map_err(failed)?;
                 if descriptor.product != own {
                     return Err(failed(self.snapshot.failure("Ready descriptor mismatch")));

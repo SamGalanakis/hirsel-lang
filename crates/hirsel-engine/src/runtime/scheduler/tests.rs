@@ -183,6 +183,108 @@ fn cyclic_member_tasks_refuse_and_component_queries_can_settle() {
     assert_eq!(rt.stats().settled, 3);
 }
 #[test]
+fn repeated_reads_and_wide_fan_in_wake_once_per_poll() {
+    for jobs in [1, 4] {
+        let mut rt = runtime(jobs, 16 << 20);
+        let events = trace(&mut rt);
+        let leaves: Vec<_> = (1..=64).collect();
+        let repeated: Vec<_> = leaves.iter().flat_map(|&n| [n, n]).collect();
+        let mut specs = vec![(0, Spec::deps(&repeated))];
+        specs.extend(leaves.iter().map(|&n| (n, Spec::deps(&[]))));
+        install(&mut rt, &specs);
+        let request = rt.request(&[query(0)]);
+        assert_eq!(rt.wait(request), Ok(vec![product(query(0))]));
+        assert_eq!(rt.stats().edges, 64);
+        let events = events.0.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, RuntimeEvent::Wake(q) if *q == query(0)))
+                .count(),
+            1
+        );
+    }
+}
+
+struct DuringPollFactory {
+    read: mpsc::Sender<()>,
+    release: Mutex<Option<mpsc::Receiver<()>>>,
+}
+impl QueryFactory for DuringPollFactory {
+    fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        if id == query(0) {
+            Ok(Box::new(DuringPollTask {
+                id,
+                read: self.read.clone(),
+                release: self.release.lock().unwrap().take(),
+            }))
+        } else {
+            Ok(Box::new(Task {
+                id,
+                spec: Spec::deps(&[]),
+            }))
+        }
+    }
+}
+struct DuringPollTask {
+    id: QueryId,
+    read: mpsc::Sender<()>,
+    release: Option<mpsc::Receiver<()>>,
+}
+impl QueryTask for DuringPollTask {
+    fn id(&self) -> QueryId {
+        self.id
+    }
+    fn weight(&self) -> MemoryWeight {
+        Spec::deps(&[]).weight
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        if let Some(release) = self.release.take() {
+            assert!(cx.read(query(1)).is_pending());
+            let _ = cx.read(query(1));
+            self.read.send(()).unwrap();
+            release.recv().unwrap();
+            QueryPoll::Waiting(vec![query(1)])
+        } else {
+            assert_eq!(cx.read(query(1)), Poll::Ready(Ok(product(query(1)))));
+            QueryPoll::Complete(product(self.id))
+        }
+    }
+}
+#[test]
+fn dependency_completion_during_poll_does_not_lose_or_duplicate_wakeup() {
+    let mut rt = runtime(2, 8 << 20);
+    let (read, read_rx) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    rt.register(
+        1,
+        Arc::new(DuringPollFactory {
+            read,
+            release: Mutex::new(Some(released)),
+        }),
+    )
+    .unwrap();
+    let request = rt.request(&[query(0)]);
+    read_rx.recv().unwrap();
+    let state = rt.shared.lock();
+    let (state, timeout) = rt
+        .shared
+        .changed
+        .wait_timeout_while(state, std::time::Duration::from_secs(2), |s| {
+            s.result(key(query(1))).is_none()
+        })
+        .unwrap();
+    let unsatisfied = state.nodes[&key(query(0))].unsatisfied;
+    drop(state);
+    release.send(()).unwrap();
+    assert!(!timeout.timed_out(), "dependency kept its worker admission");
+    assert_eq!(unsatisfied, 0);
+    assert_eq!(rt.wait(request), Ok(vec![product(query(0))]));
+    assert_eq!(rt.stats().wakes, 1);
+    assert_eq!(rt.stats().polls, 3);
+    assert_eq!(rt.stats().edges, 1);
+}
+#[test]
 fn errors_still_execute_all_required_roots_and_select_first_root_failure() {
     let mut rt = runtime(4, 16 << 20);
     let mut first = Spec::deps(&[]);

@@ -2,6 +2,8 @@
 //! query/job.rs:183-269. Waiters here are continuations, never sleeping workers.
 //! Ready ordering follows Go ebe2feef compile.go:139-184 (longest first).
 //! Worker-owned task state follows tsgo 89d5d5b checkerpool.go:305,469.
+//! Pending-edge counts follow Go 33e2e22 work/exec.go:126-135,189-210.
+//! Here subscriptions are installed on reads and survive cancelled claims.
 //! Persistent idle stacks remain charged; unlike the former native semaphore,
 //! an oversized singleton cannot exceed the budget. S0 owns semantic validity.
 use super::*;
@@ -123,6 +125,9 @@ struct Node {
     continuation: u64,
     status: Status,
     dependencies: BTreeSet<Key>,
+    // One count per reverse subscription, including reads made during a poll.
+    // Completion can race that poll's return to Waiting under the same lock.
+    unsatisfied: usize,
     waiters: BTreeSet<Key>,
     live: bool,
     // A cancelled in-flight poll is drained before a new claim can replace it.
@@ -671,6 +676,7 @@ impl State {
                 continuation,
                 status,
                 dependencies: BTreeSet::new(),
+                unsatisfied: 0,
                 waiters: BTreeSet::new(),
                 live: true,
                 discard: false,
@@ -791,11 +797,12 @@ impl State {
             result,
         });
         for waiter in waiters {
-            if self.nodes.get(&waiter).is_some_and(|node| {
-                matches!(node.status, Status::Waiting)
-                    && node.dependencies.iter().all(|k| self.result(*k).is_some())
-            }) {
-                self.nodes.get_mut(&waiter).unwrap().status = Status::Ready;
+            let Some(node) = self.nodes.get_mut(&waiter) else {
+                continue;
+            };
+            node.unsatisfied -= 1;
+            if node.unsatisfied == 0 && matches!(node.status, Status::Waiting) {
+                node.status = Status::Ready;
                 self.queue(waiter);
                 self.stats.wakes += 1;
                 self.event(RuntimeEvent::Wake(id(waiter)));
@@ -821,24 +828,23 @@ impl QueryContext for Context<'_> {
             return Poll::Ready(Err(state.errors.cancelled));
         }
         let dependency = key(dependency);
-        if !state.nodes[&self.query].dependencies.contains(&dependency)
-            && state.edges >= state.max_entries * 4
-        {
+        let new = !state.nodes[&self.query].dependencies.contains(&dependency);
+        if new && state.edges >= state.max_entries * 4 {
             return Poll::Ready(Err(state.errors.resource));
         }
         if let Err(error) = state.ensure(dependency) {
             return Poll::Ready(Err(error));
         }
-        if state.reaches(dependency, self.query) {
+        if new && state.reaches(dependency, self.query) {
             return Poll::Ready(Err(state.errors.cycle));
         }
-        let new = state
-            .nodes
-            .get_mut(&self.query)
-            .unwrap()
-            .dependencies
-            .insert(dependency);
         if new {
+            state
+                .nodes
+                .get_mut(&self.query)
+                .unwrap()
+                .dependencies
+                .insert(dependency);
             state.stats.edges += 1;
             state.edges += 1;
             state.event(RuntimeEvent::Read {
@@ -849,12 +855,15 @@ impl QueryContext for Context<'_> {
         if let Some(result) = state.result(dependency) {
             return Poll::Ready(result);
         }
-        state
+        if state
             .nodes
             .get_mut(&dependency)
             .unwrap()
             .waiters
-            .insert(self.query);
+            .insert(self.query)
+        {
+            state.nodes.get_mut(&self.query).unwrap().unsatisfied += 1;
+        }
         self.pending.insert(dependency);
         self.shared.changed.notify_all();
         Poll::Pending
@@ -1102,8 +1111,8 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                         && waits.iter().copied().map(key).collect::<BTreeSet<_>>()
                             == cx.pending =>
                 {
-                    let ready = cx.pending.iter().all(|k| state.result(*k).is_some());
                     let node = state.nodes.get_mut(&query).unwrap();
+                    let ready = node.unsatisfied == 0;
                     if let Some(task) = send_task {
                         node.task = Task::Send(Some(task));
                     }

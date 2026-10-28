@@ -692,6 +692,7 @@ use std::task::Poll;
 
 struct TaskSnapshot {
     request: ObjectTaskRequest,
+    execution: Option<QueryId>,
     ready: ReadyProduct,
     link: LinkDependencies,
     result: ProductRef,
@@ -703,6 +704,16 @@ struct TaskProducts {
     reference: Reference,
 }
 impl ObjectProducts for TaskProducts {
+    fn codegen_whole(
+        &mut self,
+        _: &super::whole::WholeCodegenKey,
+    ) -> Result<Arc<FragmentProduct>, String> {
+        Ok(Arc::new(FragmentProduct {
+            product: self.result,
+            object: self.reference,
+            summary: self.reference,
+        }))
+    }
     fn codegen(&mut self, _: &CodegenKey) -> Result<Arc<FragmentProduct>, String> {
         Ok(Arc::new(FragmentProduct {
             product: self.result,
@@ -718,6 +729,9 @@ impl ObjectProducts for TaskProducts {
     }
 }
 impl ObjectTaskSnapshot for TaskSnapshot {
+    fn execution_query(&self) -> Option<QueryId> {
+        self.execution
+    }
     fn store(&self) -> &dyn ResultStore {
         self.store.as_ref()
     }
@@ -780,6 +794,7 @@ fn task_snapshot(
 ) -> Arc<TaskSnapshot> {
     Arc::new(TaskSnapshot {
         request,
+        execution: None,
         ready,
         link: LinkDependencies {
             execution: vec![],
@@ -794,6 +809,94 @@ fn task_snapshot(
         store,
         makes: Arc::new(AtomicUsize::new(0)),
     })
+}
+
+#[test]
+fn codegen_stages_local_ready_while_execution_waits_and_preserves_failure_order() {
+    for whole in [false, true] {
+        for (execution_ok, ready_ok) in [(true, true), (false, false), (true, false)] {
+            let store = Arc::new(hirsel_engine::store::MemStore::default());
+            let mut ready = ready(store.as_ref());
+            ready.optimizer_reads.clear();
+            let key = key("caller");
+            let owner = key.owner.ready_query_id();
+            ready.product.address = owner.address;
+            let weight = MemoryWeight {
+                retained: 4096,
+                ..MemoryWeight::default()
+            };
+            let request = if whole {
+                ObjectTaskRequest::WholeCodegen {
+                    key: super::whole::WholeCodegenKey::new(vec![key]).unwrap(),
+                    weight,
+                }
+            } else {
+                ObjectTaskRequest::Codegen {
+                    key,
+                    ready: owner,
+                    weight,
+                }
+            };
+            let id = match &request {
+                ObjectTaskRequest::Codegen { key, .. } => key.query_id(),
+                ObjectTaskRequest::WholeCodegen { key, .. } => key.query_id(),
+                _ => unreachable!(),
+            };
+            let result = ProductRef {
+                address: id.address,
+                ..product(store.as_ref(), "emitted")
+            };
+            let execution_product = product(store.as_ref(), "execution");
+            let execution = query(execution_product);
+            let mut snapshot = task_snapshot(request, ready.clone(), store.clone(), result);
+            Arc::get_mut(&mut snapshot).unwrap().execution = Some(execution);
+            let mut task = ObjectTaskFactory::new(snapshot.clone()).create(id).unwrap();
+            let mut cx = TaskContext::default();
+            assert!(
+                matches!(task.poll(&mut cx), QueryPoll::Waiting(p) if p == vec![execution, owner])
+            );
+            assert_eq!(cx.reads, vec![execution, owner]);
+            let ready_error = input(store.as_ref(), "Ready refused");
+            cx.settled.push((
+                owner,
+                if ready_ok {
+                    Ok(ready.product)
+                } else {
+                    Err(ready_error)
+                },
+            ));
+            assert!(matches!(task.poll(&mut cx), QueryPoll::Waiting(p) if p == vec![execution]));
+            assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
+            let execution_error = input(store.as_ref(), "execution refused");
+            cx.settled.push((
+                execution,
+                if execution_ok {
+                    Ok(execution_product)
+                } else {
+                    Err(execution_error)
+                },
+            ));
+            match task.poll(&mut cx) {
+                QueryPoll::Complete(p) => {
+                    assert!(execution_ok && ready_ok);
+                    assert_eq!(p, result);
+                }
+                QueryPoll::Failed(error) => assert_eq!(
+                    error,
+                    if execution_ok {
+                        ready_error
+                    } else {
+                        execution_error
+                    }
+                ),
+                QueryPoll::Waiting(_) => panic!("all required inputs settled"),
+            }
+            assert_eq!(
+                snapshot.makes.load(Ordering::SeqCst),
+                usize::from(execution_ok && ready_ok)
+            );
+        }
+    }
 }
 
 #[test]
