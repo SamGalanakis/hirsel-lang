@@ -226,6 +226,7 @@ pub(crate) fn emit_relocated(
             };
             let metadata = Metadata {
                 action: marker.kind,
+                channel: None,
                 optional_carrier: plan.optional_carrier(inputs.layouts, marker.id),
                 empty_environment: plan
                     .empty_environment(body, inputs.layouts, marker.id)

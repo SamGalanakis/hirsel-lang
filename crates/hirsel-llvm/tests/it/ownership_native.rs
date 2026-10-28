@@ -245,6 +245,7 @@ fn metadata(program: &support::programs::Program) -> Units {
                 Metadata {
                     empty_environment: false,
                     optional_carrier: false,
+                    channel: None,
                     action: marker.kind,
                     callee: None,
                     cleanup: None,

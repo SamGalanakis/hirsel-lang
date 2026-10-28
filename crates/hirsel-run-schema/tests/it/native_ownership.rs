@@ -21,6 +21,7 @@ fn fixture() -> (Log, Units) {
         let metadata = Metadata {
             empty_environment: false,
             optional_carrier: false,
+            channel: None,
             action,
             callee: None,
             cleanup: None,
@@ -325,7 +326,8 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
             | Row::QueueSent { .. }
             | Row::QueuePublished { .. }
             | Row::QueueReceived { .. }
-            | Row::QueueDetached { .. } => unreachable!(),
+            | Row::QueueDetached { .. }
+            | Row::QueueTransfer { .. } => unreachable!(),
         }
     }
     log.rows.splice(2..2, child);
@@ -398,6 +400,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
         let metadata = Metadata {
             empty_environment: false,
             optional_carrier: false,
+            channel: None,
             action,
             callee: None,
             cleanup: None,
@@ -510,6 +513,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
             Metadata {
                 empty_environment: false,
                 optional_carrier: false,
+                channel: None,
                 action,
                 callee: None,
                 cleanup: None,
@@ -796,6 +800,7 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
             Metadata {
                 empty_environment: false,
                 optional_carrier: false,
+                channel: None,
                 action,
                 callee: None,
                 cleanup: None,
@@ -1953,6 +1958,7 @@ fn native_empty_spawn_still_binds_the_actual_child_and_rejects_hidden_capture_cr
         callee: Some([8; 32]),
         empty_environment: true,
         optional_carrier: false,
+        channel: None,
         ..base.clone()
     };
     let mut units = BTreeMap::from([

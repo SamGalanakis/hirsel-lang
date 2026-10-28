@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod queues;
+mod transfers;
 
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 const MUTABLE_PARAMETER: u64 = (u32::MAX - 1) as u64;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
@@ -81,6 +82,17 @@ pub enum Row {
         first: u64,
         end: u64,
     },
+    /// A checked caller binding consumed at the actual queue transition.
+    QueueTransfer {
+        task: u64,
+        frame: u64,
+        marker: u32,
+        queue: u64,
+        layout: u32,
+        item: u64,
+        direction: ChannelDirection,
+        status: u32,
+    },
     Enter {
         task: u64,
         frame: u64,
@@ -144,6 +156,7 @@ pub struct Log {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Metadata {
     pub action: u32,
+    pub channel: Option<ChannelBinding>,
     /// Empty callable custody, proved by the complete checked code graph.
     pub empty_environment: bool,
     /// The checked structural carrier has a Resource-free alternative. An
@@ -166,6 +179,21 @@ pub struct Metadata {
     pub layout: u32,
     pub source: Site,
     pub value_type: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelDirection {
+    Send,
+    Receive,
+}
+
+/// The compiler derives this from a checked intrinsic call and the linked
+/// descriptor registry. A runtime row cannot supply its own binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChannelBinding {
+    pub direction: ChannelDirection,
+    pub descriptor: u32,
 }
 /// Static checked declaration ordinals for a projected slot location.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -381,9 +409,20 @@ fn decode(
     for markers in units.values() {
         for (&id, metadata) in markers {
             if metadata.optional_carrier
-                && (metadata.action != 1
+                && (!matches!(metadata.action, 1 | 8)
                     || metadata.empty_environment
                     || metadata.cleanup.is_some())
+            {
+                return Err(Error::InvalidMarker(id));
+            }
+            if (metadata.action == 8) != metadata.channel.is_some()
+                || (metadata.channel.is_some()
+                    && (metadata.owner != ((2u64 << 32) | 1)
+                        || metadata.callee.is_some()
+                        || metadata.empty_environment
+                        || metadata.cleanup.is_some()
+                        || !metadata.cleanup_paths.is_empty()
+                        || !metadata.additional_drops.is_empty()))
             {
                 return Err(Error::InvalidMarker(id));
             }
@@ -424,6 +463,7 @@ fn decode(
         cleanup: Option<(u32, Owner, Vec<(u32, u32, Owner)>)>,
         parameters: BTreeMap<u32, Owner>,
         mutable_call: BTreeMap<u32, (Owner, [u8; 32])>,
+        channel: Option<transfers::Intent>,
     }
     struct TaskIdentity {
         depth: u32,
@@ -554,7 +594,8 @@ fn decode(
             | Row::QueueSent { task, .. }
             | Row::QueuePublished { task, .. }
             | Row::QueueReceived { task, .. }
-            | Row::QueueDetached { task, .. } => task,
+            | Row::QueueDetached { task, .. }
+            | Row::QueueTransfer { task, .. } => task,
             Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
         };
         let identity = tasks.get(&task).ok_or(Error::UnsupportedTask(task))?;
@@ -652,6 +693,39 @@ fn decode(
         let task = &identity.path;
         let operation = identity.operation.unwrap_or(0);
         match row {
+            Row::QueueTransfer {
+                task: issuer,
+                frame,
+                marker,
+                queue,
+                layout,
+                item,
+                direction,
+                status,
+            } => {
+                let current = frames.last_mut().ok_or(Error::InvalidFrame(frame))?;
+                if current.id != frame {
+                    return Err(Error::InvalidFrame(frame));
+                }
+                let intent = current.channel.take().ok_or(Error::InvalidMarker(marker))?;
+                if intent.marker != marker
+                    || intent.binding.direction != direction
+                    || intent.binding.descriptor != layout
+                {
+                    return Err(Error::InvalidMarker(marker));
+                }
+                queues.bind(
+                    queue,
+                    queues::Receipt {
+                        task: issuer,
+                        layout,
+                        item,
+                        direction,
+                        status,
+                    },
+                )?;
+                intent.commit(&mut tracker, queue, item, status, operation)?;
+            }
             Row::Task { .. }
             | Row::TaskPart { .. }
             | Row::Operation { .. }
@@ -737,6 +811,7 @@ fn decode(
                     cleanup: None,
                     parameters,
                     mutable_call: BTreeMap::new(),
+                    channel: None,
                 });
             }
             Row::Leave { frame, .. } => {
@@ -745,6 +820,7 @@ fn decode(
                         || current.pending.is_some()
                         || current.cleanup.is_some()
                         || !current.mutable_call.is_empty()
+                        || current.channel.is_some()
                 }) {
                     return Err(Error::InvalidFrame(frame));
                 }
@@ -973,6 +1049,31 @@ fn decode(
                             member.value_type.as_str(),
                         )
                     };
+                if action == 8 {
+                    if calls.is_none() || current.channel.is_some() {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    current.channel = Some(transfers::Intent {
+                        marker,
+                        binding: expected.channel.ok_or(Error::InvalidMarker(marker))?,
+                        owner: projected_owner(
+                            task,
+                            frame,
+                            parent,
+                            current.environment.as_ref(),
+                            &current.parameters,
+                            token,
+                            token_path,
+                        )?,
+                        context: Context {
+                            task: task.clone(),
+                            operation,
+                            site: expected.source.clone(),
+                        },
+                        optional: expected.optional_carrier,
+                    });
+                    continue;
+                }
                 if action == 6 {
                     if calls.is_none() || recipient >> 32 != 2 || expected.empty_environment {
                         return Err(Error::InvalidMarker(marker));
