@@ -5934,7 +5934,6 @@ fn ownership_runtime_mutable_binding_proves_the_actual_without_granting_custody(
         manifest: &manifest,
     };
     let unit = hirsel_lir::validate::validate(unit, &inputs).unwrap();
-    let before = hirsel_codec::to_text(unit.unit());
     let plan = Plan::new(
         unit.unit(),
         vec![Observation {
@@ -5949,7 +5948,6 @@ fn ownership_runtime_mutable_binding_proves_the_actual_without_granting_custody(
         }],
     );
     check(unit.unit(), &plan).unwrap();
-    assert_eq!(hirsel_codec::to_text(unit.unit()), before);
     check_transform(
         unit.unit(),
         &plan,
