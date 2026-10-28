@@ -57,11 +57,16 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
 }
 #[test]
 fn native_ready_tasks_reuse_specialized_callable_dependencies_without_materialization() {
-    ready_case(
+    ready_case_inner_mutation(
         "fn other()->u64{9u64}\nfn apply(f:fn()->u64 uses {})->u64 uses {f}{f()}\npub fn main()->u64{apply(other)}",
         false,
         false,
         false,
+        native::Validation::Ready,
+        store::VerifyStore::Off,
+        0,
+        0,
+        1,
     );
 }
 const ADAPTER_SOURCE: &str = r#"
@@ -209,6 +214,7 @@ fn ready_case_inner(
         verify_store,
         ownership,
         u8::from(missing_inventory),
+        0,
     );
 }
 
@@ -222,6 +228,7 @@ fn ready_case_inner_mutation(
     verify_store: store::VerifyStore,
     ownership: u8,
     mutation: u8,
+    expected_specializations: usize,
 ) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
@@ -763,6 +770,17 @@ fn ready_case_inner_mutation(
             }
             assert_eq!(snapshot.ready_materializations(), 0);
             let completed = tasks.completed_instances(result[0]).unwrap();
+            let specializations = completed
+                .iter()
+                .filter(|(key, _)| {
+                    completed.iter().any(|(original, _)| {
+                        key.instance != original.instance
+                            && key.instance.is_same_or_derived_from(&original.instance)
+                    })
+                })
+                .count();
+            assert_eq!(specializations, expected_specializations);
+            let original_count = completed.len() - specializations;
             assert_eq!(
                 completed
                     .iter()
@@ -778,10 +796,7 @@ fn ready_case_inner_mutation(
             if fresh {
                 assert_eq!(expected.as_ref(), Some(&outputs));
                 if recompute_instances {
-                    assert_eq!(
-                        tasks.imports.load(Ordering::Relaxed),
-                        completed.len() as u64
-                    );
+                    assert_eq!(tasks.imports.load(Ordering::Relaxed), original_count as u64);
                     assert!(tasks.source_body_demands.load(Ordering::Relaxed) > 0);
                     assert_ne!(trace.totals(), Default::default());
                 } else {
@@ -790,10 +805,7 @@ fn ready_case_inner_mutation(
                     assert_eq!(trace.totals(), Default::default());
                 }
             } else {
-                assert_eq!(
-                    tasks.imports.load(Ordering::Relaxed),
-                    completed.len() as u64
-                );
+                assert_eq!(tasks.imports.load(Ordering::Relaxed), original_count as u64);
                 expected = Some(outputs);
             }
         }
@@ -811,6 +823,7 @@ fn original_inventory_mutation(mutation: u8) {
         store::VerifyStore::Off,
         0,
         mutation,
+        0,
     );
 }
 #[test]
