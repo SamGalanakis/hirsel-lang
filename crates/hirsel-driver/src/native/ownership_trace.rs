@@ -7,10 +7,13 @@ use hirsel_lir::ir::{ConstructorKind, Inst};
 use hirsel_lir::ownership_trace::native::LeafPlan;
 use hirsel_lir::stage::ObjectArtifact;
 use hirsel_run_schema::ownership_trace::native::{
-    ChannelBinding, ChannelDirection, DropMember, LocalCalls, Metadata, Units,
+    ChannelBinding, ChannelDirection, CleanupBinding, CleanupLayouts, DropMember, LocalCalls,
+    Metadata, Units,
 };
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
+
+mod cleanup;
 
 /// Objects and immutable row expectations derived from the checked program,
 /// independently of any runtime log. This is the conservative leaf adapter.
@@ -20,6 +23,7 @@ pub struct LeafObjects {
     program: [u8; 32],
     entry: DefPath,
     calls: LocalCalls,
+    cleanup: CleanupLayouts,
 }
 fn name(path: &DefPath) -> String {
     format!(
@@ -137,6 +141,7 @@ pub(crate) fn emit_relocated(
         &program.finalizers,
     );
     let mut units = BTreeMap::new();
+    let mut queue_payloads = BTreeMap::<u32, BTreeSet<hirsel_lir::layout_types::LayoutId>>::new();
     for unit in selected {
         let original = plans
             .get(&unit.unit().digest())
@@ -236,15 +241,20 @@ pub(crate) fn emit_relocated(
                     .channel_binding(body, inputs.layouts, marker.id)
                     .map_err(failed)?
                     .map(|binding| {
+                        let descriptor = registry
+                            .index(binding.payload)
+                            .ok_or_else(|| failed("channel payload has no linked descriptor"))?;
+                        queue_payloads
+                            .entry(descriptor)
+                            .or_default()
+                            .insert(binding.payload);
                         Ok::<_, NativeError>(ChannelBinding {
                             direction: if binding.send {
                                 ChannelDirection::Send
                             } else {
                                 ChannelDirection::Receive
                             },
-                            descriptor: registry.index(binding.payload).ok_or_else(|| {
-                                failed("channel payload has no linked descriptor")
-                            })?,
+                            descriptor,
                         })
                     })
                     .transpose()?,
@@ -360,6 +370,7 @@ pub(crate) fn emit_relocated(
                 .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
         }
     };
+    let cleanup = cleanup::derive(program, selected, &queue_payloads, sites)?;
     let mut glue = super::emit_glue(program, backend, &registry)?;
     compact_object(&mut object);
     compact_object(&mut glue);
@@ -378,6 +389,7 @@ pub(crate) fn emit_relocated(
             .into_iter()
             .filter(|(_, targets)| !targets.is_empty())
             .collect(),
+        cleanup,
     })
 }
 
@@ -494,6 +506,16 @@ impl LeafObjects {
                 });
             }
         }
+        w.bulk_tree::<u32, BTreeMap<u32, Box<CleanupBinding>>>(self.cleanup.len());
+        for bindings in self.cleanup.values() {
+            w.bulk_tree::<u32, Box<CleanupBinding>>(bindings.len());
+            for binding in bindings.values() {
+                w.add(std::mem::size_of::<CleanupBinding>());
+                w.flat_vec(&binding.path);
+                w.add(binding.source.definition.capacity());
+                w.add(binding.source.file.capacity());
+            }
+        }
         let markers = w.bytes() - objects;
         // physical_calls bulk-collects both immutable levels from checked sites.
         w.bulk_tree::<[u8; 32], BTreeSet<[u8; 32]>>(self.calls.len());
@@ -594,11 +616,12 @@ impl LeafObjects {
             // Bound a corrupt external log before serde allocates its rows.
             let log = serde_json::from_reader(std::io::BufReader::new(file).take(32 * 1024 * 1024))
                 .map_err(|error| format!("ownership sidecar: {error}"))?;
-            hirsel_run_schema::ownership_trace::native::decode_local_calls(
+            hirsel_run_schema::ownership_trace::native::decode_runtime(
                 &log,
                 self.program,
                 &self.units,
                 &self.calls,
+                &self.cleanup,
                 event_limit,
             )
             .map_err(|error| error.to_string())

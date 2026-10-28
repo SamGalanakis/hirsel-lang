@@ -1548,6 +1548,12 @@ unsafe fn walk_frames<const FINALIZERS: bool>(
                         && (*step.layout).flags & LAYOUT_IMPLEMENTATION_FINALIZER == 0
                     {
                         crate::ownership_trace::retired(ctx, step.layout, at, value, step.field);
+                        crate::ownership_trace::queue_retired(
+                            ctx,
+                            value,
+                            index_of(item),
+                            (pc - 1) as u32,
+                        );
                     }
                     if !child.is_null() {
                         return Walk::Child(child, suspended(pc, &frame, nest));

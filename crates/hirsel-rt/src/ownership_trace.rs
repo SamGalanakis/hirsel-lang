@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-pub const ABI_VERSION: u32 = 98;
+pub const ABI_VERSION: u32 = 99;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 
@@ -434,6 +434,115 @@ pub(crate) unsafe fn retired(
 #[path = "ownership_trace_tests.rs"]
 mod tests;
 
+/// Detached FIFO position, retained with its actual image storage. No pointer
+/// leaves the runtime and no Rust-owned value lives in the stack scope below.
+#[derive(Clone, Copy)]
+pub(crate) struct QueueCleanupTag {
+    queue: u64,
+    layout: u32,
+    first: u64,
+}
+
+pub(crate) struct QueueCleanupScope {
+    previous: *mut QueueCleanupScope,
+    queue: u64,
+    layout: u32,
+    item: u64,
+    base: *mut u8,
+}
+
+/// # Safety
+/// The current task exclusively owns ctx. If this returns true, scope remains
+/// initialized, aligned and immovable on its fiber until queue_cleanup_end.
+/// base is the live detached image at index of tag's FIFO range.
+pub(crate) unsafe fn queue_cleanup_begin(
+    ctx: *mut TaskCtx,
+    scope: *mut QueueCleanupScope,
+    tag: Option<QueueCleanupTag>,
+    index: usize,
+    base: *mut u8,
+) -> bool {
+    let Some(tag) = tag else {
+        return false;
+    };
+    // SAFETY: ctx is the current live task; observer storage is run-owned.
+    let Some(observer) = (unsafe { observer(ctx) }) else {
+        return false;
+    };
+    let Some(item) = tag.first.checked_add(index as u64) else {
+        // SAFETY: the admitted observer stays live through this task.
+        unsafe {
+            (*observer).failed.store(true, Ordering::Relaxed);
+        }
+        return false;
+    };
+    // SAFETY: caller reserves scope on this fiber and keeps its image alive.
+    unsafe {
+        scope.write(QueueCleanupScope {
+            previous: (*ctx).ownership_queue_cleanup,
+            queue: tag.queue,
+            layout: tag.layout,
+            item,
+            base,
+        });
+        (*ctx).ownership_queue_cleanup = scope;
+        (*observer).record(Row::QueueCleanupBegin {
+            task: canonical((*ctx).ownership_task),
+            queue: tag.queue,
+            layout: tag.layout,
+            item,
+        });
+    }
+    true
+}
+
+/// # Safety
+/// scope is the current initialized scope whose begin returned true, on the
+/// same live task. Its complete ordinary image finalization has returned.
+pub(crate) unsafe fn queue_cleanup_end(ctx: *mut TaskCtx, scope: *mut QueueCleanupScope) {
+    // SAFETY: caller keeps both ctx and scope live until this pop completes.
+    unsafe {
+        if (*ctx).ownership_queue_cleanup != scope {
+            if let Some(observer) = observer(ctx) {
+                (*observer).failed.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
+        (*ctx).ownership_queue_cleanup = (*scope).previous;
+        if let Some(observer) = observer(ctx) {
+            (*observer).record(Row::QueueCleanupEnd {
+                task: canonical((*ctx).ownership_task),
+                queue: (*scope).queue,
+                item: (*scope).item,
+            });
+        }
+    }
+}
+
+/// # Safety
+/// root/step name the actual descriptor program's completed end-finalizer
+/// step. base is that program's live image, not a token or persistent identity.
+pub(crate) unsafe fn queue_retired(ctx: &TaskCtx, base: *mut u8, root: u32, step: u32) {
+    // SAFETY: scopes are borrowed from this task's still-live fiber frames.
+    unsafe {
+        let mut scope = ctx.ownership_queue_cleanup;
+        while !scope.is_null() {
+            if (*scope).base == base && (*scope).layout == root {
+                if let Some(observer) = ctx.run_ref().ownership_trace.as_ref() {
+                    observer.record(Row::QueueCleanupDrop {
+                        task: canonical(ctx.ownership_task),
+                        queue: (*scope).queue,
+                        item: (*scope).item,
+                        step,
+                    });
+                }
+                return;
+            }
+            scope = (*scope).previous;
+        }
+    }
+}
+
 /// A channel retains only a weak handle to diagnostic storage. It neither
 /// extends the run nor keeps the buffer alive after its quiescent writer.
 #[derive(Clone)]
@@ -443,6 +552,13 @@ pub(crate) struct QueueRecord {
     layout: u32,
 }
 impl QueueRecord {
+    pub(crate) fn cleanup_tag(&self, first: u64) -> QueueCleanupTag {
+        QueueCleanupTag {
+            queue: self.queue,
+            layout: self.layout,
+            first,
+        }
+    }
     fn record(&self, row: Row) {
         if let Some(rows) = self.rows.upgrade() {
             let _ = rows.push(row);

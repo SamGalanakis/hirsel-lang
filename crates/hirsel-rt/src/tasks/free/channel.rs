@@ -554,6 +554,8 @@ pub(super) unsafe fn destroy(
         return STATUS_OK;
     }
     let count = left.len();
+    #[cfg(feature = "ownership-trace")]
+    let cleanup_tag = left.cleanup_tag();
     let image = unsafe { (*ctx).detached_images.keep(left) };
     // The close phase can be the cut. Its unadmitted user finalizer must
     // not start, and the task owns the ring if this save never returns.
@@ -561,6 +563,20 @@ pub(super) unsafe fn destroy(
     let mut status = STATUS_OK;
     for index in 0..count {
         let value = unsafe { (*ctx).detached_images.at(image, index) };
+        #[cfg(feature = "ownership-trace")]
+        let mut observation =
+            std::mem::MaybeUninit::<crate::ownership_trace::QueueCleanupScope>::uninit();
+        #[cfg(feature = "ownership-trace")]
+        // SAFETY: the task-owned detached image and this fiber scope stay live through cleanup.
+        let observing = unsafe {
+            crate::ownership_trace::queue_cleanup_begin(
+                ctx,
+                observation.as_mut_ptr(),
+                cleanup_tag,
+                index,
+                value,
+            )
+        };
         let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
         // Finalizers can yield and open or close arbitrary other channels.
         // Only the index and raw slot pointer cross the user call. Nested
@@ -576,6 +592,11 @@ pub(super) unsafe fn destroy(
                 operation_site,
             )
         };
+        #[cfg(feature = "ownership-trace")]
+        if observing {
+            // SAFETY: the same task's complete ordinary finalization returned.
+            unsafe { crate::ownership_trace::queue_cleanup_end(ctx, observation.as_mut_ptr()) };
+        }
     }
     unsafe { (*ctx).detached_images.release(image) };
     status

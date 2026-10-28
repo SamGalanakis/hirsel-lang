@@ -82,6 +82,8 @@ pub(crate) struct Ring {
     capacity: usize,
     head: usize,
     len: usize,
+    #[cfg(feature = "ownership-trace")]
+    cleanup: Option<crate::ownership_trace::QueueCleanupTag>,
 }
 
 // SAFETY: a Ring owns raw image storage, with no Rust references into it.
@@ -104,7 +106,13 @@ impl Ring {
             capacity: 0,
             head: 0,
             len: 0,
+            #[cfg(feature = "ownership-trace")]
+            cleanup: None,
         }
+    }
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) fn cleanup_tag(&self) -> Option<crate::ownership_trace::QueueCleanupTag> {
+        self.cleanup
     }
     pub(crate) fn len(&self) -> usize {
         self.len
@@ -363,9 +371,12 @@ impl ChannelCell {
     ) -> ClosedChannel {
         let first = state.received;
         let end = state.sent;
-        let closed = self.close_locked(state, sender);
+        let mut closed = self.close_locked(state, sender);
         if !sender && let Some(record) = self.ownership.get() {
             record.detached(task, first, end);
+            if let Some((left, _)) = &mut closed.left {
+                left.cleanup = Some(record.cleanup_tag(first));
+            }
         }
         closed
     }

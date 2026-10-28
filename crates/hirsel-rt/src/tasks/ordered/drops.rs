@@ -152,6 +152,20 @@ pub(crate) unsafe fn endpoint(
     }
     let mut status = STATUS_OK;
     for index in 0..left.len() {
+        #[cfg(feature = "ownership-trace")]
+        let mut observation =
+            std::mem::MaybeUninit::<crate::ownership_trace::QueueCleanupScope>::uninit();
+        #[cfg(feature = "ownership-trace")]
+        // SAFETY: this fiber frame keeps scope and detached image stable through finalization.
+        let observing = unsafe {
+            crate::ownership_trace::queue_cleanup_begin(
+                ctx,
+                observation.as_mut_ptr(),
+                left.cleanup_tag(),
+                index,
+                left.at(index),
+            )
+        };
         let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
         // SAFETY: the detached FIFO owns every live image through this drop.
         status |= unsafe {
@@ -165,6 +179,11 @@ pub(crate) unsafe fn endpoint(
                 operation_site,
             )
         };
+        #[cfg(feature = "ownership-trace")]
+        if observing {
+            // SAFETY: the same task's complete ordinary finalization returned.
+            unsafe { crate::ownership_trace::queue_cleanup_end(ctx, observation.as_mut_ptr()) };
+        }
     }
     Ok(status)
 }

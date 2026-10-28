@@ -4855,6 +4855,20 @@ pub(crate) unsafe fn close_endpoint(
     let mut status = STATUS_OK;
     // The detached queue outlives every drop, whatever channels the drops open or close.
     for i in 0..left.len() {
+        #[cfg(feature = "ownership-trace")]
+        let mut observation =
+            std::mem::MaybeUninit::<crate::ownership_trace::QueueCleanupScope>::uninit();
+        #[cfg(feature = "ownership-trace")]
+        // SAFETY: this fiber frame keeps scope and detached image stable through finalization.
+        let observing = unsafe {
+            crate::ownership_trace::queue_cleanup_begin(
+                ctx,
+                observation.as_mut_ptr(),
+                left.cleanup_tag(),
+                i,
+                left.at(i),
+            )
+        };
         let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
         // SAFETY: each queued image owns its value, which nothing else reaches.
         status |= unsafe {
@@ -4868,6 +4882,11 @@ pub(crate) unsafe fn close_endpoint(
                 operation_site,
             )
         };
+        #[cfg(feature = "ownership-trace")]
+        if observing {
+            // SAFETY: the same task's complete ordinary finalization returned.
+            unsafe { crate::ownership_trace::queue_cleanup_end(ctx, observation.as_mut_ptr()) };
+        }
     }
     status
 }
