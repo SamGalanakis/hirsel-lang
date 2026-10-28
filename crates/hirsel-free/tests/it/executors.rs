@@ -206,13 +206,22 @@ fn shrink_and_retirement_race_concurrent_cuts_with_one_owner_per_word() {
     let (root, children) = tasks(&recorder, EXECUTORS);
     let owners: Arc<Vec<AtomicU64>> = Arc::new((0..2 * EXECUTORS + 1).map(|_| 0.into()).collect());
     let stop = Arc::new(AtomicBool::new(false));
+    let ready = Arc::new(std::sync::Barrier::new(EXECUTORS + 1));
+    let first_cut = Arc::new(AtomicBool::new(false));
     let cutter = std::thread::spawn({
-        let (recorder, stop) = (recorder.clone(), stop.clone());
+        let (recorder, stop, ready, first_cut) = (
+            recorder.clone(),
+            stop.clone(),
+            ready.clone(),
+            first_cut.clone(),
+        );
         move || {
+            ready.wait();
             let mut cuts = 0;
             while !stop.load(Ordering::Acquire) {
                 recorder.flush().unwrap().unwrap();
                 cuts += 1;
+                first_cut.store(true, Ordering::Release);
             }
             cuts
         }
@@ -221,7 +230,12 @@ fn shrink_and_retirement_race_concurrent_cuts_with_one_owner_per_word() {
         .into_iter()
         .enumerate()
         .map(|(index, mut task)| {
-            let (recorder, owners) = (recorder.clone(), owners.clone());
+            let (recorder, owners, ready, first_cut) = (
+                recorder.clone(),
+                owners.clone(),
+                ready.clone(),
+                first_cut.clone(),
+            );
             std::thread::spawn(move || {
                 for generation in 0..GENERATIONS {
                     // Each generation is a fresh executor preferring its compute word; the
@@ -233,6 +247,9 @@ fn shrink_and_retirement_race_concurrent_cuts_with_one_owner_per_word() {
                         0,
                         "a word has one owner"
                     );
+                    if generation == 0 {
+                        ready.wait();
+                    }
                     task.reserve(RecordBound::records(1));
                     recorder
                         .phase(
@@ -243,6 +260,12 @@ fn shrink_and_retirement_race_concurrent_cuts_with_one_owner_per_word() {
                             |w| w.load(owner.into()),
                         )
                         .unwrap();
+                    // Keep the first generation live until the cutter actually runs.
+                    if generation == 0 {
+                        while !first_cut.load(Ordering::Acquire) {
+                            std::thread::yield_now();
+                        }
+                    }
                     assert_eq!(owners[slot.index()].swap(0, Ordering::AcqRel), owner);
                     recorder.retire_executor(slot);
                 }
