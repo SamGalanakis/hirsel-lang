@@ -116,3 +116,9 @@ fn cpu_interpreter_matches_native_phases_and_strict_replay() {
 fn cpu_interpreter_consumes_ordered_native_receipts() {
     cpu_interpreter_ordered_receipts(8);
 }
+
+include!("support/cpu_pool/four_engine.rs");
+#[test]
+fn cpu_interpreter_scalar_fixture_agrees_across_four_engines() {
+    cpu_fixture_four_engine_agreement(8);
+}
