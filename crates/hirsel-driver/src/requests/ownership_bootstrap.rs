@@ -158,10 +158,13 @@ impl OwnershipBootstrap {
         {
             return Err("ownership bootstrap metadata exceeds original admission".into());
         }
+        // Diagnostic outputs retain both native objects and checked marker
+        // bindings. Split their share from the existing compilation grant;
+        // the compiler must fit its correspondingly smaller remaining share.
         let output_allowance = plan
             .admission
             .compilation
-            .split(plan.admission.compilation.bytes() / 8)
+            .split(plan.admission.compilation.bytes() / 6)
             .unwrap();
         let query = QueryId {
             kind: KIND,
