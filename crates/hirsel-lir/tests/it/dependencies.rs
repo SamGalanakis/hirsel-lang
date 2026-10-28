@@ -96,6 +96,7 @@ const ENGINE_IMPLEMENTATIONS: &[&str] = &[
 // Storage access is explicit; pure graph helpers and compiler phases cannot
 // acquire ambient persistence through an unrestricted data-crate edge.
 const STORAGE_CONSUMERS: &[&str] = &[
+    "hirsel-driver",
     "hirsel-engine",
     "hirsel-lir",
     "hirsel-product-codec",
@@ -310,6 +311,11 @@ fn layering_controls() {
     }
     assert!(check_edge("hirsel-graph", "hirsel-artifact-store", Kind::Production).is_err());
     assert!(check_edge("hirsel-kernels", "hirsel-artifact-store", Kind::Production).is_err());
+    for consumer in ["hirsel-rc", "hirsel-cli", "hirsel-conformance"] {
+        for kind in [Kind::Production, Kind::Build] {
+            assert!(check_edge(consumer, "hirsel-artifact-store", kind).is_err());
+        }
+    }
     for &(phase, class) in CRATES {
         if matches!(class, Class::Implementation | Class::Wiring | Class::Tool) {
             assert!(check_edge("hirsel-artifact-store", phase, Kind::Production).is_err());
