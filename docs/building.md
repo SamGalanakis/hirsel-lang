@@ -157,7 +157,18 @@ host-local cache under `$XDG_CACHE_HOME/hirsel/validator-v2` (or
 and `HIRSEL_RESULTS_DIR` cannot select this namespace. Each receipt binds exact
 validated content, compiler/V build, options and current validation reads;
 unreadable or mismatching receipts run V again. A missing cache location uses
-process-local V authority. Use a fresh absolute `XDG_CACHE_HOME` with
+process-local V authority.
+
+A successful local `precompute MANIFEST -o PRODUCTS` also registers its fresh V
+receipts in `$XDG_STATE_HOME/hirsel/verifier`, or
+`$HOME/.local/state/hirsel/verifier`. This private state survives disposable
+cache clearing. A local secret authenticates the exact issued association map,
+compiler identity, canonical installed path and filesystem identity, product
+index generation and private state path. Checks pin that map and still check
+current reads and every demanded content container. Copied product roots or
+registration files supply no authority. Missing, changed or corrupt state falls
+back to full local V. Registration failure leaves usable ordinary products.
+Use fresh absolute `XDG_CACHE_HOME` and `XDG_STATE_HOME` directories with
 `HIRSEL_DAEMON=off` for a fresh-verifier reference check. Source snapshots are
 renewed from disk results after 64 edited revisions to bound retained history.
 

@@ -1281,6 +1281,7 @@ dependencies = [
  "hirsel-types",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

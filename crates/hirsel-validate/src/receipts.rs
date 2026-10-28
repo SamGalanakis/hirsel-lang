@@ -1,6 +1,7 @@
 //! Local verifier authority, separate from producer query associations. Imported
 //! content can share the physical store but cannot publish through this API.
 use crate::{SignatureLookup, VRead, Validation, read_holds};
+mod installation;
 mod outputs;
 use bincode::Options;
 use hirsel_artifact_store::{Action, Address, Domain, Store};
@@ -8,6 +9,7 @@ use hirsel_span::Anchor;
 use hirsel_syntax::{ContentHash, DefPath, PackageId};
 use hirsel_tir::Definition;
 use hirsel_types::TypeInterner;
+pub use installation::Installation;
 pub use outputs::{
     SourceInvocation, StoredDefinitionOutput, VerifiedDefinitionOutput, VerifiedInvocations,
 };
@@ -199,6 +201,7 @@ enum Backend {
         Arc<dyn VerifierRows>,
         Arc<dyn hirsel_artifact_store::Contents>,
     ),
+    Registered(Arc<VerifierCache>, Arc<installation::Rows>),
     Transport(
         Arc<VerifierCache>,
         Arc<dyn VerifierRows>,
@@ -238,6 +241,12 @@ impl hirsel_artifact_store::Contents for TransportContents {
 /// cache publishes rows, so product bytes in the same host cannot supply them.
 /// Either may be dropped by the host's bound; a missing row is a miss.
 pub trait VerifierRows: hirsel_artifact_store::Contents {
+    fn publication_batch(&self) -> Option<hirsel_artifact_store::Batch> {
+        None
+    }
+    fn publication_request(&self) -> Option<hirsel_artifact_store::Request> {
+        None
+    }
     fn row(&self, key: ContentHash) -> Option<hirsel_artifact_store::Reference>;
     fn set_row(&self, key: ContentHash, reference: hirsel_artifact_store::Reference);
 }
@@ -274,6 +283,9 @@ impl VerifierCache {
                     .cloned()
                     .unwrap_or_else(|| store.for_operation()),
             )),
+            // DirStore reselects a registration against the current installed
+            // generation for each operation. Do not retain the previous pin.
+            Backend::Registered(local, _) => local.for_operation(shared),
             _ => self.clone(),
         }
     }
@@ -315,8 +327,11 @@ impl VerifierCache {
     pub(crate) fn publication_batch(&self) -> Option<hirsel_artifact_store::Batch> {
         match &self.0 {
             Backend::Directory(store) => Some(store.batch()),
-            Backend::Transport(selected, _, _) => selected.publication_batch(),
-            Backend::Memory(..) | Backend::Hosted(..) => None,
+            Backend::Transport(selected, _, _) | Backend::Registered(selected, _) => {
+                selected.publication_batch()
+            }
+            Backend::Hosted(rows, _) => rows.publication_batch(),
+            Backend::Memory(..) => None,
         }
     }
     /// Join an admitted compiler operation's bounded cache publication epoch.
@@ -325,7 +340,10 @@ impl VerifierCache {
     pub fn publication_request(&self) -> Option<hirsel_artifact_store::Request> {
         match &self.0 {
             Backend::Directory(store) => Some(store.request()),
-            Backend::Transport(selected, _, _) => selected.publication_request(),
+            Backend::Transport(selected, _, _) | Backend::Registered(selected, _) => {
+                selected.publication_request()
+            }
+            Backend::Hosted(rows, _) => rows.publication_request(),
             _ => None,
         }
     }
@@ -376,6 +394,16 @@ impl VerifierCache {
             Backend::Hosted(rows, contents) => {
                 let reference = rows.row(key)?;
                 (reference, contents.get_content(reference)?)
+            }
+            Backend::Registered(local, installed) => {
+                if let Some(value) = local.row_content(key, domain) {
+                    return Some(value);
+                }
+                let reference = installed.row(key)?;
+                (
+                    reference,
+                    hirsel_artifact_store::Contents::get_content(&**installed, reference)?,
+                )
             }
             Backend::Transport(selected, rows, contents) => {
                 if let Some(reference) = rows.row(key) {
@@ -429,6 +457,7 @@ impl VerifierCache {
                     rows.set_row(key, reference);
                 }
             }
+            Backend::Registered(local, _) => local.publish_bytes(key, domain, bytes),
             Backend::Transport(selected, rows, contents) => {
                 let Some(reference) = domain.reference(bytes) else {
                     return;
@@ -497,12 +526,19 @@ impl VerifierCache {
             Backend::Directory(store) => Arc::new(store.clone()),
             Backend::Hosted(_, contents) => contents.clone(),
             Backend::Transport(_, _, contents) => contents.clone(),
+            Backend::Registered(local, installed) => Arc::new(installation::Contents {
+                local: local.contents(),
+                installed: installed.clone(),
+            }),
         }
     }
     fn records(&self, types: Arc<TypeInterner>) -> Arc<hirsel_product_codec::TypeRecords> {
         // Hosted storage bounds bytes only; a cached codec would keep its type
         // maps and interner alive beyond the host's bound and revision.
-        if matches!(&self.0, Backend::Hosted(..) | Backend::Transport(..)) {
+        if matches!(
+            &self.0,
+            Backend::Hosted(..) | Backend::Transport(..) | Backend::Registered(..)
+        ) {
             return hirsel_product_codec::TypeRecords::new(types, self.contents());
         }
         let mut current = self.1.lock().unwrap_or_else(|error| error.into_inner());
@@ -1807,6 +1843,161 @@ mod tests {
             Store::new(directory.0.clone())
                 .lookup(Address(key(&artifact, policy)))
                 .is_none()
+        );
+    }
+    fn installation_products(root: &std::path::Path, bytes: &[u8]) {
+        let store = Store::new(root.to_path_buf());
+        let reference = store
+            .put(
+                Domain {
+                    kind: 31,
+                    schema: 1,
+                },
+                bytes,
+            )
+            .unwrap();
+        store
+            .associate(
+                Address(ContentHash::of_bytes(b"ordinary")),
+                Action(ContentHash::default()),
+                reference,
+            )
+            .unwrap();
+    }
+    fn registered(
+        f: &Fixture,
+        root: &std::path::Path,
+        state: &std::path::Path,
+        build: ContentHash,
+    ) -> Arc<VerifierCache> {
+        let install = Installation::begin(root, state, build).unwrap();
+        let cache = install.verifier();
+        assert!(check(f, &cache, build).0.violations.is_empty());
+        install.finish().unwrap();
+        Installation::registered(root, state, build, Arc::default()).unwrap()
+    }
+    #[test]
+    fn registered_installation_refuses_producer_forgery_with_and_without_registration() {
+        let root = Directory::new();
+        let state = Directory::new();
+        let state = state.0.join("private");
+        let build = ContentHash::of_bytes(b"local verifier");
+        let valid = Fixture::unit();
+        let mut malformed = Fixture::unit();
+        malformed.definition.entry = BodyId(u32::MAX);
+        let exact = artifact(&malformed);
+        let identity = exact.identity.unwrap();
+        let receipt = Receipt {
+            action: receipt_action(identity, build, &[]),
+            artifact: identity,
+            policy: build,
+            reads: vec![],
+        };
+        let producer = Store::new(root.0.clone());
+        let reference = producer
+            .put(DOMAIN, &bincode::serialize(&receipt).unwrap())
+            .unwrap();
+        let address = key(&exact, build);
+        producer
+            .associate(Address(address), Action(address), reference)
+            .unwrap();
+        // The producer has correct identities, checksums and association, as in
+        // 211. Selecting product bytes still supplies no verifier capability.
+        assert!(Installation::registered(&root.0, &state, build, Arc::default()).is_none());
+        let (fresh, ran) = check(&malformed, &VerifierCache::default(), build);
+        assert!(ran && !fresh.violations.is_empty());
+        let installed = registered(&valid, &root.0, &state, build);
+        assert!(!check(&valid, &installed, build).1);
+        let (refused, ran) = check(&malformed, &installed, build);
+        assert!(ran);
+        assert_eq!(
+            format!("{:?}", refused.violations),
+            format!("{:?}", fresh.violations)
+        );
+        assert!(
+            Installation::registered(
+                &root.0,
+                &state,
+                ContentHash::of_bytes(b"another verifier"),
+                Arc::default()
+            )
+            .is_none()
+        );
+    }
+    #[test]
+    fn registration_is_bound_to_root_state_and_exact_generation() {
+        let root = Directory::new();
+        let other = Directory::new();
+        let state = Directory::new();
+        let state = state.0.join("private");
+        let fresh_state = Directory::new();
+        let fresh_state = fresh_state.0.join("private");
+        let build = ContentHash::of_bytes(b"local verifier");
+        let f = Fixture::unit();
+        installation_products(&root.0, b"generation N");
+        installation_products(&other.0, b"generation N");
+        let pinned = registered(&f, &root.0, &state, build);
+        assert!(!check(&f, &pinned, build).1);
+        let copy = |source: &std::path::Path, target: &std::path::Path| {
+            std::fs::create_dir_all(target).unwrap();
+            for entry in std::fs::read_dir(source).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_file() {
+                    std::fs::copy(&path, target.join(path.file_name().unwrap())).unwrap();
+                }
+            }
+        };
+        // Copy registration bytes under the new root's expected name too.
+        for path in std::fs::read_dir(&state)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "registration"))
+        {
+            std::fs::copy(
+                path,
+                installation::registration_path(&state, &other.0.canonicalize().unwrap()),
+            )
+            .unwrap();
+        }
+        assert!(Installation::registered(&other.0, &state, build, Arc::default()).is_none());
+        installation::private_directory(&fresh_state).unwrap();
+        copy(&state, &fresh_state);
+        assert!(Installation::registered(&root.0, &fresh_state, build, Arc::default()).is_none());
+        installation_products(&root.0, b"modified generation N+1");
+        assert!(Installation::registered(&root.0, &state, build, Arc::default()).is_none());
+        // A selected request retains only N's issued associations.
+        assert!(!check(&f, &pinned, build).1);
+        let mut modified = Fixture::unit();
+        modified.definition.entry = BodyId(u32::MAX);
+        assert!(!check(&modified, &pinned, build).0.violations.is_empty());
+    }
+    #[test]
+    fn deleting_or_corrupting_private_registration_falls_back_to_identical_v() {
+        let root = Directory::new();
+        let state = Directory::new();
+        let state = state.0.join("private");
+        let build = ContentHash::of_bytes(b"local verifier");
+        let f = Fixture::unit();
+        installation_products(&root.0, b"products");
+        let pinned = registered(&f, &root.0, &state, build);
+        let (accepted, ran) = check(&f, &pinned, build);
+        assert!(!ran && accepted.violations.is_empty());
+        let path = installation::registration_path(
+            &state.canonicalize().unwrap(),
+            &root.0.canonicalize().unwrap(),
+        );
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[0] ^= 1;
+        std::fs::write(&path, bytes).unwrap();
+        assert!(Installation::registered(&root.0, &state, build, Arc::default()).is_none());
+        std::fs::remove_dir_all(&state).unwrap();
+        assert!(Installation::registered(&root.0, &state, build, Arc::default()).is_none());
+        let (fresh, ran) = check(&f, &VerifierCache::default(), build);
+        assert!(ran);
+        assert_eq!(
+            format!("{:?}", accepted.violations),
+            format!("{:?}", fresh.violations)
         );
     }
 }

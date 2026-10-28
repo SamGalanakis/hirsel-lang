@@ -103,6 +103,9 @@ impl Compiler {
         } else if let Ok(store) = crate::store::store_by_name("none@1", None) {
             config.store = store;
         }
+        if let Some(store) = config.store.for_compiler(self.identity()) {
+            config.store = store;
+        }
         config
     }
     /// Engines opened by a library host always reclaim their private domains,
@@ -157,9 +160,16 @@ impl Compiler {
         } else if let Ok(store) = crate::store::store_by_name("none@1", None) {
             engine = engine.with_result_store(store);
         }
+        if let Some(store) = engine
+            .product_store()
+            .and_then(|store| store.for_compiler(self.identity()))
+        {
+            engine = engine.with_result_store(store);
+        }
         engine
     }
-    pub(crate) fn identity(&self) -> ContentHash {
+    /// Exact compiler source and toolchain digest used by durable products.
+    pub fn identity(&self) -> ContentHash {
         ContentHash(self.identity)
     }
     /// Select an explicit phase factory and its compiler identity before any

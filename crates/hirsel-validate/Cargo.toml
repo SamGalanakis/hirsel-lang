@@ -6,6 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+sha2 = "0.10"
 bincode = "1.3.3"
 hirsel-artifact-store = { path = "../hirsel-artifact-store" }
 hirsel-product-codec = { path = "../hirsel-product-codec" }

@@ -9,12 +9,13 @@ pub const FORMAT: u32 = 15;
 /// The default size cap.
 pub const DEFAULT_CAP: u64 = 2 << 30;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DirStore {
     root: PathBuf,
     physical: Option<hirsel_artifact_store::Store>,
     read_only: Vec<hirsel_artifact_store::Store>,
     cap: u64,
+    verifier_identity: Option<hirsel_syntax::ContentHash>,
     verifier: std::sync::Arc<hirsel_validate::VerifierCache>,
     operation: bool,
 }
@@ -38,10 +39,24 @@ impl DirStore {
             )),
             physical: Some(physical),
             root,
+            verifier_identity: None,
             read_only: vec![],
             cap: DEFAULT_CAP,
             operation: false,
         }
+    }
+    /// Select an independently constructed local verifier for installation.
+    pub fn with_installation_verifier(
+        mut self,
+        verifier: std::sync::Arc<hirsel_validate::VerifierCache>,
+    ) -> Self {
+        self.verifier = verifier;
+        self
+    }
+    /// Precompute issues fresh V authority independently of product rows.
+    pub fn with_installation(mut self, installation: &hirsel_validate::Installation) -> Self {
+        self.verifier = installation.verifier();
+        self
     }
     /// Read installed ordinary products with the same checked format. Writes,
     /// collection and verifier associations remain in this store's own root.
@@ -133,6 +148,7 @@ impl DirStore {
             root,
             physical: None,
             cap: 0,
+            verifier_identity: None,
             verifier,
             operation: false,
         })
@@ -204,7 +220,7 @@ impl ResultStore for DirStore {
             return None;
         }
         let physical = self.physical.as_ref().map(|store| store.for_operation());
-        Some(std::sync::Arc::new(Self {
+        let selected = Self {
             root: self.root.clone(),
             verifier: self.verifier.for_operation(physical.as_ref()),
             physical,
@@ -215,7 +231,36 @@ impl ResultStore for DirStore {
                 .collect(),
             cap: self.cap,
             operation: true,
-        }))
+            verifier_identity: None,
+        };
+        match self.verifier_identity {
+            Some(identity) => selected
+                .for_compiler(identity)
+                .or_else(|| Some(std::sync::Arc::new(selected))),
+            None => Some(std::sync::Arc::new(selected)),
+        }
+    }
+    fn for_compiler(
+        &self,
+        identity: hirsel_syntax::ContentHash,
+    ) -> Option<std::sync::Arc<dyn ResultStore>> {
+        if self.verifier_identity == Some(identity) || self.read_only.is_empty() {
+            return None;
+        }
+        let state = hirsel_validate::Installation::default_state()?;
+        let mut selected = self.clone();
+        selected.verifier_identity = Some(identity);
+        for root in &self.read_only {
+            if let Some(verifier) = hirsel_validate::Installation::registered(
+                root.root(),
+                &state,
+                identity,
+                selected.verifier.clone(),
+            ) {
+                selected.verifier = verifier;
+            }
+        }
+        Some(std::sync::Arc::new(selected))
     }
     fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {
         if self.read_only.is_empty() {
@@ -397,6 +442,7 @@ mod tests {
             physical: None,
             read_only: vec![hirsel_artifact_store::Store::new(installed.clone())],
             cap: 0,
+            verifier_identity: None,
             verifier: std::sync::Arc::new(verifier),
             operation: false,
         };

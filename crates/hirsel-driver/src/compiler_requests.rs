@@ -31,7 +31,18 @@ impl CompilerRequestsExt for Compiler {
                 "package precomputation requires V".into(),
             ));
         }
-        let store = std::sync::Arc::new(DirStore::new(output.to_path_buf()));
+        let installation = hirsel_validate::Installation::default_state().and_then(|state| {
+            hirsel_validate::Installation::begin(output, &state, self.identity()).ok()
+        });
+        let mut store = DirStore::new(output.to_path_buf());
+        if let Some(installation) = &installation {
+            store = store.with_installation(installation);
+        } else {
+            // Even an unavailable private state directory must not make an
+            // existing producer-selected output root a source of V authority.
+            store = store.with_installation_verifier(std::sync::Arc::default());
+        }
+        let store = std::sync::Arc::new(store);
         config.store = store;
         config.retention = Retention::Batch;
         config.hold_bytes = 0;
@@ -45,6 +56,11 @@ impl CompilerRequestsExt for Compiler {
             return Err(ToolError::Runtime(
                 "precompute source product is unavailable".into(),
             ));
+        }
+        if let Some(installation) = installation {
+            // Product installation remains usable when optional durable local
+            // registration cannot be published. A later Check runs V again.
+            let _ = installation.finish();
         }
         Ok(())
     }

@@ -74,6 +74,11 @@ pub trait ResultStore: Send + Sync {
             reads: self.read_scope().into_iter().collect(),
         }
     }
+    /// Bind optional local installation authority to this exact compiler.
+    /// Explicit providers retain their configured authority by default.
+    fn for_compiler(&self, _identity: ContentHash) -> Option<Arc<dyn ResultStore>> {
+        None
+    }
     /// Coalesce ordinary product and verifier cache publication while an
     /// admitted producer runs. Storage's existing bounded batches spill under
     /// pressure; a scope never changes query validity or verifier authority.
