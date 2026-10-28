@@ -719,7 +719,8 @@ fn physical_cpu_publication_cannot_cross_terminal_and_torn_cuts() {
                             .unwrap()
                             .start_jobs((*ctx).run_ptr(), WIDTH.into(), None)
                             .unwrap();
-                        assert_eq!(workers(super::super::execs(ctx)).len(), WIDTH as usize);
+                        assert_eq!(width(ctx), Some(WIDTH));
+                        assert_eq!(workers(super::super::execs(ctx)).len(), WIDTH as usize - 1);
                         snapshot.recorder.flush().unwrap().unwrap();
                         let result = record::cpu_control(ctx, WIDTH, 2, 0, || {
                             if !after_publication {
