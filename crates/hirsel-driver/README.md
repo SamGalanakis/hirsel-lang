@@ -120,19 +120,19 @@ finished executable's debug information into `<build-id>.debug` beside it,
 named by its `.gnu_debuglink`. `native::test_path`'s dispatching `main` is LLVM
 IR compiled in process, and its adapters are ordinary link inputs.
 
-The kit also captures a separate static PIE closure. It contains pinned glibc
-2.36 archives and `rcrt1.o` on x86-64, and the pinned Arm GNU 14.3.rel1 sysroot's
+The kit also captures a separate static executable closure. It contains pinned glibc
+2.36 archives and `crt1.o` on x86-64, and the pinned Arm GNU 14.3.rel1 sysroot's
 glibc 2.40 archives and CRT on AArch64. Their minimum kernels are 3.2 and 3.7.
 These static libcs include files/DNS resolution without loading host NSS modules;
 the dynamic ABI floor remains glibc 2.28 on both targets. Static links group
 the runtime, LLVM unwinder, foreign archives and libc archives with the pinned
 compiler-rt `gcc_personality_v0.c` implementation. They never read host libgcc.
 Frozen kits retain both closures within the existing file and byte bounds.
-Ordinary native executables select this static PIE closure by default. Foreign
+Ordinary native executables select this fixed-address static closure by default. Foreign
 archive and relocatable object inputs stay static; explicit shared libraries and
 linker scripts retain the closed dynamic runtime. Runner hosts and images remain dynamic, as do
 executables launched with the explicit memcheck loader. Launch and validation
-inspect ELF program headers so static PIE self-relocation never runs through a
+inspect ELF program headers so static executable startup never runs through a
 dynamic loader.
 
 Production native import uses `hirsel-layout` for type-to-layout and ABI derivation.

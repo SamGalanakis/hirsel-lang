@@ -285,7 +285,7 @@ def main():
             # Static libc needs built-in files/DNS NSS modules: glibc 2.36
             # nss/nss_module.c:174-180. The 2.28 static resolver instead loads
             # host modules with incompatible private libc symbols. Arm's pinned
-            # sysroot already supplies these and its static PIE CRT. Keep the
+            # sysroot already supplies these and its static CRT. Keep the
             # dynamic ABI floor at 2.28 on both targets.
             static_root = scratch / ("static-" + target["deb"])
             if target["deb"] == "amd64":
@@ -297,12 +297,12 @@ def main():
             for name in ("Scrt1.o", "crti.o", "crtn.o", "libc_nonshared.a"):
                 shutil.copyfile(development / name, directory / name)
                 record(name, source=f"libc6-dev {target['deb']}: usr/lib/{target['multiarch']}/{name}")
-            # The release's static PIE startup and archives. Keep these apart
+            # The release's fixed-address static startup and archives. Keep these apart
             # from the link-only DSOs used by hosts, images and shared foreign
             # calls. In particular libm.a may be an absolute-path linker script;
             # select the actual archives it names, never the invoking sysroot.
-            shutil.copyfile(static_development / "rcrt1.o", directory / "rcrt1.o")
-            record("rcrt1.o", source=f"{static_source}/rcrt1.o")
+            shutil.copyfile(static_development / "crt1.o", directory / "crt1.o")
+            record("crt1.o", source=f"{static_source}/crt1.o")
             static_libraries = []
             # Static glibc before 2.34 needs pthread's private definitions to
             # precede libc's archive fallbacks, as on GCC's -lpthread -lc line.
@@ -386,7 +386,7 @@ def main():
                 "nonshared": "libc_nonshared.a",
                 "end": ["crtendS.o", "crtn.o"],
                 "static": {
-                    "start": ["rcrt1.o", "crti.o", "crtbeginS.o"],
+                    "start": ["crt1.o", "crti.o", "crtbeginS.o"],
                     "libraries": static_libraries,
                     "personality": "libcompiler_rt_personality.a",
                 },

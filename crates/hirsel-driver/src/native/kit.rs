@@ -242,7 +242,7 @@ pub(crate) fn static_input(bytes: &[u8]) -> bool {
 /// What a link writes.
 #[derive(Clone, Debug)]
 pub(crate) enum Kind {
-    /// A static PIE with the kit's archive closure and compiler-rt personality.
+    /// A fixed-address static executable with the kit's CRT and compiler-rt personality.
     StaticExecutable,
     /// A position-independent executable, loaded by the target's canonical
     /// interpreter or, for a checking tool's launch, by `loader` with
@@ -306,7 +306,7 @@ impl Link<'_> {
         match &self.kind {
             Kind::StaticExecutable => {
                 args.extend(
-                    ["-static", "-pie", "--no-dynamic-linker", "-z", "text"]
+                    ["-static", "--no-pie", "--no-dynamic-linker", "-z", "text"]
                         .into_iter()
                         .map(OsString::from),
                 );
