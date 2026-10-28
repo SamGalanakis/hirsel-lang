@@ -135,8 +135,9 @@ fn agree_in(
                         )
                     }),
                     reference,
-                    "{backend:?} Free={free} CPU={:?}",
-                    fixture.cpu
+                    "{backend:?} Free={free} CPU={:?} launcher parallelism={:?}",
+                    fixture.cpu,
+                    std::thread::available_parallelism()
                 );
             }
         }
@@ -290,7 +291,7 @@ fn cpu_scalar_scopes_agree_under_free_and_ordered_at_widths_1_4_8() {
                 b"cpu-scalar-ok\n",
                 false,
                 free,
-                true,
+                width == 1,
             );
         }
     }
@@ -371,7 +372,11 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 fn cpu_canceled_admission_skips_preparation_and_parent_can_reenter() {
     for width in [1, 4, 8] {
         let source = r#"
-fn map_value(take job: u64) -> u64 uses {} { job + 1u64 }
+fn batch(tasks: Tasks, width: u32, refuse_preparation: bool) -> Result[List[u64], CpuPoolError] {
+  core@1/cpu.map_scoped(tasks, width,
+    fn() -> List[u64] uses {} { failure.check(!refuse_preparation, Bounds()); [7u64] },
+    fn(take job: u64) -> u64 uses {} { job + 1u64 })
+}
 pub fn main(rt: Io) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   task.scope(tasks, fn(scope: Scope) -> () {
@@ -379,9 +384,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     let child = task.async(scope, fn() -> bool {
       let mut gate = take sleep
       failure.check(channel.receive(tasks, mut gate) == Error(Canceled(Requested())), Arithmetic())
-      let batch = core@1/cpu.map_scoped(tasks, WIDTH,
-        fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1u64] },
-        map_value)
+      let batch = batch(tasks, WIDTH, true)
       failure.check(batch != Error(MapperNotCertified()), Bounds())
       failure.check(batch != Error(WidthUnavailable()), Bounds())
       failure.check(batch != Error(NotGranted()), Bounds())
@@ -391,9 +394,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     failure.check(task.await(scope, take child), Arithmetic())
     let _ = wake
   })
-  let after = core@1/cpu.map_scoped(tasks, WIDTH,
-    fn() -> List[u64] uses {} { [7u64] },
-    map_value)
+  let after = batch(tasks, WIDTH, false)
   failure.check(after == Ok([8u64]), Bounds())
   let _ = out.print(io.stdout(rt)?, "cpu-canceled-ok\n")
   Ok(())
@@ -407,7 +408,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                 b"cpu-canceled-ok\n",
                 false,
                 free,
-                true,
+                width == 1,
             );
         }
     }

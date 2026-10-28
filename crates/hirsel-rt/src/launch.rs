@@ -1851,7 +1851,7 @@ pub(crate) unsafe fn execute(
     let placement_run = requested.as_ref().or_else(|| {
         fixture_run
             .as_ref()
-            .filter(|run| run.record().placement.is_some())
+            .filter(|run| run.record().placement.is_some() || cpu_fixture.is_some())
     });
     // Validate call metadata before allocating a context or starting workers.
     let replay_call = requested
@@ -1867,9 +1867,7 @@ pub(crate) unsafe fn execute(
     let ordered = if hirsel_free::session::TestHook::from_env()?.is_some() {
         None
     } else {
-        crate::tasks::ordered::admission::Admission::prepare(
-            requested.as_ref().or(cpu_fixture).or(placement_run),
-        )?
+        crate::tasks::ordered::admission::Admission::prepare(placement_run)?
     };
     let ordered_enabled = ordered.is_some();
     let production_free = requested
