@@ -1094,7 +1094,14 @@ fn generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry() {
 /// Root-free process entries keep the ordinary Result and Failure exit contract.
 #[test]
 fn zero_parameter_entries_agree_without_host_roots() {
-    let matrix = smoke_matrix();
+    let mut matrix = smoke_matrix();
+    matrix.push(Configuration {
+        options: matrix[0].options.clone(),
+        engine: Engine::Cranelift {
+            partition: Partition::Whole,
+            runtime: hirsel_driver::native::Runtime::Diagnostic,
+        },
+    });
     for (name, source, exit) in [
         (
             "zero-ok",

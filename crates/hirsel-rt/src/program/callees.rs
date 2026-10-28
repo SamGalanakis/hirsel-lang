@@ -179,7 +179,7 @@ pub(super) unsafe fn load(
     if metadata.json().as_bytes() != bytes {
         return Err("noncanonical compiled callee facts".into());
     }
-    if metadata_identity(&d.digest, &metadata) != d.callee_identity {
+    if identity_bytes(&d.digest, bytes) != d.callee_identity {
         return Err("compiled callee facts identity mismatch".into());
     }
     let facts = &metadata.facts;
