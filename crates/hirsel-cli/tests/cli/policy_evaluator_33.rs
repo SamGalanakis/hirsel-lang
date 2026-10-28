@@ -112,12 +112,12 @@ fn fixture(row: &Value, jobs: u64) -> Fixture {
 }
 
 fn simulation(
-    loaded: &mut hirsel_engine::LoadedProgram,
+    prepared: &hirsel_driver::requests::TirExecution,
     row: &Value,
     recipe: &Fixture,
 ) -> Option<Observation> {
     let run = RunConfiguration {
-        entry: loaded.entry.clone(),
+        entry: prepared.entry.clone(),
         hash_seed: 0,
         inputs: vec![],
     };
@@ -135,11 +135,16 @@ fn simulation(
             "started",
         );
         let world = SimulationConfig::from(recipe);
-        let execution = if checked {
-            hirsel_engine::run_observed_checked_bounded(&mut loaded.engine, &run, world, 1_000_000)
-        } else {
-            hirsel_engine::run_observed_snapshot_bounded(&mut loaded.engine, &run, world, 1_000_000)
-        }
+        let execution = hirsel_driver::testing::observe_tir(
+            prepared,
+            &run,
+            world,
+            hirsel_interp::Limits {
+                steps: Some(1_000_000),
+                ..Default::default()
+            },
+            checked,
+        )
         .unwrap();
         let Some(observed) = execution.observation else {
             assert!(
@@ -713,12 +718,13 @@ fn policy_evaluator_33_cell() {
         )
         .unwrap();
         let manifest = package(&root);
-        let mut loaded = hirsel_driver::load_program(&manifest).unwrap_or_else(|e| panic!("{e}"));
-        loaded
-            .check_for_execution()
-            .unwrap_or_else(|e| panic!("{e}"));
         let recipe = fixture(&row, row["jobs"].as_u64().unwrap_or(4));
         if std::env::var("POLICY_EVALUATOR_33_PHASE").unwrap() == "native" {
+            let mut loaded =
+                hirsel_driver::load_program(&manifest).unwrap_or_else(|e| panic!("{e}"));
+            loaded
+                .check_for_execution()
+                .unwrap_or_else(|e| panic!("{e}"));
             let expected = Observation {
                 exit_code: row["exit"].as_i64().map(|n| n as i32),
                 blocked: false,
@@ -730,7 +736,9 @@ fn policy_evaluator_33_cell() {
             };
             native(&mut loaded, &root, &row, &recipe, &expected);
         } else {
-            if simulation(&mut loaded, &row, &recipe).is_none() {
+            let prepared = hirsel_driver::request_tir(&manifest, hirsel_engine::Verify::On, None)
+                .unwrap_or_else(|e| panic!("{e}"));
+            if simulation(&prepared, &row, &recipe).is_none() {
                 return;
             }
         }
