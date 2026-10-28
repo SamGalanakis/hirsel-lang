@@ -14,7 +14,7 @@
   ],
   "dependencies": [
     {
-      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "manifest": "std-iter.json",
       "package": {
         "name": "std",
         "version": "1"

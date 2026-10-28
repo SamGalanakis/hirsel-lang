@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "path": "CLO-4-erased-carrier-part-handback-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

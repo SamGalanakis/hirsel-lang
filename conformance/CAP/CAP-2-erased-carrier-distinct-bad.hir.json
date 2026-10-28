@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "path": "CAP-2-erased-carrier-distinct-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

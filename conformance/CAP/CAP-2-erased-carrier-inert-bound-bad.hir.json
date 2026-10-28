@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "path": "CAP-2-erased-carrier-inert-bound-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

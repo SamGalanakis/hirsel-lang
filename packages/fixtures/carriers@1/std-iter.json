@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "std",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "../../../stdlib/std@1/iter.hir",
+      "module": [
+        "iter"
+      ]
+    }
+  ],
+  "dependencies": []
+}
