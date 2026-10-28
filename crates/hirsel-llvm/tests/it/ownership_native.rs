@@ -276,6 +276,17 @@ fn metadata(program: &support::programs::Program) -> Units {
 
 #[test]
 fn ownership_native_emission_is_explicit_and_leaves_default_object_bytes_unchanged() {
+    let header = std::fs::read_to_string(
+        std::path::Path::new(support::native::RUNTIME_INCLUDE).join("hirsel_rt_ownership_trace.h"),
+    )
+    .unwrap();
+    let version = header
+        .lines()
+        .find_map(|line| line.strip_prefix("#define HIRSEL_RT_V2_OWNERSHIP_TRACE_ABI_VERSION "))
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    assert_eq!(version, hirsel_lir::ownership_trace::native::ABI_VERSION);
     let program = fixture();
     let inputs = inputs(&program);
     let units = program.units();
@@ -363,7 +374,8 @@ fn run_equal_resources(cycle: bool) {
         } else {
             hirsel_cranelift::emit_object_ownership(&units, &inputs).unwrap()
         };
-        let dir = support::native::scratch(&format!("ownership-leaf-{backend}"));
+        let fixture = if cycle { "swap" } else { "equal" };
+        let dir = support::native::scratch(&format!("ownership-leaf-{fixture}-{backend}"));
         std::fs::write(
             dir.join("entries.h"),
             program.c_call("ownership_leaf", "call_leaf"),
