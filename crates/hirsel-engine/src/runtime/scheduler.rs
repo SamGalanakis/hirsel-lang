@@ -10,7 +10,7 @@ use super::*;
 use hirsel_intern::jobs::{COMPILER_STACK_BYTES, Jobs};
 use hirsel_syntax::ContentHash;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -92,6 +92,10 @@ pub struct RuntimeStats {
     pub waits: u64,
     pub wakes: u64,
     pub edges: u64,
+    pub duplicate_reads: u64,
+    pub wait_tokens: u64,
+    pub cycle_repair_visits: u64,
+    pub actual_metadata_bytes: u64,
     pub peak_bytes: u64,
     pub charged_bytes: u64,
     pub active: usize,
@@ -105,7 +109,8 @@ enum Status {
     Running,
     Waiting,
     Cancelling,
-    Settled(Outcome),
+    Settled(Box<Outcome>),
+    Dormant,
 }
 #[derive(Clone)]
 enum Factory {
@@ -119,23 +124,28 @@ enum Task {
         home: Option<usize>,
     },
 }
-struct Node {
+struct Execution {
     task: Task,
     weight: MemoryWeight,
     continuation: u64,
+}
+struct Node {
+    execution: Option<Box<Execution>>,
     status: Status,
-    dependencies: BTreeSet<Key>,
+    dependencies: Vec<Edge>,
     // One count per reverse subscription, including reads made during a poll.
     // Completion can race that poll's return to Waiting under the same lock.
     unsatisfied: usize,
-    waiters: BTreeSet<Key>,
+    subscribers: Vec<Subscriber>,
+    generation: u32,
+    position: u32,
     live: bool,
     // A cancelled in-flight poll is drained before a new claim can replace it.
     discard: bool,
 }
 struct State {
     factories: BTreeMap<u32, Factory>,
-    nodes: BTreeMap<Key, Node>,
+    nodes: Nodes,
     ready: BTreeSet<(Reverse<u64>, Key)>,
     cleanup: Vec<BTreeMap<Key, Option<Reference>>>,
     costs: BTreeMap<Key, u64>,
@@ -307,7 +317,7 @@ impl AdmittedRuntime {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 factories: BTreeMap::new(),
-                nodes: BTreeMap::new(),
+                nodes: Nodes::default(),
                 ready: BTreeSet::new(),
                 cleanup: (0..count).map(|_| BTreeMap::new()).collect(),
                 costs: BTreeMap::new(),
@@ -440,7 +450,23 @@ impl AdmittedRuntime {
         Ok(())
     }
     pub fn stats(&self) -> RuntimeStats {
-        self.shared.lock().stats
+        let state = self.shared.lock();
+        let mut stats = state.stats;
+        stats.actual_metadata_bytes = state.nodes.allocated_bytes()
+            + (state.ready.len() * (size_of::<(Reverse<u64>, Key)>() + 64)
+                + state.costs.len() * (size_of::<(Key, u64)>() + 64)
+                + state.factories.len() * (size_of::<(u32, Factory)>() + 64)
+                + state
+                    .requests
+                    .values()
+                    .map(|r| r.capacity() * size_of::<Key>() + 128)
+                    .sum::<usize>()
+                + state
+                    .cleanup
+                    .iter()
+                    .map(|q| q.len() * (size_of::<(Key, Option<Reference>)>() + 64))
+                    .sum::<usize>()) as u64;
+        stats
     }
     pub fn completion(&self) -> RuntimeCompletion {
         RuntimeCompletion {
@@ -520,7 +546,7 @@ impl QueryRuntime for AdmittedRuntime {
             .map(|r| key(*r))
             .collect::<BTreeSet<_>>()
             .iter()
-            .filter(|r| !state.nodes.contains_key(r))
+            .filter(|r| !state.nodes.has_slot(r))
             .count();
         if missing > state.max_entries.saturating_sub(state.nodes.len()) {
             let idle: Vec<_> = state
@@ -625,7 +651,7 @@ impl State {
     }
     fn result(&self, key: Key) -> Option<Outcome> {
         match &self.nodes.get(&key)?.status {
-            Status::Settled(result) => Some(*result),
+            Status::Settled(result) => Some(**result),
             _ => None,
         }
     }
@@ -647,7 +673,7 @@ impl State {
             node.live = true;
             return Ok(());
         }
-        if self.nodes.len() >= self.max_entries {
+        if !self.nodes.can_insert(query, self.max_entries) {
             return Err(self.errors.resource);
         }
         self.stats.claims += 1;
@@ -699,13 +725,13 @@ impl State {
                 Task::Send(None),
                 MemoryWeight::default(),
                 0,
-                Status::Settled(Err(self.errors.resource)),
+                Status::Settled(Box::new(Err(self.errors.resource))),
             ),
             Err(error) => (
                 Task::Send(None),
                 MemoryWeight::default(),
                 0,
-                Status::Settled(Err(error)),
+                Status::Settled(Box::new(Err(error))),
             ),
         };
         self.retained += weight.retained;
@@ -713,13 +739,17 @@ impl State {
         self.nodes.insert(
             query,
             Node {
-                task,
-                weight,
-                continuation,
+                execution: Some(Box::new(Execution {
+                    task,
+                    weight,
+                    continuation,
+                })),
                 status,
-                dependencies: BTreeSet::new(),
+                dependencies: Vec::new(),
                 unsatisfied: 0,
-                waiters: BTreeSet::new(),
+                subscribers: Vec::new(),
+                generation: 0,
+                position: 0,
                 live: true,
                 discard: false,
             },
@@ -731,48 +761,24 @@ impl State {
         Ok(())
     }
     fn mark_live(&mut self) {
-        for node in self.nodes.values_mut() {
-            node.live = false;
-        }
-        let mut pending: Vec<_> = self.requests.values().flatten().copied().collect();
-        while let Some(key) = pending.pop() {
-            if let Some(node) = self.nodes.get_mut(&key)
-                && !node.live
-            {
-                node.live = true;
-                pending.extend(node.dependencies.iter().copied());
-            }
-        }
+        self.nodes
+            .mark_live(self.requests.values().flatten().copied());
     }
     fn remove(&mut self, query: Key) {
         self.unqueue(query);
-        if let Some(node) = self.nodes.remove(&query) {
-            // A queued Send continuation still owns its frame until this drop.
-            let Node {
-                task,
-                weight,
-                dependencies,
-                ..
-            } = node;
-            drop(task);
-            self.retained -= weight.retained;
-            self.edges -= dependencies.len();
-            for dependency in dependencies {
-                if let Some(node) = self.nodes.get_mut(&dependency) {
-                    node.waiters.remove(&query);
-                }
-            }
+        if let Some(execution) = self.nodes.remove(&query) {
+            self.retained -= execution.weight.retained;
+            drop(execution);
         }
+        self.edges = self.nodes.edge_count();
     }
     fn restart(&mut self, query: Key) {
-        // New requesters may subscribe after cancellation but before the old
-        // bounded poll/home cleanup returns. Their latch belongs to the logical
-        // query, so transfer it to the replacement claim rather than losing it.
-        let waiters = std::mem::take(&mut self.nodes.get_mut(&query).expect("old claim").waiters);
+        // Incoming recorded reads retain the semantic slot. Pending tokens are
+        // explicitly transferred only after the discarded poll has drained.
         self.remove(query);
         self.ensure(query)
-            .expect("replacement uses the same admitted node slot");
-        self.nodes.get_mut(&query).unwrap().waiters = waiters;
+            .expect("replacement uses its admitted slot");
+        self.nodes.transfer_subscriptions(query);
         if let Some(result) = self.result(query) {
             self.settle(query, result);
         }
@@ -780,22 +786,25 @@ impl State {
     fn prune(&mut self) {
         self.mark_live();
         let mut remove = Vec::new();
-        for (&key, node) in &mut self.nodes {
+        for key in self.nodes.iter().map(|(k, _)| *k).collect::<Vec<_>>() {
+            let node = self.nodes.get_mut(&key).unwrap();
             if !node.live {
                 match node.status {
-                    Status::Ready | Status::Waiting => match &node.task {
-                        Task::Local {
-                            home: Some(home), ..
-                        } => {
-                            self.cleanup[*home].insert(key, None);
-                            node.status = Status::Cancelling;
-                            node.discard = true;
+                    Status::Ready | Status::Waiting => {
+                        match &node.execution.as_ref().expect("active execution").task {
+                            Task::Local {
+                                home: Some(home), ..
+                            } => {
+                                self.cleanup[*home].insert(key, None);
+                                node.status = Status::Cancelling;
+                                node.discard = true;
+                            }
+                            _ => remove.push(key),
                         }
-                        _ => remove.push(key),
-                    },
+                    }
                     Status::Cancelling => (),
                     Status::Running => node.discard = true,
-                    Status::Settled(_) => (),
+                    Status::Settled(_) | Status::Dormant => (),
                 }
             }
         }
@@ -804,47 +813,39 @@ impl State {
         }
         self.account();
     }
-    fn reaches(&self, from: Key, target: Key) -> bool {
-        let mut seen = HashSet::new();
-        let mut pending = vec![from];
-        while let Some(key) = pending.pop() {
-            if key == target {
-                return true;
-            }
-            if seen.insert(key)
-                && let Some(node) = self.nodes.get(&key)
-            {
-                pending.extend(node.dependencies.iter().copied());
-            }
-        }
-        false
-    }
     /// Called only after the unique task destructor has returned or unwound.
     /// The remaining charge belongs to held products, not the task frame.
     fn retire_continuation(&mut self, query: Key) {
         if let Some(node) = self.nodes.get_mut(&query) {
-            let bytes = std::mem::take(&mut node.continuation);
-            node.weight.retained -= bytes;
+            let bytes = std::mem::take(
+                &mut node
+                    .execution
+                    .as_mut()
+                    .expect("active execution")
+                    .continuation,
+            );
+            node.execution
+                .as_mut()
+                .expect("active execution")
+                .weight
+                .retained -= bytes;
             self.retained -= bytes;
         }
     }
     fn settle(&mut self, query: Key, result: Outcome) {
         let node = self.nodes.get_mut(&query).expect("claimed query");
-        node.task = Task::Send(None);
-        node.status = Status::Settled(result);
-        let waiters = std::mem::take(&mut node.waiters);
+        node.execution.as_mut().expect("active execution").task = Task::Send(None);
+        node.status = Status::Settled(Box::new(result));
         self.stats.settled += 1;
         self.event(RuntimeEvent::Settled {
             query: id(query),
             result,
         });
-        for waiter in waiters {
-            let Some(node) = self.nodes.get_mut(&waiter) else {
-                continue;
-            };
-            node.unsatisfied -= 1;
-            if node.unsatisfied == 0 && matches!(node.status, Status::Waiting) {
-                node.status = Status::Ready;
+        let producer = self.nodes.node_id(query).expect("claimed query");
+        // Reverse records also retain settled/failed semantic edges. The token
+        // generation, rather than the mere presence of an edge, grants a wake.
+        for i in 0..self.nodes.subscribers(producer).len() {
+            if let Some(waiter) = self.nodes.consume(producer, i) {
                 self.queue(waiter);
                 self.stats.wakes += 1;
                 self.event(RuntimeEvent::Wake(id(waiter)));
@@ -856,57 +857,53 @@ impl State {
 struct Context<'a> {
     shared: &'a Shared,
     query: Key,
-    pending: BTreeSet<Key>,
+    generation: NodeId,
+    pending: BTreeSet<u32>,
 }
 impl QueryContext for Context<'_> {
     fn read(&mut self, dependency: QueryId) -> Poll<Outcome> {
         let mut state = self.shared.lock();
         if state.stopped
-            || state
-                .nodes
-                .get(&self.query)
-                .is_none_or(|n| !n.live || n.discard)
+            || state.nodes.get(&self.query).is_none_or(|n| {
+                !n.live || n.discard || state.nodes.node_id(self.query) != Some(self.generation)
+            })
         {
             return Poll::Ready(Err(state.errors.cancelled));
         }
         let dependency = key(dependency);
-        let new = !state.nodes[&self.query].dependencies.contains(&dependency);
-        if new && state.edges >= state.max_entries * 4 {
+        let existing = state.nodes.edge(self.generation, dependency);
+        if existing.is_none() && state.edges >= state.max_entries * 4 {
             return Poll::Ready(Err(state.errors.resource));
         }
         if let Err(error) = state.ensure(dependency) {
             return Poll::Ready(Err(error));
         }
-        if new && state.reaches(dependency, self.query) {
-            return Poll::Ready(Err(state.errors.cycle));
-        }
-        if new {
-            state
-                .nodes
-                .get_mut(&self.query)
-                .unwrap()
-                .dependencies
-                .insert(dependency);
+        let producer = state.nodes.node_id(dependency).expect("ensured dependency");
+        let edge = if let Some(edge) = existing {
+            state.stats.duplicate_reads += 1;
+            edge
+        } else {
+            let before = state.nodes.repair_visits;
+            let inserted = state.nodes.insert_edge(self.generation, producer);
+            state.stats.cycle_repair_visits += state.nodes.repair_visits - before;
+            let Some(edge) = inserted else {
+                return Poll::Ready(Err(state.errors.cycle));
+            };
             state.stats.edges += 1;
             state.edges += 1;
             state.event(RuntimeEvent::Read {
                 query: id(self.query),
                 dependency: id(dependency),
             });
-        }
+            edge
+        };
         if let Some(result) = state.result(dependency) {
             return Poll::Ready(result);
         }
-        if state
-            .nodes
-            .get_mut(&dependency)
-            .unwrap()
-            .waiters
-            .insert(self.query)
-        {
-            state.nodes.get_mut(&self.query).unwrap().unsatisfied += 1;
+        if state.nodes.subscribe(self.generation, edge, producer) {
+            state.stats.wait_tokens += 1;
         }
-        self.pending.insert(dependency);
+        self.pending.insert(producer.slot);
         self.shared.changed.notify_all();
         Poll::Pending
     }
@@ -983,15 +980,26 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
                 let first = state
                     .ready
                     .iter()
-                    .find(|(_, query)| match &state.nodes[query].task {
-                        Task::Local {
-                            home: Some(home), ..
-                        } => *home == worker,
-                        _ => true,
+                    .find(|(_, query)| {
+                        match &state.nodes[query]
+                            .execution
+                            .as_ref()
+                            .expect("active execution")
+                            .task
+                        {
+                            Task::Local {
+                                home: Some(home), ..
+                            } => *home == worker,
+                            _ => true,
+                        }
                     })
                     .copied();
                 if let Some((_, query)) = first {
-                    let weight = state.nodes[&query].weight;
+                    let weight = state.nodes[&query]
+                        .execution
+                        .as_ref()
+                        .expect("active execution")
+                        .weight;
                     if weight.stack > stack {
                         state.unqueue(query);
                         let error = state.errors.resource;
@@ -1006,15 +1014,16 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
                     {
                         state.unqueue(query);
                         let node = state.nodes.get_mut(&query).unwrap();
-                        let work = match &mut node.task {
-                            Task::Send(task) => {
-                                Work::Send(task.take().expect("ready continuation"))
-                            }
-                            Task::Local { factory, home } => {
-                                *home = Some(worker);
-                                Work::Local(factory.clone())
-                            }
-                        };
+                        let work =
+                            match &mut node.execution.as_mut().expect("active execution").task {
+                                Task::Send(task) => {
+                                    Work::Send(task.take().expect("ready continuation"))
+                                }
+                                Task::Local { factory, home } => {
+                                    *home = Some(worker);
+                                    Work::Local(factory.clone())
+                                }
+                            };
                         node.status = Status::Running;
                         state.scratch += weight.scratch;
                         state.stats.active += 1;
@@ -1035,7 +1044,7 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
                         let node = &state.nodes[&query];
                         if let Task::Local {
                             home: Some(home), ..
-                        } = &node.task
+                        } = &node.execution.as_ref().expect("active execution").task
                         {
                             let home = *home;
                             let error = state.errors.resource;
@@ -1068,6 +1077,7 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
         let mut cx = Context {
             shared: &shared,
             query,
+            generation: shared.lock().nodes.node_id(query).expect("running query"),
             pending: BTreeSet::new(),
         };
         let mut send_task = None;
@@ -1095,6 +1105,9 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
                         .nodes
                         .get_mut(&query)
                         .expect("running local task")
+                        .execution
+                        .as_mut()
+                        .expect("running execution")
                         .continuation = continuation;
                     entry.insert(task);
                 }
@@ -1157,13 +1170,18 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
                 Ok(QueryPoll::Failed(error)) => state.settle(query, Err(error)),
                 Ok(QueryPoll::Waiting(waits))
                     if !cx.pending.is_empty()
-                        && waits.iter().copied().map(key).collect::<BTreeSet<_>>()
+                        && waits.iter().all(|q| state.nodes.node_id(key(*q)).is_some())
+                        && waits
+                            .iter()
+                            .filter_map(|q| state.nodes.node_id(key(*q)).map(|id| id.slot))
+                            .collect::<BTreeSet<_>>()
                             == cx.pending =>
                 {
                     let node = state.nodes.get_mut(&query).unwrap();
                     let ready = node.unsatisfied == 0;
                     if let Some(task) = send_task {
-                        node.task = Task::Send(Some(task));
+                        node.execution.as_mut().expect("active execution").task =
+                            Task::Send(Some(task));
                     }
                     node.status = if ready {
                         Status::Ready
@@ -1198,5 +1216,7 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
         shared.changed.notify_all();
     }
 }
+mod nodes;
 #[cfg(test)]
 mod tests;
+use nodes::{Edge, NodeId, Nodes, Subscriber};

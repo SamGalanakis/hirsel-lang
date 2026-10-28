@@ -1714,3 +1714,242 @@ fn shutdown_returns_one_charge_after_cleanup_and_reuses_it_across_admitted_round
         assert_eq!(budget.reserved(), 0);
     }
 }
+
+fn bare_node() -> super::Node {
+    super::Node {
+        execution: Some(Box::new(Execution {
+            task: super::Task::Send(None),
+            weight: MemoryWeight::default(),
+            continuation: 0,
+        })),
+        status: Status::Ready,
+        dependencies: Vec::new(),
+        subscribers: Vec::new(),
+        generation: 0,
+        position: 0,
+        unsatisfied: 0,
+        live: true,
+        discard: false,
+    }
+}
+fn exact_reaches(edges: &[Vec<usize>], from: usize, target: usize) -> bool {
+    let mut seen = vec![false; edges.len()];
+    let mut todo = vec![from];
+    while let Some(n) = todo.pop() {
+        if n == target {
+            return true;
+        }
+        if !std::mem::replace(&mut seen[n], true) {
+            todo.extend(&edges[n]);
+        }
+    }
+    false
+}
+#[test]
+fn compact_topology_matches_exact_oracle_across_insertions_and_removals() {
+    let mut nodes = Nodes::default();
+    let size = 128;
+    for i in 0..size {
+        nodes.insert(key(query(i as u64)), bare_node());
+    }
+    let mut edges = vec![Vec::new(); size];
+    let mut insert = |nodes: &mut Nodes, a: usize, b: usize| {
+        let source = nodes.node_id(key(query(a as u64))).unwrap();
+        let target = nodes.node_id(key(query(b as u64))).unwrap();
+        let duplicate = edges[a].contains(&b);
+        let expected = duplicate || !exact_reaches(&edges, b, a);
+        let accepted = nodes.edge(source, key(query(b as u64))).is_some()
+            || nodes.insert_edge(source, target).is_some();
+        assert_eq!(accepted, expected, "edge {a}->{b}");
+        if accepted && !duplicate {
+            edges[a].push(b);
+        }
+        for (a, bs) in edges.iter().enumerate() {
+            for &b in bs {
+                let left = nodes.node_id(key(query(a as u64))).unwrap();
+                let right = nodes.node_id(key(query(b as u64))).unwrap();
+                assert!(nodes.rows_for_test(left) < nodes.rows_for_test(right));
+            }
+        }
+    };
+    // A reverse chain forces interval repair. Wide fan-in, duplicate edges and
+    // self/cross cycles use the same exact insertion oracle.
+    for i in (1..size).rev() {
+        insert(&mut nodes, i, i - 1);
+    }
+    for i in 0..size {
+        insert(&mut nodes, size - 1, i);
+        insert(&mut nodes, i, i);
+    }
+    let mut seed = 226u64;
+    for _ in 0..3000 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let a = (seed >> 32) as usize % size;
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let b = (seed >> 32) as usize % size;
+        insert(&mut nodes, a, b);
+    }
+    // Removing one source deletes its reads. Incoming semantic references keep
+    // its slot until its next generation, even when that source failed.
+    for i in (0..size).step_by(3) {
+        nodes.remove(&key(query(i as u64)));
+        edges[i].clear();
+        nodes.insert(key(query(i as u64)), bare_node());
+    }
+    for a in 0..size {
+        let b = (a + 1) % size;
+        let source = nodes.node_id(key(query(a as u64))).unwrap();
+        let target = nodes.node_id(key(query(b as u64))).unwrap();
+        let expected = edges[a].contains(&b) || !exact_reaches(&edges, b, a);
+        let accepted = nodes.edge(source, key(query(b as u64))).is_some()
+            || nodes.insert_edge(source, target).is_some();
+        assert_eq!(accepted, expected);
+        if accepted && !edges[a].contains(&b) {
+            edges[a].push(b);
+        }
+    }
+}
+#[test]
+fn tokens_ignore_old_producer_and_waiter_generations_and_preserve_failed_edges() {
+    let mut nodes = Nodes::default();
+    for i in 0..3 {
+        nodes.insert(key(query(i)), bare_node());
+    }
+    let old_waiter = nodes.node_id(key(query(0))).unwrap();
+    let old_producer = nodes.node_id(key(query(1))).unwrap();
+    let edge = nodes.insert_edge(old_waiter, old_producer).unwrap();
+    assert!(nodes.subscribe(old_waiter, edge, old_producer));
+    assert!(!nodes.subscribe(old_waiter, edge, old_producer));
+    assert_eq!(nodes[&key(query(0))].unsatisfied, 1);
+    nodes.remove(&key(query(1)));
+    nodes.insert(key(query(1)), bare_node());
+    nodes.transfer_subscriptions(key(query(1)));
+    let producer = nodes.node_id(key(query(1))).unwrap();
+    assert!(nodes.consume(old_producer, 0).is_none());
+    assert_eq!(nodes[&key(query(0))].unsatisfied, 1);
+    nodes[&key(query(0))].status = Status::Waiting;
+    assert_eq!(nodes.consume(producer, 0), Some(key(query(0))));
+    assert!(nodes.consume(producer, 0).is_none());
+    nodes[&key(query(0))].status = Status::Settled(Box::new(Err(errors().protocol)));
+    // A failed node's read still closes the opposing cycle.
+    assert!(nodes.insert_edge(producer, old_waiter).is_none());
+    nodes.remove(&key(query(0)));
+    nodes.insert(key(query(0)), bare_node());
+    let waiter = nodes.node_id(key(query(0))).unwrap();
+    assert_ne!(waiter, old_waiter);
+    let edge = nodes.insert_edge(waiter, producer).unwrap();
+    assert!(nodes.subscribe(waiter, edge, producer));
+    nodes.remove(&key(query(0)));
+    nodes.insert(key(query(0)), bare_node());
+    assert!(nodes.consume(producer, 0).is_none());
+    assert_eq!(nodes[&key(query(0))].unsatisfied, 0);
+    assert_eq!(size_of::<Edge>(), 8);
+    assert_eq!(size_of::<Subscriber>(), 12);
+    assert!(size_of::<super::Node>() <= 128);
+}
+
+struct GatedReadsFactory {
+    parent_read: mpsc::Sender<()>,
+    parent_release: Mutex<Option<mpsc::Receiver<()>>>,
+    leaf_release: Mutex<Option<mpsc::Receiver<()>>>,
+}
+struct GatedReadsTask {
+    id: QueryId,
+    parent_read: mpsc::Sender<()>,
+    release: Option<mpsc::Receiver<()>>,
+}
+impl QueryFactory for GatedReadsFactory {
+    fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        Ok(Box::new(GatedReadsTask {
+            id,
+            parent_read: self.parent_read.clone(),
+            release: if id == query(0) {
+                self.parent_release.lock().unwrap().take()
+            } else {
+                self.leaf_release.lock().unwrap().take()
+            },
+        }))
+    }
+}
+impl QueryTask for GatedReadsTask {
+    fn id(&self) -> QueryId {
+        self.id
+    }
+    fn weight(&self) -> MemoryWeight {
+        Spec::deps(&[]).weight
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        if self.id == query(1) {
+            self.release.take().unwrap().recv().unwrap();
+        } else if let Some(release) = self.release.take() {
+            for _ in 0..16 {
+                assert!(cx.read(query(1)).is_pending());
+            }
+            self.parent_read.send(()).unwrap();
+            release.recv().unwrap();
+            // The producer has settled while this poll remains Running. A
+            // settled reread must neither create another token nor erase the
+            // pending-read protocol obligation from earlier in this poll.
+            for _ in 0..16 {
+                assert_eq!(cx.read(query(1)), Poll::Ready(Ok(product(query(1)))));
+            }
+            return QueryPoll::Waiting(vec![query(1)]);
+        } else {
+            for _ in 0..16 {
+                assert_eq!(cx.read(query(1)), Poll::Ready(Ok(product(query(1)))));
+            }
+        }
+        QueryPoll::Complete(product(self.id))
+    }
+}
+#[test]
+fn repeated_pending_then_settled_reads_keep_one_token_and_one_ready_transition() {
+    let mut rt = runtime(2, 8 << 20);
+    let (parent_read, read) = mpsc::channel();
+    let (parent_release, parent) = mpsc::channel();
+    let (leaf_release, leaf) = mpsc::channel();
+    rt.register(
+        1,
+        Arc::new(GatedReadsFactory {
+            parent_read,
+            parent_release: Mutex::new(Some(parent)),
+            leaf_release: Mutex::new(Some(leaf)),
+        }),
+    )
+    .unwrap();
+    let first = rt.request(&[query(0)]);
+    let second = rt.request(&[query(0)]);
+    read.recv().unwrap();
+    assert_eq!(rt.stats().wait_tokens, 1);
+    rt.cancel(first);
+    leaf_release.send(()).unwrap();
+    let state = rt.shared.lock();
+    let (state, timeout) = rt
+        .shared
+        .changed
+        .wait_timeout_while(state, std::time::Duration::from_secs(2), |s| {
+            s.result(key(query(1))).is_none()
+        })
+        .unwrap();
+    assert!(!timeout.timed_out());
+    assert_eq!(state.nodes[&key(query(0))].unsatisfied, 0);
+    drop(state);
+    parent_release.send(()).unwrap();
+    assert_eq!(rt.wait(second), Ok(vec![product(query(0))]));
+    let stats = rt.stats();
+    assert_eq!(stats.claims, 2);
+    assert_eq!(stats.wait_tokens, 1);
+    assert_eq!(stats.wakes, 1);
+    assert_eq!(stats.duplicate_reads, 47);
+    assert!(stats.actual_metadata_bytes <= stats.bookkeeping_bytes);
+    println!(
+        "layout hot={} outgoing={} reverse={} execution={} outcome={} actual={} allowance={}",
+        size_of::<super::Node>(),
+        size_of::<Edge>(),
+        size_of::<Subscriber>(),
+        size_of::<Execution>(),
+        size_of::<Outcome>(),
+        stats.actual_metadata_bytes,
+        stats.bookkeeping_bytes
+    );
+}
