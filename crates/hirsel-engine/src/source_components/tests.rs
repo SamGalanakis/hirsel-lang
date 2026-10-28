@@ -130,7 +130,9 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
         Ok(Arc::new(())),
         Arc::new(reads.clone()),
         crate::memo::Durability::Low,
-        Some(first.components[0].product.record.output.0),
+        Some(crate::summary::SettledSummary::Test(
+            first.components[0].product.record.output.0,
+        )),
     );
     let mut edits = crate::memo::ChangeSet::default();
     edits.text(ids[0], crate::memo::Durability::Low);
@@ -141,7 +143,9 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
         Ok(Arc::new(())),
         Arc::new(reads.clone()),
         crate::memo::Durability::Low,
-        Some(changed.components[0].product.record.output.0),
+        Some(crate::summary::SettledSummary::Test(
+            changed.components[0].product.record.output.0,
+        )),
     );
     assert_eq!(
         original.changed_at, equal.changed_at,

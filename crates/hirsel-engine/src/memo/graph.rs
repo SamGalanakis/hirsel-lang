@@ -4,6 +4,7 @@
 //! the current revision and gets its `verified_at` stamp lazily, when read.
 use super::{Durability, ReadKey, ReadKind, Reads, Revision};
 use crate::QueryKind;
+use crate::summary::SettledSummary;
 use hirsel_intern::IdHasher;
 use hirsel_intern::timings::{self, Count};
 use hirsel_syntax::{ContentHash, DefId};
@@ -123,7 +124,7 @@ struct Record {
     reads: Arc<Reads>,
     durability: Durability,
     changed_at: Revision,
-    output: Option<ContentHash>,
+    output: Option<SettledSummary>,
 }
 
 /// A broad input invalidates a shared reverse-index snapshot. Confirmations
@@ -347,9 +348,9 @@ impl MemoGraph {
         }
     }
 
-    /// The canonical output of a settled query, independent of its action.
-    pub(crate) fn output(&self, key: &MemoKey) -> Option<ContentHash> {
-        self.records.get(key)?.output
+    /// The exact facet of a settled query, independent of its action.
+    pub(crate) fn output(&self, key: &MemoKey) -> Option<&SettledSummary> {
+        self.records.get(key)?.output.as_ref()
     }
 
     /// Starts the next revision: marks exactly the subscribers of each changed
@@ -519,7 +520,7 @@ impl MemoGraph {
 
     /// Equal settled outputs preserve their change revision even when their
     /// source or dependency witnesses changed. None marks a provisional or
-    /// unencodable product and can never establish equality.
+    /// absent product and can never establish equality.
     pub(crate) fn insert_output<T>(
         &mut self,
         key: MemoKey,
@@ -527,10 +528,13 @@ impl MemoGraph {
         value: Result<Arc<T>, hirsel_types::QueryError>,
         reads: Arc<Reads>,
         durability: Durability,
-        output: Option<ContentHash>,
+        output: Option<SettledSummary>,
     ) -> Memo<T> {
         let output = output.filter(|_| value.is_ok());
-        let unchanged = output.is_some() && output == self.output(&key);
+        let unchanged = output
+            .as_ref()
+            .zip(self.output(&key))
+            .is_some_and(|(new, old)| new.equivalent(old));
         let memo = self.insert(key, text, value, reads, durability, unchanged);
         self.records.get_mut(&key).expect("inserted record").output = output;
         memo
@@ -543,11 +547,15 @@ impl MemoGraph {
         value: Result<Arc<T>, hirsel_types::QueryError>,
         reads: Arc<Reads>,
         durability: Durability,
-        output: Option<ContentHash>,
+        output: Option<SettledSummary>,
     ) -> Memo<T> {
         let output = output.filter(|_| value.is_ok());
         let previous = self.records.get(&key).and_then(|record| {
-            (output.is_some() && output == record.output).then_some(record.changed_at)
+            output
+                .as_ref()
+                .zip(record.output.as_ref())
+                .is_some_and(|(new, old)| new.equivalent(old))
+                .then_some(record.changed_at)
         });
         let mut memo = self.adopt_value(key, text, value, reads, durability);
         let record = self.records.get_mut(&key).expect("adopted record");
@@ -1177,7 +1185,7 @@ mod tests {
             Ok(Arc::new(())),
             reads(&[]),
             Durability::Low,
-            Some(h("output")),
+            Some(SettledSummary::Test(h("output"))),
         );
         let mut changes = ChangeSet::default();
         changes.text(owner, Durability::Low);
@@ -1188,16 +1196,28 @@ mod tests {
             Ok(Arc::new(())),
             reads(&[(ReadKey::Signature(def("new-dependency")), "new")]),
             Durability::Low,
-            Some(h("output")),
+            Some(SettledSummary::Test(h("output"))),
         );
         assert_eq!(equal.changed_at, first.changed_at);
-        assert_eq!(graph.output(&key), Some(h("output")));
+        assert!(
+            graph
+                .output(&key)
+                .unwrap()
+                .equivalent(&SettledSummary::Test(h("output")))
+        );
         assert_eq!(
             graph
                 .subscribers(&ReadKey::Signature(def("new-dependency")))
                 .count(),
             1
         );
+        let mut dependency_change = ChangeSet::default();
+        dependency_change.read(ReadKey::Signature(def("new-dependency")), Durability::Low);
+        graph.apply(&dependency_change);
+        assert!(matches!(
+            graph.check(&equal),
+            Verdict::Dirty(Invalidation::Read(_))
+        ));
         graph.apply(&changes);
         let provisional = graph.insert_output(
             key,
@@ -1208,7 +1228,7 @@ mod tests {
             None,
         );
         assert_eq!(provisional.changed_at, graph.revision());
-        assert_eq!(graph.output(&key), None);
+        assert!(graph.output(&key).is_none());
         graph.apply(&changes);
         let settled = graph.insert_output(
             key,
@@ -1216,7 +1236,7 @@ mod tests {
             Ok(Arc::new(())),
             reads(&[]),
             Durability::Low,
-            Some(h("output")),
+            Some(SettledSummary::Test(h("output"))),
         );
         assert_eq!(settled.changed_at, graph.revision());
         graph.apply(&changes);
@@ -1226,7 +1246,7 @@ mod tests {
             Ok(Arc::new(())),
             reads(&[]),
             Durability::Low,
-            Some(h("output")),
+            Some(SettledSummary::Test(h("output"))),
         );
         assert_eq!(adopted.changed_at, settled.changed_at);
         graph.apply(&changes);
@@ -1236,7 +1256,7 @@ mod tests {
             Ok(Arc::new(())),
             reads(&[]),
             Durability::Low,
-            Some(h("different-output")),
+            Some(SettledSummary::Test(h("different-output"))),
         );
         assert_eq!(changed.changed_at, graph.revision());
     }
@@ -1268,6 +1288,21 @@ mod tests {
         assert_eq!(again.changed_at, first.changed_at, "backdated");
         assert_eq!(graph.subscribers(&ReadKey::Signature(b)).count(), 0);
         assert_eq!(graph.subscribers(&ReadKey::Signature(def("c"))).count(), 1);
+        let mut dependency_change = ChangeSet::default();
+        dependency_change.read(ReadKey::Signature(b), Durability::Low);
+        graph.apply(&dependency_change);
+        assert_eq!(
+            graph.check(&again),
+            Verdict::Valid,
+            "old subscription retired"
+        );
+        dependency_change.reads.clear();
+        dependency_change.read(ReadKey::Signature(def("c")), Durability::Low);
+        graph.apply(&dependency_change);
+        assert!(matches!(
+            graph.check(&again),
+            Verdict::Dirty(Invalidation::Read(_))
+        ));
         graph.apply(&change);
         let fresh = graph.insert::<()>(
             key,

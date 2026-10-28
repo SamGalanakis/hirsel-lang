@@ -221,6 +221,34 @@ const SOURCE_INPUT: Domain = Domain {
     schema: 1,
 };
 impl FrontBodyQueries {
+    /// Retain a typed settled Summary under its own grant. Its producer keeps
+    /// the existing complete source/type reservation alive through the view.
+    pub fn live_summary(
+        self: &Arc<Self>,
+        product: ProductRef,
+        allowance: &mut MemoryReservation,
+    ) -> Option<crate::runtime::LiveSummaryProduct> {
+        let query = QueryId {
+            kind: FRONT_BODY_KIND,
+            address: product.address,
+        };
+        if self.completed_product(query)?.ok()? != product {
+            return None;
+        }
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let outcome = outcomes.get(&product.address.0)?;
+        let value = outcome
+            .summary
+            .as_ref()?
+            .materialize(&outcome.checked, &outcome.reads);
+        crate::runtime::LiveSummaryProduct::new(
+            (product.address, product.action),
+            value,
+            self.anchors.as_ref().clone(),
+            self.clone(),
+            allowance,
+        )
+    }
     pub(crate) fn prepare_generator(
         &self,
         syntax: Arc<ItemSyntax>,

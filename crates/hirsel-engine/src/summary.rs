@@ -24,6 +24,9 @@ use hirsel_types::{
     SizeParameterRef, TypeId, TypeInterner, TypeKind, TypeParamId, TypeParameterRef,
 };
 use std::collections::{BTreeSet, HashSet};
+mod facet;
+pub(crate) use facet::SettledSummary;
+pub use facet::SummaryView;
 
 /// A generic parameter named by its declaring binder (contract rev 3).
 #[derive(

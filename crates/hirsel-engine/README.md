@@ -860,6 +860,19 @@ changed owners and actual reverse subscribers through the same P implementation.
 Generator drains and per-file operational gates remain in source order. GEN-5
 retains keyed checked inputs separately from final-mode selection summaries.
 
+Resident Summary cutoff compares the normalized typed fields directly, retaining
+ordered calls/growth and checked-summary facts while source positions remain in
+their current source products. Type handles are scoped to their interner;
+foreign owners require complete graph comparison. Explicit portable identities
+preserve the existing byte contract.
+
+`runtime::LiveSummaryProduct` and `LiveLowerProduct` retain typed values and their
+producer/source/type admission. `SummaryFacet` can keep an old equal settled value
+while the current product supplies fresh reads, action and positions. Explicit
+archive materialization retains its bytes and complete backing grant through
+`ProductArchive`; a refused or failed encoding remains retryable. These owners
+are also available to consumers of the existing runtime result descriptors.
+
 Published summaries keep GEN-5's pre-mode checked summary and growth separately
 from the final mode-refined selection input. Batch publication retains both
 before releasing bodies; reading the checked input then needs no TypedBody.

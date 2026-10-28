@@ -8,22 +8,22 @@ impl QueryEngine {
         &mut self,
         definition: DefId,
     ) -> Result<Option<ContentHash>, QueryError> {
-        self.definition_summary(definition)?;
+        let summary = self.definition_summary(definition)?;
         Ok(self
             .graph
-            .output(&MemoKey::new(QueryKind::Summary, definition)))
+            .output(&MemoKey::new(QueryKind::Summary, definition))
+            .and_then(|_| {
+                summary_archive_identity(
+                    self.types.clone(),
+                    &summary.summary,
+                    &summary.growth,
+                    summary.checked.as_deref(),
+                )
+            }))
     }
 
-    fn summary_output(
-        &self,
-        summary: &DefinitionSummary,
-        growth: &ParameterGrowth,
-        checked: Option<&CheckedSummary>,
-    ) -> Option<ContentHash> {
-        if !self.s1.is_empty() || !self.s1.failure_is_own() || !self.signature_stack.is_empty() {
-            return None;
-        }
-        summary_identity(self.types.clone(), summary, growth, checked)
+    fn summary_is_settled(&self) -> bool {
+        self.s1.is_empty() && self.s1.failure_is_own() && self.signature_stack.is_empty()
     }
 
     /// Extend a completed compact summary only when a program-level storage
@@ -310,11 +310,9 @@ impl QueryEngine {
         let reads = summary.reads.clone();
         let key = crate::memo::MemoKey::new(QueryKind::Summary, definition);
         let text = summary.text;
-        let output = self.summary_output(
-            &summary.summary,
-            &summary.growth,
-            summary.checked.as_deref(),
-        );
+        let output = self
+            .summary_is_settled()
+            .then(|| crate::summary::SettledSummary::published(&summary, &self.types));
         let value = Ok(std::sync::Arc::new(QueryOutput {
             value: summary,
             diagnostics: vec![],
@@ -412,7 +410,9 @@ impl QueryEngine {
     ) {
         let key = MemoKey::new(QueryKind::CheckedSummary, definition);
         let durability = reads.durability(|read| self.durability_of(read));
-        let output = self.summary_output(&summary.summary, &summary.growth, None);
+        let output = self
+            .summary_is_settled()
+            .then(|| crate::summary::SettledSummary::checked(&summary, &self.types));
         let value = Ok(Arc::new(QueryOutput {
             value: summary,
             diagnostics: vec![],
@@ -481,35 +481,22 @@ impl QueryEngine {
     }
 }
 
-/// The canonical semantic summary identity shared by scalar and admitted
-/// publication. All diagnostic positions are excluded before encoding.
-pub(crate) fn summary_identity(
+/// Explicit portable identity for native/durable consumers. Resident memo
+/// cutoff uses exact typed fields and never calls this encoder.
+pub(crate) fn summary_archive_identity(
     types: Arc<hirsel_types::TypeInterner>,
     summary: &DefinitionSummary,
     growth: &ParameterGrowth,
     checked: Option<&CheckedSummary>,
 ) -> Option<ContentHash> {
-    fn semantic(
-        summary: &DefinitionSummary,
-        growth: &ParameterGrowth,
-    ) -> (DefinitionSummary, ParameterGrowth) {
-        let mut summary = summary.clone();
-        for call in &mut summary.calls {
-            call.site = Span::default();
-        }
-        let mut growth = growth.clone();
-        for edge in &mut growth.edges {
-            edge.3 = Span::default();
-        }
-        (summary, growth)
-    }
     // Use the portable codec's canonical type graph positions. Diagnostic
     // locations remain in the published record and its position witnesses;
     // source text, reads and locations are outside the semantic output.
-    let value = (
-        semantic(summary, growth),
-        checked.map(|c| semantic(&c.summary, &c.growth)),
-    );
+    let value = crate::SummaryView {
+        summary,
+        growth,
+        checked,
+    };
     let bytes = hirsel_product_codec::canonical_bytes(types, &value, |_| None)?;
     Some(ContentHash::of_parts(
         "hirsel.summary.output.v1",

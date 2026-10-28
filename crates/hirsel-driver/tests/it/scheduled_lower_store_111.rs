@@ -133,6 +133,39 @@ fn check_lower_reuse(carry_across_stores: bool) {
                         records.encode(&program.engine, &scalar.value)
                     );
                     assert_eq!(actual.verified.is_some(), verify == Verify::On);
+                    let mut live_grant = budget.reserve(16 << 20).unwrap();
+                    let live_lower = actual.into_live(products[0], &mut live_grant).unwrap();
+                    assert_eq!(live_lower.address(), products[0].address);
+                    assert_eq!(live_lower.action(), products[0].action);
+                    assert_eq!(live_lower.output().value.path.path(), &program.entry);
+                    let front_request = runtime.request(&[front.query(&program.entry).unwrap()]);
+                    let front_product = runtime.wait(front_request).unwrap()[0];
+                    let live_summary = front.live_summary(front_product, &mut live_grant).unwrap();
+                    assert!(live_summary.equivalent(&live_summary.clone()));
+                    if revision == 0 {
+                        let mut scratch = budget.reserve(8 << 20).unwrap();
+                        let archive = live_lower
+                            .archive(&mut scratch, 8 << 20, |output, reads, depth, source, _| {
+                                records
+                                    .encode(source, &(output, reads, depth))
+                                    .ok_or_else(|| std::io::Error::other("archive encoding"))
+                            })
+                            .unwrap();
+                        assert_eq!(archive.reference().domain, LIVE_LOWER);
+                        assert_eq!(
+                            store.put_content(LIVE_LOWER, archive.bytes()),
+                            Some(archive.reference())
+                        );
+                        assert_eq!(
+                            live_lower
+                                .archive(&mut scratch, u64::MAX, |_, _, _, _, _| panic!(
+                                    "re-encoded Lower"
+                                ))
+                                .unwrap()
+                                .reference(),
+                            archive.reference()
+                        );
+                    }
                     let work = lower.work_snapshot();
                     let lowerings: u64 = work.iter().map(|(_, w)| w.lowerings).sum();
                     let initializers: u64 = work.iter().map(|(_, w)| w.initializers).sum();
@@ -152,6 +185,23 @@ fn check_lower_reuse(carry_across_stores: bool) {
                         _ => unreachable!(),
                     }
                     runtime.shutdown();
+                    drop(runtime);
+                    drop(front);
+                    drop(lower);
+                    drop(program);
+                    drop(live_grant);
+                    assert_eq!(
+                        live_lower.output().value.path,
+                        live_summary.value().definition
+                    );
+                    assert!(budget.reserved() > 0);
+                    drop(live_lower);
+                    drop(live_summary);
+                    assert_eq!(
+                        budget.reserved(),
+                        0,
+                        "last typed views release the complete producer grants"
+                    );
                 }
             }
         }

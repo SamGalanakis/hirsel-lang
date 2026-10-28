@@ -522,7 +522,7 @@ impl Task {
                 },
                 |accepted| accepted.source.clone(),
             ),
-            summary_identity: summaries::summary_identity(
+            summary_identity: summaries::summary_archive_identity(
                 owner.lower.signatures().types().clone(),
                 &summary.summary,
                 &summary.growth,

@@ -320,6 +320,23 @@ pub struct FrontLowerOutput {
     owner: Arc<FrontLowerQueries>,
 }
 impl FrontLowerOutput {
+    /// Move the typed ordinary result into an admitted live owner. Verifier
+    /// capabilities are independent products and cannot be minted by this view.
+    pub fn into_live(
+        self,
+        product: ProductRef,
+        allowance: &mut MemoryReservation,
+    ) -> Option<crate::runtime::LiveLowerProduct> {
+        crate::runtime::LiveLowerProduct::new(
+            (product.address, product.action),
+            self.output,
+            Arc::new(self.reads),
+            self.depth,
+            self.owner.anchors.clone(),
+            self.owner,
+            allowance,
+        )
+    }
     pub fn native_product(&self) -> crate::NativeOriginalProduct {
         crate::NativeOriginalProduct {
             definition: self.output.value.path.path().clone(),

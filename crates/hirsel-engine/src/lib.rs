@@ -54,7 +54,8 @@ pub use source_components::{
 };
 pub use summary::{
     CallClass, CheckedSummary, DefinitionSummary, Frame, FrameKind, GenericParameterRef,
-    GrowthEdge, ParameterGrowth, PublishedSummary, SummaryCall, growing_sites, summarize,
+    GrowthEdge, ParameterGrowth, PublishedSummary, SummaryCall, SummaryView, growing_sites,
+    summarize,
 };
 mod semantic;
 mod snapshot;
