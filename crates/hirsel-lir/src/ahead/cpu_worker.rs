@@ -241,7 +241,8 @@ pub fn validate_cpu_summaries(
         let Some(protocol) = CpuWorkerProtocol::derive(worker, table) else {
             return false;
         };
-        let Some((bytes, retained)) = summary_layout(table, protocol.result_layout) else {
+        let Some((bytes, owners, retained_count)) = summary_layout(table, protocol.result_layout)
+        else {
             return false;
         };
         let Some(value) = worker.unit().tables.calls[protocol.mapper.index()].result else {
@@ -254,7 +255,9 @@ pub fn validate_cpu_summaries(
                 layout: protocol.result_layout,
                 bytes,
                 ordinal: protocol.ordinal,
-                retained,
+                retained: retained_count != 0,
+                owners,
+                retained_count,
             })
     })
 }
