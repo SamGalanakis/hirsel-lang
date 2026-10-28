@@ -136,10 +136,29 @@ pub(in crate::tasks::free) fn encode(
     pending: &mut Pending,
     result: &mut Result<Completion, AdapterError>,
 ) -> Stopped<()> {
+    pending.encoded = encode_result(
+        pending.request.buffers(),
+        result,
+        &pending.created,
+        &mut pending.output_count,
+        pending.track_output,
+        &pending.shared.authorities,
+    )?;
+    Ok(())
+}
+
+pub(in crate::tasks::free) fn encode_result(
+    request: &Request,
+    result: &mut Result<Completion, AdapterError>,
+    declared: &[Created],
+    output_count: &mut Option<u64>,
+    track_output: bool,
+    authorities: &super::requests::Authorities,
+) -> Stopped<Vec<u8>> {
     capture(result)?;
     let mut canonical = result.clone();
     let refusal = if let Some(word) = refusal_word(&canonical) {
-        let authority = pending.shared.authorities.reference(word)?;
+        let authority = authorities.reference(word)?;
         *refusal_field(&mut canonical).unwrap() = 0;
         Some(authority)
     } else {
@@ -154,7 +173,7 @@ pub(in crate::tasks::free) fn encode(
     let created = if count == 0 {
         Vec::new()
     } else {
-        if count != pending.created.len() {
+        if count != declared.len() {
             return Err(Stop::Diverged(
                 "host handle creation needs one declared resource per field".into(),
             ));
@@ -162,13 +181,11 @@ pub(in crate::tasks::free) fn encode(
         for word in fields.into_iter().flatten() {
             *word = 0;
         }
-        pending.created.clone()
+        declared.to_vec()
     };
-    if pending.track_output && pending.output_count.is_none() {
-        pending.output_count = match result {
-            Ok(Completion::Unit(Ok(()))) => {
-                Some(output_bytes(pending.request.buffers()).unwrap().len() as u64)
-            }
+    if track_output && output_count.is_none() {
+        *output_count = match result {
+            Ok(Completion::Unit(Ok(()))) => Some(output_bytes(request).unwrap().len() as u64),
             Ok(Completion::Unit(Err(
                 crate::io::IoError::Canceled(_) | crate::io::IoError::NotGranted,
             ))) => Some(0),
@@ -183,19 +200,19 @@ pub(in crate::tasks::free) fn encode(
             }
         };
     }
-    if pending.track_output {
-        checked_output(pending.request.buffers(), result, pending.output_count)?;
+    if track_output {
+        checked_output(request, result, *output_count)?;
     }
-    pending.encoded.clear();
+    let mut encoded = Vec::new();
     let envelope = Envelope {
         refusal,
-        output_count: pending.output_count,
+        output_count: *output_count,
         result: canonical,
         created,
     };
-    envelope.validate_request(pending.request.buffers())?;
-    envelope.encode(&mut pending.encoded);
-    Ok(())
+    envelope.validate_request(request)?;
+    envelope.encode(&mut encoded);
+    Ok(encoded)
 }
 
 // Preserve the established Free codec seam and callers.

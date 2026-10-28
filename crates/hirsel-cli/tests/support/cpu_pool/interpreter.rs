@@ -33,7 +33,7 @@ fn cpu_interpreter_native_policy(width: usize, free: bool) {
         "io":{"stdout":"stdout.bytes@1","dirs":[],"tasks":if free { "tasks.free@1" } else { "tasks.cooperative@1" },"cpu":{"provider":"cpu.scoped@1",
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
     let interpreted_tape = root.join("interpreted.tape");
-    if !free {
+    {
         checked(
             Command::new(env!("CARGO_BIN_EXE_hirsel"))
                 .arg("run")
@@ -42,6 +42,10 @@ fn cpu_interpreter_native_policy(width: usize, free: bool) {
                 .arg(&grants)
                 .arg("--record")
                 .arg(&interpreted_tape)
+                .env(
+                    "HIRSEL_RT_FREE_PROJECTION",
+                    root.join("interpreted.projection"),
+                )
                 .output()
                 .unwrap(),
         );
@@ -58,13 +62,24 @@ fn cpu_interpreter_native_policy(width: usize, free: bool) {
                 .output()
                 .unwrap(),
         );
-        if !free {
-            checked(
-                Command::new(&executable)
-                    .arg("--hirsel-replay")
-                    .arg(&interpreted_tape)
-                    .output()
-                    .unwrap(),
+        let interpreted_projection = root.join("interpreted.projection");
+        if free && !interpreted_projection.exists() {
+            panic!("missing live TIR Free projection");
+        }
+        let cross_projection = root.join(format!("{backend}-from-tir.projection"));
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-replay")
+                .arg(&interpreted_tape)
+                .env("HIRSEL_RT_FREE_PROJECTION", &cross_projection)
+                .output()
+                .unwrap(),
+        );
+        if free {
+            assert_eq!(
+                fs::read(&interpreted_projection).unwrap(),
+                fs::read(&cross_projection).unwrap(),
+                "live TIR to {backend} W{width}"
             );
         }
         let tape = root.join(format!("{backend}.tape"));

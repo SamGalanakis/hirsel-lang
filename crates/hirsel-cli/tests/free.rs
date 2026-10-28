@@ -6527,3 +6527,50 @@ fn runtime50_default_routes_use_r6() {
     assert_eq!(replay.stdout, live.stdout);
     assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
 }
+
+#[test]
+fn tir_live_free_durable_host_wait_and_scope_expiry_cross_replay() {
+    let scratch = Scratch::new("tir-live-free-host");
+    let source = scratch.path("main.hir");
+    std::fs::write(&source, include_str!("free/live-tir-host.hir")).unwrap();
+    for level in ["record", "durable"] {
+        let tape = scratch.path(&format!("{level}.tape"));
+        let live_projection = scratch.path(&format!("{level}-live.projection"));
+        let grants = serde_json::json!({"recording":level,"args":[],"placement":{"cores":1,"reorder":"auto"},
+            "io":{"tasks":"tasks.free@1","stdout":"stdout.bytes@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}}).to_string();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .arg("run")
+            .arg(&source)
+            .args(["--grants", &grants, "--record"])
+            .arg(&tape)
+            .env(hirsel_rt::free_replay::Report::VAR, &live_projection);
+        let live = bounded_output(&mut command, &source, &format!("TIR {level} live"));
+        assert_eq!(live.status.code(), Some(0), "{live:?}");
+        assert_eq!(live.stdout, b"expired\n");
+        assert!(
+            std::fs::read(&tape)
+                .unwrap()
+                .starts_with(hirsel_free::tape::MAGIC)
+        );
+        for engine in ENGINES {
+            let replay_projection = scratch.path("replay.projection");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .arg("run")
+                .args(engine)
+                .arg(&source)
+                .arg("--replay")
+                .arg(&tape)
+                .env(hirsel_rt::free_replay::Report::VAR, &replay_projection);
+            let replay =
+                bounded_output(&mut command, &source, &format!("TIR {level} to {engine:?}"));
+            assert_eq!(replay.status.code(), Some(0), "{replay:?}");
+            assert_eq!(replay.stdout, live.stdout);
+            assert_eq!(
+                std::fs::read(&live_projection).unwrap(),
+                std::fs::read(&replay_projection).unwrap()
+            );
+        }
+    }
+}

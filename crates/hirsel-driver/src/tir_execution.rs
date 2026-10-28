@@ -285,7 +285,7 @@ fn run_provider_on_host(
         }
         HostLaunch::Replay(_) => None,
     };
-    let (run, io, instance) = match crate::admit_bound_host_run(
+    let (run, io, instance, free) = match crate::admit_bound_host_run(
         selection.bind(
             launch,
             &input.runtime.types,
@@ -296,15 +296,31 @@ fn run_provider_on_host(
         launch,
         host,
     )? {
-        HostRun::Live { admitted, io } => (
-            admitted.run().clone(),
-            network::HostIo::Live(io),
-            admitted.instance(),
-        ),
+        HostRun::Live { admitted, mut io } => {
+            let free = if admitted
+                .run()
+                .record()
+                .io
+                .as_ref()
+                .and_then(|io| io.tasks.as_deref())
+                == Some("tasks.free@1")
+            {
+                hirsel_rt::free_replay::Codec::record(&mut io, &admitted, tape.as_deref())
+                    .map_err(|e| ToolError::Runtime(format!("Free recording: {e}")))?
+            } else {
+                None
+            };
+            (
+                admitted.run().clone(),
+                network::HostIo::Live(io),
+                admitted.instance(),
+                free,
+            )
+        }
         // A replay parks where the recording parked (its `blocked` and `ready` events).
         HostRun::Replay { run, io } => {
             let instance = io.instance();
-            (run, network::HostIo::Replay(io), instance)
+            (run, network::HostIo::Replay(io), instance, None)
         }
     };
     // A callee replay selected its entry before requesting immutable TIR.
@@ -336,6 +352,9 @@ fn run_provider_on_host(
     }
     let mut operations = network::HostLibrary::new(&tir_run, &run, io)
         .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
+    if let Some((codec, session, report)) = free {
+        operations.enable_free_recording(codec, session, report, run.record().inputs.test_seed);
+    }
     if observed.is_some() {
         operations.silence_replay_output();
     }

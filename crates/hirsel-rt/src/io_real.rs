@@ -242,6 +242,24 @@ impl crate::journal::Journal for HomeJournal {
     }
 }
 impl RealIo {
+    pub(crate) fn free_process_keys(&self, handle: u64) -> Option<crate::io_keys::KeySet> {
+        if !matches!(
+            self.state.handles.rows.get(&handle),
+            Some(crate::handles::Grant::Process { .. })
+        ) {
+            return None;
+        }
+        self.with_registry(|registry| registry.process_keys(handle))
+    }
+    pub(crate) fn free_net_ports(&self, handle: u64) -> Option<crate::io_keys::Key> {
+        if !matches!(
+            self.state.handles.rows.get(&handle),
+            Some(crate::handles::Grant::Net { .. })
+        ) {
+            return None;
+        }
+        self.with_registry(|registry| registry.net_ports(handle))
+    }
     pub(crate) fn namespace_coupled(&self) -> bool {
         self.streams
             .storages()

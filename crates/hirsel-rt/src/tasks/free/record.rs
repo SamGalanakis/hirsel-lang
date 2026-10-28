@@ -154,6 +154,16 @@ pub(crate) struct Sink {
     discard: bool,
 }
 
+impl Sink {
+    pub(crate) fn file(file: std::fs::File, durable: bool) -> Self {
+        Self {
+            file: Some(file),
+            durable,
+            ..Default::default()
+        }
+    }
+}
+
 impl hirsel_free::recorder::TapeSink for Sink {
     fn append(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         use std::io::Write;

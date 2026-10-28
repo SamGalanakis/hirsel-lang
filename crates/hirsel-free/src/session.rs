@@ -59,8 +59,29 @@ pub struct Recording {
 pub type Handle = (u8, u64);
 
 enum Side {
-    Live(Box<Recorder<Marked>>),
+    Live(Box<Recorder<Sink>>),
     Replay(Box<Replayer>),
+}
+
+// Production streams directly to its admitted destination. Only the test channel
+// retains bytes and barrier offsets for rendering every intermediate cut.
+enum Sink {
+    Memory(Marked),
+    Stream(Box<dyn TapeSink + Send>),
+}
+impl TapeSink for Sink {
+    fn append(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Memory(sink) => sink.append(bytes),
+            Self::Stream(sink) => sink.append(bytes),
+        }
+    }
+    fn barrier(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Memory(sink) => sink.barrier(),
+            Self::Stream(sink) => sink.barrier(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -128,9 +149,19 @@ pub struct Session {
 impl Session {
     /// A recording bound to `binding`.
     pub fn record(binding: &[u8], recording: Recording) -> Session {
-        let recorder = Recorder::new(Marked::default(), binding, recording.durable)
+        let recorder = Recorder::new(Sink::Memory(Marked::default()), binding, recording.durable)
             .expect("an in-memory tape");
         Session::new(Side::Live(Box::new(recorder)), recording)
+    }
+
+    /// Stream a production recording to an already admitted destination.
+    pub fn record_to(
+        binding: &[u8],
+        recording: Recording,
+        sink: Box<dyn TapeSink + Send>,
+    ) -> std::io::Result<Session> {
+        let recorder = Recorder::new(Sink::Stream(sink), binding, recording.durable)?;
+        Ok(Session::new(Side::Live(Box::new(recorder)), recording))
     }
 
     /// A replay of `tape`.
@@ -255,18 +286,18 @@ impl Session {
             Side::Replay(replayer) => replayer.publish(path, progress)?,
         }
         self.tasks.get_mut(path).unwrap().progress = progress;
-        self.maybe_flush();
-        Ok(())
+        self.maybe_flush()
     }
 
-    fn maybe_flush(&mut self) {
+    fn maybe_flush(&mut self) -> Result<(), Diverged> {
         let n = self.recording.flush_one_in;
         if n > 0
             && self.word().is_multiple_of(n)
             && let Side::Live(recorder) = &mut self.side
         {
-            recorder.flush().expect("an in-memory tape");
+            recorder.flush().map_err(|e| Diverged(e.to_string()))?;
         }
+        Ok(())
     }
 
     fn object(&self, handle: Handle) -> ObjectId {
@@ -610,6 +641,135 @@ impl Session {
         replayer.completion(path, op)
     }
 
+    /// Prepare an owned typed host call. The caller stages cancellation and the
+    /// canonical request, then publishes and persists Entered before claim.
+    pub fn record_host_prepare(
+        &mut self,
+        path: &[u32],
+        keys: &[(&str, bool)],
+    ) -> Result<HostWrite, Diverged> {
+        let op = self.op(path);
+        let Side::Live(recorder) = &mut self.side else {
+            return Err(Diverged("host preparation requires recording".into()));
+        };
+        self.requests = self
+            .requests
+            .checked_add(1)
+            .ok_or_else(|| Diverged("host request overflow".into()))?;
+        let id = self.requests;
+        Ok(HostWrite {
+            op,
+            live: Some(recorder.prepare(path, op, id)),
+            positions: recorder.positions(path, op, 0, keys),
+        })
+    }
+
+    pub fn record_host_id(request: &HostWrite) -> u64 {
+        request.live.as_ref().expect("a live host call").id
+    }
+
+    pub fn record_host_positions(
+        &mut self,
+        path: &[u32],
+        request: &mut HostWrite,
+        index: u32,
+        keys: &[(&str, bool)],
+    ) -> Result<(), Diverged> {
+        let Side::Live(recorder) = &mut self.side else {
+            return Err(Diverged("host retry requires recording".into()));
+        };
+        recorder.ready(path, request.op);
+        request.positions = recorder.positions(path, request.op, index, keys);
+        Ok(())
+    }
+
+    pub fn record_host_ready(&self, request: &HostWrite) -> bool {
+        match &self.side {
+            Side::Live(recorder) => recorder.positions_ready(&request.positions),
+            Side::Replay(_) => false,
+        }
+    }
+
+    pub fn record_host_observation(&mut self, path: &[u32], bytes: &[u8]) -> Result<(), Diverged> {
+        let op = self.op(path);
+        let Side::Live(recorder) = &mut self.side else {
+            return Err(Diverged("host observation requires recording".into()));
+        };
+        recorder.observation(path, op, bytes);
+        Ok(())
+    }
+
+    /// Publish Entered and make Prepared durable before the claim CAS.
+    pub fn record_host_entered(&mut self, path: &[u32]) -> Result<(), Diverged> {
+        self.publish(path, Phase::Entered)?;
+        self.record_host_durable(path, Phase::Entered)
+    }
+
+    fn record_host_durable(&mut self, path: &[u32], phase: Phase) -> Result<(), Diverged> {
+        let progress = Progress::new(self.op(path), phase);
+        let Side::Live(recorder) = &mut self.side else {
+            return Err(Diverged("host durability requires recording".into()));
+        };
+        if let Err(error) = recorder.durable_through(path, progress) {
+            self.stopped = true;
+            return Err(Diverged(error.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn record_host_ended(
+        &mut self,
+        path: &[u32],
+        request: &HostWrite,
+        index: u32,
+        bytes: &[u8],
+        output: Option<(&str, &[u8])>,
+        blocked: bool,
+    ) -> Result<(), Diverged> {
+        let Side::Live(recorder) = &mut self.side else {
+            return Err(Diverged("host result requires recording".into()));
+        };
+        recorder.observation(path, request.op, bytes);
+        if let Some((sink, bytes)) = output {
+            let key = recorder
+                .key_index(sink)
+                .ok_or_else(|| Diverged("unknown output key".into()))?;
+            let position = request
+                .positions
+                .iter()
+                .find(|position| position.key == key)
+                .ok_or_else(|| Diverged("output has no key position".into()))?;
+            recorder.output(path, sink, position.epoch, bytes);
+        }
+        recorder.end_positions(&request.positions);
+        if blocked {
+            recorder.blocked(path, request.op);
+        }
+        self.publish(path, Phase::Ended(index))
+    }
+
+    /// Persist completion before returning any initialized result to the engine.
+    pub fn record_host_complete(
+        &mut self,
+        path: &[u32],
+        request: &HostWrite,
+        bytes: &[u8],
+    ) -> Result<(), Diverged> {
+        let Side::Live(recorder) = &mut self.side else {
+            return Err(Diverged("host completion requires recording".into()));
+        };
+        recorder
+            .complete(
+                path,
+                request.op,
+                request.live.as_ref().expect("live request"),
+                bytes,
+            )
+            .map_err(|e| Diverged(format!("host completion: {e:?}")))?;
+        self.tasks.get_mut(path).unwrap().progress = Progress::new(request.op, Phase::Done);
+        self.record_host_durable(path, Phase::Done)
+    }
+
     /// A host write's entered phase, once the engine began the op, the cut admitted its entry
     /// and the engine applied the task's pending releases: `Prepared`, its exclusive position
     /// on `sink`'s key, then (durable) the wait until the entry is under the watermark.
@@ -635,7 +795,7 @@ impl Session {
         {
             recorder
                 .durable_through(path, Progress::new(op, Phase::Entered))
-                .expect("an in-memory tape");
+                .map_err(|e| Diverged(e.to_string()))?;
         }
         Ok(HostWrite {
             op,
@@ -709,7 +869,7 @@ impl Session {
                 }
                 recorder
                     .durable_through(path, Progress::new(op, Phase::Done))
-                    .expect("an in-memory tape");
+                    .map_err(|e| Diverged(e.to_string()))?;
                 self.tasks.get_mut(path).unwrap().progress = Progress::new(op, Phase::Done);
             }
             Side::Replay(replayer) => {
@@ -735,6 +895,20 @@ impl Session {
         }
     }
 
+    /// Close a streaming recording with its canonical terminal and request receipt.
+    pub fn finish_recording(
+        mut self,
+        outcome: impl FnOnce(&crate::claim::Sweep) -> String,
+    ) -> Result<Projection, Diverged> {
+        let Side::Live(recorder) = &mut self.side else {
+            return Err(Diverged("a replay is not a recording".into()));
+        };
+        recorder
+            .stop_with(outcome, None)
+            .map_err(|e| Diverged(e.to_string()))?;
+        Ok(recorder.final_projection())
+    }
+
     /// A stopped live run's tape and projections.
     pub fn report(self) -> Report {
         let Side::Live(recorder) = self.side else {
@@ -746,7 +920,9 @@ impl Session {
             .map(|cut| recorder.projection("truncated", cut))
             .collect();
         projections.push(recorder.final_projection());
-        let sink = recorder.into_sink();
+        let Sink::Memory(sink) = recorder.into_sink() else {
+            panic!("a streaming recording finishes with its projection");
+        };
         // Each cut's chunk ends at a barrier; the header's (durable runs) comes first.
         let first = sink.marks.len() - cuts.len();
         let cuts = projections

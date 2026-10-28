@@ -458,44 +458,51 @@ unsafe fn invoke_discovered_observed(
 ) -> Stopped<()> {
     unsafe {
         invoke_resolved(ctx, call, |completion| {
-            handles::capture(completion)?;
-            if handles::refusal_word(completion).is_some() {
-                return Ok(Some(Vec::new()));
-            }
-            let fields =
-                handles::fields(completion).map_err(|error| Stop::Refused(error.into()))?;
-            let resources = fields
-                .into_iter()
-                .flatten()
-                .map(|word| {
-                    let (key, kind) = identity(*word).ok_or_else(|| {
-                        Stop::Refused("created host handle has no registered resource".into())
-                    })?;
-                    let domains = process_keys(*word);
-                    if let Some(domains) = &domains {
-                        if kind != crate::io_keys::Kind::Other
-                            || !domains.contains(key, Mode::Exclusive)
-                            || !domains.contains(crate::io_keys::NAMESPACE, Mode::Exclusive)
-                            || domains
-                                .keys()
-                                .iter()
-                                .any(|(_, mode)| *mode != Mode::Exclusive)
-                        {
-                            return Err(Stop::Refused("invalid process issue domains".into()));
-                        }
-                    }
-                    let ports = net_ports(*word);
-                    if ports
-                        .is_some_and(|p| kind != crate::io_keys::Kind::Other || p == key || p.0 < 4)
-                    {
-                        return Err(Stop::Refused("invalid live Net port domain".into()));
-                    }
-                    Ok((key, kind, domains, ports))
-                })
-                .collect::<Stopped<Vec<_>>>()?;
+            let resources = discover(completion, identity, process_keys, net_ports)?;
             Ok(Some(resources))
         })
     }
+}
+
+fn discover(
+    completion: &mut Result<Completion, AdapterError>,
+    identity: impl Fn(u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)>,
+    process_keys: impl Fn(u64) -> Option<KeySet>,
+    net_ports: impl Fn(u64) -> Option<crate::io_keys::Key>,
+) -> Stopped<Resources> {
+    handles::capture(completion)?;
+    if handles::refusal_word(completion).is_some() {
+        return Ok(Vec::new());
+    }
+    let fields = handles::fields(completion).map_err(|error| Stop::Refused(error.into()))?;
+    let resources = fields
+        .into_iter()
+        .flatten()
+        .map(|word| {
+            let (key, kind) = identity(*word).ok_or_else(|| {
+                Stop::Refused("created host handle has no registered resource".into())
+            })?;
+            let domains = process_keys(*word);
+            if let Some(domains) = &domains {
+                if kind != crate::io_keys::Kind::Other
+                    || !domains.contains(key, Mode::Exclusive)
+                    || !domains.contains(crate::io_keys::NAMESPACE, Mode::Exclusive)
+                    || domains
+                        .keys()
+                        .iter()
+                        .any(|(_, mode)| *mode != Mode::Exclusive)
+                {
+                    return Err(Stop::Refused("invalid process issue domains".into()));
+                }
+            }
+            let ports = net_ports(*word);
+            if ports.is_some_and(|p| kind != crate::io_keys::Kind::Other || p == key || p.0 < 4) {
+                return Err(Stop::Refused("invalid live Net port domain".into()));
+            }
+            Ok((key, kind, domains, ports))
+        })
+        .collect::<Stopped<Vec<_>>>()?;
+    Ok(resources)
 }
 
 unsafe fn invoke_result(

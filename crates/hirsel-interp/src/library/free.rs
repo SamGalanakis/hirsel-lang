@@ -55,6 +55,7 @@ pub(super) struct Free {
     pub session: Session,
     native: bool,
     root_observation: Option<Vec<u8>>,
+    root_pending: bool,
     /// Pending releases by task id.
     pending: BTreeMap<u64, Pending<SharedRoot>>,
     /// Tokens of tasks parked for good.
@@ -171,6 +172,7 @@ impl Free {
             session,
             native: false,
             root_observation: None,
+            root_pending: false,
             pending: BTreeMap::new(),
             finals: BTreeSet::new(),
             waits: BTreeSet::new(),
@@ -269,6 +271,10 @@ impl Library {
 
     pub fn native_free_cut(&mut self, context: &OperationContext<'_>) -> OperationResult {
         self.free_final(context)
+    }
+
+    pub fn native_root_pending(&self) -> bool {
+        self.free.as_ref().is_some_and(|free| free.root_pending)
     }
 
     pub fn take_native_root_observation(&mut self) -> Option<Vec<u8>> {
@@ -1009,6 +1015,12 @@ impl Library {
             .map_err(diverged)?;
         if free.session.admits(&path, Phase::Done) {
             if task == 0 && free.native {
+                // The host projects the public outcome after the evaluator returns.
+                // It writes that observation and Done together before the terminal.
+                if !free.session.is_replay() {
+                    free.root_pending = true;
+                    return Ok(());
+                }
                 free.root_observation = Some(
                     free.session
                         .replay_host_observation(&path, &[])

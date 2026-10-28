@@ -1,4 +1,4 @@
-//! Engine-facing Free host replay. The typed codec, authority mapping and
+//! Engine-facing Free host recording and replay. The typed codec, authority mapping and
 //! footprint allow-list are the native executor's own implementations. Engines
 //! own phase scheduling through `hirsel_free::session::Session`.
 use super::*;
@@ -6,13 +6,23 @@ use hirsel_free::session::Session;
 
 pub use crate::trace_events::free::canonical_events;
 
-/// Typed host state for one production replay. It never opens a live adapter.
+/// Typed host state for one production recording or strict replay.
 pub struct Codec {
     handles: handles::Handles,
     authorities: requests::Authorities,
     initial_env: bool,
     namespace_coupled: bool,
     spans: native::SpanState,
+    live: Option<Live>,
+}
+
+#[derive(Default)]
+struct Live {
+    words: std::collections::BTreeMap<u64, Created>,
+    ordinals: std::collections::BTreeMap<Vec<u32>, u64>,
+    ready: std::collections::BTreeSet<u64>,
+    waiting: std::collections::BTreeSet<u64>,
+    ready_all: bool,
 }
 
 fn error(stop: Stop) -> String {
@@ -68,8 +78,63 @@ impl Codec {
                 initial_env,
                 namespace_coupled,
                 spans: Default::default(),
+                live: None,
             },
             Session::replay(bytes).map_err(|e| e.to_string())?,
+        )))
+    }
+
+    /// Admit a source recording with the native header, destination protection,
+    /// file sink and durable barriers. The home adapter retains its providers.
+    pub fn record(
+        io: &mut crate::io_real::RealIo,
+        admitted: &hirsel_run_config::AdmittedRun,
+        path: Option<&std::path::Path>,
+    ) -> Result<Option<(Self, Session, Option<Report>)>, String> {
+        use hirsel_run_schema::RecordingLevel;
+        let level = crate::host_launch::recording_level(admitted.run(), path.is_some())?;
+        if level == RecordingLevel::None {
+            return Ok(None);
+        }
+        let path = path.expect("validated recording destination");
+        let (file, header, path) = crate::host_launch::header(io, admitted, path, &[])?;
+        let report = Report::open(&io.mount_pins(), &[("recording", &file)])?;
+        let durable = level == RecordingLevel::Durable;
+        let namespace_coupled = io.namespace_coupled();
+        let mut binding = b"F1B4".to_vec();
+        crate::ABI_VERSION.encode(&mut binding);
+        header.encode(&mut binding);
+        namespace_coupled.encode(&mut binding);
+        let sink = super::super::record::Sink::file(file, durable);
+        let session = Session::record_to(
+            &binding,
+            hirsel_free::session::Recording {
+                durable,
+                ..Default::default()
+            },
+            Box::new(sink),
+        )
+        .map_err(|e| format!("Free recording: {e}"))?;
+        if durable {
+            std::fs::File::open(path.parent().unwrap_or(std::path::Path::new("/")))
+                .and_then(|directory| directory.sync_all())
+                .map_err(|e| e.to_string())?;
+        }
+        let initial_env = admitted.run().record().env.is_some();
+        let authorities = requests::Authorities::default();
+        authorities.root(initial_env);
+        io.discard_history();
+        Ok(Some((
+            Self {
+                handles: Default::default(),
+                authorities,
+                initial_env,
+                namespace_coupled,
+                spans: Default::default(),
+                live: Some(Live::default()),
+            },
+            session,
+            report,
         )))
     }
 
@@ -91,9 +156,38 @@ impl Codec {
         }
         let keys = native::request_keys_with_domains(
             request,
-            |word| self.handles.identity(word),
-            |word| self.handles.process_keys(word),
-            |word| self.handles.net_ports(word),
+            |word| match &self.live {
+                Some(live) => live
+                    .words
+                    .get(&word)
+                    .map(|created| (crate::io_keys::Key(created.resource), created.kind))
+                    .ok_or_else(|| Stop::Refused("unmapped live host resource".into())),
+                None => self.handles.identity(word),
+            },
+            |word| match &self.live {
+                Some(live) => live
+                    .words
+                    .get(&word)
+                    .and_then(|created| created.process_keys.as_ref())
+                    .map(|keys| {
+                        KeySet::new(
+                            keys.iter()
+                                .map(|&key| (crate::io_keys::Key(key), Mode::Exclusive))
+                                .collect(),
+                        )
+                    })
+                    .ok_or_else(|| Stop::Refused("missing process issue domains".into())),
+                None => self.handles.process_keys(word),
+            },
+            |word| match &self.live {
+                Some(live) => live
+                    .words
+                    .get(&word)
+                    .and_then(|created| created.net_ports)
+                    .map(crate::io_keys::Key)
+                    .ok_or_else(|| Stop::Refused("missing Net port domain".into())),
+                None => self.handles.net_ports(word),
+            },
             self.initial_env,
         )
         .map_err(error)?;
@@ -131,6 +225,128 @@ impl Codec {
         )
         .map_err(error)?;
         Ok((result, count))
+    }
+
+    /// Distribute the home driver's single readiness snapshot to pending owners.
+    pub fn observe_ready(&mut self, ready: &crate::io::Ready) {
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        match ready {
+            crate::io::Ready::Every => live.ready_all = true,
+            crate::io::Ready::Tokens(tokens) => live.ready.extend(
+                tokens
+                    .iter()
+                    .filter(|token| live.waiting.contains(token))
+                    .copied(),
+            ),
+        }
+    }
+
+    pub fn has_ready(&self) -> bool {
+        self.live
+            .as_ref()
+            .is_some_and(|live| live.ready_all || !live.ready.is_empty())
+    }
+
+    fn record_completion(
+        &mut self,
+        io: &crate::io_real::RealIo,
+        path: &[u32],
+        op: u64,
+        request: &Request,
+        result: &mut Result<Completion, AdapterError>,
+        output_count: &mut Option<u64>,
+    ) -> Result<Vec<u8>, String> {
+        use crate::io::Adapter;
+        let resources = super::discover(
+            result,
+            |word| io.identity(word),
+            |word| io.free_process_keys(word),
+            |word| io.free_net_ports(word),
+        )
+        .map_err(error)?;
+        let live = self
+            .live
+            .as_mut()
+            .ok_or("host result requires live codec")?;
+        let mut words_result = result.clone();
+        let words = if handles::refusal_word(result).is_some() {
+            Vec::new()
+        } else {
+            handles::fields(&mut words_result)
+                .map_err(str::to_string)?
+                .into_iter()
+                .flatten()
+                .map(|word| *word)
+                .collect::<Vec<_>>()
+        };
+        let created = words
+            .into_iter()
+            .zip(resources)
+            .map(|(word, (resource, kind, process_keys, net_ports))| {
+                let ordinal = live.ordinals.entry(path.to_vec()).or_default();
+                *ordinal = ordinal.checked_add(1).expect("host handle ordinal");
+                let created = Created {
+                    path: path.to_vec(),
+                    ordinal: *ordinal,
+                    resource: resource.0,
+                    kind,
+                    process_keys: process_keys
+                        .map(|keys| keys.keys().iter().map(|(key, _)| key.0).collect()),
+                    net_ports: net_ports.map(|key| key.0),
+                };
+                live.words.insert(word, created.clone());
+                created
+            })
+            .collect::<Vec<_>>();
+        let bytes = handles::encode_result(
+            request,
+            result,
+            &created,
+            output_count,
+            output_bytes(request).is_some(),
+            &self.authorities,
+        )
+        .map_err(error)?;
+        self.authorities.observe(path, op, result).map_err(error)?;
+        self.spans.observe(request, result).map_err(error)?;
+        Ok(bytes)
+    }
+
+    /// Persist the public root outcome in Done before closing the native terminal.
+    pub fn finish_recording(
+        session: Session,
+        outcome: &hirsel_run_schema::RunOutcome,
+        root_pending: bool,
+    ) -> Result<hirsel_free::projection::Projection, String> {
+        let mut session = session;
+        let progress = session.progress(&[]);
+        if root_pending {
+            if progress.phase != Phase::Entered {
+                return Err("Free root end is not Entered".into());
+            }
+            let mut bytes = Vec::new();
+            outcome.encode(&mut bytes);
+            session
+                .record_host_observation(&[], &bytes)
+                .map_err(|e| e.to_string())?;
+            session
+                .publish(&[], Phase::Done)
+                .map_err(|e| e.to_string())?;
+        }
+        if matches!(outcome, hirsel_run_schema::RunOutcome::Returned(_)) && !root_pending {
+            return Err("Free returned outcome has no root end".into());
+        }
+        let kind =
+            if matches!(outcome, hirsel_run_schema::RunOutcome::Failed { .. }) && !root_pending {
+                "native-failure-v2"
+            } else {
+                "native-outcome-v2"
+            };
+        session
+            .finish_recording(|sweep| crate::free_launch::terminal_bytes(kind, outcome, sweep))
+            .map_err(|e| e.to_string())
     }
 
     /// Root Done carries the canonical public outcome, never an engine-specific
@@ -178,6 +394,9 @@ pub struct Call {
     next: Phase,
     attempt: u32,
     observed: Option<(Result<Completion, AdapterError>, Option<u64>)>,
+    live: Option<hirsel_free::session::HostWrite>,
+    encoded: Vec<u8>,
+    waiting: bool,
 }
 
 /// One bounded advance never waits on a host resource.
@@ -197,11 +416,192 @@ impl Call {
             next: Phase::Entered,
             attempt: 0,
             observed: None,
+            live: None,
+            encoded: Vec::new(),
+            waiting: false,
         })
     }
 
     pub fn request(&self) -> &Request {
         &self.request
+    }
+
+    /// Drive the native request ownership and phase order with the home adapter.
+    /// Pending keeps all buffers in Call. No adapter loan crosses a saved wait.
+    pub fn advance_live(
+        &mut self,
+        codec: &mut Codec,
+        session: &mut Session,
+        path: &[u32],
+        cancellation: Option<Option<u32>>,
+        io: &mut crate::io_real::RealIo,
+    ) -> Result<Poll, String> {
+        use crate::io::Adapter;
+        use hirsel_free::session::Claim;
+        loop {
+            if !session.admits(path, self.next) {
+                return Ok(Poll::Cut);
+            }
+            match self.next {
+                Phase::Entered | Phase::Attempt(_) => {
+                    let expected = self
+                        .keys
+                        .iter()
+                        .map(|(key, shared)| {
+                            let key = key
+                                .strip_prefix("host-resource/")
+                                .ok_or("host key prefix")?
+                                .parse::<u32>()
+                                .map_err(|e| e.to_string())?;
+                            Ok((
+                                crate::io_keys::Key(key),
+                                if *shared {
+                                    Mode::Shared
+                                } else {
+                                    Mode::Exclusive
+                                },
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    super::concurrent::check_keys(
+                        KeySet::new(expected),
+                        io.keys(&self.request),
+                        codec.namespace_coupled,
+                        io.namespace_coupled(),
+                    )
+                    .map_err(error)?;
+                    let keys = self
+                        .keys
+                        .iter()
+                        .map(|(key, shared)| (key.as_str(), *shared))
+                        .collect::<Vec<_>>();
+                    if self.attempt == 0 {
+                        self.live = Some(
+                            session
+                                .record_host_prepare(path, &keys)
+                                .map_err(|e| e.to_string())?,
+                        );
+                    } else {
+                        let token = Session::record_host_id(self.live.as_ref().unwrap());
+                        if self.waiting && cancellation.flatten().is_none() {
+                            let live = codec.live.as_mut().unwrap();
+                            if !live.ready.remove(&token) && !live.ready_all {
+                                return Ok(Poll::Pending);
+                            }
+                        }
+                        codec.live.as_mut().unwrap().waiting.remove(&token);
+                        self.waiting = false;
+                        session
+                            .record_host_positions(
+                                path,
+                                self.live.as_mut().unwrap(),
+                                self.attempt,
+                                &keys,
+                            )
+                            .map_err(|e| e.to_string())?;
+                    }
+                    if crate::io_checks::cancellation_result(&self.request, 0).is_some()
+                        && let Some(live) = cancellation
+                    {
+                        session
+                            .cancel_check(path, live)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    if self.attempt == 0 {
+                        session
+                            .record_host_observation(path, &codec.request(&self.request)?)
+                            .map_err(|e| e.to_string())?;
+                        session
+                            .record_host_entered(path)
+                            .map_err(|e| e.to_string())?;
+                        self.next = Phase::Claimed;
+                    } else {
+                        session
+                            .publish(path, self.next)
+                            .map_err(|e| e.to_string())?;
+                        self.next = Phase::Ended(self.attempt);
+                    }
+                }
+                Phase::Claimed => {
+                    match session
+                        .host_claim(path, self.live.as_mut().unwrap())
+                        .map_err(|e| e.to_string())?
+                    {
+                        Claim::Waiting => return Ok(Poll::Pending),
+                        Claim::Final => return Ok(Poll::Cut),
+                        Claim::Call => self.next = Phase::Ended(0),
+                    }
+                }
+                Phase::Ended(index) => {
+                    let request = self.live.as_ref().unwrap();
+                    if !session.record_host_ready(request) {
+                        return Ok(Poll::Pending);
+                    }
+                    let token = Session::record_host_id(request);
+                    io.enter(token);
+                    let cause = cancellation.flatten().filter(|_| io.cancellable(token));
+                    let canceled = match cause {
+                        Some(cause) => crate::io_checks::cancel(io, &self.request, cause),
+                        None => Ok(None),
+                    };
+                    let (mut result, mut count) = match canceled {
+                        Ok(Some(result)) => (Ok(result), None),
+                        Err(error) => (Err(error), None),
+                        Ok(None) => match &self.request {
+                            Request::Print { stdout, bytes } => {
+                                io.print_observed(*stdout, false, bytes)
+                            }
+                            Request::PrintStderr { stderr, bytes } => {
+                                io.print_observed(*stderr, true, bytes)
+                            }
+                            _ => (io.call(self.request.clone()), None),
+                        },
+                    };
+                    self.encoded = codec.record_completion(
+                        io,
+                        path,
+                        session.op(path),
+                        &self.request,
+                        &mut result,
+                        &mut count,
+                    )?;
+                    let output = match count {
+                        Some(count) => Some((
+                            self.keys
+                                .iter()
+                                .find(|(_, shared)| !*shared)
+                                .ok_or("output has no sink")?
+                                .0
+                                .as_str(),
+                            &output_bytes(&self.request).unwrap()[..count as usize],
+                        )),
+                        None => None,
+                    };
+                    let blocked = matches!(result, Err(AdapterError::Blocked));
+                    session
+                        .record_host_ended(path, request, index, &self.encoded, output, blocked)
+                        .map_err(|e| e.to_string())?;
+                    self.observed = Some((result, count));
+                    if blocked {
+                        io.parked(token);
+                        codec.live.as_mut().unwrap().waiting.insert(token);
+                        self.attempt = index.checked_add(1).ok_or("host attempt overflow")?;
+                        self.next = Phase::Attempt(self.attempt);
+                        self.waiting = true;
+                        return Ok(Poll::Pending);
+                    }
+                    io.finish(token);
+                    self.next = Phase::Done;
+                }
+                Phase::Done => {
+                    session
+                        .record_host_complete(path, self.live.as_ref().unwrap(), &self.encoded)
+                        .map_err(|e| e.to_string())?;
+                    return Ok(Poll::Complete(self.observed.take().unwrap().0));
+                }
+                _ => return Err("invalid live host phase".into()),
+            }
+        }
     }
 
     /// Follow the same phases as the native executor. The caller retries

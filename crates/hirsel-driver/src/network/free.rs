@@ -61,6 +61,18 @@ impl OwnedCall {
     }
 }
 impl HostLibrary {
+    pub(crate) fn enable_free_recording(
+        &mut self,
+        codec: Codec,
+        session: hirsel_free::session::Session,
+        report: Option<hirsel_rt::free_replay::Report>,
+        seed: u64,
+    ) {
+        self.library.enable_native_free(session, seed);
+        self.free = Some(codec);
+        self.free_report = report;
+    }
+
     /// The library supplies the checked request, placement decision and decode
     /// schemas. Replay advances the same one native host operation and never
     /// starts a callee or asks the legacy Io tape for an outcome.
@@ -377,9 +389,15 @@ impl HostLibrary {
         let path = self.library.task_path();
         let cancellation = self.library.host_cancellation();
         let codec = self.free.as_mut().unwrap();
+        let io = &mut self.io;
         let (result, progressed) = self.library.with_free_session(|session| {
             let before = session.progress(&path);
-            let result = request.advance(codec, session, &path, cancellation)?;
+            let result = match io {
+                HostIo::Live(io) => {
+                    request.advance_live(codec, session, &path, cancellation, io)?
+                }
+                HostIo::Replay(_) => request.advance(codec, session, &path, cancellation)?,
+            };
             Ok((result, before != session.progress(&path)))
         })?;
         self.free_progressed |= progressed;
@@ -656,12 +674,16 @@ impl HostLibrary {
         if let Some(expected) = self.library.take_native_root_observation() {
             Codec::check_outcome(&expected, outcome)?;
         }
-        let projection = self
+        let root_pending = self.library.native_root_pending();
+        let session = self
             .library
             .take_free()
-            .ok_or("missing Free replay session")?
-            .finish()
-            .map_err(|e| e.to_string())?;
+            .ok_or("missing Free phase session")?;
+        let projection = if session.is_replay() {
+            session.finish().map_err(|e| e.to_string())?
+        } else {
+            Codec::finish_recording(session, outcome, root_pending)?
+        };
         if let Some(report) = &mut self.free_report {
             report.write(&projection)?;
         }

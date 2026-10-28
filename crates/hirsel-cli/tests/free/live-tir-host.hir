@@ -1,0 +1,17 @@
+pub type AppError = Grant(GrantError) | Clock(ClockError) | Wait(WaitError) | Output(OutputError)
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let c = io.monotonic_clock(rt) ? Grant
+  let now = clock.monotonic(c) ? Clock
+  let later = match instant.checked_add(c, now, 1000000u64) { Some(at) => at, None() => now }
+  clock.sleep_until(c, later) ? Wait
+  let bounded = task.scope_until(tasks, Deadline(clock: c, at: now), fn(s: Scope) -> () {
+    let child = task.async(s, fn() -> u64 { 7u64 })
+    let _ = task.await(s, take child)
+    ()
+  })
+  failure.check(match bounded { Expired(_) => true, Finished(_) => false }, Bounds())
+  out.print(output, "expired\n") ? Output
+  Ok(())
+}

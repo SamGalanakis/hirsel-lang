@@ -348,16 +348,32 @@ pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stoppe
             .free_namespace_coupled
             .load(Ordering::Relaxed)
     };
-    if coupled != io.adapter.namespace_coupled() {
+    let expected = super::native::namespace_policy(expected, coupled);
+    check_keys(
+        expected.clone(),
+        Some(io.adapter.keys(request)),
+        coupled,
+        io.adapter.namespace_coupled(),
+    )?;
+    Ok((expected, io.adapter.blocking(request)))
+}
+
+// The native worker and reference engine admit the same complete footprint.
+pub(super) fn check_keys(
+    expected: KeySet,
+    actual: Option<KeySet>,
+    coupled: bool,
+    actual_coupled: bool,
+) -> Stopped<()> {
+    if coupled != actual_coupled {
         return Err(Stop::Refused("namespace policy changed during run".into()));
     }
-    let expected = super::native::namespace_policy(expected, coupled);
-    if expected != io.adapter.keys(request) {
+    if actual.as_ref() != Some(&expected) {
         return Err(Stop::Refused(
             "native host footprint has unadmitted domains".into(),
         ));
     }
-    Ok((expected, io.adapter.blocking(request)))
+    Ok(())
 }
 
 /// # Safety

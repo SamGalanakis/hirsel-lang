@@ -448,8 +448,17 @@ pub(crate) fn admit_bound_host_run(
             // process providers at once, as a compiled program's entries hand them over.
             hirsel_rt::io::Adapter::net(&mut io, hirsel_rt::net_host::provider);
             hirsel_rt::io::Adapter::process(&mut io, hirsel_rt::process::host);
-            hirsel_rt::host_launch::journal(&mut io, &admitted, record, &[])
-                .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            if admitted
+                .run()
+                .record()
+                .io
+                .as_ref()
+                .and_then(|io| io.tasks.as_deref())
+                != Some("tasks.free@1")
+            {
+                hirsel_rt::host_launch::journal(&mut io, &admitted, record, &[])
+                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            }
             Ok(HostRun::Live { admitted, io })
         }
         BoundHostRun::Replay { run, io } => Ok(HostRun::Replay { run, io }),

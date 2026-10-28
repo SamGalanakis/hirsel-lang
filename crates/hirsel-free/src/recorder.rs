@@ -344,6 +344,10 @@ impl<S: TapeSink> Recorder<S> {
             .all(|p| self.keys[p.key as usize].1.ready(p.epoch))
     }
 
+    pub(crate) fn key_index(&self, key: &str) -> Option<u32> {
+        self.key_index.get(key).copied()
+    }
+
     /// The bounded host call of these positions returned or registered its wait.
     pub fn end_positions(&mut self, positions: &[Position]) {
         for p in positions {
@@ -507,6 +511,15 @@ impl<S: TapeSink> Recorder<S> {
     /// Stop the run: the terminal cut, the request sweep and the stop chunk. `None` when the
     /// run already stopped.
     pub fn stop(&mut self, outcome: &str, task: Option<&[u32]>) -> io::Result<Option<Sweep>> {
+        self.stop_with(|_| outcome.into(), task)
+    }
+
+    /// Construct the terminal from the same atomic sweep that closes admission.
+    pub fn stop_with(
+        &mut self,
+        outcome: impl FnOnce(&Sweep) -> String,
+        task: Option<&[u32]>,
+    ) -> io::Result<Option<Sweep>> {
         let Some(terminal) = self.arbiter.stop(0, &[&self.requests]) else {
             return Ok(None);
         };
@@ -526,7 +539,7 @@ impl<S: TapeSink> Recorder<S> {
             })
             .collect();
         let end = End {
-            outcome: outcome.into(),
+            outcome: outcome(&sweep),
             task: task.map(<[u32]>::to_vec),
         };
         let keys = Self::new_keys(&self.keys, &mut self.unnamed);

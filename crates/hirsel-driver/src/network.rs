@@ -1149,6 +1149,22 @@ impl HostLibrary {
     /// Arm `scope`'s deadline as a timer wait on its clock under a token of its own; no
     /// cancellation applies to it. A reached deadline, or a clock the host cannot read,
     /// expires the scope at once (CONC-3).
+    // Scope timers are control interests, as in the native Free host service.
+    // Their expiry is recorded by cancellation checks and the scope exit.
+    fn scope_timer(&mut self, request: R) -> Result<C, Error> {
+        if self.free.is_some() && !self.library.free_replay() {
+            return self.io.call(request).map_err(|error| match error {
+                hirsel_rt::io::AdapterError::Blocked => Error::Blocked(Vec::new()),
+                error => {
+                    let message = format!("{error:?}");
+                    self.refused.get_or_insert(message.clone());
+                    Error::Unavailable(format!("host scope timer: {message}"))
+                }
+            });
+        }
+        self.host_cancelable(request, None)
+    }
+
     fn arm_deadline(
         &mut self,
         scope: u64,
@@ -1163,7 +1179,7 @@ impl HostLibrary {
         let token = self.next_wait;
         self.next_wait += 1;
         self.io.adapter().enter(token);
-        match self.host_cancelable(request.clone(), None) {
+        match self.scope_timer(request.clone()) {
             Err(Error::Blocked(_)) => {
                 self.io.adapter().parked(token);
                 self.armed.push((token, scope, request));
@@ -2703,6 +2719,10 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         self.ready = if self.waits.is_empty()
             && armed.is_empty()
             && !self.runner_waits()
+            && self.free_waits.is_empty()
+            && self.free_drops.is_empty()
+            && self.free_checks.is_empty()
+            && self.free_runners.is_empty()
             && !self.io.adapter().process_sources()
         {
             Ready::Tokens(Vec::new())
@@ -2722,7 +2742,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 continue;
             }
             self.io.adapter().enter(token);
-            match self.host_cancelable(request.clone(), None) {
+            match self.scope_timer(request.clone()) {
                 Err(Error::Blocked(_)) => self.armed.push((token, scope, request)),
                 completion => {
                     self.io.adapter().finish(token);
@@ -2789,12 +2809,15 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 Ready::Tokens(a)
             }
         };
+        if let Some(codec) = &mut self.free {
+            codec.observe_ready(&self.ready);
+        }
         // Keep entry order for the next poll's ties.
         self.armed.sort_by_key(|(token, _, _)| *token);
         self.runner_children(cx)
     }
     fn wait(&mut self) -> Result<bool, Error> {
-        if self.free.is_some() {
+        if self.library.free_replay() {
             return Ok(false);
         }
         self.remote_deliveries();
@@ -2807,7 +2830,17 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         if self.free.is_some() {
             // Retry the parked set after actual replay publication, even if
             // the publishing request still waits on its next key epoch.
-            return Ok(std::mem::take(&mut self.free_progressed));
+            let progressed = std::mem::take(&mut self.free_progressed);
+            let ready = match &mut self.io {
+                HostIo::Live(io) => {
+                    self.free.as_ref().unwrap().has_ready()
+                        || io
+                            .has_ready()
+                            .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))?
+                }
+                HostIo::Replay(_) => false,
+            };
+            return Ok(progressed || ready);
         }
         self.remote_deliveries();
         self.io
@@ -3127,7 +3160,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         for (scope, clock, at) in self.library.take_deadlines() {
             // Native Free replay has no timer request or live readiness source.
             // Its cancellation checks and scope-exit expiry come from phases.
-            if self.free.is_none() {
+            if !self.library.free_replay() {
                 self.arm_deadline(scope, &clock, at, cx)?;
             }
         }
