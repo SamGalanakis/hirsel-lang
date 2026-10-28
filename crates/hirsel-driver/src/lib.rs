@@ -661,7 +661,10 @@ fn run_path_on_host_observed(
         .map(|(outcome, _)| outcome)
 }
 
-pub(crate) fn request_tir(
+/// Prepare the selected entry through the ordinary immutable compiler graph.
+/// The returned products can serve repeated simulations with fresh runtime state.
+/// `None` selects the manifest entry; an explicit definition binds that entry.
+pub fn request_tir(
     path: &Path,
     verify: hirsel_engine::Verify,
     definition: Option<hirsel_syntax::DefPath>,

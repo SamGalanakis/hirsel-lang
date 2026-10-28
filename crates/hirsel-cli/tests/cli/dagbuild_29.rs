@@ -67,10 +67,10 @@ fn dagbuild_29_reference_checked_workflows() {
     hirsel_engine::with_compiler_stack(|| {
         let scratch = scratch("dagbuild-29-semantic-");
         let selection = package(scratch.path());
-        let mut loaded = hirsel_driver::load_program(&selection).unwrap();
-        loaded.check_for_execution().unwrap();
+        let prepared =
+            hirsel_driver::request_tir(&selection, hirsel_engine::Verify::On, None).unwrap();
         let config = hirsel_engine::RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -171,11 +171,13 @@ fn dagbuild_29_reference_checked_workflows() {
             let mut previous = None;
             for engine in ["reference", "checked-h"] {
                 eprintln!("DAGBUILD_29_STARTED {id} {engine}");
-                let execution = if engine == "reference" {
-                    hirsel_engine::run_observed_snapshot(&mut loaded.engine, &config, world.clone())
-                } else {
-                    hirsel_engine::run_observed_checked(&mut loaded.engine, &config, world.clone())
-                };
+                let execution = hirsel_driver::testing::observe_tir(
+                    &prepared,
+                    &config,
+                    world.clone(),
+                    hirsel_interp::Limits::default(),
+                    engine == "checked-h",
+                );
                 if let Ok(executed) = &execution {
                     if let Ok(hirsel_engine::RunOutcome::ToolingLimit(limit)) = &executed.outcome {
                         let known = [

@@ -143,13 +143,10 @@ fn scripted(caps: bool) {
         let scratch = scratch("suite-runner-29-script-");
         let root = scratch.path();
         let selection = package(root);
-        let mut loaded =
-            hirsel_driver::load_program(&selection).unwrap_or_else(|error| panic!("{error}"));
-        loaded
-            .check_for_execution()
+        let prepared = hirsel_driver::request_tir(&selection, hirsel_engine::Verify::On, None)
             .unwrap_or_else(|error| panic!("{error}"));
         let config = hirsel_engine::RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -161,11 +158,13 @@ fn scripted(caps: bool) {
             let mut previous = None;
             for engine in ["reference", "checked-h"] {
                 eprintln!("SUITE_RUNNER_29_STARTED {id} {engine}");
-                let execution = if engine == "reference" {
-                    hirsel_engine::run_observed_snapshot(&mut loaded.engine, &config, world.clone())
-                } else {
-                    hirsel_engine::run_observed_checked(&mut loaded.engine, &config, world.clone())
-                };
+                let execution = hirsel_driver::testing::observe_tir(
+                    &prepared,
+                    &config,
+                    world.clone(),
+                    hirsel_interp::Limits::default(),
+                    engine == "checked-h",
+                );
                 let mut receipt =
                     json!({"id":id,"engine":engine,"state":"completed","passed":false});
                 match execution {

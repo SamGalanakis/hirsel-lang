@@ -49,10 +49,10 @@ fn scripted(caps: bool) {
     hirsel_engine::with_compiler_stack(|| {
         let scratch = scratch("batchrun-27-script-");
         let selection = package(scratch.path());
-        let mut loaded = hirsel_driver::load_program(&selection).unwrap();
-        loaded.check_for_execution().unwrap();
+        let prepared =
+            hirsel_driver::request_tir(&selection, hirsel_engine::Verify::On, None).unwrap();
         let config = hirsel_engine::RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -106,11 +106,13 @@ fn scripted(caps: bool) {
             let mut previous = None;
             for engine in ["interpreter", "checked-h"] {
                 eprintln!("BATCHRUN_27_STARTED {id} {engine}");
-                let execution = if engine == "interpreter" {
-                    hirsel_engine::run_observed_snapshot(&mut loaded.engine, &config, world.clone())
-                } else {
-                    hirsel_engine::run_observed_checked(&mut loaded.engine, &config, world.clone())
-                }
+                let execution = hirsel_driver::testing::observe_tir(
+                    &prepared,
+                    &config,
+                    world.clone(),
+                    hirsel_interp::Limits::default(),
+                    engine == "checked-h",
+                )
                 .unwrap();
                 let observation = execution
                     .observation
