@@ -9,6 +9,14 @@ mod scratch;
 
 // Bounds payload ownership, Arc/region headers and BTreeMap allocation overhead.
 const ENTRY_CHARGE: u64 = 2048;
+fn association_bytes(entries: usize) -> u64 {
+    if entries == 0 {
+        return 0;
+    }
+    let mut weight = crate::NativeMetadataWeight::default();
+    weight.tree::<ContentHash, Association>(entries);
+    weight.bytes()
+}
 struct State {
     used: u64,
     contents: BTreeMap<ContentHash, (Reference, Bytes)>,
@@ -45,6 +53,17 @@ pub struct RequestStore {
     verifier: Option<Arc<hirsel_validate::VerifierCache>>,
     memory: Arc<Admission>,
     state: Mutex<State>,
+}
+impl std::fmt::Debug for RequestStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        f.debug_struct("RequestStore")
+            .field("retained_bytes", &self.retained_bytes())
+            .field("metadata_bytes", &state.used)
+            .field("associations", &state.associations.len())
+            .field("contents", &state.contents.len())
+            .finish()
+    }
 }
 impl RequestStore {
     pub fn new(backend: Arc<dyn ResultStore>, memory: MemoryReservation) -> Self {
@@ -255,7 +274,14 @@ impl ResultStore for RequestStore {
         // admitted request can publish a different action at the same address
         // immediately, so they cannot replace this request's selected result.
         // Retain only metadata here, under the same bounded transport charge.
-        if state.associations.contains_key(&address.0) || self.charge(&mut state, ENTRY_CHARGE) {
+        let exists = state.associations.contains_key(&address.0);
+        let Some(next) = state.associations.len().checked_add(usize::from(!exists)) else {
+            self.memory.exhausted.store(true, Ordering::Release);
+            return;
+        };
+        let growth =
+            association_bytes(next).saturating_sub(association_bytes(state.associations.len()));
+        if exists || self.charge(&mut state, growth) {
             state.associations.insert(address.0, association);
             drop(state);
             self.backend.associate_product(address, action, reference);
@@ -275,6 +301,44 @@ mod tests {
     }
     fn address() -> Address {
         Address(ContentHash::of_bytes(b"request transport"))
+    }
+    #[test]
+    fn request_associations_charge_their_physical_tree_and_replacements_keep_its_grant() {
+        for count in [32u32, 64, 128] {
+            let backend = Arc::new(MemStore::default());
+            let reference = backend.put_content(domain(), b"selected").unwrap();
+            let allowance = 64 << 10;
+            let budget = ProcessBudget::new(allowance);
+            let request = RequestStore::new(backend, budget.reserve(allowance).unwrap());
+            let action = Action(address().0);
+            let (_, actual) = crate::test_alloc::measured(|| {
+                for index in 0..count {
+                    let address = Address(ContentHash::of_bytes(&index.to_le_bytes()));
+                    request.associate_product(address, action, reference);
+                }
+            });
+            let charged = request.retained_bytes();
+            assert!(!request.exhausted());
+            assert!(actual.live > 0);
+            assert!(
+                charged >= actual.live as u64,
+                "charged={charged}, actual={}",
+                actual.live
+            );
+            assert!(charged >= actual.peak as u64);
+            assert!(charged < u64::from(count) * ENTRY_CHARGE);
+            for index in 0..count {
+                let address = Address(ContentHash::of_bytes(&index.to_le_bytes()));
+                assert_eq!(
+                    request.lookup_product(address),
+                    Some(Association { action, reference })
+                );
+                request.associate_product(address, action, reference);
+                assert_eq!(request.retained_bytes(), charged);
+            }
+            drop(request);
+            assert_eq!(budget.reserved(), 0);
+        }
     }
     #[test]
     fn request_transport_survives_durable_failure_and_held_child_retains_admission() {
@@ -378,8 +442,8 @@ mod tests {
         a.associate_product(address(), action_a, first);
         assert_eq!(backend.lookup_product(address()), Some(selected_a));
         assert_eq!(b.lookup_product(address()), Some(selected_b));
-        assert_eq!(a.retained_bytes(), ENTRY_CHARGE);
-        assert_eq!(b.retained_bytes(), ENTRY_CHARGE);
+        assert_eq!(a.retained_bytes(), association_bytes(1));
+        assert_eq!(b.retained_bytes(), association_bytes(1));
         assert!(!a.exhausted() && !b.exhausted());
         drop(a);
         drop(b);
@@ -396,10 +460,16 @@ mod tests {
         let reference = request.put_content(domain(), b"durable content").unwrap();
         let action = Action(address().0);
         request.associate_product(address(), action, reference);
+        for index in 1u32..4 {
+            let next = Address(ContentHash::of_bytes(&index.to_le_bytes()));
+            request.associate_product(next, action, reference);
+            assert!(request.lookup_product(next).is_some());
+        }
         let other = Address(ContentHash::of_bytes(b"another address"));
         request.associate_product(other, action, reference);
         assert!(request.exhausted());
-        assert_eq!(request.retained_bytes(), ENTRY_CHARGE);
+        assert_eq!(request.retained_bytes(), association_bytes(4));
+        assert!(request.retained_bytes() <= ENTRY_CHARGE);
         assert!(request.lookup_product(other).is_none());
         assert!(backend.lookup_product(other).is_none());
         assert!(request.lookup_product(address()).is_some());

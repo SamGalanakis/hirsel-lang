@@ -670,8 +670,7 @@ impl SourceProducts {
         Arc::new(move |reference| {
             if store.exhausted() {
                 return ToolError::Runtime(format!(
-                    "compiler product transport allowance exhausted; retained {}B",
-                    store.retained_bytes(),
+                    "compiler product transport allowance exhausted; {store:?}",
                 ));
             }
             if let Some(error) = ownership
