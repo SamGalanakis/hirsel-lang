@@ -31,12 +31,14 @@ pub fn task_result_payload(layouts: &LayoutTable, layout: LayoutId) -> Option<La
     {
         return None;
     }
-    let [ScanStep::Handle {
-        offset: 0,
-        kind: HandleKind::Task,
-        ty: Some(schema),
-        obtains: Some(payload),
-    }] = record.scan.as_slice()
+    let [
+        ScanStep::Handle {
+            offset: 0,
+            kind: HandleKind::Task,
+            ty: Some(schema),
+            obtains: Some(payload),
+        },
+    ] = record.scan.as_slice()
     else {
         return None;
     };
@@ -67,7 +69,13 @@ pub fn task_result_call<S>(
     };
     let arguments = call.arguments.get(&unit.pools.call_arguments)?;
     if arguments.len() != 4
-        || (0..4).any(|parameter| arguments.iter().filter(|arg| arg.parameter == parameter).count() != 1)
+        || (0..4).any(|parameter| {
+            arguments
+                .iter()
+                .filter(|arg| arg.parameter == parameter)
+                .count()
+                != 1
+        })
     {
         return None;
     }
@@ -82,7 +90,10 @@ pub fn task_result_call<S>(
     if argument.passing != hirsel_core_contract::Passing::Mut {
         return None;
     }
-    let layout = unit.types.get(unit.addresses.get(address.index())?.ty.index())?.layout;
+    let layout = unit
+        .types
+        .get(unit.addresses.get(address.index())?.ty.index())?
+        .layout;
     let record = layouts.layout(layout)?;
     let tag = record.tag.as_ref()?;
     if record.kind != LayoutKind::Variant
@@ -107,7 +118,11 @@ pub fn task_result_call<S>(
                 return None;
             };
             if none.passing != hirsel_core_contract::Passing::Borrow
-                || unit.types.get(unit.values.get(value.index())?.ty.index())?.layout != layout
+                || unit
+                    .types
+                    .get(unit.values.get(value.index())?.ty.index())?
+                    .layout
+                    != layout
                 || !runtime_calls::empty_option(unit, layouts, value)
             {
                 return None;
@@ -118,7 +133,10 @@ pub fn task_result_call<S>(
             let ArgumentValue::Value(value) = task_argument.value else {
                 return None;
             };
-            let task = unit.types.get(unit.values.get(value.index())?.ty.index())?.layout;
+            let task = unit
+                .types
+                .get(unit.values.get(value.index())?.ty.index())?
+                .layout;
             if task_argument.passing != hirsel_core_contract::Passing::Take
                 || task_result_payload(layouts, task) != Some(field.layout)
             {
@@ -126,7 +144,11 @@ pub fn task_result_call<S>(
             }
         }
     }
-    Some(TaskResultCall { direction, address, layout })
+    Some(TaskResultCall {
+        direction,
+        address,
+        layout,
+    })
 }
 
 #[cfg(test)]
@@ -154,7 +176,10 @@ mod tests {
             copy: CopyRecipe::Bits,
             finalizer: None,
             storage: vec![],
-            abi: AbiInputs { scalars: vec![], unaligned: false },
+            abi: AbiInputs {
+                scalars: vec![],
+                unaligned: false,
+            },
         }
     }
 
@@ -167,10 +192,16 @@ mod tests {
             record(LayoutKind::Handle),
         ];
         table.layouts[2].fields.push(FieldLayout {
-            ordinal: 0, offset: 0, layout: LayoutId(1), unaligned: false,
+            ordinal: 0,
+            offset: 0,
+            layout: LayoutId(1),
+            unaligned: false,
         });
         table.layouts[2].scan.push(ScanStep::Handle {
-            offset: 0, kind: HandleKind::Task, ty: Some(LayoutId(2)), obtains: Some(LayoutId(0)),
+            offset: 0,
+            kind: HandleKind::Task,
+            ty: Some(LayoutId(2)),
+            obtains: Some(LayoutId(0)),
         });
         assert_eq!(task_result_payload(&table, LayoutId(2)), Some(LayoutId(0)));
         for mutation in 0..7 {
@@ -179,19 +210,31 @@ mod tests {
                 0 => forged.layouts[2].kind = LayoutKind::Aggregate,
                 1 => forged.layouts[2].fields[0].offset = 8,
                 2 => forged.layouts[2].fields[0].layout = LayoutId(0),
-                3 => forged.layouts[2].drop.push(DropStep::CloseHandle { offset: 0 }),
-                4 => if let ScanStep::Handle { ty, .. } = &mut forged.layouts[2].scan[0] {
-                    *ty = Some(LayoutId(1));
-                },
-                5 => if let ScanStep::Handle { kind, .. } = &mut forged.layouts[2].scan[0] {
-                    *kind = HandleKind::TaskSet;
-                },
-                6 => if let ScanStep::Handle { obtains, .. } = &mut forged.layouts[2].scan[0] {
-                    *obtains = Some(LayoutId(99));
-                },
+                3 => forged.layouts[2]
+                    .drop
+                    .push(DropStep::CloseHandle { offset: 0 }),
+                4 => {
+                    if let ScanStep::Handle { ty, .. } = &mut forged.layouts[2].scan[0] {
+                        *ty = Some(LayoutId(1));
+                    }
+                }
+                5 => {
+                    if let ScanStep::Handle { kind, .. } = &mut forged.layouts[2].scan[0] {
+                        *kind = HandleKind::TaskSet;
+                    }
+                }
+                6 => {
+                    if let ScanStep::Handle { obtains, .. } = &mut forged.layouts[2].scan[0] {
+                        *obtains = Some(LayoutId(99));
+                    }
+                }
                 _ => unreachable!(),
             }
-            assert_eq!(task_result_payload(&forged, LayoutId(2)), None, "mutation {mutation}");
+            assert_eq!(
+                task_result_payload(&forged, LayoutId(2)),
+                None,
+                "mutation {mutation}"
+            );
         }
     }
 
@@ -200,29 +243,55 @@ mod tests {
         use hirsel_core_contract::OperationId;
         let hash = ContentHash::of_bytes(b"task-result-formals");
         let mut b = UnitBuilder::new(LirUnit::<Ready>::new(UnitHeader {
-            source_count: 0, track_caller: false, stage: crate::stage::StageKind::Ready,
-            lir_version: crate::LIR_VERSION, origin: UnitOrigin::Library, key: UnitKey(hash),
+            source_count: 0,
+            track_caller: false,
+            stage: crate::stage::StageKind::Ready,
+            lir_version: crate::LIR_VERSION,
+            origin: UnitOrigin::Library,
+            key: UnitKey(hash),
             definition: hirsel_syntax::DefPath::core("task_result_formals"),
-            implementation_revision: hash, instance: hash, target: hash, abi: FnAbiId(0),
+            implementation_revision: hash,
+            instance: hash,
+            target: hash,
+            abi: FnAbiId(0),
         }));
         let mut table = LayoutTable::new(&TargetSpec::x86_64_unknown_linux_gnu());
         table.layouts = vec![
-            record(LayoutKind::Resource), record(LayoutKind::Scalar(ScalarKind::U64)),
-            record(LayoutKind::Handle), record(LayoutKind::Variant),
+            record(LayoutKind::Resource),
+            record(LayoutKind::Scalar(ScalarKind::U64)),
+            record(LayoutKind::Handle),
+            record(LayoutKind::Variant),
             record(LayoutKind::Scalar(ScalarKind::U32)),
         ];
         table.layouts[2].fields.push(FieldLayout {
-            ordinal: 0, offset: 0, layout: LayoutId(1), unaligned: false,
+            ordinal: 0,
+            offset: 0,
+            layout: LayoutId(1),
+            unaligned: false,
         });
         table.layouts[2].scan.push(ScanStep::Handle {
-            offset: 0, kind: HandleKind::Task, ty: Some(LayoutId(2)), obtains: Some(LayoutId(0)),
+            offset: 0,
+            kind: HandleKind::Task,
+            ty: Some(LayoutId(2)),
+            obtains: Some(LayoutId(0)),
         });
         table.layouts[3].tag = Some(TagEncoding {
-            offset: 0, form: TagForm::Ordinal, variants: vec![
-                VariantLayout { ordinal: 0, fields: vec![] },
-                VariantLayout { ordinal: 1, fields: vec![FieldLayout {
-                    ordinal: 0, offset: 0, layout: LayoutId(0), unaligned: false,
-                }] },
+            offset: 0,
+            form: TagForm::Ordinal,
+            variants: vec![
+                VariantLayout {
+                    ordinal: 0,
+                    fields: vec![],
+                },
+                VariantLayout {
+                    ordinal: 1,
+                    fields: vec![FieldLayout {
+                        ordinal: 0,
+                        offset: 0,
+                        layout: LayoutId(0),
+                        unaligned: false,
+                    }],
+                },
             ],
         });
         let block = b.block(BlockKind::Body, &[]);
@@ -232,28 +301,54 @@ mod tests {
         let none = b.owned(ValueRepr::Aggregate, LayoutId(3));
         let symbol = b.symbol(SymbolKind::Type, hirsel_syntax::DefPath::core("Option"));
         let construct = b.construct(
-            ConstructorKind::Variant { definition: symbol, variant: 0 }, LayoutId(3), &[],
+            ConstructorKind::Variant {
+                definition: symbol,
+                variant: 0,
+            },
+            LayoutId(3),
+            &[],
             Placement::Fixed(StorageOwner::Heap(TaskDomainId(0))),
         );
-        b.push(block, Inst::Construct { result: none, construct, failure: FailureId(0) });
+        b.push(
+            block,
+            Inst::Construct {
+                result: none,
+                construct,
+                failure: FailureId(0),
+            },
+        );
         let slot = b.slot(ValueRepr::Aggregate, LayoutId(3), SlotKind::Temporary);
-        let address = b.address(AddressBase::Slot(slot), &[], ValueRepr::Aggregate, LayoutId(3));
+        let address = b.address(
+            AddressBase::Slot(slot),
+            &[],
+            ValueRepr::Aggregate,
+            LayoutId(3),
+        );
         let version = b.plain(ValueRepr::Aggregate, LayoutId(3));
         let target = ArgumentValue::Address { address, version };
         let (name, arguments) = match direction {
-            TaskResultDirection::Hold => ("$intrinsic.TaskFinish", vec![
-                (Passing::Mut, target), (Passing::Borrow, ArgumentValue::Value(none)),
-                (Passing::Borrow, ArgumentValue::Value(word)),
-                (Passing::Borrow, ArgumentValue::Value(descriptor)),
-            ]),
-            TaskResultDirection::Join => ("$intrinsic.TaskJoin", vec![
-                (Passing::Borrow, ArgumentValue::Value(word)),
-                (Passing::Take, ArgumentValue::Value(task)), (Passing::Mut, target),
-                (Passing::Borrow, ArgumentValue::Value(word)),
-            ]),
+            TaskResultDirection::Hold => (
+                "$intrinsic.TaskFinish",
+                vec![
+                    (Passing::Mut, target),
+                    (Passing::Borrow, ArgumentValue::Value(none)),
+                    (Passing::Borrow, ArgumentValue::Value(word)),
+                    (Passing::Borrow, ArgumentValue::Value(descriptor)),
+                ],
+            ),
+            TaskResultDirection::Join => (
+                "$intrinsic.TaskJoin",
+                vec![
+                    (Passing::Borrow, ArgumentValue::Value(word)),
+                    (Passing::Take, ArgumentValue::Value(task)),
+                    (Passing::Mut, target),
+                    (Passing::Borrow, ArgumentValue::Value(word)),
+                ],
+            ),
         };
         let callee = b.operation(OperationId {
-            definition: hirsel_syntax::DefPath::core(name), declaration_digest: hash,
+            definition: hirsel_syntax::DefPath::core(name),
+            declaration_digest: hash,
         });
         b.call(callee, &arguments, None);
         b.ret(block, None);
@@ -273,17 +368,27 @@ mod tests {
                 let arguments = &mut forged.pools.call_arguments;
                 match mutation {
                     0 => arguments[3].parameter = 0,
-                    1 => arguments[if direction == TaskResultDirection::Hold {0} else {2}].passing
-                        = Passing::Borrow,
+                    1 => {
+                        arguments[if direction == TaskResultDirection::Hold {
+                            0
+                        } else {
+                            2
+                        }]
+                        .passing = Passing::Borrow
+                    }
                     2 => forged.tables.calls[0].pretransfer_failure = Some(FailureId(0)),
                     3 => forged.tables.calls[0].result = Some(ValueId(0)),
-                    4 => forged.tables.operations[0].definition
-                        = hirsel_syntax::DefPath::core("$intrinsic.Other"),
+                    4 => {
+                        forged.tables.operations[0].definition =
+                            hirsel_syntax::DefPath::core("$intrinsic.Other")
+                    }
                     5 => arguments[1].passing = Passing::Mut,
                     _ => unreachable!(),
                 }
-                assert!(task_result_call(&forged, &table, &forged.tables.calls[0]).is_none(),
-                    "{direction:?} mutation {mutation}");
+                assert!(
+                    task_result_call(&forged, &table, &forged.tables.calls[0]).is_none(),
+                    "{direction:?} mutation {mutation}"
+                );
             }
         }
     }
@@ -291,10 +396,18 @@ mod tests {
     #[test]
     fn held_result_requires_an_actual_none_origin_and_join_requires_matching_task_payload() {
         let (mut unit, mut table) = call_fixture(TaskResultDirection::Hold);
-        let Inst::Construct { construct, .. } = unit.instructions[0] else { panic!() };
-        let ConstructorKind::Variant { definition, .. } = unit.tables.constructs[construct.index()].constructor
-            else { panic!() };
-        unit.tables.constructs[construct.index()].constructor = ConstructorKind::Variant { definition, variant: 1 };
+        let Inst::Construct { construct, .. } = unit.instructions[0] else {
+            panic!()
+        };
+        let ConstructorKind::Variant { definition, .. } =
+            unit.tables.constructs[construct.index()].constructor
+        else {
+            panic!()
+        };
+        unit.tables.constructs[construct.index()].constructor = ConstructorKind::Variant {
+            definition,
+            variant: 1,
+        };
         assert!(task_result_call(&unit, &table, &unit.tables.calls[0]).is_none());
         let (unit, _) = call_fixture(TaskResultDirection::Join);
         if let ScanStep::Handle { obtains, .. } = &mut table.layouts[2].scan[0] {
