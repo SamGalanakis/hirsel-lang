@@ -1292,7 +1292,19 @@ impl QueryEngine {
     /// generated owner includes its exact text hash; arbitrary persisted ids
     /// cannot name an anchor in another source generation.
     pub(crate) fn record_anchor_owner(&self, anchor: Anchor) -> Option<(DefPath, u32)> {
-        artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor)
+        self.sources
+            .anchor(anchor)
+            .and_then(|(file, _)| self.parsed.get(&file))
+            .and_then(|(_, _, parsed)| parsed.as_ref().ok())
+            .and_then(|parsed| parsed.value.items.iter().find(|item| item.anchor == anchor))
+            .and_then(|parsed| {
+                self.items
+                    .get(&parsed.item.definition)?
+                    .iter()
+                    .find(|item| item.anchor == anchor && item.occurrence == parsed.occurrence)
+            })
+            .map(|item| (item.item.definition.clone(), item.occurrence))
+            .or_else(|| artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor))
             .or_else(|| self.catalog.owner(anchor))
     }
     pub(crate) fn record_anchor(&self, path: &DefPath, occurrence: u32) -> Option<Anchor> {
@@ -2834,10 +2846,7 @@ impl QueryEngine {
         let (report, executed, acceptance, evidence) = hirsel_validate::validate_definition(
             definition,
             self.types.clone(),
-            |anchor| {
-                artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor)
-                    .or_else(|| self.catalog.owner(anchor))
-            },
+            |anchor| self.record_anchor_owner(anchor),
             snapshot.validation(&definition.path.path().0.package),
             policy,
             cache.as_deref(),
@@ -3104,6 +3113,59 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn source_anchor_lookup_uses_current_items_after_cached_parse_owners_are_removed() {
+        let mut engine = QueryEngine::new(crate::default_environment(), PhaseAdapters::default());
+        let context = crate::default_context();
+        for (filename, text) in [
+            ("first.hir", "fn first() {}\nfn spare() {}"),
+            ("second.hir", "fn second() {}"),
+        ] {
+            let file = engine.sources.add(filename, text.into()).unwrap();
+            let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
+            let mut parsed = hirsel_parser::parse(file, tokens, &context, &mut engine.sources);
+            engine.index(&mut parsed.syntax, &context).unwrap();
+            engine.parsed.insert(
+                file,
+                (
+                    context.clone(),
+                    engine.environment.clone(),
+                    Ok(QueryOutput {
+                        value: parsed.syntax,
+                        diagnostics: vec![],
+                        dependencies: vec![],
+                    }),
+                ),
+            );
+        }
+        let anchors = engine
+            .sources
+            .anchors()
+            .map(|(anchor, _, _)| anchor)
+            .collect::<Vec<_>>();
+        for anchor in &anchors {
+            assert_eq!(
+                engine.record_anchor_owner(*anchor),
+                artifact_anchor_owner(&engine.items, &engine.sources, &engine.generated, *anchor)
+            );
+        }
+        let removed = engine
+            .items
+            .keys()
+            .find(|path| path.0.name == "first")
+            .unwrap()
+            .clone();
+        let anchor = engine.items.remove(&removed).unwrap()[0].anchor;
+        assert_eq!(engine.record_anchor_owner(anchor), None);
+        engine.parsed.clear();
+        for anchor in anchors {
+            assert_eq!(
+                engine.record_anchor_owner(anchor),
+                artifact_anchor_owner(&engine.items, &engine.sources, &engine.generated, anchor)
+            );
+        }
+    }
 
     #[test]
     fn source_generated_signature_reads_do_not_grant_execution_selection() {
