@@ -24,7 +24,8 @@ pub struct Record {
     )]
     pub payload: Vec<u8>,
 }
-fn serialize_payload<S: serde::Serializer>(
+/// Serialize an opaque byte payload using the format's bulk byte operation.
+pub fn serialize_payload<S: serde::Serializer>(
     payload: &[u8],
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
@@ -33,7 +34,8 @@ fn serialize_payload<S: serde::Serializer>(
 // serde-rs/bytes f685179, src/bytebuf.rs:202-259: request bulk bytes while
 // preserving sequence-format support. Keep the public Vec and Serde's existing
 // bounded Vec sequence fallback; strings remain invalid for this payload.
-fn deserialize_payload<'de, D: serde::Deserializer<'de>>(
+/// Decode bytes or the equivalent sequence without accepting string payloads.
+pub fn deserialize_payload<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<u8>, D::Error> {
     struct Payload;

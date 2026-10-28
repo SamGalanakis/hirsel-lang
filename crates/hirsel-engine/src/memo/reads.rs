@@ -613,7 +613,7 @@ impl serde::Serialize for Reads {
 }
 impl<'de> serde::Deserialize<'de> for Reads {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let bytes: Vec<u8> = serde::Deserialize::deserialize(d)?;
+        let bytes = hirsel_product_codec::deserialize_payload(d)?;
         let mut input = bytes.as_slice();
         Reads::decode(&mut input)
             .filter(|_| input.is_empty())

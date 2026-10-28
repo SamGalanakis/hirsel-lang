@@ -13,6 +13,10 @@ struct Record {
     body: Reference,
     reads: Reads,
     decode_bytes: u64,
+    #[serde(
+        serialize_with = "hirsel_product_codec::serialize_payload",
+        deserialize_with = "hirsel_product_codec::deserialize_payload"
+    )]
     facts: Vec<u8>,
 }
 #[derive(serde::Serialize)]
@@ -21,6 +25,7 @@ struct RecordRef<'a> {
     body: Reference,
     reads: &'a Reads,
     decode_bytes: u64,
+    #[serde(serialize_with = "hirsel_product_codec::serialize_payload")]
     facts: &'a [u8],
 }
 fn address(key: Key) -> hirsel_artifact_store::Address {
@@ -114,5 +119,59 @@ impl BodyTask {
             self.remember_cached_carry(record.body, reads, record.facts, record.decode_bytes);
         }
         Some(completed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_fact_bytes_preserve_the_stored_sequence_and_its_bounds() {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Legacy {
+            key: Key,
+            body: Reference,
+            reads: Reads,
+            decode_bytes: u64,
+            facts: Vec<u8>,
+        }
+        for len in [0, 1, 127, 8192] {
+            let key = ContentHash::of_bytes(b"compact-owner");
+            let legacy = Legacy {
+                key,
+                body: crate::store::product_domain(QueryKind::Modes)
+                    .reference(b"body")
+                    .unwrap(),
+                reads: Reads::from_vec(vec![(ReadKey::Environment, key)]).unwrap(),
+                decode_bytes: 12345,
+                facts: (0..len).map(|n| n as u8).collect(),
+            };
+            let bytes = bincode::serialize(&legacy).unwrap();
+            let options = || {
+                bincode::DefaultOptions::new()
+                    .with_fixint_encoding()
+                    .with_limit(bytes.len() as u64)
+                    .reject_trailing_bytes()
+            };
+            let record: Record = options().deserialize(&bytes).unwrap();
+            assert_eq!(record.facts, legacy.facts);
+            assert_eq!(record.reads, legacy.reads);
+            assert_eq!(bincode::serialize(&record).unwrap(), bytes);
+            let borrowed = RecordRef {
+                key: record.key,
+                body: record.body,
+                reads: &record.reads,
+                decode_bytes: record.decode_bytes,
+                facts: &record.facts,
+            };
+            assert_eq!(bincode::serialize(&borrowed).unwrap(), bytes);
+            for end in 0..bytes.len() {
+                assert!(options().deserialize::<Record>(&bytes[..end]).is_err());
+            }
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(options().deserialize::<Record>(&trailing).is_err());
+        }
     }
 }
