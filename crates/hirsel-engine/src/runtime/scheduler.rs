@@ -783,8 +783,9 @@ impl State {
     fn remove(&mut self, query: Key) {
         self.unqueue(query);
         if let Some(execution) = self.nodes.remove(&query) {
-            self.retained -= execution.weight.retained;
+            let retained = execution.weight.retained;
             drop(execution);
+            self.retained -= retained;
         }
         self.edges = self.nodes.edge_count();
     }
