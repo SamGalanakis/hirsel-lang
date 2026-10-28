@@ -662,9 +662,24 @@ pub(crate) fn artifact_anchor_owner(
 ) -> Option<(DefPath, u32)> {
     anchor_owner(items, anchor).or_else(|| {
         let (file, base) = sources.anchor(anchor)?;
-        let (owner, source) = generated.iter().find(|(_, source)| source.file == file)?;
+        let (owner, source) = generated
+            .iter()
+            .find(|(_, source)| source.file == file)
+            .or_else(|| {
+                let identity = generated_source_identity(sources, file)?;
+                generated.iter().find(|(_, source)| {
+                    generated_source_identity(sources, source.file) == Some(identity)
+                })
+            })?;
         Some((generated_codec_owner(owner, &source.text), base))
     })
+}
+pub(crate) fn generated_source_identity(
+    sources: &SourceMap,
+    file: FileId,
+) -> Option<(&std::path::Path, &str)> {
+    let source = sources.file(file)?;
+    Some((source.logical_path(), source.text()))
 }
 pub(super) fn generated_codec_owner(owner: &DefPath, text: &str) -> DefPath {
     let hash = ContentHash::of_bytes(text.as_bytes());
@@ -1313,6 +1328,15 @@ impl QueryEngine {
             .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
             .map(|item| item.anchor)
             .or_else(|| self.catalog.anchor(path, occurrence))
+            .or_else(|| {
+                let (_, source) = self
+                    .generated
+                    .iter()
+                    .find(|(owner, source)| generated_codec_owner(owner, &source.text) == *path)?;
+                self.sources.anchors().find_map(|(anchor, file, base)| {
+                    (file == source.file && base == occurrence).then_some(anchor)
+                })
+            })
             .or_else(|| {
                 self.sources.anchors().find_map(|(anchor, _, _)| {
                     (self.record_anchor_owner(anchor) == Some((path.clone(), occurrence)))

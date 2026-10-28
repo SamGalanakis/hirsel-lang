@@ -83,16 +83,20 @@ impl NativeRecordContext {
         // exact bytes may share its content-bound codec owner.
         let mut generations = BTreeMap::new();
         for (file, binding) in &generated {
-            if let Some(source) = engine.sources.file(*file) {
+            if let Some(identity) =
+                super::persistent::generated_source_identity(&engine.sources, *file)
+            {
                 generations
-                    .entry((source.logical_path(), source.text()))
+                    .entry(identity)
                     .or_insert_with(|| binding.clone());
             }
         }
         let mut current_anchors = BTreeMap::new();
         for (anchor, file, base) in engine.sources.anchors() {
             if let Some((owner, _)) = generated.get(&file) {
-                current_anchors.insert((owner.clone(), base), anchor);
+                current_anchors
+                    .entry((owner.clone(), base))
+                    .or_insert(anchor);
             }
         }
         let mut seen = std::collections::BTreeSet::new();
@@ -100,8 +104,9 @@ impl NativeRecordContext {
             if generated.contains_key(&file) || !seen.insert(file) {
                 continue;
             }
-            if let Some(source) = engine.sources.file(file)
-                && let Some(binding) = generations.get(&(source.logical_path(), source.text()))
+            if let Some(identity) =
+                super::persistent::generated_source_identity(&engine.sources, file)
+                && let Some(binding) = generations.get(&identity)
             {
                 generated.insert(file, binding.clone());
             }

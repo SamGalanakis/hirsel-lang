@@ -88,6 +88,11 @@ fn identical_generated_sources_rebind_old_sites_but_changed_text_stays_unowned()
     let (_, old) = placed(text);
     let (_, changed) = placed("    fn()->u8 {4u8}");
     let (file, current) = placed(text);
+    let unrelated_file = engine
+        .sources
+        .add_logical("unrelated", "unrelated", text.into())
+        .unwrap();
+    let unrelated = engine.sources.item_anchor(unrelated_file, 4);
     engine.generated.insert(
         path,
         crate::queries::generation::GeneratedSource {
@@ -110,8 +115,13 @@ fn identical_generated_sources_rebind_old_sites_but_changed_text_stays_unowned()
     assert_eq!(encoded, records.encode(&context, &row(current)).unwrap());
     let decoded: Row = records.decode(&context, &encoded).unwrap();
     assert_eq!(decoded.origin.anchor, current);
+    assert_eq!(context.record_owner(old), engine.record_anchor_owner(old));
+    let (owner, occurrence) = context.record_owner(old).unwrap();
+    assert_eq!(engine.record_anchor(&owner, occurrence), Some(current));
     assert!(context.record_owner(changed).is_none());
     assert!(records.encode(&context, &row(changed)).is_none());
+    assert!(context.record_owner(unrelated).is_none());
+    assert!(records.encode(&context, &row(unrelated)).is_none());
 }
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Row {
