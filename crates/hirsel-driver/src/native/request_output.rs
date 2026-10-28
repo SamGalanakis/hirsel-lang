@@ -126,6 +126,8 @@ pub(crate) fn run_bound_output(
             ));
         }
         let scratch = Scratch::new()?;
+        #[cfg(test)]
+        super::tool::before_request_link(&scratch.0);
         std::fs::write(scratch.0.join("run.json"), run.launch_bytes())
             .map_err(|error| NativeError::new(StageName::Launch, error.to_string()))?;
         let executable = scratch.0.join("program");
