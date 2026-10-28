@@ -27,8 +27,10 @@ impl FnEmitter<'_, '_, '_> {
                 .unit()
                 .ahead
                 .and_then(|p| p.host_spine(self.unit.header.instance))
-                .is_some()
-                && hirsel_lir::ahead::scalar_image(self.em.inputs.unit().layouts, *layout))
+                .is_some_and(|spine| {
+                    spine.barriers.contains(&self.instruction_index)
+                        || hirsel_lir::ahead::scalar_image(self.em.inputs.unit().layouts, *layout)
+                }))
         {
             self.ahead_barrier()?;
         }

@@ -38,8 +38,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     .inputs
                     .ahead
                     .and_then(|p| p.host_spine(unit.header.instance))
-                    .is_some()
-                    && hirsel_lir::ahead::scalar_image(self.inputs.layouts, *layout))
+                    .is_some_and(|spine| {
+                        let index = unit.blocks[b.index()].instructions.start as usize + i;
+                        spine.barriers.contains(&index)
+                            || hirsel_lir::ahead::scalar_image(self.inputs.layouts, *layout)
+                    }))
             {
                 self.ahead_barrier()?;
             }

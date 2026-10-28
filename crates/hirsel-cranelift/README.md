@@ -56,7 +56,7 @@ Invariants:
   `IsWritable` reads the count, and `Share` marks the tracked blocks a copy holds shared.
 - Library and inline-instance bodies are weak (`Preemptible`) in every object that
   references them, as are layout descriptors and the descriptor registry; source units
-  are exported once. No `available_externally` copies: Cranelift does not inline.
+  are exported once. No `available_externally` copies: Private ahead objects inline their validated spare-push bodies with Cranelift's inliner; ordinary unit calls remain out of line.
 - Checked arithmetic and conversions follow `hirsel-llvm`: overflow, division by zero,
   shifts and float-to-int range checks are guarded before the instruction. i128
   division and i128-to-float conversion call compiler-rt (`__divti3`, `__floattidf`, ...),

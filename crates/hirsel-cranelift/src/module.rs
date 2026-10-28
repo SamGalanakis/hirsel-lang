@@ -477,6 +477,11 @@ pub(crate) fn emit(
     );
     let counter_units =
         hirsel_lir::invocations::room::counter_units(units.iter().map(|u| u.unit()));
+    if inputs.alternate {
+        bodies
+            .sort_by_key(|(unit, _, _)| !unit.header.definition.is_core("$native.list_push_spare"));
+    }
+    let mut inline_push = crate::inline::PrivatePush::default();
     let mut frames = BTreeMap::new();
     let mut context = Context::new();
     let mut builder_context = FunctionBuilderContext::new();
@@ -503,6 +508,15 @@ pub(crate) fn emit(
                 function.measured = profile.sources.and_then(|s| s.get(&unit.header.definition));
             }
             function.emit()?;
+        }
+        context
+            .inline(&mut inline_push)
+            .map_err(|error| CodegenError::Cranelift {
+                name: name.clone(),
+                message: error.to_string(),
+            })?;
+        if inputs.alternate && unit.header.definition.is_core("$native.list_push_spare") {
+            inline_push.insert(id, context.func.clone());
         }
         emitter.compile(&name, id, &mut context)?;
         if inputs.alternate

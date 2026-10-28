@@ -25,6 +25,7 @@ pub use dwarf::{Resolved, debug_object, debug_object_sources};
 mod flat;
 mod foreign;
 mod function;
+mod inline;
 mod instructions;
 mod module;
 mod object;
