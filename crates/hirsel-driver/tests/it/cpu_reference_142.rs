@@ -371,6 +371,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 fn cpu_canceled_admission_skips_preparation_and_parent_can_reenter() {
     for width in [1, 4, 8] {
         let source = r#"
+fn map_value(take job: u64) -> u64 uses {} { job + 1u64 }
 pub fn main(rt: Io) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   task.scope(tasks, fn(scope: Scope) -> () {
@@ -380,7 +381,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
       failure.check(channel.receive(tasks, mut gate) == Error(Canceled(Requested())), Arithmetic())
       let batch = core@1/cpu.map_scoped(tasks, WIDTH,
         fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1u64] },
-        fn(take job: u64) -> u64 uses {} { job + 7u64 })
+        map_value)
       failure.check(batch != Error(MapperNotCertified()), Bounds())
       failure.check(batch != Error(WidthUnavailable()), Bounds())
       failure.check(batch != Error(NotGranted()), Bounds())
@@ -392,7 +393,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   })
   let after = core@1/cpu.map_scoped(tasks, WIDTH,
     fn() -> List[u64] uses {} { [7u64] },
-    fn(take job: u64) -> u64 uses {} { job + 1u64 })
+    map_value)
   failure.check(after == Ok([8u64]), Bounds())
   let _ = out.print(io.stdout(rt)?, "cpu-canceled-ok\n")
   Ok(())
