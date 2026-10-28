@@ -114,6 +114,13 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         fn(take job: unique List[u64]) -> (unique List[u64], unique List[u64]) uses {} {
           let mut left = take job
           list.reserve(mut left, 128u64)
+          for iteration in 0u64..130u64 {
+            let mut scratch: List[u64] = []
+            list.reserve(mut scratch, 128u64)
+            list.push(mut scratch, left[0] + iteration)
+            let copied = copy scratch
+            failure.check(copied[0] == left[0] + iteration, Bounds())
+          }
           let right = [left[0] + 1u64]
           if fail == 1u64 && left[0] == 0u64 { failure.check(false, Bounds()) }
           (take left, take right)
@@ -145,4 +152,145 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         "tasks.cooperative@1",
         "Ordered allocating success/failure with two result owners",
     );
+}
+
+fn ordered_arena_receipts_match_serial_and_exact_witness() {
+    let _compiler = QUAL_COMPILER.lock().unwrap_or_else(|e| e.into_inner());
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let source = r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let rows = core@1/cpu.map_scoped(tasks, 4u32,
+    fn() -> List[unique List[u64]] uses {} {
+      let mut inputs: List[unique List[u64]] = []
+      for value in 1u64..5u64 {
+        let mut input: List[u64] = []
+        list.reserve(mut input, 8u64)
+        list.push(mut input, value)
+        list.push(mut inputs, take input)
+      }
+      take inputs
+    },
+    fn(take input: unique List[u64]) -> unique List[u64] uses {} {
+      let job = input[0]
+      for size in 16384u64..16404u64 {
+        let mut refill: List[u64] = []
+        list.reserve(mut refill, size)
+        list.push(mut refill, job)
+        let mut copied = copy refill
+        copied[0] = job + 1u64
+        failure.check(refill[0] == job && copied[0] == job + 1u64, Bounds())
+      }
+      let mut checksum = 0u64
+      for iteration in 0u64..130u64 {
+        let mut chunk: List[u64] = []
+        list.reserve(mut chunk, 1024u64)
+        list.push(mut chunk, job)
+        list.push(mut chunk, iteration)
+        let copied = copy chunk
+        checksum += copied[1]
+      }
+      let mut out: List[u64] = []
+      list.reserve(mut out, 1024u64)
+      list.push(mut out, job)
+      list.push(mut out, job + checksum - 8378u64)
+      take out
+    })
+  failure.check(rows == Ok([[1u64,8u64],[2u64,9u64],[3u64,10u64],[4u64,11u64]]), Bounds())
+  Ok(())
+}
+"#;
+    let manifest = qual_manifest(root, source);
+    let grants = root.join("grants.json");
+    let mut reference = None;
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        checked(
+            cpu_compiler()
+                .args(["build", "--validate-stages", "--backend", backend])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        for (cores, reorder) in [(1, "off"), (4, "auto")] {
+            let mut authority = qual_grants(4);
+            authority["budgets"] =
+                serde_json::json!({"provider":"budgets.limits@2","memory_bytes":64 << 20});
+            authority["io"]["tasks"] = serde_json::json!("tasks.cooperative@1");
+            authority["placement"] = serde_json::json!({"cores":cores,"reorder":reorder});
+            fs::write(&grants, authority.to_string()).unwrap();
+            for traced in [false, true] {
+                let tape = root.join(format!("{backend}-{cores}-{traced}.tape"));
+                let observation = root.join("arena.observation");
+                let trace = root.join("arena.events");
+                let mut command = Command::new(&executable);
+                command
+                    .arg("--hirsel-grants")
+                    .arg(&grants)
+                    .arg("--hirsel-record")
+                    .arg(&tape)
+                    .env("HIRSEL_RT_OBSERVATION", &observation);
+                if traced {
+                    command.arg("--hirsel-trace-events").arg(&trace);
+                }
+                let live = qual_native_output(&mut command, root);
+                if !live.status.success() {
+                    eprintln!(
+                        "{backend} cores={cores} traced={traced}: {:?}",
+                        fs::read_to_string(&observation)
+                    );
+                }
+                let live = checked(live);
+                let observed = qual_observation(&observation);
+                let recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
+                let summaries: Vec<_> = recording
+                    .events
+                    .iter()
+                    .filter_map(|event| {
+                        if let hirsel_rt::io::Request::CpuSummary(summary) = &event.request {
+                            Some(summary.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(summaries.len(), 4);
+                // CPU receipts bind the grant's batch envelope, independently of the run limit.
+                assert!(
+                    summaries.iter().all(|summary| {
+                        summary.native.as_ref().is_some_and(|native| {
+                            native.limit == 8 << 20
+                                && native.pieces.iter().any(|piece| !piece.envelope.is_empty())
+                        })
+                    }),
+                    "{backend} cores={cores} trace={traced}: {summaries:#?}"
+                );
+                if let Some(expected) = &reference {
+                    assert_eq!(&summaries, expected, "{backend} {cores} trace={traced}");
+                } else {
+                    reference = Some(summaries);
+                }
+                let canonical = traced.then(|| fs::read(&trace).unwrap());
+                let mut replay = Command::new(&executable);
+                replay
+                    .arg("--hirsel-replay")
+                    .arg(&tape)
+                    .env("HIRSEL_RT_WORKERS", "1")
+                    .env("HIRSEL_RT_OBSERVATION", &observation);
+                if traced {
+                    replay.arg("--hirsel-trace-events").arg(&trace);
+                }
+                let replay = checked(qual_native_output(&mut replay, root));
+                assert_eq!(replay.stdout, live.stdout);
+                assert_eq!(replay.stderr, live.stderr);
+                assert_eq!(qual_observation(&observation), observed);
+                if let Some(canonical) = canonical {
+                    assert_eq!(fs::read(&trace).unwrap(), canonical);
+                }
+            }
+        }
+    }
 }

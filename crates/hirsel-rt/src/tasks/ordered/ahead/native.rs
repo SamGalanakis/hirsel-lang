@@ -79,6 +79,7 @@ pub(crate) struct Native {
     pub(crate) cpu_job: Option<std::sync::Arc<crate::pool::cpu_scoped::probe::Job>>,
     pub(super) saved_roots: Option<super::cpu_roots::Saved>,
     pub(super) input_blocks: Vec<crate::pool::cpu_scoped::ledger::blocks::Observed>,
+    pub(super) arena: super::cpu_arena::Arena,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -344,6 +345,7 @@ impl Native {
             cpu_job: None,
             saved_roots: None,
             input_blocks,
+            arena: super::cpu_arena::Arena::new(),
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -450,9 +452,29 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                 .expect("a saved CPU call retains its ordinal");
                 saved.check(ctx, &*native, owner);
             }
-            super::host_return::flush_logical(ctx, native);
             let run = (*ctx).run_ptr();
-            let mut pause = (*run).control.stopped().is_some();
+            let arena_ready = if (*run).control.stopped().is_some() {
+                false
+            } else {
+                match super::cpu_arena::flush(ctx, native) {
+                    Ok(ready) => ready,
+                    Err(stop) => {
+                        (*run).control.request_inside(stop);
+                        false
+                    }
+                }
+            };
+            if arena_ready {
+                if (*native).physical.reason & (4 | 16) != 0 {
+                    super::cpu_arena::canonical(ctx, native);
+                } else if !(*native).growth.is_null()
+                    && (*(*native).growth).kind != super::cpu_handoff::COPY_SEQUENCE
+                {
+                    super::cpu_arena::forget(native, (*(*native).growth).block);
+                }
+            }
+            super::host_return::flush_logical(ctx, native);
+            let mut pause = !arena_ready || (*run).control.stopped().is_some();
             if !private(ctx) {
                 pause |= (*ctx)
                     .ahead

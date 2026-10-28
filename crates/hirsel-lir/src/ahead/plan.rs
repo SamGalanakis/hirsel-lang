@@ -50,7 +50,7 @@ impl RootPlan {
                         || !mapper.regional.is_empty()
                 })
         }) {
-            ordinary.max(80)
+            ordinary.max(96)
         } else {
             ordinary
         }
@@ -985,6 +985,48 @@ impl AheadPlan {
             .values()
             .filter_map(|r| r.cpu.as_ref()?.mapper.as_ref())
             .find_map(|m| m.regional.get(&(id, instruction)))
+    }
+    /// A dropless sequence release can run in the job's private allocation
+    /// lists. The checked mapper graph still binds its exact instruction.
+    pub fn cpu_release(
+        &self,
+        unit: &LirUnit<Ready>,
+        instruction: usize,
+        table: &LayoutTable,
+    ) -> Option<(ValueId, LayoutId)> {
+        let Inst::Release {
+            value,
+            layout,
+            live: MaskRef::All,
+            ..
+        } = *unit.instructions.get(instruction)?
+        else {
+            return None;
+        };
+        let permitted = self
+            .roots
+            .values()
+            .filter_map(|r| r.cpu.as_ref()?.mapper.as_ref())
+            .any(|mapper| {
+                mapper
+                    .cleanup
+                    .contains(&(unit.header.instance, instruction))
+            });
+        if !permitted {
+            return None;
+        }
+        let LayoutKind::Block { payload } = table.layout(layout)?.kind else {
+            return None;
+        };
+        let record = table.layout(payload)?;
+        let LayoutKind::Sequence { element } = record.kind else {
+            return None;
+        };
+        (record.finalizer.is_none()
+            && record.drop.is_empty()
+            && record.scan.is_empty()
+            && scalar_image(table, element))
+        .then_some((value, payload))
     }
     pub fn cpu_allocation(&self, id: ContentHash, instruction: usize) -> bool {
         self.roots

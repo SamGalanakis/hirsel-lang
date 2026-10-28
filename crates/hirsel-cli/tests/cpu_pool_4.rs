@@ -172,3 +172,16 @@ fn ordered_deferred_list_growth_and_copy_agree_across_four_engines_and_replay() 
         "fn(take job: u64) -> unique List[u64] uses {} { let mut out = [job]; list.reserve(mut out, 8u64); for i in 0u64..255u64 { list.push(mut out, i) }; list.push(mut out, job + 7u64); list.reserve(mut out, 512u64); let copied = copy out; [copied[0], copied[list.len(copied) - 1u64]] }",
     );
 }
+
+#[test]
+fn ordered_allocating_job_arena_reuses_buffers_and_returns_an_escaping_owner() {
+    cpu_fixture_allocating_four_engine_mapper(
+        4,
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut checksum = 0u64; for i in 0u64..130u64 { let mut chunk: List[u64] = []; list.reserve(mut chunk, 128u64); list.push(mut chunk, job); list.push(mut chunk, i); let copied = copy chunk; checksum = int.wrapping_add(checksum, copied[1]) }; let mut out: List[u64] = []; list.reserve(mut out, 128u64); list.push(mut out, job); list.push(mut out, job + checksum - 8378u64); take out }",
+    );
+}
+
+#[test]
+fn ordered_allocating_job_arena_preserves_serial_receipts_and_exact_trace() {
+    ordered_arena_receipts_match_serial_and_exact_witness();
+}

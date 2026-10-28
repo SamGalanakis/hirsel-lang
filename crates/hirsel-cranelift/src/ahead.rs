@@ -19,9 +19,12 @@ impl FnEmitter<'_, '_, '_> {
         if !self.em.inputs.unit().alternate {
             return Ok(());
         }
-        let state = self
-            .ahead_helper(false, &[self.context])?
-            .expect("getter result");
+        let state = match self.sig.ahead {
+            Some(index) => self.entry_params[index],
+            None => self
+                .ahead_helper(false, &[self.context])?
+                .expect("getter result"),
+        };
         self.ahead_state = Some(state);
         self.ahead_counter = Some(self.b.declare_var(types::I64));
         self.ahead_reload();
@@ -390,6 +393,9 @@ impl FnEmitter<'_, '_, '_> {
         Ok(())
     }
     pub(crate) fn host_instruction(&mut self, inst: &hirsel_lir::ir::Inst) -> Emitted<bool> {
+        if self.cpu_release()? {
+            return Ok(true);
+        }
         use hirsel_lir::{ir::Inst, runtime_abi::RuntimeEntry};
         let Some(state) = self.ahead_state else {
             return Ok(false);
@@ -753,5 +759,71 @@ impl FnEmitter<'_, '_, '_> {
         let refused = self.b.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
         self.b.ins().trapnz(refused, crate::function::TRAP);
         Ok(Some(self.load_ty(types::I64, record, 16)))
+    }
+}
+
+impl FnEmitter<'_, '_, '_> {
+    fn cpu_release(&mut self) -> Emitted<bool> {
+        if self.ownership.is_some() || self.em.inputs.unit().fuel {
+            return Ok(false);
+        }
+        let Some(state) = self.ahead_state else {
+            return Ok(false);
+        };
+        let Some((value, payload)) = self.em.inputs.unit().ahead.and_then(|plan| {
+            plan.cpu_release(
+                self.unit,
+                self.instruction_index,
+                self.em.inputs.unit().layouts,
+            )
+        }) else {
+            return Ok(false);
+        };
+        let Some(offset) =
+            self.em.inputs.unit().ahead.and_then(|p| {
+                p.cpu_ordinal(self.unit.header.instance, self.em.inputs.unit().layouts)
+            })
+        else {
+            return self.invalid("CPU release without a job ordinal");
+        };
+        let environment = self.load_ty(
+            types::I64,
+            state,
+            hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET,
+        );
+        let ordinal = self.load_ty(types::I64, environment, offset);
+        let (record, _) = self.stack_bytes(88, 8);
+        let version = self.b.ins().iconst(types::I32, 1);
+        let kind = self.b.ins().iconst(types::I32, 6);
+        let zero32 = self.b.ins().iconst(types::I32, 0);
+        let zero = self.u64c(0);
+        let pointer = self.get1(value)?;
+        let descriptor = self.descriptor_value(payload)?;
+        for (offset, value) in [
+            (0, version),
+            (4, kind),
+            (8, ordinal),
+            (16, pointer),
+            (24, zero),
+            (32, descriptor),
+            (36, zero32),
+            (40, zero),
+            (48, zero),
+            (56, zero),
+            (64, zero),
+            (72, zero),
+            (80, zero),
+        ] {
+            self.store_at(value, record, offset);
+        }
+        self.ahead_flush();
+        let status = self.rt1(
+            hirsel_lir::runtime_abi::RuntimeEntry::CpuAheadGrow,
+            &[state, record],
+        )?;
+        self.ahead_reload();
+        let refused = self.b.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
+        self.b.ins().trapnz(refused, crate::function::TRAP);
+        Ok(true)
     }
 }

@@ -66,6 +66,7 @@ pub(super) struct Signature<'m, 'a> {
     /// result pointer, and the returned field holding it.
     pub(super) value: Option<(ScalarKind, u32)>,
     pub(super) returns: Type<'m>,
+    pub(super) ahead: Option<(u32, u32)>,
 }
 
 pub(super) fn physical<'m>(module: &'m Module<'m>, ty: PhysicalType) -> Type<'m> {
@@ -180,6 +181,7 @@ impl<'m, 'a> Signature<'m, 'a> {
             },
             value: value.map(|kind| (kind, PairField::Value.index())),
             returns,
+            ahead: None,
         })
     }
 
@@ -275,6 +277,14 @@ impl<'m, 'a> Signature<'m, 'a> {
             self.returns = module.struct_type(&fields);
             self.ty = module.function_type(self.returns, &self.types);
         }
+        self
+    }
+
+    pub(super) fn with_ahead(mut self, module: &'m Module<'m>) -> Self {
+        let first = self.types.len() as u32;
+        self.types.extend([module.ptr_type(), module.ptr_type()]);
+        self.ahead = Some((first, first + 1));
+        self.ty = module.function_type(self.returns, &self.types);
         self
     }
 

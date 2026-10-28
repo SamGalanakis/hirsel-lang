@@ -175,6 +175,59 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
         unsafe { finish(native, std::ptr::null_mut(), NOT_CERTIFIED) };
         return Ok(true);
     }
+    if unsafe { (*pointer).kind == RELEASE_SEQUENCE } {
+        let block = unsafe { (*pointer).block };
+        let task = super::super::super::engine::current(ctx);
+        let owned = super::super::super::engine::with_driver(ctx, |driver| {
+            driver
+                .cpu_batch
+                .as_ref()
+                .is_some_and(|batch| batch.owns(task, unsafe { (*pointer).ordinal }))
+        });
+        let valid = owned
+            && !block.is_null()
+            && unsafe {
+                let descriptor = (*block).index();
+                descriptor == (*pointer).index
+                    && descriptor < (*ctx).heap_ref().layout_count()
+                    && (*(*ctx).descriptor(descriptor)).finalizer.is_none()
+                    && (*(*ctx).descriptor(descriptor)).step_count == 0
+                    && (*(*ctx).descriptor(descriptor)).scan_words == 0
+            };
+        let released = valid
+            && unsafe {
+                // The checked descriptor has neither child credits nor a user
+                // finalizer. Keep this path structurally separate from the general
+                // release walker, which can submit semantic operations.
+                let count = (*block).count;
+                if count >= crate::count::COUNT_ARENA_SHARED {
+                    true
+                } else if count == 1 && (*block).domain() == alloc::DOMAIN_HEAP {
+                    let capacity = (*ctx).heap_ref().capacity(block);
+                    let charge = if (*block).kind() == alloc::KIND_LARGE {
+                        crate::budget::large_charge(capacity)
+                    } else {
+                        crate::budget::small_charge(capacity)
+                    };
+                    (*ctx).heap().free(block);
+                    super::super::super::engine::memory_freed(ctx, charge);
+                    true
+                } else if count > 1 {
+                    (*block).count = count - 1;
+                    true
+                } else {
+                    false
+                }
+            };
+        unsafe {
+            finish(
+                native,
+                block,
+                if released { ACCEPTED } else { NOT_CERTIFIED },
+            )
+        };
+        return Ok(true);
+    }
     if unsafe { (*native).growth_plan.is_none() && (*pointer).kind == ALLOC_RAW_REGION } {
         let request = unsafe { &*pointer };
         let task = super::super::super::engine::current(ctx);

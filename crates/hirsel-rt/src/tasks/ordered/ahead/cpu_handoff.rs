@@ -20,7 +20,9 @@ pub const ALLOC_RAW_REGION: u32 = 3;
 pub const CHECK_UNTRACKED_SEQUENCE: u32 = 4;
 /// A shallow sequence copy borrows its original and keeps every original credit.
 pub const COPY_SEQUENCE: u32 = 5;
-pub const STACK_BYTES: u64 = 80;
+/// Release of a checked pointer-free sequence owned by this job.
+pub const RELEASE_SEQUENCE: u32 = 6;
+pub const STACK_BYTES: u64 = 96;
 
 /// The value and retained-block table remain owned by the saved mapper until
 /// retirement. Publication borrows them; it never adds counted holders.
@@ -258,6 +260,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_grow(
         "test rdi, rdi", "je 2f", "test rsi, rsi", "je 2f",
         "cmp byte ptr [rdi + {cpu}], 0", "je 2f",
         "mov eax, [rdi + {cpu_phase}]", "sub eax, 2", "cmp eax, 1", "ja 2f",
+        "5:", "push rdi", "push rsi", "call {cached}", "pop rsi", "pop rdi",
+        "test al, al", "je 4f", "xor eax, eax", "ret", "4:",
+        "cmp qword ptr [rdi + {arena_count}], {arena_events}", "jb 6f",
+        "push rdi", "push rsi", "push rbx", "mov rbx, rdi", "mov esi, 64", "call {handoff}",
+        "pop rbx", "pop rsi", "pop rdi", "jmp 5b", "6:",
         "cmp qword ptr [rdi + {growth}], 0", "jne 3f",
         "push rbx", "mov rbx, rdi", "mov [rbx + {growth}], rsi",
         "mov dword ptr [rbx + {status}], {refused}",
@@ -267,6 +274,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_grow(
         "2:", "mov eax, {refused}", "ret", "3:", "ud2",
         cpu = const std::mem::offset_of!(Native, cpu),
         cpu_phase = const std::mem::offset_of!(Native, cpu_phase),
+        arena_count = const std::mem::offset_of!(Native, arena) + std::mem::offset_of!(super::cpu_arena::Arena, count),
+        arena_events = const super::cpu_arena::EVENTS,
+        cached = sym super::cpu_arena::growth,
         growth = const std::mem::offset_of!(Native, growth),
         status = const std::mem::offset_of!(Native, growth_status),
         refused = const NOT_CERTIFIED,

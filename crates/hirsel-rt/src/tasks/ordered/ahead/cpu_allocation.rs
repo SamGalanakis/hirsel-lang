@@ -96,12 +96,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_alloc(
         "cmp byte ptr [rbx + {cpu}], 0", "je 2f",
         "mov eax, [rbx + {cpu_phase}]", "sub eax, 2", "cmp eax, 1", "ja 2f",
         "cmp dword ptr [rbx + {request_phase}], 0", "jne 2f",
+        "4:", "call {cached}", "test rax, rax", "je 3f", "pop rbx", "ret", "3:",
+        "cmp qword ptr [rbx + {arena_count}], {arena_events}", "jb 5f",
+        "mov [rbx + {index}], esi", "mov [rbx + {extent}], rdx", "mov [rbx + {align}], rcx",
+        "mov esi, 64", "call {handoff}", "mov rdi, rbx",
+        "mov esi, [rbx + {index}]", "mov rdx, [rbx + {extent}]", "mov rcx, [rbx + {align}]",
+        "jmp 4b", "5:",
         "mov [rbx + {index}], esi", "mov [rbx + {extent}], rdx", "mov [rbx + {align}], rcx",
         "mov qword ptr [rbx + {result}], 0", "mov dword ptr [rbx + {request_phase}], {requested}",
         "mov esi, {reason}", "call {handoff}",
         "cmp dword ptr [rbx + {request_phase}], 0", "jne 2f",
         "mov rax, [rbx + {result}]", "test rax, rax", "je 2f",
         "mov qword ptr [rbx + {result}], 0", "pop rbx", "ret", "2:", "ud2",
+        arena_count = const std::mem::offset_of!(Native, arena) + std::mem::offset_of!(super::cpu_arena::Arena, count),
+        arena_events = const super::cpu_arena::EVENTS,
+        cached = sym super::cpu_arena::allocate,
         cpu = const std::mem::offset_of!(Native, cpu),
         cpu_phase = const std::mem::offset_of!(Native, cpu_phase),
         request_phase = const std::mem::offset_of!(Native, allocation) + std::mem::offset_of!(Request, phase),
@@ -171,6 +180,11 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bo
         .expect("a CPU allocation belongs to its claimed ordinal");
         ledger.blocks.lock().unwrap().adopt(owner, result);
     }
+    let extent = request.extent;
+    let align = request.align;
+    // SAFETY: the fresh block is still exclusively owned by the saved job.
+    unsafe { super::cpu_arena::adopt(ctx, native, result, extent, align) };
+    let request = unsafe { &mut (*native).allocation };
     request.result = result;
     request.phase = IDLE;
     Ok(true)

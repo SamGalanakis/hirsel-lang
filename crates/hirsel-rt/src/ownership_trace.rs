@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-pub const ABI_VERSION: u32 = 99;
+pub const ABI_VERSION: u32 = 101;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 

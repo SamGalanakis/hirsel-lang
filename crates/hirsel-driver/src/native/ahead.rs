@@ -18,6 +18,7 @@ pub(super) fn helper_identity() -> ContentHash {
             hirsel_rt::AHEAD_CPU_HELPERS,
             hirsel_rt::AHEAD_CPU_ALLOCATION_HELPERS,
             hirsel_rt::AHEAD_CPU_HANDOFF_HELPERS,
+            hirsel_rt::AHEAD_CPU_ARENA_HELPERS,
             hirsel_rt::AHEAD_SWITCH,
             if hirsel_llvm::NATIVE_TSAN || hirsel_cranelift::NATIVE_TSAN {
                 hirsel_rt::TSAN_CALLBACK_BRIDGES

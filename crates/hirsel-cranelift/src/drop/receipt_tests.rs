@@ -254,6 +254,7 @@ fn probe(target: &TargetSpec, malformed: bool, nested: bool) -> Vec<u8> {
                 hidden: vec![Hidden::Context],
                 first: vec![1],
                 value: None,
+                ahead: None,
             },
         );
         f.define1(ValueId(0), f.entry_params[1]).unwrap();

@@ -2306,6 +2306,34 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         } else {
             self.em.entry_signature(abi, self.definition())?
         };
+        let helper = match site.callee {
+            Callee::Direct(symbol) | Callee::Bound { code: symbol, .. } => {
+                Some(&unit.tables.symbols[symbol.index()])
+            }
+            Callee::Indirect(_) => self
+                .em
+                .inputs
+                .unit()
+                .ahead
+                .and_then(|plan| plan.cpu_callee(unit, call)),
+            _ => None,
+        };
+        let signature = if self.em.inputs.unit().alternate
+            && helper.is_some_and(|symbol| {
+                let definition = &symbol.definition;
+                (definition.is_core("list.push")
+                    || definition.is_core("list.reserve")
+                    || definition.is_core("$native.list_push_spare"))
+                    && symbol.instance.is_some_and(|id| {
+                        name.as_ref().is_some_and(|name| {
+                            *name == hirsel_lir::ahead::alternate_name(definition, id)
+                        })
+                    })
+            }) {
+            signature.with_ahead()
+        } else {
+            signature
+        };
         let mut args = Vec::new();
         let mut result_place = None;
         let invocation_site = self.anchor_code(site.anchor)?;
@@ -2428,6 +2456,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
         }
         let receipt_result = self.receipt_call_arguments(site, &mut args)?;
+        if signature.ahead.is_some() {
+            args.push(self.ahead_state.expect("a private job state"));
+        }
         if args.len() != signature.ir.params.len() {
             return self.invalid("a call whose arguments differ from its signature");
         }

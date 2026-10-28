@@ -17,6 +17,7 @@ pub(super) struct Saved {
     retained: Vec<*mut Header>,
     allocations: Vec<Block>,
     inputs: Vec<Observed>,
+    arena: [super::cpu_arena::Entry; super::cpu_arena::SLOTS],
 }
 
 /// Record the initialized input graph before its credits can move into mapper
@@ -101,6 +102,7 @@ impl Saved {
                 retained,
                 allocations,
                 inputs,
+                arena: super::cpu_arena::snapshot(native),
             }
         }
     }
@@ -110,6 +112,7 @@ impl Saved {
     pub(super) unsafe fn check(&self, ctx: *mut TaskCtx, native: &Native, owner: Owner) {
         // SAFETY: the same exclusive saved frame still owns its records.
         unsafe {
+            assert_eq!(self.arena, super::cpu_arena::snapshot(native));
             assert_eq!(self.owner, owner, "a saved CPU ordinal and task generation");
             assert_eq!(
                 self.sp, native.physical.saved_sp,

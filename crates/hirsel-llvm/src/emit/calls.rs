@@ -31,7 +31,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     pub(super) fn return_status(&mut self, status: u128, value: Option<Value<'m>>) -> Emitted {
         self.ownership_leave()?;
         self.ahead_point(false)?;
-        self.ahead_flush();
+        if self.signature.ahead.is_none() {
+            self.ahead_flush();
+        }
         let status_byte = self.module.const_int(self.module.int_type(8), status);
         let mut returned = self.module.const_zero(self.signature.returns);
         if let (true, Some((kind, _))) = (self.signature.roots.is_empty(), self.signature.value) {
@@ -478,6 +480,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         } else {
             Signature::of(self.module, self.inputs.layouts, abi, self.definition())?
         };
+        let signature = if self.inputs.alternate && root_name.is_some() {
+            signature.with_ahead(self.module)
+        } else {
+            signature
+        };
         let name = root_name.or(name);
         // A runtime primitive's body is the runtime's, which states nothing.
         let aliasing = match site.callee {
@@ -850,8 +857,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         } else {
             (function, name)
         };
+        if signature.ahead.is_some() {
+            args.extend([
+                self.ahead_state.expect("a private job state"),
+                self.ahead_counter.expect("a private job counter"),
+            ]);
+        }
         self.host_read_boundary(call, false)?;
-        self.ahead_flush();
+        if signature.ahead.is_none() {
+            self.ahead_flush();
+        }
         self.ownership_call(call, false)?;
         self.bind_runtime(call, name.as_deref(), codes)?;
         self.resume_tail_bind(call)?;
@@ -859,7 +874,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Some(function) => self.builder.call(function, &args),
             None => self.builder.call_typed(signature.ty, callee, &args),
         };
-        self.ahead_reload();
+        if signature.ahead.is_none() {
+            self.ahead_reload();
+        }
         signature.attribute_call(self.module, returned);
         // A rejected gate leaves mut roots and temporary scatters unpublished.
         let status = signature.status(&self.builder, returned);

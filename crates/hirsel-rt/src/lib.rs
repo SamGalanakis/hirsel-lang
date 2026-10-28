@@ -154,7 +154,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 96;
+pub const ABI_VERSION: u32 = 100;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library
@@ -330,6 +330,8 @@ pub const AHEAD_CPU_ALLOCATION_HELPERS: &[u8] =
     include_bytes!("tasks/ordered/ahead/cpu_allocation.rs");
 #[doc(hidden)]
 pub const AHEAD_CPU_HANDOFF_HELPERS: &[u8] = include_bytes!("tasks/ordered/ahead/cpu_handoff.rs");
+/// Fixed private allocation leaves whose stack protocol belongs to the CPU proof.
+pub const AHEAD_CPU_ARENA_HELPERS: &[u8] = include_bytes!("tasks/ordered/ahead/cpu_arena.rs");
 #[doc(hidden)]
 pub const AHEAD_SWITCH: &[u8] = include_bytes!("fiber.rs");
 /// The continuation ownership protocol compiler plans are bound to.

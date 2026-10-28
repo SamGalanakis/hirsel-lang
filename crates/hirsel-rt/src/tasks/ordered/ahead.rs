@@ -13,6 +13,7 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) mod cpu_allocation;
+pub(crate) mod cpu_arena;
 pub mod cpu_handoff;
 pub(crate) mod cpu_roots;
 pub(crate) mod cpu_withdrawal;

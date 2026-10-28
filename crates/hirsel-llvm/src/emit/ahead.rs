@@ -13,6 +13,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return Ok(());
         }
         self.builder.position(self.prologue_block);
+        if let Some((state, counter)) = self.signature.ahead {
+            self.ahead_state = Some(self.module.parameter(self.function, state));
+            self.ahead_counter = Some(self.module.parameter(self.function, counter));
+            return Ok(());
+        }
         let getter = self.ahead_helper(false)?;
         let state = self.builder.call(getter, &[self.context]);
         let counter = self.prologue.alloca(self.module.int_type(64), 8);
@@ -180,6 +185,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// Retain the selected inert buffer without a count mutation or runtime
     /// allocator on the private stack. Its old fuel position is journaled on idle.
     pub(super) fn host_instruction(&mut self, inst: &Inst) -> Emitted<bool> {
+        if self.cpu_release()? {
+            return Ok(true);
+        }
         let Some(state) = self.ahead_state else {
             return Ok(false);
         };
@@ -641,5 +649,90 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.offset(record, self.const_u64(16)),
             8,
         )))
+    }
+}
+
+impl<'m, 'a> FnEmitter<'m, 'a> {
+    fn cpu_release(&mut self) -> Emitted<bool> {
+        if self.ownership.is_some() || self.inputs.fuel {
+            return Ok(false);
+        }
+        let Some(state) = self.ahead_state else {
+            return Ok(false);
+        };
+        let index = self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1;
+        let Some((value, payload)) = self
+            .inputs
+            .ahead
+            .and_then(|plan| plan.cpu_release(self.unit, index, self.inputs.layouts))
+        else {
+            return Ok(false);
+        };
+        let offset = self
+            .inputs
+            .ahead
+            .and_then(|p| p.cpu_ordinal(self.unit.header.instance, self.inputs.layouts))
+            .ok_or_else(|| CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "CPU release without a job ordinal".into(),
+            })?;
+        self.flush_lengths(true)?;
+        let environment = self.builder.load(
+            self.module.ptr_type(),
+            self.builder.offset(
+                state,
+                self.const_u64(hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET),
+            ),
+            8,
+        );
+        let ordinal = self.load_u64(self.builder.offset(environment, self.const_u64(offset)));
+        let record = self
+            .prologue
+            .alloca(self.module.array_type(self.module.int_type(8), 88), 8);
+        let i32t = self.module.int_type(32);
+        let pointer = self.get(value)?;
+        let descriptor = self.descriptor(payload)?;
+        for (offset, value, align) in [
+            (0, self.module.const_int(i32t, 1), 4),
+            (4, self.module.const_int(i32t, 6), 4),
+            (8, ordinal, 8),
+            (16, pointer, 8),
+            (24, self.module.const_zero(self.module.ptr_type()), 8),
+            (32, descriptor, 4),
+            (36, self.module.const_zero(i32t), 4),
+            (40, self.const_u64(0), 8),
+            (48, self.const_u64(0), 8),
+            (56, self.const_u64(0), 8),
+            (64, self.const_u64(0), 8),
+            (72, self.const_u64(0), 8),
+            (80, self.const_u64(0), 8),
+        ] {
+            self.builder.store(
+                value,
+                self.builder.offset(record, self.const_u64(offset)),
+                align,
+            );
+        }
+        self.ahead_flush();
+        let helper = self.runtime(RuntimeEntry::CpuAheadGrow)?;
+        let status = self.builder.call(helper, &[state, record]);
+        self.ahead_reload();
+        let accepted = self.builder.icmp(
+            IntPredicate::Eq,
+            status,
+            self.module.const_zero(self.module.int_type(8)),
+        );
+        let next = self.module.append_block(self.function);
+        let invalid = self.module.append_block(self.function);
+        self.builder.cond_br(accepted, next, invalid);
+        self.builder.position(invalid);
+        let trap = self
+            .module
+            .intrinsic("llvm.trap", &[])
+            .or_else(|error| self.invalid(error))?;
+        self.builder.call(trap, &[]);
+        self.builder.unreachable();
+        self.builder.position(next);
+        Ok(true)
     }
 }

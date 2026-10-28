@@ -116,11 +116,23 @@ fn ordered_remaining_mode(name: &str, template: &str, status: i32, allocating: b
         authority["io"]["cpu"]["max_workers"] = serde_json::json!(8);
     }
     fs::write(&grants, authority.to_string()).unwrap();
-    for backend in ["llvm", "cranelift"] {
+    let fuel_modes: &[bool] = if allocating && name != "fuel" {
+        &[true, false]
+    } else {
+        &[true]
+    };
+    for (backend, fueled) in ["llvm", "cranelift"]
+        .into_iter()
+        .flat_map(|backend| fuel_modes.iter().map(move |&fueled| (backend, fueled)))
+    {
         let executable = root.join(backend);
+        let mut build = cpu_compiler();
+        build.args(["build", "--validate-stages", "--backend", backend]);
+        if fueled {
+            build.arg("--fuel");
+        }
         checked(
-            cpu_compiler()
-                .args(["build", "--fuel", "--validate-stages", "--backend", backend])
+            build
                 .arg(&manifest)
                 .arg("-o")
                 .arg(&executable)
@@ -278,6 +290,6 @@ fn ordered_remaining_mode(name: &str, template: &str, status: i32, allocating: b
                 .unwrap()
                 .is_empty()
         );
-        eprintln!("{backend} {name}: live == replay, cleanup completed");
+        eprintln!("{backend} {name} fuel={fueled}: live == replay, cleanup completed");
     }
 }

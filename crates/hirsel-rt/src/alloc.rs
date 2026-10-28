@@ -1737,6 +1737,17 @@ impl Heap {
             crate::root_trace::retired(block);
         }
     }
+    /// Return cached CPU backing whose logical free was already journaled.
+    /// # Safety
+    /// The exclusive job arena owns this dead, pointer-free block. No compiled
+    /// code or suspension runs while the allocator's meter switch is changed.
+    pub(crate) unsafe fn free_cached(&mut self, block: *mut Header) {
+        let metered = std::mem::replace(&mut self.metered, false);
+        // SAFETY: the arena retains the physical block until this one return.
+        unsafe { self.free(block) };
+        self.metered = metered;
+    }
+
     /// A bare system block's free is its one matching `free`; nothing lists it in production.
     #[cfg(feature = "system-allocator")]
     #[inline(always)]

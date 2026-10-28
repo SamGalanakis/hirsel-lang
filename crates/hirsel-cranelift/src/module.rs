@@ -80,9 +80,15 @@ pub(crate) struct Sig<'a> {
     pub(crate) first: Vec<usize>,
     /// The plain scalar result returned in the value word.
     pub(crate) value: Option<ScalarKind>,
+    pub(crate) ahead: Option<usize>,
 }
 
 impl<'a> Sig<'a> {
+    pub(crate) fn with_ahead(mut self) -> Self {
+        self.ahead = Some(self.ir.params.len());
+        self.ir.params.push(ir::AbiParam::new(PTR));
+        self
+    }
     pub(crate) fn hidden_index(&self, which: Hidden) -> Option<usize> {
         self.hidden.iter().position(|h| *h == which)
     }
@@ -144,6 +150,7 @@ pub(crate) fn signature<'a>(
         hidden,
         first,
         value,
+        ahead: None,
     })
 }
 
@@ -400,6 +407,15 @@ pub(crate) fn emit(
             return Err(CodegenError::DuplicateSymbol { name });
         }
         let sig = emitter.entry_signature(abi, &header.definition)?;
+        let sig = if inputs.alternate
+            && (header.definition.is_core("list.push")
+                || header.definition.is_core("list.reserve")
+                || header.definition.is_core("$native.list_push_spare"))
+        {
+            sig.with_ahead()
+        } else {
+            sig
+        };
         let library = !inputs.alternate
             && (header.origin == UnitOrigin::Library
                 || inputs.inline_instances.contains(&header.instance));

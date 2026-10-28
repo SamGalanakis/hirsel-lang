@@ -343,6 +343,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
                 hidden: vec![Hidden::Context],
                 first: vec![],
                 value: None,
+                ahead: None,
             },
         );
         let base = f.entry_params[1];

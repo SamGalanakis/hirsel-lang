@@ -135,6 +135,15 @@ impl Meter {
             self.allocations.fetch_add(1, Ordering::Relaxed);
         }
     }
+    /// Balanced private CPU reuse cycles keep their admitted storage charge.
+    /// Fold their telemetry at the same boundary as the arena's final frees;
+    /// no policy, charge witness or budget state changes here.
+    pub(crate) fn cpu_reuses(&self, count: u64) {
+        if self.metered() && count != 0 {
+            self.allocations.fetch_add(count, Ordering::Relaxed);
+            self.ops.fetch_add(count.wrapping_mul(2), Ordering::Relaxed);
+        }
+    }
     /// Credit `bytes` whose logical lifetime ended.
     #[inline]
     pub(crate) fn credit(&self, bytes: u64) {

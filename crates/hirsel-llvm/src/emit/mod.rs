@@ -668,7 +668,12 @@ fn lower<T>(
             } else {
                 Signature::of(&module, inputs.layouts, abi, &unit.header.definition)?
             };
-            let body_name = if signature.roots.is_empty() {
+            let signature = if private_roots {
+                signature.with_ahead(&module)
+            } else {
+                signature
+            };
+            let body_name = if signature.roots.is_empty() && signature.ahead.is_none() {
                 name.clone()
             } else {
                 format!("{name}{ROOTS_SUFFIX}")
@@ -695,7 +700,7 @@ fn lower<T>(
                 module.string_attribute(function, "disable-tail-calls", "true");
                 module.string_attribute(function, "frame-pointer", "all");
             }
-            let entry = if signature.roots.is_empty() {
+            let entry = if signature.roots.is_empty() && signature.ahead.is_none() {
                 function
             } else {
                 let entry = external.declare(
@@ -714,6 +719,18 @@ fn lower<T>(
                     &external,
                     inputs.layouts,
                 );
+                if signature.ahead.is_some() {
+                    let name = RuntimeEntry::AheadState.declaration().symbol.to_owned();
+                    manifested
+                        .imports
+                        .entry(name.clone())
+                        .or_insert_with(|| ObjectSymbol {
+                            name,
+                            kind: ObjectSymbolKind::Runtime,
+                            definition: None,
+                            abi: None,
+                        });
+                }
                 if inputs.alternate {
                     module.add_attribute(entry, AttributeSlot::Function, Attribute::NoRedZone);
                     module.string_attribute(entry, "disable-tail-calls", "true");
@@ -1050,13 +1067,7 @@ fn define_root_adapter<'m>(
 ) {
     let builder = Builder::new(module);
     builder.position(module.append_block(entry));
-    let original_arity = signature
-        .companions
-        .iter()
-        .flatten()
-        .copied()
-        .min()
-        .unwrap_or(signature.types.len() as u32);
+    let original_arity = external.types.len() as u32;
     let mut args: Vec<_> = (0..original_arity)
         .map(|i| module.parameter(entry, i))
         .collect();
@@ -1094,7 +1105,24 @@ fn define_root_adapter<'m>(
             ]);
         }
     }
+    let counter = if signature.ahead.is_some() {
+        let ty = module.function_type(module.ptr_type(), &[module.ptr_type()]);
+        let getter = module
+            .function(RuntimeEntry::AheadState.declaration().symbol, ty)
+            .expect("fixed ahead getter signature");
+        crate::runtime::substrate(module, getter, RuntimeEntry::AheadState);
+        let state = builder.call(getter, &[module.parameter(entry, 0)]);
+        let counter = builder.alloca(module.int_type(64), 8);
+        builder.store(builder.load(module.int_type(64), state, 8), counter, 8);
+        args.extend([state, counter]);
+        Some((state, counter))
+    } else {
+        None
+    };
     let returned = builder.call(target, &args);
+    if let Some((state, counter)) = counter {
+        builder.store(builder.load(module.int_type(64), counter, 8), state, 8);
+    }
     signature.attribute_call(module, returned);
     for (field, &i) in signature.roots.iter().enumerate() {
         builder.store(

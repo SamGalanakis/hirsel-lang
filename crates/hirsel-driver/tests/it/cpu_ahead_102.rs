@@ -439,7 +439,7 @@ fn cpu_allocating_mapper_graph_binds_heap_handoffs_cleanup_and_both_final_frames
             }
             assert!(native::check_ahead_objects(&program, &forged).is_err());
         }
-        assert_eq!(root.handoff_bytes(64), 80);
+        assert_eq!(root.handoff_bytes(64), 96);
     });
 }
 
@@ -675,7 +675,7 @@ fn cpu_saved_summary_checks_live_result_ordinal_and_retained_owner_on_both_emitt
             assert_eq!(summary.retained, owned);
             if mode == 2 {
                 assert!(cpu.mapper.as_ref().unwrap().allocations.is_empty());
-                assert_eq!(root.handoff_bytes(64), 80);
+                assert_eq!(root.handoff_bytes(64), 96);
             }
             assert_eq!(summary.call, cpu.binding.worker.mapper);
             assert_eq!(summary.ordinal, cpu.binding.worker.ordinal);
@@ -799,7 +799,7 @@ fn cpu_saved_summary_checks_live_result_ordinal_and_retained_owner_on_both_emitt
                     evidence.frames.iter().copied().collect();
                 // This fixture is one worker -> mapper -> optional helper chain.
                 // Every real caller frame and the naked handoff must fit together.
-                let expected = 16 + 80 + root.graph.bodies.keys().map(|id| frames[id]).sum::<u64>();
+                let expected = 16 + 96 + root.graph.bodies.keys().map(|id| frames[id]).sum::<u64>();
                 assert!(
                     evidence.bounds.contains(&(id, expected)),
                     "{backend:?} helper frame composition: expected {expected}, bounds {:?}",
@@ -1143,7 +1143,7 @@ fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
             let frames: std::collections::BTreeMap<_, _> =
                 evidence.frames.iter().copied().collect();
             assert_eq!(root.graph.bodies.len(), 3, "worker -> mapper -> reserve");
-            let expected = 16 + 80 + root.graph.bodies.keys().map(|id| frames[id]).sum::<u64>();
+            let expected = 16 + 96 + root.graph.bodies.keys().map(|id| frames[id]).sum::<u64>();
             assert!(
                 evidence.bounds.contains(&(id, expected)),
                 "{backend:?}: {:?}",
