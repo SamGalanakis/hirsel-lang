@@ -97,8 +97,10 @@ pub(crate) struct SourceProjection {
 pub(crate) fn source_projection(
     entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
 ) -> SourceProjection {
-    let compact =
-        std::sync::Arc::strong_count(entry) == 1 && std::sync::Arc::weak_count(entry) == 0;
+    // Entry weak references belong to the engine's disposable snapshot_sources.
+    // They retain no payload and cannot escape the engine. Public output/read
+    // owners still require both strong and weak uniqueness below.
+    let compact = std::sync::Arc::strong_count(entry) == 1;
     SourceProjection {
         compact,
         compact_output: compact

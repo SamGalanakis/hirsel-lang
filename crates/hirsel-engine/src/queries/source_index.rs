@@ -709,6 +709,9 @@ mod tests {
                 let held = shared.then(|| output.clone());
                 header.memo.value = Ok(output);
                 prior.signatures.insert(id, Arc::new(header));
+                prior
+                    .snapshot_sources
+                    .insert(id, Arc::downgrade(prior.signatures.get(&id).unwrap()));
                 let required = prior.source_index_bytes().unwrap();
                 let budget = ProcessBudget::new(required);
                 let carry = prior
