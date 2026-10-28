@@ -1394,7 +1394,9 @@ pub(super) fn install(
             errors,
         ) {
             Ok(bootstrap) => bootstrap,
-            Err(error) => return Err(loading.failed(instance_bootstrap_error(&program, error))),
+            Err(error) => {
+                return Err(loading.failed(instance_bootstrap_error(&program, error, errors)));
+            }
         };
         // Nested pools return every released subcharge to this original
         // partition. Generated syntax, accepted text, source owners and the
@@ -2283,19 +2285,32 @@ fn lower_reads(definitions: &[DefPath]) -> Result<usize, ToolError> {
 fn instance_bootstrap_error(
     program: &LoadedProgram,
     error: FrontInstanceBootstrapError,
+    errors: RuntimeErrors,
 ) -> ToolError {
     match error {
         FrontInstanceBootstrapError::Bootstrap(error) => bootstrap_error(program, error),
         FrontInstanceBootstrapError::Front {
+            reference,
             error,
             sources,
             owner,
-            ..
         } => ToolError::Query {
             error: error.unwrap_or_else(|| {
                 QueryError::Operational(hirsel_types::OperationalFailure {
                     operation: "instance bootstrap".into(),
-                    message: "a front task failed without a diagnostic".into(),
+                    message: if reference == errors.resource {
+                        format!("a front task exceeded its admitted resources; Front retained {} of {} bytes", owner.retained_bytes(), owner.admitted_bytes())
+                    } else if reference == errors.cycle {
+                        "a front task has a query dependency cycle".into()
+                    } else if reference == errors.cancelled {
+                        "a front task was cancelled".into()
+                    } else if reference == errors.panicked {
+                        "a front task panicked".into()
+                    } else if reference == errors.protocol {
+                        "a front task violated its query protocol".into()
+                    } else {
+                        "a front task failed without a diagnostic".into()
+                    },
                 })
             }),
             phase: None,
