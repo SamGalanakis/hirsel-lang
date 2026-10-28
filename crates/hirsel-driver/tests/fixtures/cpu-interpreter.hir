@@ -4,6 +4,9 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     let rows = core@1/cpu.map_scoped(tasks, WIDTH,
       fn() -> List[u64] uses {} { JOBS },
       fn(take job: u64) -> u64 uses {} { job + 7u64 })
+    failure.check(rows != Error(WidthUnavailable()), Arithmetic())
+    failure.check(rows != Error(MapperNotCertified()), Arithmetic())
+    failure.check(rows != Error(NotGranted()), Arithmetic())
     failure.check(rows == Ok(EXPECTED), Bounds())
   }
   let _ = out.print(io.stdout(rt)?, "cpu-scalar-ok\n")

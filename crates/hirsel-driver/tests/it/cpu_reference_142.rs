@@ -83,7 +83,11 @@ fn agree_in(
             native::run_heap_in(&program, &entry, &sites, &world)
         }
         .unwrap();
-        assert_eq!(heap.observation, reference);
+        assert_eq!(
+            heap.observation, reference,
+            "Heap Free={free} CPU={:?}",
+            fixture.cpu
+        );
         if native {
             let mut diagnostic_fixture = fixture.clone();
             diagnostic_fixture.trace_roots = true;
@@ -377,6 +381,9 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
       let batch = core@1/cpu.map_scoped(tasks, WIDTH,
         fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1u64] },
         fn(take job: u64) -> u64 uses {} { job + 7u64 })
+      failure.check(batch != Error(MapperNotCertified()), Bounds())
+      failure.check(batch != Error(WidthUnavailable()), Bounds())
+      failure.check(batch != Error(NotGranted()), Bounds())
       batch == Error(Canceled(Requested()))
     })
     task.cancel(scope, child)
