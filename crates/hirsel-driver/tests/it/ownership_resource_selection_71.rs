@@ -149,9 +149,9 @@ pub fn main(rt:Io)->Result[(),GrantError] {
    let mut receiver=take rx
    let first=channel.receive(tasks,mut receiver)
    let second=channel.receive(tasks,mut receiver)
-   let Some(a)=take first else { failure.check(false,Bounds())
+   let Ok(a)=take first else { failure.check(false,Bounds())
 return }
-   let Some(b)=take second else { failure.check(false,Bounds())
+   let Ok(b)=take second else { failure.check(false,Bounds())
 return }
    failure.check(a==7u64 && b==9u64,Bounds())
   })
