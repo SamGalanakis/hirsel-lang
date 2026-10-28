@@ -213,3 +213,25 @@ return }
         );
     }
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn empty_resource_channel_endpoints_do_not_own_their_potential_payloads() {
+    for policy in ["tasks.cooperative@1", "tasks.free@1"] {
+        super::ownership_owned_call_49::source_calls_granted(
+            r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ let token=Token()
+ let (tx,rx):(Sender[Token],Receiver[Token])=channel.open(tasks)
+ Ok(())
+}
+"#,
+            1,
+            0,
+            &serde_json::json!({"io":{"tasks":policy,"dirs":[]}}).to_string(),
+        );
+    }
+}

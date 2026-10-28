@@ -17,6 +17,12 @@ impl Selection {
             let Some(record) = layouts.layout(layout) else {
                 return true;
             };
+            // An endpoint stores no inline Resource. Queue contents belong to
+            // the runtime object, with separate committed transport checks.
+            // This cannot authorize a Resource-bearing runtime argument.
+            if super::runtime_calls::channel_handle(layouts, layout) {
+                continue;
+            }
             if record.finalizer.is_some()
                 || matches!(
                     record.kind,
@@ -32,9 +38,35 @@ impl Selection {
             {
                 return true;
             }
-            pending.extend(record.references());
+            let mut stored = record.clone();
+            remove_channel_obtains(layouts, &mut stored.scan);
+            stored.for_each_reference_mut(&mut |id| pending.push(*id));
         }
         false
+    }
+}
+
+// Aggregate scans flatten their fields' handle rows. Their `obtains` edge is
+// runtime queue custody, while fields and drop children still name storage.
+// Retain every other edge, including a Resource also present as an inline field.
+fn remove_channel_obtains(layouts: &LayoutTable, steps: &mut [crate::layout_types::ScanStep]) {
+    use crate::layout_types::{HandleKind, ScanStep};
+    for step in steps {
+        match step {
+            ScanStep::Handle { kind: HandleKind::Receiver, ty: Some(schema), obtains, .. }
+                if super::runtime_calls::channel_handle(layouts, *schema)
+                    && layouts.layout(*schema).is_some_and(|record|
+                        matches!(record.scan.as_slice(), [ScanStep::Handle { obtains: expected, .. }] if expected == obtains)) =>
+            {
+                *obtains = None;
+            }
+            ScanStep::ActiveVariant { variants, .. } => {
+                for (_, steps) in variants {
+                    remove_channel_obtains(layouts, steps);
+                }
+            }
+            _ => (),
+        }
     }
 }
 

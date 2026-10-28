@@ -33,7 +33,7 @@ pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> b
 
 // Only resource selection uses this proof. Owned selection retains its
 // original channel custody requirements.
-pub(super) fn plain_channel_handle(layouts: &LayoutTable, layout: LayoutId) -> bool {
+pub(super) fn channel_handle(layouts: &LayoutTable, layout: LayoutId) -> bool {
     use crate::layout_types::{DropStep, HandleKind, ScalarKind, ScanStep};
     let Some(record) = layouts.layout(layout) else {
         return false;
@@ -68,9 +68,83 @@ pub(super) fn plain_channel_handle(layouts: &LayoutTable, layout: LayoutId) -> b
                 ty: Some(schema),
                 obtains: Some(payload),
             },
-        ] => *schema == layout && plain(layouts, *payload, 0),
+        ] => *schema == layout && layouts.layout(*payload).is_some(),
         _ => false,
     }
+}
+
+pub(super) fn plain_channel_handle(layouts: &LayoutTable, layout: LayoutId) -> bool {
+    channel_handle(layouts, layout)
+        && layouts.layout(layout).is_some_and(|record| {
+            record.scan.iter().all(|step| match step {
+                crate::layout_types::ScanStep::Handle {
+                    obtains: Some(payload),
+                    ..
+                } => plain(layouts, *payload, 0),
+                _ => true,
+            })
+        })
+}
+
+fn empty_option<S>(unit: &LirUnit<S>, layouts: &LayoutTable, mut value: ValueId) -> bool {
+    let layout = unit.types[unit.values[value.index()].ty.index()].layout;
+    let Some(record) = layouts.layout(layout) else {
+        return false;
+    };
+    if record.kind != LayoutKind::Variant
+        || record.finalizer.is_some()
+        || !record.tag.as_ref().is_some_and(|tag| {
+            tag.variants
+                .iter()
+                .any(|variant| variant.ordinal == 0 && variant.fields.is_empty())
+        })
+    {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    while seen.insert(value) {
+        if unit.types[unit.values[value.index()].ty.index()].layout != layout {
+            return false;
+        }
+        let Some(inst) = unit
+            .instructions
+            .iter()
+            .find(|inst| inst.defs().contains(&value))
+        else {
+            return false;
+        };
+        match *inst {
+            Inst::Construct { construct, .. } => {
+                let site = &unit.tables.constructs[construct.index()];
+                return matches!(site.constructor, ConstructorKind::Variant { definition, variant: 0 }
+                    if unit.tables.symbols[definition.index()].definition.is_core("Option"))
+                    && site.layout == layout
+                    && site
+                        .fields
+                        .get(&unit.pools.fields)
+                        .is_some_and(|fields| fields.is_empty());
+            }
+            Inst::Read { reaching, .. } => value = reaching,
+            Inst::Store { value: stored, .. } => value = stored,
+            Inst::Recast { value: source, .. } => value = source,
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn channel_none_argument<S>(
+    unit: &LirUnit<S>,
+    layouts: &LayoutTable,
+    call: &CallSite,
+    parameter: u32,
+    value: ValueId,
+) -> bool {
+    parameter == 1
+        && call.pretransfer_failure.is_none()
+        && matches!(call.callee, Callee::Operation(operation)
+            if unit.tables.operations[operation.index()].definition.is_core("$intrinsic.ChannelOpen"))
+        && empty_option(unit, layouts, value)
 }
 
 // Only a complete program request can additionally prove the callback's code
@@ -199,6 +273,11 @@ pub(super) fn runtime_call<S>(
                 }
             }
             ArgumentValue::Value(value) => {
+                if argument.passing == hirsel_core_contract::Passing::Borrow
+                    && channel_none_argument(unit, layouts, call, argument.parameter, value)
+                {
+                    continue;
+                }
                 let layout = unit.types[unit.values[value.index()].ty.index()].layout;
                 let inert = !selection.tracks_layout(layouts, layout)
                     || plain(layouts, layout, 0)
@@ -266,6 +345,200 @@ mod tests {
                 unaligned: false,
             },
         }
+    }
+
+    #[test]
+    fn channel_creation_empty_image_requires_the_exact_none_origin_through_memory_ssa() {
+        use crate::{abi_types::FnAbiId, objects::UnitKey, testing::UnitBuilder};
+        let hash = ContentHash::of_bytes(b"channel-none-origin");
+        let mut b = UnitBuilder::new(LirUnit::<Ready>::new(UnitHeader {
+            source_count: 0,
+            track_caller: false,
+            stage: crate::stage::StageKind::Ready,
+            lir_version: crate::LIR_VERSION,
+            origin: UnitOrigin::Library,
+            key: UnitKey(hash),
+            definition: hirsel_syntax::DefPath::core("channel_none_origin"),
+            implementation_revision: hash,
+            instance: hash,
+            target: hash,
+            abi: FnAbiId(0),
+        }));
+        let mut table = LayoutTable::new(&TargetSpec::x86_64_unknown_linux_gnu());
+        table.layouts = vec![record(LayoutKind::Resource), record(LayoutKind::Variant)];
+        table.layouts[1].tag = Some(TagEncoding {
+            offset: 0,
+            form: TagForm::Ordinal,
+            variants: vec![
+                VariantLayout {
+                    ordinal: 0,
+                    fields: vec![],
+                },
+                VariantLayout {
+                    ordinal: 1,
+                    fields: vec![FieldLayout {
+                        ordinal: 0,
+                        offset: 0,
+                        layout: LayoutId(0),
+                        unaligned: false,
+                    }],
+                },
+            ],
+        });
+        let block = b.block(BlockKind::Body, &[]);
+        let symbol = b.symbol(SymbolKind::Type, hirsel_syntax::DefPath::core("Option"));
+        let none = b.owned(ValueRepr::Aggregate, LayoutId(1));
+        let construct = b.construct(
+            ConstructorKind::Variant {
+                definition: symbol,
+                variant: 0,
+            },
+            LayoutId(1),
+            &[],
+            Placement::Fixed(StorageOwner::Heap(TaskDomainId(0))),
+        );
+        b.push(
+            block,
+            Inst::Construct {
+                result: none,
+                construct,
+                failure: FailureId(0),
+            },
+        );
+        let slot = b.slot(ValueRepr::Aggregate, LayoutId(1), SlotKind::Temporary);
+        let address = b.address(
+            AddressBase::Slot(slot),
+            &[],
+            ValueRepr::Aggregate,
+            LayoutId(1),
+        );
+        let version = b.plain(ValueRepr::Aggregate, LayoutId(1));
+        b.push(
+            block,
+            Inst::Store {
+                address,
+                value: none,
+                version,
+            },
+        );
+        let borrowed = b.plain(ValueRepr::Aggregate, LayoutId(1));
+        b.push(
+            block,
+            Inst::Read {
+                result: borrowed,
+                address,
+                reaching: version,
+                mode: ReadMode::Borrow,
+            },
+        );
+        b.ret(block, None);
+        let unit = b.finish();
+        assert!(empty_option(&unit, &table, none));
+        assert!(empty_option(&unit, &table, borrowed));
+        let mut some = unit.clone();
+        some.tables.constructs[construct.index()].constructor = ConstructorKind::Variant {
+            definition: symbol,
+            variant: 1,
+        };
+        assert!(!empty_option(&some, &table, borrowed));
+        let mut other = unit.clone();
+        other.tables.symbols[symbol.index()].definition = hirsel_syntax::DefPath::core("Other");
+        assert!(!empty_option(&other, &table, borrowed));
+        let mut cycle = unit;
+        if let Inst::Read { reaching, .. } = &mut cycle.instructions[2] {
+            *reaching = borrowed;
+        }
+        assert!(!empty_option(&cycle, &table, borrowed));
+    }
+
+    #[test]
+    fn resource_selection_separates_typed_endpoints_from_their_queue_payload() {
+        let mut table = LayoutTable::new(&TargetSpec::x86_64_unknown_linux_gnu());
+        table.layouts = vec![
+            record(LayoutKind::Resource),
+            record(LayoutKind::Scalar(ScalarKind::U64)),
+            record(LayoutKind::Handle),
+        ];
+        let endpoint = LayoutId(2);
+        table.layouts[2].fields = vec![FieldLayout {
+            ordinal: 0,
+            offset: 0,
+            layout: LayoutId(1),
+            unaligned: false,
+        }];
+        table.layouts[2].drop = vec![DropStep::CloseHandle { offset: 0 }];
+        for kind in [HandleKind::Sender, HandleKind::Receiver] {
+            table.layouts[2].scan = vec![ScanStep::Handle {
+                offset: 0,
+                kind,
+                ty: Some(endpoint),
+                obtains: (kind == HandleKind::Receiver).then_some(LayoutId(0)),
+            }];
+            assert!(channel_handle(&table, endpoint));
+            assert!(!Selection::Resources.tracks_layout(&table, endpoint));
+            assert!(Selection::Owned.tracks_layout(&table, endpoint));
+            assert!(Selection::Resources.tracks_layout(&table, LayoutId(0)));
+            assert_eq!(
+                plain_channel_handle(&table, endpoint),
+                kind == HandleKind::Sender
+            );
+            if let ScanStep::Handle { ty, .. } = &mut table.layouts[2].scan[0] {
+                *ty = None;
+            }
+            assert!(!channel_handle(&table, endpoint));
+            assert!(Selection::Resources.tracks_layout(&table, endpoint));
+        }
+    }
+
+    #[test]
+    fn resource_selection_does_not_follow_flattened_queue_obtains_as_inline_storage() {
+        let mut table = LayoutTable::new(&TargetSpec::x86_64_unknown_linux_gnu());
+        table.layouts = vec![
+            record(LayoutKind::Resource),
+            record(LayoutKind::Scalar(ScalarKind::U64)),
+            record(LayoutKind::Handle),
+            record(LayoutKind::Aggregate),
+            record(LayoutKind::Resource),
+        ];
+        table.layouts[2].fields = vec![FieldLayout {
+            ordinal: 0,
+            offset: 0,
+            layout: LayoutId(1),
+            unaligned: false,
+        }];
+        table.layouts[2].drop = vec![DropStep::CloseHandle { offset: 0 }];
+        table.layouts[2].scan = vec![ScanStep::Handle {
+            offset: 0,
+            kind: HandleKind::Receiver,
+            ty: Some(LayoutId(2)),
+            obtains: Some(LayoutId(0)),
+        }];
+        table.layouts[3].fields = vec![FieldLayout {
+            ordinal: 0,
+            offset: 0,
+            layout: LayoutId(2),
+            unaligned: false,
+        }];
+        table.layouts[3].scan = table.layouts[2].scan.clone();
+        assert!(!Selection::Resources.tracks_layout(&table, LayoutId(3)));
+        table.layouts[3].fields.push(FieldLayout {
+            ordinal: 1,
+            offset: 8,
+            layout: LayoutId(0),
+            unaligned: false,
+        });
+        assert!(
+            Selection::Resources.tracks_layout(&table, LayoutId(3)),
+            "an inline Resource also referenced by the queue must remain tracked"
+        );
+        table.layouts[3].fields.pop();
+        if let ScanStep::Handle { obtains, .. } = &mut table.layouts[3].scan[0] {
+            *obtains = Some(LayoutId(4));
+        }
+        assert!(
+            Selection::Resources.tracks_layout(&table, LayoutId(3)),
+            "a forged queue schema must not hide a Resource"
+        );
     }
 
     #[test]
