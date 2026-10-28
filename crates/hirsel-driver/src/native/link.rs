@@ -3949,7 +3949,7 @@ mod tests {
             execution: Default::default(),
         };
         let shape = |target: &TargetSpec| {
-            let command = launcher(Path::new("/out/app"), target, &tools).unwrap();
+            let command = launcher(Path::new("/bin/sh"), target, &tools).unwrap();
             let mut words = vec![command.get_program().to_owned()];
             words.extend(command.get_args().map(ToOwned::to_owned));
             words
@@ -3961,7 +3961,7 @@ mod tests {
                 format!("{x86}/ld-linux-x86-64.so.2").as_str(),
                 "--library-path",
                 x86,
-                "/out/app"
+                "/bin/sh"
             ]
         );
         // The emulator runs the release's loader; the cross sysroot takes no part.
@@ -3973,7 +3973,7 @@ mod tests {
                 format!("{arm}/ld-linux-aarch64.so.1").as_str(),
                 "--library-path",
                 arm,
-                "/out/app"
+                "/bin/sh"
             ]
         );
     }
@@ -4012,7 +4012,7 @@ mod tests {
             execution: Default::default(),
         };
         let launched = launch(
-            Path::new("/unused/program"),
+            Path::new("/bin/sh"),
             &TargetSpec::x86_64_unknown_linux_gnu(),
             &tools,
             &dir,
@@ -4033,7 +4033,7 @@ mod tests {
                 .is_none()
         );
         let launched = launch(
-            Path::new("/unused/program"),
+            Path::new("/bin/sh"),
             &TargetSpec::x86_64_unknown_linux_gnu(),
             &tools,
             &dir,
