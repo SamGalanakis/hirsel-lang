@@ -1022,7 +1022,13 @@ impl QueryTask for CallableTask {
         self.id
     }
     fn weight(&self) -> MemoryWeight {
-        self.tasks.weight
+        MemoryWeight {
+            retained: std::mem::size_of::<Self>() as u64,
+            ..self.tasks.weight
+        }
+    }
+    fn continuation_bytes(&self) -> u64 {
+        std::mem::size_of::<Self>() as u64
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
@@ -1184,6 +1190,17 @@ mod retained_tests {
             let mut waiting = waiting;
             waiting.sort_by_key(|query| query.address.0);
             assert_eq!(waiting, pending.0);
+            let alias_id = QueryId {
+                kind: super::super::instance::CALLABLE_VALUE_KIND,
+                address: tasks.roots[0].address(super::super::instance::CALLABLE_VALUE_KIND),
+            };
+            for id in [tasks.callable_id(), alias_id] {
+                let task = InstanceTaskFactory::new(tasks.clone()).create(id).unwrap();
+                assert_eq!(task.weight().retained, size_of::<CallableTask>() as u64);
+                assert_eq!(task.continuation_bytes(), size_of::<CallableTask>() as u64);
+                assert_eq!(task.weight().scratch, tasks.weight.scratch);
+                assert_eq!(task.weight().stack, tasks.weight.stack);
+            }
         });
     }
 
