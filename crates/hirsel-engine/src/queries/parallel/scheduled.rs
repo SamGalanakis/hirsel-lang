@@ -1359,12 +1359,16 @@ impl QueryEngine {
             if !seen.insert(definition.clone()) {
                 continue;
             }
+            // A source carry can own an exact selection receipt before its
+            // expression arenas are materialized. Validate that receipt below;
+            // absent With syntax in a body-free head cannot invalidate it.
             if !self
-                .snapshot(&definition)
-                .is_ok_and(|syntax| crate::families::closes(&syntax))
+                .specialization_dependencies
+                .contains_key(&DefId::intern(&definition))
+                && !self
+                    .snapshot(&definition)
+                    .is_ok_and(|syntax| crate::families::closes(&syntax))
             {
-                self.specialization_dependencies
-                    .remove(&DefId::intern(&definition));
                 continue;
             }
             let Some(dependencies) = self.specialization_dependencies(&definition) else {
