@@ -90,6 +90,7 @@ pub(crate) fn retained_signature_entry_bytes(
 
 pub(crate) struct SourceProjection {
     pub(crate) compact: bool,
+    pub(crate) detail: bool,
     pub(crate) compact_output: bool,
     pub(crate) compact_reads: bool,
     pub(crate) shared_products: bool,
@@ -101,8 +102,17 @@ pub(crate) fn source_projection(
     // They retain no payload and cannot escape the engine. Public output/read
     // owners still require both strong and weak uniqueness below.
     let compact = std::sync::Arc::strong_count(entry) == 1;
+    let detail = &entry.detail;
+    let detail = detail.signatures.capacity() != 0
+        || detail.failed_signatures.capacity() != 0
+        || detail.failed_signature_keys.capacity() != 0
+        || detail.lookups.capacity() != 0
+        || detail.manifest_lookups.capacity() != 0
+        || detail.resolver.node_identity().is_some()
+        || detail.citations.capacity() != 0;
     SourceProjection {
         compact,
+        detail,
         compact_output: compact
             && entry.memo.value.as_ref().is_ok_and(|output| {
                 std::sync::Arc::strong_count(output) == 1 && std::sync::Arc::weak_count(output) == 0
@@ -153,7 +163,10 @@ pub(crate) fn source_signature_head_components(
     };
     weight.reads(&entry.memo.reads);
     let reads = weight.bytes;
-    weight.detail(&entry.detail);
+    weight.add(arc_bytes(&*entry.detail.resolver));
+    if let Some(failure) = &entry.detail.operational_failure {
+        weight.failure(failure);
+    }
     let detail = weight.bytes - reads;
     let mut value = 0;
     let mut dependencies =
@@ -174,7 +187,7 @@ fn signature_entry_bytes(
     let head = projection.is_some();
     let projected = projection
         .as_ref()
-        .is_some_and(|p| p.compact || entry.products.resolution.is_some());
+        .is_some_and(|p| p.compact || p.detail || entry.products.resolution.is_some());
     let compact_output = projection.as_ref().is_some_and(|p| p.compact_output);
     let compact_reads = projection.as_ref().is_some_and(|p| p.compact_reads);
     let shared_products = projection.as_ref().is_some_and(|p| p.shared_products);
@@ -191,7 +204,17 @@ fn signature_entry_bytes(
         weight.reads(&entry.memo.reads);
     }
     weight.cloned_vectors = projected;
-    weight.detail(&entry.detail);
+    if head {
+        // The exact typed read receipt is authoritative. A carried head drops
+        // the normalizer's duplicate resolver/path observations, retaining only
+        // an operational refusal and the empty resolver Arc's allocation.
+        weight.add(arc_bytes(&*entry.detail.resolver));
+        if let Some(failure) = &entry.detail.operational_failure {
+            weight.failure(failure);
+        }
+    } else {
+        weight.detail(&entry.detail);
+    }
     weight.flat_vec(&entry.covered);
     if let Some(depth) = &entry.depth {
         weight.add(size_of_val(&*depth.first));

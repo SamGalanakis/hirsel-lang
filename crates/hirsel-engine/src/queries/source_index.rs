@@ -49,6 +49,13 @@ fn hash<K, V>(weight: &mut crate::NativeMetadataWeight, capacity: usize) {
     }
 }
 impl QueryEngine {
+    fn source_header_reads(&self, key: &MemoKey) -> Option<&Arc<Reads>> {
+        self.signatures
+            .get(&key.def)
+            .filter(|entry| entry.memo.key == *key)
+            .map(|entry| &entry.memo.reads)
+    }
+
     fn source_types(&self) -> Result<hirsel_types::TypeProjection, QueryError> {
         // Immutable base rows already have their original owner. A base-only
         // context has no local closure to collect, including during inspection.
@@ -91,7 +98,19 @@ impl QueryEngine {
             || !self.private_signature_publications.is_empty()
         {
             if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
-                eprintln!("source carry refused unsettled: generated={} s1={} active={} signature_stack={} execution_stack={} staged_constants={} staged_values={} private_active={} private_failed={} pending_private={}", self.generated.len(), !self.s1.is_empty(), self.active.len(), self.signature_stack.len(), self.execution_stack.len(), self.staged_constants.len(), self.staged_values.len(), self.private_summary_active, self.private_summary_failure.is_some(), self.private_signature_publications.len());
+                eprintln!(
+                    "source carry refused unsettled: generated={} s1={} active={} signature_stack={} execution_stack={} staged_constants={} staged_values={} private_active={} private_failed={} pending_private={}",
+                    self.generated.len(),
+                    !self.s1.is_empty(),
+                    self.active.len(),
+                    self.signature_stack.len(),
+                    self.execution_stack.len(),
+                    self.staged_constants.len(),
+                    self.staged_values.len(),
+                    self.private_summary_active,
+                    self.private_summary_failure.is_some(),
+                    self.private_signature_publications.len()
+                );
             }
             return Err(invalid());
         }
@@ -151,7 +170,17 @@ impl QueryEngine {
             }
             w.add(environment.compiler_version.capacity());
         });
-        weight.map(&self.syntax_keys, |w, (path, _), _| w.path(path));
+        weight.tree::<(DefPath, QueryKind), ContentHash>(
+            self.syntax_keys
+                .keys()
+                .filter(|(_, kind)| *kind == QueryKind::Signature)
+                .count(),
+        );
+        for ((path, kind), _) in &self.syntax_keys {
+            if *kind == QueryKind::Signature {
+                weight.path(path);
+            }
+        }
         weight.map(&self.package_manifests, |w, package, _| {
             w.add(package.name.capacity());
             w.add(package.version.capacity());
@@ -199,7 +228,11 @@ impl QueryEngine {
             .ok_or_else(invalid)?
             .checked_add(type_bytes)
             .ok_or_else(invalid)?
-            .checked_add(self.graph.retained_bytes().ok_or_else(invalid)?)
+            .checked_add(
+                self.graph
+                    .source_headers_bytes(|key| self.source_header_reads(key))
+                    .ok_or_else(invalid)?,
+            )
             .ok_or_else(invalid)?
             .checked_add(self.front_changes.retained_bytes())
             .ok_or_else(invalid)?;
@@ -253,7 +286,9 @@ impl QueryEngine {
                 self.catalog
                     .source_carry_bytes(&self.items, &self.indexed_sources),
                 type_bytes,
-                self.graph.retained_bytes().ok_or_else(invalid)?,
+                self.graph
+                    .source_headers_bytes(|key| self.source_header_reads(key))
+                    .ok_or_else(invalid)?,
             );
         }
         Ok(total)
@@ -269,7 +304,10 @@ impl QueryEngine {
         let types = self.source_types()?;
         let required = self.source_index_bytes_with_types(types.retained_bytes())?;
         if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
-            eprintln!("source carry transfer required={required} allowance={}", allowance.bytes());
+            eprintln!(
+                "source carry transfer required={required} allowance={}",
+                allowance.bytes()
+            );
         }
         if allowance.bytes() < required {
             return Err(invalid());
@@ -281,14 +319,14 @@ impl QueryEngine {
             signature_persisted: true,
             ..Default::default()
         });
-        let signatures = std::mem::take(&mut self.signatures)
+        let signatures: Table<hirsel_types::SignatureRef> = std::mem::take(&mut self.signatures)
             .into_iter()
             .map(|(id, entry)| {
                 let projection = crate::memo::retained::source_projection(&entry);
                 let share = projection.shared_products;
                 let compact = projection.compact;
                 let compact_output = projection.compact_output;
-                if entry.products.resolution.is_none() && !compact {
+                if entry.products.resolution.is_none() && !compact && !projection.detail {
                     return (id, entry);
                 }
                 let mut memo = entry.memo.clone();
@@ -311,10 +349,13 @@ impl QueryEngine {
                 // syntax. It cannot replace the complete stored publication.
                 let projected = Entry {
                     memo,
-                    detail: entry.detail.clone(),
+                    detail: DependencyReads {
+                        operational_failure: entry.detail.operational_failure.clone(),
+                        ..Default::default()
+                    },
                     products: if share {
                         shared_products.clone()
-                    } else if entry.products.resolution.is_some() {
+                    } else if entry.products.resolution.is_some() || projection.detail {
                         Arc::new(PhaseProducts {
                             signature_persisted: true,
                             resolution: None,
@@ -333,19 +374,28 @@ impl QueryEngine {
                 (id, Arc::new(projected))
             })
             .collect();
+        let graph = std::mem::take(&mut self.graph).into_source_headers(|key| {
+            signatures
+                .get(&key.def)
+                .filter(|entry| entry.memo.key == *key)
+                .map(|entry| &entry.memo.reads)
+        });
         let allowance = Arc::new(allowance);
         let sources = std::mem::take(&mut self.sources).replace_owner(allowance.clone());
         let state = SourceIndexState {
             sources,
             indexed_sources: std::mem::take(&mut self.indexed_sources),
             builtins: std::mem::take(&mut self.builtins),
-            syntax_keys: std::mem::take(&mut self.syntax_keys),
+            syntax_keys: std::mem::take(&mut self.syntax_keys)
+                .into_iter()
+                .filter(|((_, kind), _)| *kind == QueryKind::Signature)
+                .collect(),
             signatures,
             private_summary_reads: std::mem::take(&mut self.private_summary_reads),
             private_summaries: std::mem::take(&mut self.private_summaries),
             private_unique_failures: std::mem::take(&mut self.private_unique_failures),
             private_summary_revision: self.private_summary_revision,
-            graph: std::mem::take(&mut self.graph),
+            graph,
             front_changes: std::mem::take(&mut self.front_changes),
             inputs: std::mem::take(&mut self.inputs),
             environment_seen: self.environment_seen.take(),

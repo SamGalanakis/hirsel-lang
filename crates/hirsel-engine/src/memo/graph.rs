@@ -10,6 +10,7 @@ use hirsel_syntax::{ContentHash, DefId};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+mod source;
 
 /// One memo's identity: its query kind, its definition and, for memos with
 /// arguments (staged values, generated instances), a session ordinal of the
