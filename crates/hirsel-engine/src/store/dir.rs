@@ -398,6 +398,7 @@ mod tests {
             read_only: vec![hirsel_artifact_store::Store::new(installed.clone())],
             cap: 0,
             verifier: std::sync::Arc::new(verifier),
+            operation: false,
         };
         // Initialize the installed store's ordinary read lock before observing
         // query writes; lock creation is independent of query publication.
