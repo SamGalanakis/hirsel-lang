@@ -220,6 +220,18 @@ impl Workers {
                 continue;
             };
             let exec = &self.execs[index];
+            // The role owns attachment, and this dormant exec has no thread
+            // that can reach its cell. Spawn publishes the initialized worker.
+            assert!(exec.worker.get().is_null());
+            exec.worker.set(unsafe { Worker::create_scoped(run) });
+            if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+                probe.event(
+                    "start",
+                    self.domain,
+                    Arc::as_ptr(exec) as usize,
+                    index as u64,
+                );
+            }
             execs.holders.count.fetch_add(1, Ordering::AcqRel);
             let thread = if fail_at == Some(index as u32) {
                 drop(assigned);
@@ -309,16 +321,7 @@ unsafe fn start_at(
         caller_task: u32::MAX,
     };
     for index in 0..width {
-        let worker = unsafe { Worker::create_scoped(run) };
-        let exec = Exec::new(Kind::Scoped(index as u16), worker, false);
-        if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
-            probe.event(
-                "start",
-                workers.domain,
-                Arc::as_ptr(&exec) as usize,
-                u64::from(index),
-            );
-        }
+        let exec = Exec::new(Kind::Scoped(index as u16), std::ptr::null_mut(), false);
         let mut assigned = reservation.assign(Arc::clone(&exec)).unwrap();
         assigned.topology = topology.clone();
         execs
@@ -335,7 +338,11 @@ unsafe fn start_at(
     if let Err(error) = workers.start_pending(run, 0..count, fail_at) {
         workers.join();
         for exec in &workers.execs {
-            unsafe { Worker::retire(exec.worker.replace(std::ptr::null_mut())) };
+            let worker = exec.worker.replace(std::ptr::null_mut());
+            if worker.is_null() {
+                continue;
+            }
+            unsafe { Worker::retire(worker) };
             if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
                 probe.event("retire", workers.domain, Arc::as_ptr(exec) as usize, 0);
             }
@@ -393,7 +400,11 @@ pub(super) unsafe fn finish(run: *mut RunShared) {
         workers.join();
         for exec in &workers.execs {
             assert!(!exec.busy());
-            unsafe { Worker::retire(exec.worker.replace(std::ptr::null_mut())) };
+            let worker = exec.worker.replace(std::ptr::null_mut());
+            if worker.is_null() {
+                continue;
+            }
+            unsafe { Worker::retire(worker) };
             if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
                 probe.event("retire", workers.domain, Arc::as_ptr(exec) as usize, 0);
             }
@@ -412,7 +423,12 @@ pub(super) fn forget(execs: &mut Execs) -> Vec<*mut Worker> {
         .take()
         .map_or_else(Vec::new, |workers| {
             // Detached reclaim runs only after the last native worker exited.
-            workers.execs.iter().map(|exec| exec.worker.get()).collect()
+            workers
+                .execs
+                .iter()
+                .map(|exec| exec.worker.get())
+                .filter(|worker| !worker.is_null())
+                .collect()
         })
 }
 
@@ -866,6 +882,14 @@ mod tests {
                     }
                     let owners = owners.unwrap();
                     assert_eq!(owners.len(), width as usize);
+                    execs
+                        .scoped
+                        .lock()
+                        .unwrap()
+                        .as_mut()
+                        .unwrap()
+                        .start_jobs(run, width.into(), None)
+                        .unwrap();
                     assert_eq!(workers(execs).len(), width as usize);
                     assert_eq!(permits.available(), 0);
                     let other = Arc::new(Permits::new(1));

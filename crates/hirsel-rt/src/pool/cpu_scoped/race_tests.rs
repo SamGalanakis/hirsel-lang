@@ -709,6 +709,16 @@ fn physical_cpu_publication_cannot_cross_terminal_and_torn_cuts() {
                             }),
                             Ok(0)
                         );
+                        // This cut fixture admits all physical recorders even
+                        // though its scalar control carries an empty job list.
+                        super::super::execs(ctx)
+                            .scoped
+                            .lock()
+                            .unwrap()
+                            .as_mut()
+                            .unwrap()
+                            .start_jobs((*ctx).run_ptr(), WIDTH.into(), None)
+                            .unwrap();
                         assert_eq!(workers(super::super::execs(ctx)).len(), WIDTH as usize);
                         snapshot.recorder.flush().unwrap().unwrap();
                         let result = record::cpu_control(ctx, WIDTH, 2, 0, || {
