@@ -155,7 +155,7 @@ fn ordered_summary_encodes_initialized_fields_and_active_arms() {
 }
 
 #[test]
-#[ignore = "requires a private exclusive cpuset; run explicitly for overlap qualification"]
+#[ignore = "requires exclusive CPUs; tools/cpu-overlap reports host-blocked without counting a pass"]
 fn ordered_allocating_mappers_overlap_and_replay() {
     run_width_policy_backends_mode(8, "tasks.cooperative@1", &["llvm", "cranelift"], true);
 }

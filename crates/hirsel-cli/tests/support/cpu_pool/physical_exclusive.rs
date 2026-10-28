@@ -1,12 +1,85 @@
-// A narrow affinity is admission, not ownership. Only a private, valid kernel
-// cpuset partition can justify a simultaneous-width assertion on a shared host.
-fn exclusive_cpus(affinity: &[usize]) -> Result<BTreeSet<usize>, String> {
+// Ownership is the private job's effective cpuset. Exclusivity is a separate
+// host property: every branch outside the job's ancestry must be disjoint.
+#[derive(Debug)]
+struct CpuOwnership {
+    cpus: BTreeSet<usize>,
+    group: String,
+    exclusivity: Result<(), String>,
+}
+
+fn parse_cpu_list(text: &str) -> Result<BTreeSet<usize>, String> {
+    let mut cpus = BTreeSet::new();
+    for field in text.trim().split(',').filter(|s| !s.is_empty()) {
+        let (first, last) = field.split_once('-').unwrap_or((field, field));
+        let first = first.parse::<usize>().map_err(|e| e.to_string())?;
+        let last = last.parse::<usize>().map_err(|e| e.to_string())?;
+        if first > last || last >= libc::CPU_SETSIZE as usize {
+            return Err(format!("invalid CPU range: {field}"));
+        }
+        cpus.extend(first..=last);
+    }
+    Ok(cpus)
+}
+
+fn disjoint_cgroup_branches(
+    root: &std::path::Path,
+    leaf: &std::path::Path,
+    cpus: &BTreeSet<usize>,
+) -> Result<(), String> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        if directory == leaf {
+            continue;
+        }
+        if !leaf.starts_with(&directory) {
+            let effective = fs::read_to_string(directory.join("cpuset.cpus.effective"))
+                .map_err(|e| format!("cannot check {}: {e}", directory.display()))?;
+            let other = parse_cpu_list(&effective)?;
+            let intersection: Vec<_> = other.intersection(cpus).copied().collect();
+            if !intersection.is_empty() {
+                return Err(format!(
+                    "host-blocked: not exclusive: {} intersects owned CPUs {intersection:?}",
+                    directory.display()
+                ));
+            }
+            // A child's effective set is a subset of this disjoint parent.
+            continue;
+        }
+        // Ancestor cpusets necessarily include ours. Processes resident in an
+        // ancestor can still run here, unlike its disjoint child branches.
+        let members = fs::read_to_string(directory.join("cgroup.procs"))
+            .map_err(|e| format!("cannot check {}: {e}", directory.display()))?;
+        for pid in members.split_whitespace() {
+            let status = match fs::read_to_string(format!("/proc/{pid}/status")) {
+                Ok(status) => status,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("cannot check ancestor PID {pid}: {error}")),
+            };
+            // Kernel threads live in the hierarchy root even under a systemd
+            // fence. Their preemptions still invalidate switch-free samples.
+            if !status.lines().any(|line| line == "Kthread:\t1") {
+                return Err(format!(
+                    "host-blocked: not exclusive: {} has resident userspace PID {pid}",
+                    directory.display()
+                ));
+            }
+        }
+        for entry in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn owned_cpus(affinity: &[usize]) -> Result<CpuOwnership, String> {
     let membership = fs::read_to_string("/proc/self/cgroup").map_err(|e| e.to_string())?;
     let group = membership
         .lines()
         .find_map(|line| line.strip_prefix("0::"))
         .ok_or("no unified cgroup membership")?;
-    // Do not credit a cgroup namespace's root or a partially visible hierarchy.
     if group == "/" || !group.starts_with('/') || group.split('/').any(|p| p == "..") {
         return Err("no visible private cgroup".into());
     }
@@ -15,18 +88,20 @@ fn exclusive_cpus(affinity: &[usize]) -> Result<BTreeSet<usize>, String> {
     let read = |path: &std::path::Path| {
         fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
     };
-    let partition = read(&leaf.join("cpuset.cpus.partition"))?;
     let members = read(&leaf.join("cgroup.procs"))?;
     let stat = read(&leaf.join("cgroup.stat"))?;
     if !private_test_processes(&members, &test_process_chain()?)
         || !stat.lines().any(|line| line == "nr_descendants 0")
     {
-        return Err(
-            "partition also contains processes or descendant cgroups outside this test job".into(),
-        );
+        return Err("cgroup contains processes or descendants outside this test job".into());
     }
-    let mut quota = affinity.len();
-    // As in managed_cores/linux.rs, every visible ancestor limits the job.
+    let cpus = parse_cpu_list(&read(&leaf.join("cpuset.cpus.effective"))?)?;
+    let admitted: BTreeSet<_> = affinity.iter().copied().collect();
+    if cpus != admitted {
+        return Err(format!(
+            "private cpuset {cpus:?} differs from affinity {admitted:?}"
+        ));
+    }
     for directory in leaf.ancestors() {
         let path = directory.join("cpu.max");
         if path.exists() {
@@ -38,20 +113,30 @@ fn exclusive_cpus(affinity: &[usize]) -> Result<BTreeSet<usize>, String> {
             if fields[0] != "max" {
                 let amount = fields[0].parse::<usize>().map_err(|e| e.to_string())?;
                 let period = fields[1].parse::<usize>().map_err(|e| e.to_string())?;
-                quota = quota.min(amount.checked_div(period).ok_or("zero quota period")?);
+                let quota = amount.checked_div(period).ok_or("zero quota period")?;
+                if quota < cpus.len() {
+                    return Err(format!(
+                        "quota {quota} is below owned CPU count {}",
+                        cpus.len()
+                    ));
+                }
             }
         }
         if directory == root {
             break;
         }
     }
-    partition_cpus(
-        &partition,
-        &read(&leaf.join("cpuset.cpus.exclusive.effective"))?,
-        &read(&leaf.join("cpuset.cpus.effective"))?,
-        affinity,
-        quota,
-    )
+    Ok(CpuOwnership {
+        exclusivity: disjoint_cgroup_branches(root, &leaf, &cpus),
+        cpus,
+        group: group.to_owned(),
+    })
+}
+
+fn exclusive_cpus(affinity: &[usize]) -> Result<BTreeSet<usize>, String> {
+    let ownership = owned_cpus(affinity)?;
+    ownership.exclusivity?;
+    Ok(ownership.cpus)
 }
 
 fn test_process_chain() -> Result<BTreeSet<u32>, String> {
@@ -89,21 +174,8 @@ fn partition_cpus(
     if !matches!(partition.trim(), "root" | "isolated") {
         return Err(format!("not a valid cpuset partition: {partition:?}"));
     }
-    let parse = |text: &str| -> Result<BTreeSet<usize>, String> {
-        let mut cpus = BTreeSet::new();
-        for field in text.trim().split(',').filter(|s| !s.is_empty()) {
-            let (first, last) = field.split_once('-').unwrap_or((field, field));
-            let first = first.parse::<usize>().map_err(|e| e.to_string())?;
-            let last = last.parse::<usize>().map_err(|e| e.to_string())?;
-            if first > last || last >= libc::CPU_SETSIZE as usize {
-                return Err(format!("invalid CPU range: {field}"));
-            }
-            cpus.extend(first..=last);
-        }
-        Ok(cpus)
-    };
-    let exclusive = parse(exclusive)?;
-    let effective = parse(effective)?;
+    let exclusive = parse_cpu_list(exclusive)?;
+    let effective = parse_cpu_list(effective)?;
     let cpus: BTreeSet<_> = affinity
         .iter()
         .copied()
@@ -123,6 +195,60 @@ fn partition_cpus(
 #[cfg(test)]
 mod exclusive_cpu_tests {
     use super::*;
+
+    fn cgroup_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let leaf = root.path().join("window/job");
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(root.path().join("cgroup.procs"), "").unwrap();
+        fs::write(root.path().join("window/cgroup.procs"), "").unwrap();
+        (root, leaf)
+    }
+
+    #[test]
+    fn delegated_member_is_owned_but_intersecting_sibling_is_not_exclusive() {
+        let (root, leaf) = cgroup_fixture();
+        let sibling = root.path().join("shared");
+        fs::create_dir(&sibling).unwrap();
+        fs::write(sibling.join("cpuset.cpus.effective"), "0-31").unwrap();
+        let cpus = parse_cpu_list("16-19").unwrap();
+        let error = disjoint_cgroup_branches(root.path(), &leaf, &cpus).unwrap_err();
+        assert!(error.contains("host-blocked: not exclusive"), "{error}");
+        assert!(
+            error.contains("shared") && error.contains("16, 17, 18, 19"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn external_fence_can_prove_exclusivity_without_partition_root() {
+        let (root, leaf) = cgroup_fixture();
+        for (name, cpus) in [("other", "0-7,16-31"), ("window/other-job", "12-15")] {
+            let branch = root.path().join(name);
+            fs::create_dir(&branch).unwrap();
+            fs::write(branch.join("cpuset.cpus.effective"), cpus).unwrap();
+        }
+        assert_eq!(
+            disjoint_cgroup_branches(root.path(), &leaf, &parse_cpu_list("8-11").unwrap()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn unreadable_branch_and_ancestor_residents_refuse_exclusivity() {
+        let (root, leaf) = cgroup_fixture();
+        fs::create_dir(root.path().join("unknown")).unwrap();
+        let cpus = parse_cpu_list("8-11").unwrap();
+        assert!(disjoint_cgroup_branches(root.path(), &leaf, &cpus).is_err());
+        fs::remove_dir(root.path().join("unknown")).unwrap();
+        fs::write(
+            root.path().join("window/cgroup.procs"),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        let error = disjoint_cgroup_branches(root.path(), &leaf, &cpus).unwrap_err();
+        assert!(error.contains("resident userspace PID"), "{error}");
+    }
 
     #[test]
     fn affinity_and_invalid_or_shared_partitions_never_prove_ownership() {

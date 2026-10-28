@@ -374,8 +374,15 @@ def _rust_test_impl(ctx):
         env["HIRSEL_REPLAY_FIXTURE_OUT"] = cmd_args(fixture.as_output())
         ctx.actions.run(command, env = env, category = "deadline_replay_fixture")
         return [DefaultInfo(default_output = fixture)]
+    sub_targets = {}
+    if ctx.attrs.test_binary.startswith("hirsel-cli-test-cpu_pool_"):
+        # Materialize the existing launcher and its exact environment before a
+        # fenced CPU window, so no Buck daemon or build shares the test scope.
+        host_command = ctx.actions.declare_output("host-command.json")
+        host_inputs = ctx.actions.write_json(host_command, {"command": command, "env": env}, with_inputs = True)
+        sub_targets["host-command"] = [DefaultInfo(default_output = host_command, other_outputs = [host_inputs])]
     return [
-        DefaultInfo(default_output = ctx.attrs.harness[DefaultInfo].default_outputs[0]),
+        DefaultInfo(default_output = ctx.attrs.harness[DefaultInfo].default_outputs[0], sub_targets = sub_targets),
         RunInfo(args = command),
         ExternalRunnerTestInfo(
             type = "rust",

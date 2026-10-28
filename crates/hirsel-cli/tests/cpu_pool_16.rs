@@ -72,7 +72,7 @@ fn cpu_interpreter_ordered_cancellation_at_every_task_phase() {
 }
 
 #[test]
-#[ignore = "requires a private exclusive cpuset; run explicitly for overlap qualification"]
+#[ignore = "requires exclusive CPUs; tools/cpu-overlap reports host-blocked without counting a pass"]
 fn ordered_allocating_mappers_overlap_and_replay() {
     run_width_policy_backends_mode(16, "tasks.cooperative@1", &["llvm", "cranelift"], true);
 }

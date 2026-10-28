@@ -107,8 +107,16 @@ fn overlap(text: &str, width: usize, exclusive: &BTreeSet<usize>) -> bool {
     false
 }
 fn run_width(width: usize) {
-    run_width_policy(width, "tasks.free@1");
-    run_width_policy(width, "tasks.cooperative@1");
+    let mut failures = Vec::new();
+    for provider in ["tasks.free@1", "tasks.cooperative@1"] {
+        // Diagnose both policies even when the host blocks the first one.
+        if let Err(failure) = std::panic::catch_unwind(|| run_width_policy(width, provider)) {
+            failures.push(failure);
+        }
+    }
+    if let Some(failure) = failures.into_iter().next() {
+        std::panic::resume_unwind(failure);
+    }
 }
 fn run_width_policy(width: usize, provider: &str) {
     run_width_policy_backends(width, provider, &["llvm", "cranelift"]);
@@ -153,6 +161,7 @@ fn run_width_policy_backends_mode(
     backends: &[&str],
     allocating: bool,
 ) {
+    let private = std::env::var("HIRSEL_CPU_PRIVATE_SCOPE").as_deref() == Ok("inside");
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let source = include_str!("physical.hir");
@@ -193,6 +202,7 @@ fn run_width_policy_backends_mode(
     let grants = root.join("grants.json");
     fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":provider,"cpu":{"provider":"cpu.scoped@1",
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
+    let mut blocked = Vec::new();
     for &backend in backends {
         let executable = root.join(backend);
         checked(
@@ -237,13 +247,39 @@ fn run_width_policy_backends_mode(
         #[cfg(feature = "native-tsan")]
         {
             command.env("HIRSEL_TSAN_DOUBLE_CLAIM", "1");
-            let output = command.output().unwrap();
+            let mut mutant = command.spawn().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let timed_out = loop {
+                if mutant.try_wait().unwrap().is_some() {
+                    break false;
+                }
+                if std::time::Instant::now() >= deadline {
+                    mutant.kill().unwrap();
+                    break true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            let output = mutant.wait_with_output().unwrap();
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!("MUTANT {provider} {backend} W{width}\n{stderr}");
-            assert_eq!(output.status.code(), Some(66), "{output:?}");
-            assert!(stderr.contains("ThreadSanitizer: data race"), "{stderr}");
-            emitted_mapper_race(&executable, &stderr);
-            eprintln!("MUTANT {provider} {backend} W{width}: exit 66, emitted mapper race");
+            if timed_out {
+                eprintln!(
+                    "MUTANT {provider} {backend} W{width}: double-claim control timed out at 15s; P not qualified"
+                );
+                blocked.push(format!(
+                    "{provider} {backend}: double-claim control timed out at 15s"
+                ));
+            } else if std::panic::catch_unwind(|| {
+                assert_eq!(output.status.code(), Some(66), "{output:?}");
+                assert!(stderr.contains("ThreadSanitizer: data race"), "{stderr}");
+                emitted_mapper_race(&executable, &stderr);
+            })
+            .is_ok()
+            {
+                eprintln!("MUTANT {provider} {backend} W{width}: exit 66, emitted mapper race");
+            } else {
+                blocked.push(format!("{provider} {backend}: double-claim control failed"));
+            }
             command.env_remove("HIRSEL_TSAN_DOUBLE_CLAIM");
         }
         // Place this test's fresh workers on distinct admitted CPUs. Affinity
@@ -257,13 +293,15 @@ fn run_width_policy_backends_mode(
             .filter(|&cpu| unsafe { libc::CPU_ISSET(cpu, &allowed) })
             .collect();
         assert_eq!(cpus.len(), width);
+        let owned = owned_cpus(&cpus);
         let ownership = exclusive_cpus(&cpus);
         let exclusive = ownership.as_ref().cloned().unwrap_or_default();
-        if allocating {
-            assert_eq!(
-                exclusive.len(),
-                width,
-                "allocating P({width}) requires full exclusive CPU ownership: {ownership:?}"
+        if private {
+            let owned = owned.as_ref().expect("private delegated cgroup ownership");
+            assert_eq!(owned.cpus.len(), width);
+            eprintln!(
+                "CPU {provider} {backend} W{width}: owned={:?} cgroup={} exclusivity={:?}",
+                owned.cpus, owned.group, owned.exclusivity
             );
         }
         cpus.sort_by_key(|cpu| (!exclusive.contains(cpu), *cpu));
@@ -329,10 +367,34 @@ fn run_width_policy_backends_mode(
         );
         let samples = fs::read_to_string(&probe).unwrap();
         let rejected = fs::read_to_string(root.join("probe.txt.rejected")).unwrap();
-        assert!(
-            overlap(&samples, width, &exclusive),
-            "no switch-free CPU overlap at W={width}, exclusive={exclusive:?}\n{before}\n{after}\n{threads:?}\n{retired}\n{samples}\n{rejected}"
-        );
+        let observed = if private {
+            &owned.as_ref().unwrap().cpus
+        } else {
+            &exclusive
+        };
+        let full_overlap = overlap(&samples, width, observed);
+        if private {
+            for line in samples.lines() {
+                let cpu: usize = line.split_whitespace().nth(3).unwrap().parse().unwrap();
+                assert!(
+                    observed.contains(&cpu),
+                    "sample outside owned cpuset: {line}"
+                );
+            }
+            assert_eq!(
+                owned_cpus(&cpus).unwrap().cpus,
+                *observed,
+                "owned cpuset changed during the run"
+            );
+            eprintln!(
+                "CPU {provider} {backend} W{width}: owned={}/{} pinned={}/{} samples={} inside_owned=true full_overlap={full_overlap}",
+                observed.len(),
+                width,
+                pinned.len(),
+                width,
+                samples.lines().count()
+            );
+        }
         eprintln!(
             "CPU samples accepted={} rejected={}",
             samples.lines().count(),
@@ -365,6 +427,16 @@ fn run_width_policy_backends_mode(
             assert_eq!(replay.stderr, output.stderr);
             assert!(fs::read(&replay_probe).unwrap().is_empty());
         }
+        if (private || allocating) && exclusive.len() != width {
+            blocked.push(format!(
+                "{provider} {backend}: {ownership:?}, full_overlap={full_overlap}"
+            ));
+            continue;
+        }
+        assert!(
+            full_overlap,
+            "no switch-free CPU overlap at W={width}, owned={observed:?}\n{before}\n{after}\n{threads:?}\n{retired}\n{samples}\n{rejected}"
+        );
         if exclusive.len() == width || width == 1 {
             eprintln!(
                 "CPU {provider} {backend} P({width}): switch-free overlap with positive CPU progress, ownership={ownership:?}"
@@ -376,4 +448,5 @@ fn run_width_policy_backends_mode(
             );
         }
     }
+    assert!(blocked.is_empty(), "P({width}) not qualified: {blocked:?}");
 }

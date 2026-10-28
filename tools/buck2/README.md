@@ -888,3 +888,40 @@ mutant. Instrumented pool fixtures use 3,000,000 loop iterations and retain the
 same switch-free overlap assertion and probe cap. The x86 fiber switch annotates both ordinary fibers and naked CPU ahead
 handoffs; only CPU ahead certificates are enabled in this sanitizer mode.
 Each policy/emitter pool cell must independently establish overlap.
+
+### Private CPU overlap audits
+
+`tools/cpu-overlap --prepare /tmp/cpu-overlap-commands` builds the W4/W8/W16
+Ordered audits, P16, and both native TSan gates, and materializes their existing
+launcher commands and environments. It copies each mode's executables and std
+products into that directory because Buck's sanitizer config reuses output
+paths. Remove the prepared directory after the window. Prepare instrumented
+std first with the
+existing `tools/capped python3 tools/buck2/prepare_tsan.py` recipe. Builds happen
+before the fenced window, outside the test scopes.
+
+`tools/cpu-overlap --run /tmp/cpu-overlap-commands --cpus 0-7,16-23` runs those
+commands in private delegated user scopes with exact effective cpusets and the
+existing memory grants. It does not reserve CPUs. Every body checks ownership,
+worker placement, samples and full overlap, then refuses P qualification with
+`host-blocked: not exclusive` when another cgroup can run on those CPUs.
+Failures remain failures. The three ignored Ordered bodies stay ignored because
+libtest cannot report a dynamic host skip without counting the body as passed.
+
+After fencing other top-level cgroups, the orchestrator can run
+`sudo -n tools/cpu-overlap --run /tmp/cpu-overlap-commands --cpus 0-7,16-23 --slice timing.slice --uid 1000`.
+Each command gets its own system scope in the named top-level slice and drops
+to that user. No daemon or build shares the scope. The sixteen logical CPUs
+may include SMT siblings; no sibling-idleness or speedup claim is made. The
+runner has a fifteen-minute total deadline and never changes other slices.
+Ownership comes from `cpuset.cpus.effective`; disjoint effective sets outside
+the job's ancestry, plus no resident userspace processes in its ancestors,
+prove exclusivity independently of
+kernel partition-root status. Root kernel threads remain subject to the
+switch-free interval check. Unreadable branches refuse qualification.
+
+The fence must also exclude the owned CPUs from empty top-level cgroups such
+as `dev-hugepages.mount`, whose inherited effective sets otherwise intersect.
+TSan controls remain mandatory. A failed or fifteen-second hung mutant is
+recorded before the production placement audit continues; the body still
+fails. The existing 180-second native TSan gate deadline remains unchanged.

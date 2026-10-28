@@ -1006,6 +1006,8 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_tsan_runtime_archives", name="hirsel-rt-tsan-archives"))
     out.append("\n" + call("hirsel_script_test", name="test-workers-tsan", script="tools/tests/workers_tsan.py", full=False,
                             data=["tools/workers-tsan", "tools/tests/workers_tsan.py"]))
+    out.append("\n" + call("hirsel_script_test", name="test-cpu-overlap", script="tools/tests/cpu_overlap.py", full=False,
+                            data=["tools/cpu-overlap", "tools/tests/cpu_overlap.py"]))
     for width in [4, 8]:
         out.append("\n" + call("hirsel_native_pool_tsan", name=f"gate-cpu-pool-native-tsan-{width}", width=width,
                                products=PRODUCTS, data=Raw('glob(["stdlib/**", "native-tests/library/**", "crates/hirsel-cli/Cargo.toml"])')))
