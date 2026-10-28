@@ -3,6 +3,63 @@ use super::*;
 const DOMAIN: Domain = Domain { kind: 1, schema: 1 };
 
 #[test]
+fn checked_views_bind_the_mapping_range_and_complete_reference() {
+    let directory = tempfile::tempdir().unwrap();
+    let writer = Store::rebuildable(directory.path().to_owned());
+    let reference = writer.put(DOMAIN, &vec![7; 5000]).unwrap();
+    let reader = Store::rebuildable(directory.path().to_owned());
+    let statistics = reader.enable_statistics();
+    let operation = reader.request();
+    let held = reader.get(reference).unwrap();
+    for _ in 0..8 {
+        assert_eq!(reader.get(reference).unwrap().as_ptr(), held.as_ptr());
+    }
+    assert_eq!(statistics.snapshot().counters["ContentChecks"], 1);
+    assert_eq!(statistics.snapshot().counters["ContentReuses"], 8);
+    for fault in 0..3 {
+        let mut forged = reference;
+        match fault {
+            0 => forged.domain.kind += 1,
+            1 => forged.domain.schema += 1,
+            _ => forged.len -= 1,
+        }
+        assert!(reader.get(forged).is_none());
+    }
+    let container = reader.raw_container(reference).unwrap();
+    let shifted = container.range(8, container.len() as u64 - 8, 1).unwrap();
+    assert!(checked_container(shifted, reference).is_none());
+    operation.finish().unwrap();
+    // A held old view cannot authorize a replacement inode in a new operation.
+    let path = writer.output_path(reference);
+    fs::remove_file(&path).unwrap();
+    fs::write(&path, vec![0; HEADER + 5000]).unwrap();
+    let operation = reader.request();
+    assert!(reader.get(reference).is_none());
+    assert_eq!(&*held, &vec![7; 5000]);
+    operation.finish().unwrap();
+}
+
+#[test]
+fn checked_slots_never_accept_a_colliding_reference_or_a_different_pack_range() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::rebuildable(directory.path().to_owned());
+    let batch = store.batch();
+    let references: Vec<_> = (0u32..80)
+        .map(|number| store.put(DOMAIN, &number.to_le_bytes()).unwrap())
+        .collect();
+    batch.finish().unwrap();
+    let operation = store.request();
+    for reference in &references {
+        assert_eq!(store.get(*reference).unwrap().len(), 4);
+    }
+    for pair in references.windows(2) {
+        let other = store.raw_container(pair[0]).unwrap();
+        assert!(checked_container(other, pair[1]).is_none());
+    }
+    operation.finish().unwrap();
+}
+
+#[test]
 fn configured_disk_caps_include_index_growth_and_preserve_held_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::rebuildable(dir.path().to_owned());

@@ -147,10 +147,24 @@ enum Region {
     Owned(Arc<[u8]>),
     Buffer(Box<[u8]>),
     Static(&'static [u8]),
+    Checked(Box<CheckedRegion>),
     Retained {
         region: Arc<Region>,
         _owner: Arc<dyn Send + Sync>,
     },
+}
+
+// Rust std 1.90.0, sync/once_lock.rs:151,309: a successful initialization
+// belongs to its immutable owner. Slots only avoid repeated integrity work;
+// collisions fall back to the complete SHA-256 check. No action is memoized.
+struct CheckedRegion {
+    region: Arc<Region>,
+    records: [std::sync::OnceLock<CheckedContainer>; 16],
+    statistics: Option<Arc<Statistics>>,
+}
+struct CheckedContainer {
+    range: Range<usize>,
+    reference: Reference,
 }
 // SAFETY: mappings are read-only; publication replaces files rather than
 // modifying a mapped inode. Every view retains an Arc to its mapping.
@@ -206,7 +220,15 @@ impl Region {
             Self::Owned(bytes) => bytes,
             Self::Buffer(bytes) => bytes,
             Self::Static(bytes) => bytes,
+            Self::Checked(checked) => checked.region.bytes(),
             Self::Retained { region, .. } => region.bytes(),
+        }
+    }
+    fn checks(&self) -> Option<&CheckedRegion> {
+        match self {
+            Self::Checked(checked) => Some(checked),
+            Self::Retained { region, .. } => region.checks(),
+            _ => None,
         }
     }
 }
@@ -460,6 +482,13 @@ impl Store {
                 region,
                 _owner: Arc::new(statistics::Backing::new(statistics.clone(), bytes)),
             });
+        }
+        if !matches!(kind, Counter::IndexOpens) {
+            region = Arc::new(Region::Checked(Box::new(CheckedRegion {
+                region,
+                records: std::array::from_fn(|_| std::sync::OnceLock::new()),
+                statistics: self.statistics.get().cloned(),
+            })));
         }
         if retain {
             cache.insert(path.to_owned(), region.clone());
@@ -870,6 +899,22 @@ fn checked_content(region: Arc<Region>, reference: Reference) -> Option<Bytes> {
     )
 }
 fn checked_container(bytes: Bytes, reference: Reference) -> Option<Bytes> {
+    let checks = bytes.region.checks();
+    let slot = checks.map(|checks| {
+        &checks.records[reference.output.0.0[0] as usize % checks.records.len()]
+    });
+    if let Some(checked) = slot.and_then(std::sync::OnceLock::get)
+        && checked.range == bytes.range
+        && checked.reference == reference
+    {
+        if let Some(statistics) = checks.and_then(|checks| checks.statistics.as_ref()) {
+            statistics.add(Counter::ContentReuses, 1);
+        }
+        return bytes.range(HEADER as u64, reference.len, 1);
+    }
+    if let Some(statistics) = checks.and_then(|checks| checks.statistics.as_ref()) {
+        statistics.add(Counter::ContentChecks, 1);
+    }
     if reference.len > MAX_RECORD as u64
         || bytes.get(..8)? != MAGIC
         || word(&bytes, 8)? != reference.domain.kind
@@ -881,6 +926,12 @@ fn checked_container(bytes: Bytes, reference: Reference) -> Option<Bytes> {
         || reference.domain.output(&bytes[HEADER..]) != reference.output
     {
         return None;
+    }
+    if let Some(slot) = slot {
+        let _ = slot.set(CheckedContainer {
+            range: bytes.range.clone(),
+            reference,
+        });
     }
     bytes.range(HEADER as u64, reference.len, 1)
 }

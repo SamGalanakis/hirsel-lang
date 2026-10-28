@@ -48,6 +48,8 @@ counters!(
     StandaloneOpens,
     RegionLoads,
     RegionCacheHits,
+    ContentChecks,
+    ContentReuses,
     RetainedRegionPeakBytes,
     RetainedRegionPeakCount,
     RegionBytesLoaded,
