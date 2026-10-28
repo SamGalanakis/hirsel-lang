@@ -577,3 +577,61 @@ fn queued_equal_resource_fields_keep_distinct_credit_and_descriptor_drop_order()
         "reordered valid steps passed"
     );
 }
+
+#[test]
+fn untracked_image_cleanup_accepts_no_resource_destruction_authority() {
+    let (mut log, _, _, calls) = queued_cleanup();
+    log.rows = vec![
+        Row::Enter {
+            task: 0,
+            frame: 1,
+            unit: [7; 32],
+        },
+        Row::QueueCreated {
+            task: 0,
+            queue: 1,
+            layout: 99,
+        },
+        Row::QueueSent {
+            task: 0,
+            queue: 1,
+            layout: 99,
+            item: 0,
+            status: 0,
+            pending: false,
+        },
+        Row::QueueDetached {
+            task: 0,
+            queue: 1,
+            layout: 99,
+            first: 0,
+            end: 1,
+        },
+        Row::QueueCleanupBegin {
+            task: 0,
+            queue: 1,
+            layout: 99,
+            item: 0,
+        },
+        Row::QueueCleanupEnd {
+            task: 0,
+            queue: 1,
+            item: 0,
+        },
+        Row::Leave { task: 0, frame: 1 },
+    ];
+    let units = BTreeMap::from([([7; 32], BTreeMap::new())]);
+    let layouts = CleanupLayouts::new();
+    let trace = cleanup_decode(&mut log, &units, &layouts, &calls).unwrap();
+    assert!(trace.events.is_empty());
+    log.rows.insert(
+        5,
+        Row::QueueCleanupDrop {
+            task: 0,
+            queue: 1,
+            item: 0,
+            step: 17,
+        },
+    );
+    assert!(cleanup_decode(&mut log, &units, &layouts, &calls).is_err());
+}
