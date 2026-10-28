@@ -932,6 +932,8 @@ impl Plan {
         // source roots have separate slots.
         // Reserve the same row bound here and in the runtime constructor so
         // task grants cannot spend the scheduler's bookkeeping allocation.
+        // The storage root polls one retained recipe continuation itself;
+        // recipe identities do not allocate independent scheduler nodes.
         let per_definition = 4
             + 2 * usize::from(needs_run)
             + 2 * usize::from(needs_native)
