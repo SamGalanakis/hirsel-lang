@@ -298,3 +298,13 @@ fn task_result_metadata_cannot_swap_roles_or_authorize_an_unbound_formal() {
         assert!(decode(&log, &units).is_err(), "corruption {corruption}");
     }
 }
+
+#[test]
+fn a_lost_runtime_binding_refuses_even_when_the_log_claims_completeness() {
+    let (mut log, units) = fixture(1);
+    log.rows.insert(1, Row::ObservationLost);
+    log.row_count = log.rows.len() as u64;
+    assert_eq!(decode(&log, &units).unwrap_err(), Error::Incomplete);
+    log.complete = false;
+    assert_eq!(decode(&log, &units).unwrap_err(), Error::Incomplete);
+}
