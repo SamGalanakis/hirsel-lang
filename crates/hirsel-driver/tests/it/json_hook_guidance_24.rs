@@ -1,9 +1,38 @@
 //! Field attribution and incorrect custom hook vectors follow Serde's
 //! internals/check.rs:29–53 and tests/ui/with/incorrect_type.rs (MIT OR Apache-2.0).
 //! Contracts are handwritten independently of the generator.
-use hirsel_driver::load_program;
+use hirsel_driver::{
+    requests::{CompileOperation, CompileResult},
+    session::Session,
+};
 use hirsel_engine::{LoweringPolicy, with_compiler_stack};
 use std::{fs, path::PathBuf};
+
+fn checked(session: &mut Session) -> hirsel_engine::CheckOutput {
+    match session.request(CompileOperation::Check {
+        lowering: LoweringPolicy::Comptime,
+    }) {
+        Ok(output) => {
+            let CompileResult::Check(checked) = &output.result else {
+                panic!("expected Check")
+            };
+            checked.clone()
+        }
+        // A generated declaration can reject during registration, before the
+        // Check roots exist. Its source diagnostic is a completed refusal.
+        Err(hirsel_engine::ToolError::Query {
+            error: hirsel_engine::QueryError::Diagnostics(diagnostics),
+            sources,
+            ..
+        }) => hirsel_engine::CheckOutput {
+            diagnostics,
+            sources,
+            completion: hirsel_engine::CheckCompletion::Complete,
+            unsafe_ffi: vec![],
+        },
+        Err(error) => panic!("{error}"),
+    }
+}
 
 fn fixture(source: &str, helper: Option<&str>) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -42,8 +71,8 @@ fn reject(
 ) {
     with_compiler_stack(|| {
         let dir = fixture(source, helper);
-        let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
-        let output = program.check(LoweringPolicy::Comptime).unwrap();
+        let mut program = Session::open(&dir.path().join("hirsel.json"), hirsel_engine::Verify::On);
+        let output = checked(&mut program);
         assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
         let errors: Vec<_> = output
             .diagnostics
@@ -88,19 +117,15 @@ fn reject(
             dir.path().join("relocated.hir")
         );
         let at = output.sources.resolve(d.primary);
-        let generated = program
-            .engine
-            .generated_sources()
-            .find(|(_, g)| g.file == at.file)
-            .unwrap()
-            .1;
+        let generated = output.sources.file(at.file).unwrap();
+        assert_eq!(generated.path, PathBuf::from("<generated:hooks@0/outer>"));
         assert_eq!(
-            &generated.text[at.start as usize..at.end as usize],
+            &generated.text()[at.start as usize..at.end as usize],
             output.sources.slice(d.primary).unwrap()
         );
         if rule == "LANG-4" {
             assert_eq!(output.sources.slice(d.primary), Some(callee.as_str()));
-            let start = generated.text.find(&format!("= {callee}(")).unwrap() + 2;
+            let start = generated.text().find(&format!("= {callee}(")).unwrap() + 2;
             assert_eq!(
                 (at.start as usize, at.end as usize),
                 (start, start + callee.len())
@@ -241,8 +266,8 @@ fn json_hook_guidance_24_cross_module_nominal() {
         let helper = "pub type Service { name: String }\npub fn service_to_json(value: Service) -> json.Value uses {} = comptime derive.json_value(shape(Service))\npub fn service_from_json(value: json.Value) -> Result[Service, String] uses {} = comptime derive.from_json(shape(Service))\n";
         with_compiler_stack(|| {
             let dir = fixture(&s, Some(helper));
-            let mut p = load_program(&dir.path().join("hirsel.json")).unwrap();
-            let output = p.check(LoweringPolicy::Comptime).unwrap();
+            let mut p = Session::open(&dir.path().join("hirsel.json"), hirsel_engine::Verify::On);
+            let output = checked(&mut p);
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         });
     }
@@ -293,39 +318,33 @@ pub fn main() -> Result[(), String] uses {} {
         );
         let dir = fixture(&source, None);
         let path = dir.path().join("hirsel.json");
-        let mut program = load_program(&path).unwrap();
-        program.check_for_execution().unwrap_or_else(|e| match e {
-            hirsel_engine::ToolError::Query {
-                error: hirsel_engine::QueryError::Diagnostics(ds),
-                sources,
-                ..
-            } => panic!(
-                "{}",
-                ds.iter()
-                    .map(|d| d.render_human(&sources))
-                    .collect::<String>()
-            ),
-            e => panic!("{e}"),
-        });
+        let prepared = hirsel_driver::request_tir(&path, hirsel_engine::Verify::On, None)
+            .unwrap_or_else(|e| match e {
+                hirsel_engine::ToolError::Query {
+                    error: hirsel_engine::QueryError::Diagnostics(ds),
+                    sources,
+                    ..
+                } => panic!(
+                    "{}",
+                    ds.iter()
+                        .map(|d| d.render_human(&sources))
+                        .collect::<String>()
+                ),
+                e => panic!("{e}"),
+            });
         let config = hirsel_engine::RunConfiguration {
-            entry: program.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
         for checked in [false, true] {
-            let execution = if checked {
-                hirsel_engine::run_observed_checked(
-                    &mut program.engine,
-                    &config,
-                    hirsel_engine::SimulationConfig::default(),
-                )
-            } else {
-                hirsel_engine::run_observed_snapshot(
-                    &mut program.engine,
-                    &config,
-                    hirsel_engine::SimulationConfig::default(),
-                )
-            }
+            let execution = hirsel_driver::testing::observe_tir(
+                &prepared,
+                &config,
+                hirsel_engine::SimulationConfig::default(),
+                hirsel_interp::Limits::default(),
+                checked,
+            )
             .unwrap();
             let observation = hirsel_driver::native::Observation::of_reference(
                 execution.observation.as_ref().unwrap(),

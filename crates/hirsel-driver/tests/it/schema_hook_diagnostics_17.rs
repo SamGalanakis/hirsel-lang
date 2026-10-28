@@ -1,8 +1,37 @@
 //! Field-attributed failures, following Serde check.rs:29–53 (MIT OR Apache-2.0).
 //! Expected hook contracts below are written independently of generated text.
-use hirsel_driver::load_program;
+use hirsel_driver::{
+    requests::{CompileOperation, CompileResult},
+    session::Session,
+};
 use hirsel_engine::{LoweringPolicy, with_compiler_stack};
 use std::{fs, path::PathBuf};
+
+fn checked(session: &mut Session) -> hirsel_engine::CheckOutput {
+    match session.request(CompileOperation::Check {
+        lowering: LoweringPolicy::Comptime,
+    }) {
+        Ok(output) => {
+            let CompileResult::Check(checked) = &output.result else {
+                panic!("expected Check")
+            };
+            checked.clone()
+        }
+        // A generated declaration can reject during registration, before the
+        // Check roots exist. Its source diagnostic is a completed refusal.
+        Err(hirsel_engine::ToolError::Query {
+            error: hirsel_engine::QueryError::Diagnostics(diagnostics),
+            sources,
+            ..
+        }) => hirsel_engine::CheckOutput {
+            diagnostics,
+            sources,
+            completion: hirsel_engine::CheckCompletion::Complete,
+            unsafe_ffi: vec![],
+        },
+        Err(error) => panic!("{error}"),
+    }
+}
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -54,8 +83,8 @@ fn reject(
 ) {
     with_compiler_stack(|| {
         let dir = fixture(source, dependency);
-        let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
-        let output = program.check(LoweringPolicy::Comptime).unwrap();
+        let mut program = Session::open(&dir.path().join("hirsel.json"), hirsel_engine::Verify::On);
+        let output = checked(&mut program);
         assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
         let errors: Vec<_> = output
             .diagnostics
@@ -69,23 +98,22 @@ fn reject(
         if rule == "LANG-4" {
             assert_eq!(primary, callee);
         }
-        let generated = program
-            .engine
-            .generated_sources()
-            .find(|(_, g)| output.sources.resolve(d.primary).file == g.file)
-            .unwrap()
-            .1;
         let at = output.sources.resolve(d.primary);
+        let generated = output.sources.file(at.file).unwrap();
+        assert_eq!(generated.path, PathBuf::from("<generated:hooks@0/outer>"));
         if rule == "LANG-4" {
             let expected =
-                generated.text.find(&format!("match {callee}(")).unwrap() + "match ".len();
+                generated.text().find(&format!("match {callee}(")).unwrap() + "match ".len();
             assert_eq!(
                 (at.start as usize, at.end as usize),
                 (expected, expected + callee.len())
             );
         }
 
-        assert_eq!(&generated.text[at.start as usize..at.end as usize], primary);
+        assert_eq!(
+            &generated.text()[at.start as usize..at.end as usize],
+            primary
+        );
         let (input, result) = if direction == "decode" {
             ("std@1/json.Value", nominal)
         } else {
@@ -133,7 +161,7 @@ fn reject(
                 .any(|l| l["message"] == context)
         );
         assert!(d.fix.is_none());
-        let repeated = program.check(LoweringPolicy::Comptime).unwrap();
+        let repeated = checked(&mut program);
         assert_eq!(
             output
                 .diagnostics
@@ -242,8 +270,8 @@ fn schema_hook_diagnostics_17_cross_package_module() {
 fn schema_hook_diagnostics_17_handwritten_missing_name_unaffected() {
     with_compiler_stack(|| {
         let dir = fixture("fn ordinary() { missing_hook() }", None);
-        let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
-        let output = program.check(LoweringPolicy::Comptime).unwrap();
+        let mut program = Session::open(&dir.path().join("hirsel.json"), hirsel_engine::Verify::On);
+        let output = checked(&mut program);
         assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
         let d = &output.diagnostics[0];
         assert_eq!(d.rule.as_str(), "LANG-4");
@@ -296,29 +324,31 @@ pub fn main() -> Result[(), String] uses {} {
 "#;
         let dir = fixture(source, None);
         let path = dir.path().join("hirsel.json");
-        let mut program = load_program(&path).unwrap();
-        program.check_for_execution().unwrap_or_else(|e| match e {
-            hirsel_engine::ToolError::Query {
-                error: hirsel_engine::QueryError::Diagnostics(ds),
-                sources,
-                ..
-            } => panic!(
-                "{}",
-                ds.iter()
-                    .map(|d| d.render_human(&sources))
-                    .collect::<String>()
-            ),
-            e => panic!("{e}"),
-        });
+        let prepared = hirsel_driver::request_tir(&path, hirsel_engine::Verify::On, None)
+            .unwrap_or_else(|e| match e {
+                hirsel_engine::ToolError::Query {
+                    error: hirsel_engine::QueryError::Diagnostics(ds),
+                    sources,
+                    ..
+                } => panic!(
+                    "{}",
+                    ds.iter()
+                        .map(|d| d.render_human(&sources))
+                        .collect::<String>()
+                ),
+                e => panic!("{e}"),
+            });
         let config = hirsel_engine::RunConfiguration {
-            entry: program.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
-        let execution = hirsel_engine::run_observed_checked(
-            &mut program.engine,
+        let execution = hirsel_driver::testing::observe_tir(
+            &prepared,
             &config,
             hirsel_engine::SimulationConfig::default(),
+            hirsel_interp::Limits::default(),
+            true,
         )
         .unwrap();
         let observation = hirsel_driver::native::Observation::of_reference(
@@ -379,8 +409,9 @@ fn schema_hook_diagnostics_17_cross_package_manual_twins() {
                 .replace("service: Service", "service: helper@0/model.Service");
             let helper = "pub type Service { name: String }\npub fn service_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[unique Service, schema.SchemaError] uses {} { match wire { Text(s) => Ok(Service(name: unique s)), _ => Error(schema.scalar_error(mut check, \"String\")) } }\npub fn service_schema_encode(value: Service, mut check: schema.CheckState) -> Result[unique json.Value, schema.SchemaError] uses {} { Ok(Text(unique value.name)) }\n";
             let dir = fixture(&s, Some(helper));
-            let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
-            let output = program.check(LoweringPolicy::Comptime).unwrap();
+            let mut program =
+                Session::open(&dir.path().join("hirsel.json"), hirsel_engine::Verify::On);
+            let output = checked(&mut program);
             assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         }
