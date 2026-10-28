@@ -1004,6 +1004,8 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="gate-cpu-pool-tsan", script="tools/workers-tsan", full=False,
                             data=[], sanitizer="thread", files_env={"HIRSEL_WORKERS_TSAN": ":hirsel-rt-unittest-harness"}))
     out.append("\n" + call("hirsel_tsan_runtime_archives", name="hirsel-rt-tsan-archives"))
+    out.append("\n" + call("hirsel_script_test", name="test-workers-tsan", script="tools/tests/workers_tsan.py", full=False,
+                            data=["tools/workers-tsan", "tools/tests/workers_tsan.py"]))
     for width in [4, 8]:
         out.append("\n" + call("hirsel_native_pool_tsan", name=f"gate-cpu-pool-native-tsan-{width}", width=width,
                                products=PRODUCTS, data=Raw('glob(["stdlib/**", "native-tests/library/**", "crates/hirsel-cli/Cargo.toml"])')))

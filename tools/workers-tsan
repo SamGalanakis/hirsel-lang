@@ -38,6 +38,15 @@ if "HIRSEL_NATIVE_CPU_HARNESS" in os.environ:
                     passed.add(event["name"])
         if len(passed) != 4 and "4 passed" not in result.stdout:
             raise SystemExit("native CPU TSan harness did not pass all four cells")
+        lines = (result.stdout + "\n" + result.stderr).splitlines()
+        missing = [f"CPU {policy} {backend} P({args.native}):"
+                   for policy in ["tasks.free@1", "tasks.cooperative@1"]
+                   for backend in ["llvm", "cranelift"]
+                   if not any(line.startswith(f"CPU {policy} {backend} P({args.native}):")
+                              for line in lines)]
+        if missing:
+            raise SystemExit("native CPU TSan full-width P not qualified; "
+                             "exclusive CPU witnesses missing for " + ", ".join(missing))
     raise SystemExit(result.returncode)
 
 if "HIRSEL_WORKERS_TSAN" in os.environ:
