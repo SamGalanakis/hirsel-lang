@@ -46,6 +46,12 @@ pub struct NativeMarker {
     pub layout: LayoutId,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeChannelBinding {
+    pub send: bool,
+    pub payload: LayoutId,
+}
+
 /// Constructed only after ordinary Ready validation and exhaustive checking of
 /// this adapter's supported instruction set. An arbitrary user plan cannot
 /// suppress an ownership transition before native emission.
@@ -225,6 +231,7 @@ impl LeafPlan {
                             Kind::Move => 1,
                             Kind::Drop if carrier_move => 4,
                             Kind::Drop => 2,
+                            Kind::Alias if runtime_calls::channel_alias(unit, layouts, &observation).is_some() => 8,
                             Kind::Alias if matches!(from, Location::Address(_)) => 6,
                             Kind::Alias => 3,
                         },
@@ -621,6 +628,13 @@ impl LeafPlan {
                     let call = &unit.tables.calls[call.index()];
                     if matches!(call.callee, Callee::Operation(_)) {
                         runtime_call(unit, layouts, selection, call, None, None)?;
+                        if selection == Selection::Resources
+                            && let Some(channel) = runtime_calls::channel_call(unit, layouts, call)
+                            && selection.tracks_layout(layouts, channel.layout)
+                        {
+                            push(Point::CallEntered(b), Kind::Alias,
+                                Location::Address(channel.address), Location::Parameter(1), channel.layout)?;
+                        }
                         if let Some(value) = runtime_calls::spawn_parameter(unit, call) {
                             push(
                                 Point::CallEntered(b),
@@ -1122,6 +1136,7 @@ impl LeafPlan {
                         4
                     }
                     Kind::Drop => 2,
+                    Kind::Alias if runtime_calls::channel_alias(body, layouts, observation).is_some() => 8,
                     Kind::Alias if matches!(marker.token, Location::Address(_)) => 6,
                     Kind::Alias => 3,
                 },
@@ -1840,8 +1855,22 @@ impl LeafPlan {
                 .iter()
                 .find(|(_, marker)| marker.id == id)
                 .is_some_and(|(_, marker)| {
-                    marker.kind == 1 && variants::may_be_empty(layouts, marker.layout)
+                    matches!(marker.kind, 1 | 8) && variants::may_be_empty(layouts, marker.layout)
                 })
+    }
+
+    pub fn channel_binding(
+        &self, unit: &LirUnit<Ready>, layouts: &LayoutTable, id: MarkerId,
+    ) -> Result<Option<NativeChannelBinding>, String> {
+        let (_, marker) = self.commits.iter().find(|(_, marker)| marker.id == id)
+            .ok_or("channel marker has no committed operation")?;
+        if marker.kind != 8 { return Ok(None); }
+        let observation = self.plan.observations.iter().find(|observation| observation.marker.id == id)
+            .ok_or("channel marker lost its checked alias")?;
+        let channel = runtime_calls::channel_alias(unit, layouts, observation)
+            .ok_or("channel marker has no exact checked intrinsic payload")?;
+        if channel.layout != marker.layout { return Err("channel payload layout differs".into()); }
+        Ok(Some(NativeChannelBinding { send: channel.send, payload: channel.layout }))
     }
 
     /// A statically known function reference or resource-free environment has
