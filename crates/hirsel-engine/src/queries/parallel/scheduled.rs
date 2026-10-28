@@ -793,11 +793,7 @@ impl FrontBodyQueries {
             .collect()
     }
     pub(crate) fn registration(&self, path: &DefPath) -> Option<&AcceptedFrontRegistration> {
-        self.inputs
-            .values()
-            .find(|input| input.definition.path() == path)?
-            .registration
-            .as_deref()
+        self.registration_handle(path).map(Arc::as_ref)
     }
     fn worker(&self) -> Worker<'_> {
         Worker {
