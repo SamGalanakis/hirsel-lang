@@ -7,7 +7,10 @@ use hirsel_run_schema::ownership_trace::{
     Buffer,
     native::{Log, Row, VERSION},
 };
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 pub const ABI_VERSION: u32 = 97;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
@@ -48,8 +51,9 @@ pub(crate) fn task_end(ctx: &TaskCtx) {
 pub(crate) struct Observer {
     destination: std::path::PathBuf,
     program: [u8; 32],
-    rows: Buffer<Row>,
+    rows: Arc<Buffer<Row>>,
     next_frame: AtomicU64,
+    next_queue: AtomicU64,
     failed: AtomicBool,
 }
 impl Observer {
@@ -64,14 +68,15 @@ impl Observer {
         Self {
             destination,
             program,
-            rows: Buffer::new(
+            rows: Arc::new(Buffer::new(
                 limit,
                 Row::Leave {
                     task: u64::MAX,
                     frame: 0,
                 },
-            ),
+            )),
             next_frame: AtomicU64::new(1),
+            next_queue: AtomicU64::new(1),
             failed: AtomicBool::new(false),
         }
     }
@@ -81,8 +86,10 @@ impl Observer {
         let _ = self.rows.push(row);
     }
     pub(crate) fn write(self) {
-        let rows = self.rows.into_rows();
-        let complete = rows.is_ok() && !self.failed.into_inner();
+        let rows = Arc::try_unwrap(self.rows)
+            .ok()
+            .and_then(|rows| rows.into_rows().ok());
+        let complete = rows.is_some() && !self.failed.into_inner();
         let rows = rows.unwrap_or_default();
         let log = Log {
             version: VERSION,
@@ -410,3 +417,99 @@ pub(crate) unsafe fn retired(
 #[cfg(test)]
 #[path = "ownership_trace_tests.rs"]
 mod tests;
+
+/// A channel retains only a weak handle to diagnostic storage. It neither
+/// extends the run nor keeps the buffer alive after its quiescent writer.
+#[derive(Clone)]
+pub(crate) struct QueueRecord {
+    rows: Weak<Buffer<Row>>,
+    queue: u64,
+    layout: u32,
+}
+impl QueueRecord {
+    fn record(&self, row: Row) {
+        if let Some(rows) = self.rows.upgrade() {
+            let _ = rows.push(row);
+        }
+    }
+    pub(crate) fn sent(&self, task: u64, item: u64, status: u32, pending: bool) {
+        self.record(Row::QueueSent {
+            task: canonical(task),
+            queue: self.queue,
+            layout: self.layout,
+            item,
+            status,
+            pending,
+        });
+    }
+    pub(crate) fn received(&self, task: u64, item: u64, status: u32) {
+        self.record(Row::QueueReceived {
+            task: canonical(task),
+            queue: self.queue,
+            layout: self.layout,
+            item,
+            status,
+        });
+    }
+    pub(crate) fn published(&self, task: u64, item: u64) {
+        self.record(Row::QueuePublished {
+            task: canonical(task),
+            queue: self.queue,
+            layout: self.layout,
+            item,
+        });
+    }
+    pub(crate) fn detached(&self, task: u64, first: u64, end: u64) {
+        self.record(Row::QueueDetached {
+            task: canonical(task),
+            queue: self.queue,
+            layout: self.layout,
+            first,
+            end,
+        });
+    }
+}
+fn canonical(task: u64) -> u64 {
+    if task as u32 == 0 { 0 } else { task }
+}
+
+/// The actual creation installs this identity before any endpoint is exposed.
+/// IDs come from the admitted observer, never payloads, addresses or handles.
+pub(crate) fn queue_created(
+    run: &crate::context::RunShared,
+    task: u64,
+    cell: &crate::channels::ChannelCell,
+) {
+    let Some(observer) = &run.ownership_trace else {
+        return;
+    };
+    let Ok(queue) = observer
+        .next_queue
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+    else {
+        observer.failed.store(true, Ordering::Relaxed);
+        return;
+    };
+    let record = QueueRecord {
+        rows: Arc::downgrade(&observer.rows),
+        queue,
+        layout: cell.element.descriptor,
+    };
+    if cell.ownership.set(record).is_err() {
+        observer.failed.store(true, Ordering::Relaxed);
+        return;
+    }
+    observer.record(Row::QueueCreated {
+        task: canonical(task),
+        queue,
+        layout: cell.element.descriptor,
+    });
+}
+
+/// # Safety
+/// This context owns creation; neither endpoint has been exposed to another task.
+pub(crate) unsafe fn queue_created_here(ctx: *mut TaskCtx, cell: &crate::channels::ChannelCell) {
+    unsafe {
+        queue_created((*ctx).run_ref(), (*ctx).ownership_task, cell);
+    }
+}

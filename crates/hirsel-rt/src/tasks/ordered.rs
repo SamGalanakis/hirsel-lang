@@ -340,10 +340,17 @@ impl Backend<Command> for Objects<'_> {
                 }
             } else {
                 let left = super::role::with_role(self.ctx, |s| {
-                    if observing {
-                        s.channels.close_images(*word)
-                    } else {
-                        s.channels.close(*word)
+                    #[cfg(not(feature = "ownership-trace"))]
+                    {
+                        if observing {
+                            s.channels.close_images(*word)
+                        } else {
+                            s.channels.close(*word)
+                        }
+                    }
+                    #[cfg(feature = "ownership-trace")]
+                    {
+                        s.channels.close_observed(*word, observing, task)
                     }
                 });
                 canonical = unsafe {
@@ -604,7 +611,15 @@ impl Backend<Command> for Objects<'_> {
                         .take()
                         .expect("creation committed once");
                     let (sender, receiver) = reservation.words();
+                    #[cfg(feature = "ownership-trace")]
+                    let channel = reservation.channel();
                     s.channels.initialize_open(reservation, element, &*layout);
+                    #[cfg(feature = "ownership-trace")]
+                    crate::ownership_trace::queue_created(
+                        (*self.ctx).run_ref(),
+                        task,
+                        &s.channels.payload(channel),
+                    );
                     let image = [sender.to_ne_bytes(), receiver.to_ne_bytes()].concat();
                     (Outcome::image(0, image), Next::Yield)
                 }
@@ -652,11 +667,16 @@ impl Backend<Command> for Objects<'_> {
                     } else {
                         None
                     };
+                    #[cfg(not(feature = "ownership-trace"))]
                     let (status, pending) = if early {
                         s.channels.send_pending(channel, image.as_mut_ptr())
                     } else {
                         (s.channels.send(channel, image.as_mut_ptr()), None)
                     };
+                    #[cfg(feature = "ownership-trace")]
+                    let (status, pending) =
+                        s.channels
+                            .send_observed(channel, image.as_mut_ptr(), early, task);
                     (
                         Outcome {
                             status,

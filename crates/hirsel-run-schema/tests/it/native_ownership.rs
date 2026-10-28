@@ -320,7 +320,12 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
             | Row::TaskPart { .. }
             | Row::Operation { .. }
             | Row::Spawn { .. }
-            | Row::TaskEnd { .. } => unreachable!(),
+            | Row::TaskEnd { .. }
+            | Row::QueueCreated { .. }
+            | Row::QueueSent { .. }
+            | Row::QueuePublished { .. }
+            | Row::QueueReceived { .. }
+            | Row::QueueDetached { .. } => unreachable!(),
         }
     }
     log.rows.splice(2..2, child);
@@ -2182,5 +2187,190 @@ fn native_constructed_variant_fields_bind_the_exact_ssa_and_declaration_field() 
             _ => at.fields.push(Projection::Field { field: 0 }),
         }
         assert!(decode_local_calls(&log, [49; 32], &forged, &calls, 100).is_err());
+    }
+}
+
+fn queue_rows() -> Vec<Row> {
+    vec![
+        Row::QueueCreated {
+            task: 0,
+            queue: 1,
+            layout: 9,
+        },
+        Row::QueueSent {
+            task: 0,
+            queue: 1,
+            layout: 9,
+            item: 0,
+            status: 0,
+            pending: true,
+        },
+        Row::QueueReceived {
+            task: 0,
+            queue: 1,
+            layout: 9,
+            item: 0,
+            status: 2,
+        },
+        Row::QueuePublished {
+            task: 0,
+            queue: 1,
+            layout: 9,
+            item: 0,
+        },
+        Row::QueueReceived {
+            task: 0,
+            queue: 1,
+            layout: 9,
+            item: 0,
+            status: 0,
+        },
+        Row::QueueSent {
+            task: 0,
+            queue: 1,
+            layout: 9,
+            item: 1,
+            status: 0,
+            pending: false,
+        },
+        Row::QueueDetached {
+            task: 0,
+            queue: 1,
+            layout: 9,
+            first: 1,
+            end: 2,
+        },
+        Row::QueueSent {
+            task: 0,
+            queue: 1,
+            layout: 9,
+            item: 2,
+            status: 1,
+            pending: false,
+        },
+        Row::QueueReceived {
+            task: 0,
+            queue: 1,
+            layout: 9,
+            item: 2,
+            status: 1,
+        },
+        Row::QueueCreated {
+            task: 0,
+            queue: 2,
+            layout: 9,
+        },
+    ]
+}
+
+#[test]
+fn native_queue_positions_preserve_pending_fifo_without_creating_resource_authority() {
+    let (mut log, units) = fixture();
+    let expected = decode_leaf(&log, log.program, &units, 1000).unwrap();
+    log.rows.splice(0..0, queue_rows());
+    log.row_count = log.rows.len() as u64;
+    let encoded = serde_json::to_vec(&log).unwrap();
+    let restored: Log = serde_json::from_slice(&encoded).unwrap();
+    let actual = decode_leaf(&restored, log.program, &units, 1000).unwrap();
+    assert_eq!(
+        actual, expected,
+        "queue receipts are not Resource identities or drops"
+    );
+}
+
+#[test]
+fn native_queue_positions_refuse_forged_identity_schema_fifo_and_publication() {
+    let create = Row::QueueCreated {
+        task: 0,
+        queue: 1,
+        layout: 9,
+    };
+    let sent = |item, pending| Row::QueueSent {
+        task: 0,
+        queue: 1,
+        layout: 9,
+        item,
+        status: 0,
+        pending,
+    };
+    let receive = |item| Row::QueueReceived {
+        task: 0,
+        queue: 1,
+        layout: 9,
+        item,
+        status: 0,
+    };
+    let publish = Row::QueuePublished {
+        task: 0,
+        queue: 1,
+        layout: 9,
+        item: 0,
+    };
+    let detach = Row::QueueDetached {
+        task: 0,
+        queue: 1,
+        layout: 9,
+        first: 0,
+        end: 1,
+    };
+    for rows in [
+        vec![sent(0, false)],
+        vec![create, create],
+        vec![
+            create,
+            Row::QueueSent {
+                task: 0,
+                queue: 1,
+                layout: 8,
+                item: 0,
+                status: 0,
+                pending: false,
+            },
+        ],
+        vec![create, sent(1, false)],
+        vec![create, sent(0, false), sent(0, false)],
+        vec![create, publish],
+        vec![create, sent(0, false), publish],
+        vec![create, sent(0, true), publish, publish],
+        vec![create, sent(0, true), receive(0)],
+        vec![create, receive(0)],
+        vec![create, sent(0, false), receive(1)],
+        vec![create, sent(0, false), receive(0), receive(0)],
+        vec![
+            create,
+            Row::QueueSent {
+                task: 0,
+                queue: 1,
+                layout: 9,
+                item: 0,
+                status: 1,
+                pending: false,
+            },
+        ],
+        vec![create, sent(0, false), detach, sent(1, false)],
+        vec![create, sent(0, false), detach, detach],
+        vec![
+            create,
+            sent(0, false),
+            Row::QueueDetached {
+                task: 0,
+                queue: 1,
+                layout: 9,
+                first: 1,
+                end: 1,
+            },
+        ],
+    ] {
+        let log = Log {
+            version: VERSION,
+            program: [3; 32],
+            row_count: rows.len() as u64,
+            complete: true,
+            rows,
+        };
+        assert_eq!(
+            decode_leaf(&log, log.program, &BTreeMap::new(), 1000).unwrap_err(),
+            Error::InvalidQueue(1)
+        );
     }
 }

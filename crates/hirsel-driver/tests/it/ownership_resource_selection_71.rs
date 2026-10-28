@@ -135,7 +135,7 @@ pub fn main()->Result[(),u64] {
 #[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
 fn scalar_channel_traffic_preserves_parent_and_child_resource_lifetimes() {
     for tasks in ["tasks.cooperative@1", "tasks.free@1"] {
-        super::ownership_owned_call_49::source_calls_granted(
+        super::ownership_owned_call_49::source_calls_granted_with_log(
             r#"
 resource type Token {}
 drop(x) {}
@@ -166,6 +166,50 @@ return }
             2,
             0,
             &serde_json::json!({"io":{"tasks":tasks,"dirs":[]}}).to_string(),
+            |log| {
+                use hirsel_run_schema::ownership_trace::native::Row;
+                let created = log
+                    .rows
+                    .iter()
+                    .filter_map(|row| match row {
+                        Row::QueueCreated { queue, layout, .. } => Some((*queue, *layout)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(created.len(), 1, "the actual channel creation is absent");
+                let (queue, layout) = created[0];
+                let sends = log
+                    .rows
+                    .iter()
+                    .filter_map(|row| match row {
+                        Row::QueueSent {
+                            queue: q,
+                            layout: l,
+                            item,
+                            status: 0,
+                            ..
+                        } if (*q, *l) == (queue, layout) => Some(*item),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let received = log
+                    .rows
+                    .iter()
+                    .filter_map(|row| match row {
+                        Row::QueueReceived {
+                            queue: q,
+                            layout: l,
+                            item,
+                            status: 0,
+                            ..
+                        } if (*q, *l) == (queue, layout) => Some(*item),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(sends, [0, 1]);
+                assert_eq!(received, [0, 1]);
+                assert_eq!(log.rows.iter().filter(|row| matches!(row, Row::QueueDetached { queue: q, layout: l, first: 2, end: 2, .. } if (*q,*l) == (queue,layout))).count(), 1);
+            },
         );
     }
 }

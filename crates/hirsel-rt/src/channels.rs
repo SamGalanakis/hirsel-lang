@@ -197,6 +197,8 @@ pub(crate) struct Channel {
 pub(crate) struct ChannelCell {
     pub(crate) element: Element,
     pub(crate) object: std::sync::OnceLock<hirsel_free::record::ObjectId>,
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) ownership: std::sync::OnceLock<crate::ownership_trace::QueueRecord>,
     sequence: AtomicU64,
     state: Mutex<ChannelState>,
 }
@@ -271,6 +273,55 @@ impl ChannelCell {
             state.pending.insert(sequence);
         }
         (DONE, early.then_some(sequence))
+    }
+
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) unsafe fn send_observed(
+        &self,
+        state: &mut ChannelState,
+        slot: *mut u8,
+        early: bool,
+        task: u64,
+    ) -> (u32, Option<u64>) {
+        let item = state.sent;
+        let result = unsafe { self.send(state, slot, early) };
+        if let Some(record) = self.ownership.get() {
+            record.sent(task, item, result.0, result.1.is_some());
+        }
+        result
+    }
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) unsafe fn receive_observed(
+        &self,
+        state: &mut ChannelState,
+        slot: *mut u8,
+        task: u64,
+    ) -> Result<bool, u32> {
+        let item = state.received;
+        let result = unsafe { self.receive(state, slot) };
+        if let Some(record) = self.ownership.get() {
+            match result {
+                Ok(true) => record.received(task, item, DONE),
+                Err(status) => record.received(task, item, status),
+                Ok(false) => (),
+            }
+        }
+        result
+    }
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) fn close_observed(
+        &self,
+        state: &mut ChannelState,
+        sender: bool,
+        task: u64,
+    ) -> ClosedChannel {
+        let first = state.received;
+        let end = state.sent;
+        let closed = self.close_locked(state, sender);
+        if !sender && let Some(record) = self.ownership.get() {
+            record.detached(task, first, end);
+        }
+        closed
     }
 
     pub(crate) fn ready(&self, state: &ChannelState) -> bool {
@@ -364,6 +415,8 @@ impl ClosedChannel {
 pub(crate) struct PendingSend {
     channel: u32,
     sequence: u64,
+    #[cfg(feature = "ownership-trace")]
+    task: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -452,6 +505,8 @@ impl Channels {
             }),
             element,
             object: Default::default(),
+            #[cfg(feature = "ownership-trace")]
+            ownership: Default::default(),
             sequence: AtomicU64::new(1),
         })
     }
@@ -601,7 +656,16 @@ impl Channels {
     /// `slot` is a `Some` image of the channel's element in another frame.
     pub(crate) unsafe fn send(&mut self, channel: u32, slot: *mut u8) -> u32 {
         // SAFETY: caller contract.
-        unsafe { self.send_inner(channel, slot, false) }.0
+        unsafe {
+            self.send_inner(
+                channel,
+                slot,
+                false,
+                #[cfg(feature = "ownership-trace")]
+                None,
+            )
+        }
+        .0
     }
 
     /// An E send's internal commit. It does not touch the channel: an older
@@ -615,7 +679,15 @@ impl Channels {
         slot: *mut u8,
     ) -> (u32, Option<PendingSend>) {
         // SAFETY: caller contract.
-        unsafe { self.send_inner(channel, slot, true) }
+        unsafe {
+            self.send_inner(
+                channel,
+                slot,
+                true,
+                #[cfg(feature = "ownership-trace")]
+                None,
+            )
+        }
     }
 
     unsafe fn send_inner(
@@ -623,10 +695,17 @@ impl Channels {
         channel: u32,
         slot: *mut u8,
         early: bool,
+        #[cfg(feature = "ownership-trace")] task: Option<u64>,
     ) -> (u32, Option<PendingSend>) {
         let cell = self.payload(channel);
         let mut state = cell.lock();
+        #[cfg(not(feature = "ownership-trace"))]
         let (status, pending) = unsafe { cell.send(&mut state, slot, early) };
+        #[cfg(feature = "ownership-trace")]
+        let (status, pending) = match task {
+            Some(task) => unsafe { cell.send_observed(&mut state, slot, early, task) },
+            None => unsafe { cell.send(&mut state, slot, early) },
+        };
         cell.next_event();
         drop(state);
         if !early && status == DONE {
@@ -634,13 +713,30 @@ impl Channels {
         }
         (
             status,
-            pending.map(|sequence| PendingSend { channel, sequence }),
+            pending.map(|sequence| PendingSend {
+                channel,
+                sequence,
+                #[cfg(feature = "ownership-trace")]
+                task: task.unwrap_or(0),
+            }),
         )
+    }
+
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) unsafe fn send_observed(
+        &mut self,
+        channel: u32,
+        slot: *mut u8,
+        early: bool,
+        task: u64,
+    ) -> (u32, Option<PendingSend>) {
+        unsafe { self.send_inner(channel, slot, early, Some(task)) }
     }
 
     /// Retirement step 3: clear pending AND touch the channel immediately
     /// before polling. Consuming the ticket twice is an executor fault.
     pub(crate) fn publish(&mut self, send: PendingSend) {
+        #[cfg(not(feature = "ownership-trace"))]
         if !self
             .payload(send.channel)
             .lock()
@@ -648,6 +744,17 @@ impl Channels {
             .remove(&send.sequence)
         {
             fault("an early send was published twice");
+        }
+        #[cfg(feature = "ownership-trace")]
+        {
+            let cell = self.payload(send.channel);
+            let mut state = cell.lock();
+            if !state.pending.remove(&send.sequence) {
+                fault("an early send was published twice");
+            }
+            if let Some(record) = cell.ownership.get() {
+                record.published(send.task, send.sequence);
+            }
         }
         self.touch(send.channel);
     }
@@ -707,6 +814,17 @@ impl Channels {
         unsafe { cell.receive(&mut cell.lock(), slot) }
     }
 
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) unsafe fn receive_observed(
+        &mut self,
+        channel: u32,
+        slot: *mut u8,
+        task: u64,
+    ) -> Result<bool, u32> {
+        let cell = self.payload(channel);
+        unsafe { cell.receive_observed(&mut cell.lock(), slot, task) }
+    }
+
     /// Reserve recycling lists before a native recording phase.
     pub(crate) fn prepare_close(&mut self) {
         self.endpoint_slots.reserve(1);
@@ -718,20 +836,41 @@ impl Channels {
     /// with their descriptor index, for the caller to drop oldest first; none when the element
     /// needs no drop.
     pub(crate) fn close(&mut self, word: u64) -> Option<(Ring, u32)> {
-        self.close_inner(word, false)
+        self.close_inner(
+            word,
+            false,
+            #[cfg(feature = "ownership-trace")]
+            None,
+        )
     }
 
     /// Retain inert leftovers too, for initialized-value retirement evidence.
     pub(crate) fn close_images(&mut self, word: u64) -> Option<(Ring, u32)> {
-        self.close_inner(word, true)
+        self.close_inner(
+            word,
+            true,
+            #[cfg(feature = "ownership-trace")]
+            None,
+        )
     }
 
-    fn close_inner(&mut self, word: u64, retain_inert: bool) -> Option<(Ring, u32)> {
+    fn close_inner(
+        &mut self,
+        word: u64,
+        retain_inert: bool,
+        #[cfg(feature = "ownership-trace")] task: Option<u64>,
+    ) -> Option<(Ring, u32)> {
         self.prepare_close();
         let (channel, _) = self.endpoint_of(word);
         let cell = self.payload(channel);
         let mut state = cell.lock();
+        #[cfg(not(feature = "ownership-trace"))]
         let closed = self.close_locked(word, &cell, &mut state);
+        #[cfg(feature = "ownership-trace")]
+        let closed = match task {
+            Some(task) => self.close_locked_observed(word, &cell, &mut state, task),
+            None => self.close_locked(word, &cell, &mut state),
+        };
         cell.next_event();
         drop(state);
         let left = closed.into_left();
@@ -740,6 +879,32 @@ impl Channels {
         } else {
             left
         }
+    }
+
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) fn close_observed(
+        &mut self,
+        word: u64,
+        retain_inert: bool,
+        task: u64,
+    ) -> Option<(Ring, u32)> {
+        self.close_inner(word, retain_inert, Some(task))
+    }
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) fn close_locked_observed(
+        &mut self,
+        word: u64,
+        cell: &ChannelCell,
+        state: &mut ChannelState,
+        task: u64,
+    ) -> ClosedChannel {
+        let (channel, sender) = self.endpoint_of(word);
+        let mut detached = cell.close_observed(state, sender, task);
+        detached._row = self.retire(word, detached.last);
+        if detached.unsent {
+            self.touch(channel);
+        }
+        detached
     }
 
     /// Detach without freeing image storage in the phase. The caller retains

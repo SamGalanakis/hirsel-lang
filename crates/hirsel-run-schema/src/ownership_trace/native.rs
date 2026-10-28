@@ -7,7 +7,9 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 12;
+mod queues;
+
+pub const VERSION: u32 = 13;
 const MUTABLE_PARAMETER: u64 = (u32::MAX - 1) as u64;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
@@ -42,6 +44,42 @@ pub enum Row {
     Operation {
         task: u64,
         ordinal: u64,
+    },
+    /// Runtime-owned channel identity and its exact Option payload descriptor.
+    /// These rows provide no Resource identity or destruction authority.
+    QueueCreated {
+        task: u64,
+        queue: u64,
+        layout: u32,
+    },
+    QueueSent {
+        task: u64,
+        queue: u64,
+        layout: u32,
+        item: u64,
+        status: u32,
+        pending: bool,
+    },
+    QueuePublished {
+        task: u64,
+        queue: u64,
+        layout: u32,
+        item: u64,
+    },
+    QueueReceived {
+        task: u64,
+        queue: u64,
+        layout: u32,
+        item: u64,
+        status: u32,
+    },
+    /// Receiver close detached [first, end). Payload cleanup has not finished.
+    QueueDetached {
+        task: u64,
+        queue: u64,
+        layout: u32,
+        first: u64,
+        end: u64,
     },
     Enter {
         task: u64,
@@ -155,6 +193,7 @@ pub enum Error {
     InvalidTask(u64),
     InvalidOperation { task: u64, ordinal: u64 },
     InvalidFrame(u64),
+    InvalidQueue(u64),
     UnknownUnit([u8; 32]),
     InvalidMarker(u32),
     InvalidLocation(u64),
@@ -418,6 +457,7 @@ fn decode(
     let mut environments = BTreeMap::<u64, SpawnEnvironment>::new();
     let mut ended_tasks = BTreeSet::new();
     let mut tracker = Tracker::new(limit);
+    let mut queues = queues::Queues::default();
     for &row in &log.rows {
         match row {
             Row::Task { task, depth } => {
@@ -509,7 +549,12 @@ fn decode(
             | Row::CleanupEnd { task, .. }
             | Row::Leave { task, .. }
             | Row::Spawn { task, .. }
-            | Row::TaskEnd { task } => task,
+            | Row::TaskEnd { task }
+            | Row::QueueCreated { task, .. }
+            | Row::QueueSent { task, .. }
+            | Row::QueuePublished { task, .. }
+            | Row::QueueReceived { task, .. }
+            | Row::QueueDetached { task, .. } => task,
             Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
         };
         let identity = tasks.get(&task).ok_or(Error::UnsupportedTask(task))?;
@@ -521,6 +566,9 @@ fn decode(
         }
         if ended_tasks.contains(&task) {
             return Err(Error::InvalidTask(task));
+        }
+        if queues.observe(row)? {
+            continue;
         }
         if let Row::Spawn {
             frame,
@@ -608,7 +656,12 @@ fn decode(
             | Row::TaskPart { .. }
             | Row::Operation { .. }
             | Row::Spawn { .. }
-            | Row::TaskEnd { .. } => unreachable!(),
+            | Row::TaskEnd { .. }
+            | Row::QueueCreated { .. }
+            | Row::QueueSent { .. }
+            | Row::QueuePublished { .. }
+            | Row::QueueReceived { .. }
+            | Row::QueueDetached { .. } => unreachable!(),
             Row::Enter { frame, unit, .. } => {
                 if frame == 0 || !entered.insert(frame) {
                     return Err(Error::InvalidFrame(frame));

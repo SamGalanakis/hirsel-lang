@@ -42,7 +42,11 @@ pub(crate) unsafe fn open(
         if let Some(replay) = &replay {
             replay.create()?;
         }
+        #[cfg(feature = "ownership-trace")]
+        let observed_cell = cell.clone();
         role::with_held(ctx, |s| s.channels.initialize_open_cell(reservation, cell));
+        #[cfg(feature = "ownership-trace")]
+        crate::ownership_trace::queue_created_here(ctx, &observed_cell);
         out.write(sender);
         out.add(1).write(receiver);
         if let Some(writer) = writer {
@@ -183,7 +187,11 @@ pub(super) fn sent(
         Phase::Done,
         replay.map(|object| object.token()),
         |writer| {
+            #[cfg(not(feature = "ownership-trace"))]
             let status = unsafe { cell.send(state, message, false) }.0;
+            #[cfg(feature = "ownership-trace")]
+            let status =
+                unsafe { cell.send_observed(state, message, false, (*ctx).ownership_task) }.0;
             let version = cell.next_event();
             let outcome = if status == crate::channels::DONE {
                 "send"
@@ -287,7 +295,16 @@ pub(super) unsafe fn receive_begun(
                             canceled_outcome.as_deref().unwrap(),
                         )
                     } else {
-                        match unsafe { cell.receive(&mut state, message) } {
+                        match unsafe {
+                            #[cfg(not(feature = "ownership-trace"))]
+                            {
+                                cell.receive(&mut state, message)
+                            }
+                            #[cfg(feature = "ownership-trace")]
+                            {
+                                cell.receive_observed(&mut state, message, (*ctx).ownership_task)
+                            }
+                        } {
                             Ok(true) => (crate::channels::DONE, "msg"),
                             Err(status) => (status, "closed"),
                             Ok(false) => {
@@ -438,7 +455,21 @@ pub(super) unsafe fn close_action_entered(
         polling,
         |writer| {
             let left = unsafe {
-                role::with_held(ctx, |s| s.channels.close_locked(word, &cell, &mut state))
+                role::with_held(ctx, |s| {
+                    #[cfg(not(feature = "ownership-trace"))]
+                    {
+                        s.channels.close_locked(word, &cell, &mut state)
+                    }
+                    #[cfg(feature = "ownership-trace")]
+                    {
+                        s.channels.close_locked_observed(
+                            word,
+                            &cell,
+                            &mut state,
+                            (*ctx).ownership_task,
+                        )
+                    }
+                })
             };
             if left.unsent {
                 // The parked receivers now see Closed.

@@ -114,10 +114,19 @@ pub(crate) unsafe fn endpoint(
         name,
         || {
             let left = role::with_role(ctx, |s| {
-                if super::events::enabled(s) {
-                    s.channels.close_images(word)
-                } else {
-                    s.channels.close(word)
+                #[cfg(not(feature = "ownership-trace"))]
+                {
+                    if super::events::enabled(s) {
+                        s.channels.close_images(word)
+                    } else {
+                        s.channels.close(word)
+                    }
+                }
+                #[cfg(feature = "ownership-trace")]
+                {
+                    let observing = super::events::enabled(s);
+                    s.channels
+                        .close_observed(word, observing, unsafe { (*ctx).ownership_task })
                 }
             });
             (left, Next::Keep)

@@ -13,7 +13,17 @@ pub(super) fn source_calls_exit(source: &str, created: u64, expected_exit: i32) 
 }
 
 pub(super) fn source_calls_granted(source: &str, created: u64, expected_exit: i32, grants: &str) {
-    hirsel_engine::with_compiler_stack(|| {
+    source_calls_granted_with_log(source, created, expected_exit, grants, |_| {});
+}
+
+pub(super) fn source_calls_granted_with_log(
+    source: &str,
+    created: u64,
+    expected_exit: i32,
+    grants: &str,
+    observe: impl Fn(&hirsel_run_schema::ownership_trace::native::Log) + Send,
+) {
+    hirsel_engine::with_compiler_stack(move || {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
         let manifest = directory.path().join("hirsel.json");
@@ -162,6 +172,14 @@ pub(super) fn source_calls_granted(source: &str, created: u64, expected_exit: i3
                 "{}",
                 String::from_utf8_lossy(&run.execution.stderr)
             );
+            let raw = std::fs::read(
+                directory
+                    .path()
+                    .join(backend.name())
+                    .join("ownership.rows.json"),
+            )
+            .unwrap();
+            observe(&serde_json::from_slice(&raw).unwrap());
             let trace = run
                 .trace
                 .unwrap_or_else(|error| panic!("{backend:?} original plan trace: {error}"));

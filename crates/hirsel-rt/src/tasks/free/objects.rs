@@ -702,7 +702,16 @@ pub(crate) unsafe fn channel_receive(
                     canceled.as_deref().unwrap(),
                 )
             } else {
-                match unsafe { cell.receive(&mut state, message) } {
+                match unsafe {
+                    #[cfg(not(feature = "ownership-trace"))]
+                    {
+                        cell.receive(&mut state, message)
+                    }
+                    #[cfg(feature = "ownership-trace")]
+                    {
+                        cell.receive_observed(&mut state, message, (*ctx).ownership_task)
+                    }
+                } {
                     Ok(true) => (crate::channels::DONE, "msg"),
                     Err(status) => (status, "closed"),
                     Ok(false) => unreachable!("the receiver owns this channel's ready message"),
@@ -932,7 +941,10 @@ pub(crate) unsafe fn channel_close(
         Phase::Done,
         replay.as_ref().map(|object| object.token()),
         |writer| {
+            #[cfg(not(feature = "ownership-trace"))]
             let closed = cell.close_locked(&mut state, sender);
+            #[cfg(feature = "ownership-trace")]
+            let closed = cell.close_observed(&mut state, sender, unsafe { (*ctx).ownership_task });
             let version = cell.next_event();
             if let Some(writer) = writer {
                 writer.touch(

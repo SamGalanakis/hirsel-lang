@@ -4384,7 +4384,18 @@ unsafe fn receive_ready(
         return Some(crate::channels::CANCELED + cause);
     }
     // SAFETY: caller contract.
-    match unsafe { s.channels.receive(channel, slot) } {
+    #[cfg(feature = "ownership-trace")]
+    let owner = handle(task, s.task(task).generation);
+    match unsafe {
+        #[cfg(not(feature = "ownership-trace"))]
+        {
+            s.channels.receive(channel, slot)
+        }
+        #[cfg(feature = "ownership-trace")]
+        {
+            s.channels.receive_observed(channel, slot, owner)
+        }
+    } {
         Ok(true) => Some(crate::channels::DONE),
         Ok(false) => None,
         Err(status) => Some(status),
@@ -4431,7 +4442,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
     // SAFETY: a registry descriptor is immutable program data.
     let (sender, receiver, channel) = role::with_role(ctx, |t| {
         let (sender, receiver) = t.channels.open(element, unsafe { &*layout });
-        (sender, receiver, t.channels.channel(sender, true))
+        let channel = t.channels.channel(sender, true);
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            crate::ownership_trace::queue_created_here(ctx, &t.channels.payload(channel));
+        }
+        (sender, receiver, channel)
     });
     crate::free::create(ctx, (crate::free::CHANNEL, u64::from(channel)));
     crate::free::done(ctx);
@@ -4538,7 +4554,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     let object = (crate::free::CHANNEL, u64::from(channel));
     crate::free::wait_until(ctx, |ctx| crate::free::enabled(ctx, object));
     // SAFETY: caller contract.
-    let status = role::with_role(ctx, |t| unsafe { t.channels.send(channel, message) });
+    let status = role::with_role(ctx, |t| unsafe {
+        #[cfg(not(feature = "ownership-trace"))]
+        {
+            t.channels.send(channel, message)
+        }
+        #[cfg(feature = "ownership-trace")]
+        {
+            t.channels
+                .send_observed(channel, message, false, (*ctx).ownership_task)
+                .0
+        }
+    });
     let outcome = if status == crate::channels::DONE {
         "send"
     } else {
@@ -4684,7 +4711,17 @@ unsafe fn free_receive(ctx: *mut TaskCtx, channel: u32, message: *mut u8) -> u32
             format!("canceled {cause}"),
         ),
         // SAFETY: caller contract.
-        None => match role::with_role(ctx, |t| unsafe { t.channels.receive(channel, message) }) {
+        None => match role::with_role(ctx, |t| unsafe {
+            #[cfg(not(feature = "ownership-trace"))]
+            {
+                t.channels.receive(channel, message)
+            }
+            #[cfg(feature = "ownership-trace")]
+            {
+                t.channels
+                    .receive_observed(channel, message, (*ctx).ownership_task)
+            }
+        }) {
             Ok(true) => (crate::channels::DONE, "msg".into()),
             Err(status) => (status, "closed".into()),
             Ok(false) => fault("a free-mode receive acted on an empty open channel"),
@@ -4759,7 +4796,17 @@ pub(crate) unsafe fn close_endpoint(
     if crate::free::close(ctx, (crate::free::CHANNEL, u64::from(channel)), outcome) == Some(false) {
         return STATUS_OK;
     }
-    let Some((left, descriptor)) = role::with_role(ctx, |t| t.channels.close(word)) else {
+    let Some((left, descriptor)) = role::with_role(ctx, |t| {
+        #[cfg(not(feature = "ownership-trace"))]
+        {
+            t.channels.close(word)
+        }
+        #[cfg(feature = "ownership-trace")]
+        {
+            t.channels
+                .close_observed(word, false, unsafe { (*ctx).ownership_task })
+        }
+    }) else {
         return STATUS_OK;
     };
     let mut status = STATUS_OK;
