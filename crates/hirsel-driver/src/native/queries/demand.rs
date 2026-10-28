@@ -56,7 +56,11 @@ impl NamedKey {
 /// Compact ordinary discovery data. A recipe's typed actuals are a separate
 /// content product and are decoded only when that particular instance misses.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(super) struct Request {
+#[serde(transparent)]
+pub(super) struct Request(Arc<RequestData>);
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(super) struct RequestData {
     key: NamedKey,
     recipe: Reference,
     lexical: NamedKey,
@@ -64,20 +68,27 @@ pub(super) struct Request {
     layouts: Option<Reference>,
     plan: Reference,
 }
+impl std::ops::Deref for Request {
+    type Target = RequestData;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 impl Request {
     pub(super) fn has_receipt_roots(&self) -> bool {
         self.receipt_roots.is_some()
     }
     pub(super) fn retained_metadata_bytes(&self) -> u64 {
-        let Self {
+        let RequestData {
             key,
             lexical,
             recipe: _,
             receipt_roots: _,
             layouts: _,
             plan: _,
-        } = self;
+        } = &*self.0;
         let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.arc(&self.0);
         for key in [key, lexical] {
             weight.path(&key.definition);
             weight.flat_vec(&key.encoding);
@@ -501,7 +512,7 @@ impl DemandInstances {
                 None,
             )
         };
-        Ok(Request {
+        Ok(Request(Arc::new(RequestData {
             key: NamedKey::of(key),
             lexical: NamedKey::of(instances.lexical_key(id)),
             receipt_roots: (!instances.roles[id.index()].is_library()
@@ -517,7 +528,7 @@ impl DemandInstances {
                     .encode(engine, &InstancePlan::capture(instances, id)?)
                     .ok_or("native original plan encoding failed")?,
             )?,
-        })
+        })))
     }
     pub(super) fn admit(&mut self, request: Request) -> Result<InstanceAddress, String> {
         let key = request.key.bind()?;

@@ -1030,10 +1030,12 @@ impl InstanceTasks {
             },
         )?;
         {
+            let entries = self.entries();
+            let retained = scope.retained_bytes(entries.iter().map(|entry| &entry.request));
             let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
             registry.charged = registry
                 .charged
-                .checked_add(scope.retained_bytes())
+                .checked_add(retained)
                 .filter(|bytes| *bytes <= self.allowance.bytes())
                 .ok_or("callable graph metadata exceeds retained allowance")?;
         }

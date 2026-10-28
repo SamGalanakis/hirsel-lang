@@ -8,22 +8,28 @@ pub(in crate::native::queries) struct Scope {
     requests: BTreeMap<Vec<u8>, Request>,
 }
 impl Scope {
-    pub(in crate::native::queries) fn retained_bytes(&mut self) -> u64 {
-        super::super::ownership_compilation::metadata::operations(&mut self.operations)
-            + self
-                .outputs
-                .iter()
-                .map(|(key, output)| {
-                    key.instance.retained_encoding_bytes() as u64
-                        + output.retained_metadata_bytes()
-                        + 512
-                })
-                .sum::<u64>()
-            + self
-                .requests
-                .iter()
-                .map(|(key, r)| key.capacity() as u64 + r.retained_metadata_bytes() + 512)
-                .sum::<u64>()
+    pub(in crate::native::queries) fn retained_bytes<'a>(
+        &mut self,
+        admitted: impl IntoIterator<Item = &'a Request>,
+    ) -> u64 {
+        let admitted = admitted
+            .into_iter()
+            .map(|request| Arc::as_ptr(&request.0))
+            .collect::<std::collections::HashSet<_>>();
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.vec(&self.outputs, |weight, (key, output)| {
+            weight.path(key.instance.definition());
+            weight.add(key.instance.retained_encoding_bytes());
+            weight.add(output.retained_metadata_bytes() as usize);
+        });
+        weight.map(&self.requests, |weight, key, request| {
+            weight.add(key.capacity());
+            if !admitted.contains(&Arc::as_ptr(&request.0)) {
+                weight.add(request.retained_metadata_bytes() as usize);
+            }
+        });
+        weight.bytes()
+            + super::super::ownership_compilation::metadata::operations(&mut self.operations)
     }
 }
 impl DemandInstances {
@@ -262,7 +268,12 @@ impl DemandInstances {
         for (key, origin) in keys.iter().zip(&specialized.origins) {
             let original = &originals[origin.index()].0;
             let mut request = self.requests[original.instance.encoding()].clone();
-            request.key = NamedKey::of(&key.instance);
+            if request.key.definition != *key.instance.definition()
+                || request.key.body != key.instance.body()
+                || request.key.encoding != key.instance.encoding()
+            {
+                Arc::make_mut(&mut request.0).key = NamedKey::of(&key.instance);
+            }
             requests.insert(key.instance.encoding().to_vec(), request);
         }
         let index = keys
@@ -420,5 +431,59 @@ impl DemandInstances {
             operations,
             requests,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callable_requests_share_admitted_backing_and_specialization_keeps_lexical_identity() {
+        let types = hirsel_types::TypeInterner::new(None);
+        let path = hirsel_syntax::DefPath::core("request");
+        let key = InstanceKey::new(&path, 0, &[], &types, None, None).unwrap();
+        let reference = SOURCE_RECIPE.reference(b"request").unwrap();
+        let original = Request(Arc::new(RequestData {
+            key: NamedKey::of(&key),
+            lexical: NamedKey::of(&key),
+            recipe: reference,
+            receipt_roots: None,
+            layouts: None,
+            plan: reference,
+        }));
+        let portable = serde_json::to_vec(&*original.0).unwrap();
+        assert_eq!(serde_json::to_vec(&original).unwrap(), portable);
+        let restored: Request = serde_json::from_slice(&portable).unwrap();
+        assert_eq!(restored, original);
+        assert!(!Arc::ptr_eq(&restored.0, &original.0));
+        let mut scope = Scope {
+            outputs: Vec::new(),
+            operations: hirsel_layout::operation::OperationRegistry {
+                seal_sources: BTreeMap::new(),
+                receipt_sources: BTreeMap::new(),
+                pretransfer_adapters: Vec::new(),
+                pretransfer_actuals: Vec::new(),
+                invocation_bodies: Vec::new(),
+                invocations: BTreeMap::new(),
+                types,
+                signatures: BTreeMap::new(),
+                type_declarations: BTreeMap::new(),
+                owners: Default::default(),
+            },
+            requests: BTreeMap::from([(key.encoding().to_vec(), original.clone())]),
+        };
+        assert!(Arc::ptr_eq(&scope.requests[key.encoding()].0, &original.0));
+        let separate = scope.retained_bytes(std::iter::empty());
+        let shared = scope.retained_bytes([&original]);
+        assert_eq!(separate - shared, original.retained_metadata_bytes());
+        let request = scope.requests.get_mut(key.encoding()).unwrap();
+        Arc::make_mut(&mut request.0).key.body = 1;
+        assert_eq!(original.key.body, 0);
+        assert_eq!(request.lexical, original.lexical);
+        assert!(!Arc::ptr_eq(&request.0, &original.0));
+        assert_eq!(scope.retained_bytes([&original]), separate);
+        drop(original);
+        assert_eq!(scope.requests[key.encoding()].lexical.body, 0);
     }
 }
