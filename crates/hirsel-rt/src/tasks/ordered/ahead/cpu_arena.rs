@@ -55,6 +55,36 @@ impl Arena {
     }
 }
 
+/// The native scan also carries type edges and value observations. These do
+/// not read holders; rejecting every nonempty program would reject scalar
+/// sequence payloads too. Actual holder instructions and unknown scans refuse.
+/// # Safety
+/// The descriptor is checked and its scan words are readable and immutable.
+pub(super) unsafe fn inert_layout(layout: &crate::Layout) -> bool {
+    use hirsel_core_contract::handle_scan::{TYPE_EDGE, VALUE, VALUE_COLUMN, VALUE_FIELD, WORDS};
+    if layout.finalizer.is_some() || layout.step_count != 0 {
+        return false;
+    }
+    if layout.scan_words == 0 {
+        return true;
+    }
+    let Ok(words) = usize::try_from(layout.scan_words) else {
+        return false;
+    };
+    if !words.is_multiple_of(WORDS)
+        || words > isize::MAX as usize / size_of::<u64>()
+        || layout.scan.is_null()
+        || !layout.scan.addr().is_multiple_of(align_of::<u64>())
+    {
+        return false;
+    }
+    // SAFETY: the caller supplies a checked native descriptor and immutable
+    // readable scan words. Only non-holder instructions are admitted.
+    unsafe { std::slice::from_raw_parts(layout.scan, words) }
+        .chunks_exact(WORDS)
+        .all(|op| matches!(op[0], TYPE_EDGE | VALUE | VALUE_FIELD | VALUE_COLUMN))
+}
+
 /// Register fresh canonical backing, without changing its already admitted
 /// logical allocation. Only layouts with no child owners or finalizers enter
 /// these lists. Fuel-bearing jobs retain their exact canonical interleaving.
@@ -96,7 +126,7 @@ pub(super) unsafe fn adopt(
         (*native).arena.traced = u64::from(super::super::events::observing(ctx));
         let index = (*pointer).index();
         let layout = &*(*ctx).descriptor(index);
-        if layout.finalizer.is_some() || layout.step_count != 0 || layout.scan_words != 0 {
+        if !inert_layout(layout) {
             return;
         }
         let Some(entry) = (*native)
@@ -384,4 +414,69 @@ pub(super) unsafe extern "C" fn growth(
         allocate = sym allocate,
         release = sym release,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inert_layout;
+    use hirsel_core_contract::handle_scan::*;
+
+    #[test]
+    fn arena_layout_ignores_observations_and_rejects_holder_or_unknown_scans() {
+        let mut layout = crate::text::hirsel_rt_v2_bytes_descriptor.0;
+        let mut scan = [
+            TYPE_EDGE,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            TYPE_EDGE,
+            0,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            VALUE,
+            VALUE_SEQUENCE,
+            16,
+            8,
+            16,
+            2,
+            0,
+            0,
+        ];
+        layout.scan = scan.as_ptr();
+        layout.scan_words = scan.len() as u64;
+        // SAFETY: this local descriptor names the initialized array above.
+        assert!(unsafe { inert_layout(&layout) });
+        for opcode in [
+            HANDLE,
+            BLOCK,
+            ROOT,
+            INLINE,
+            UNKNOWN,
+            TYPE_UNKNOWN,
+            TYPED_HANDLE,
+        ] {
+            scan[0] = opcode;
+            // SAFETY: only the opcode changes, with the same readable words.
+            assert!(!unsafe { inert_layout(&layout) }, "opcode {opcode}");
+        }
+        scan[0] = TYPE_EDGE;
+        layout.step_count = 1;
+        // SAFETY: the scan remains initialized; steps are never read here.
+        assert!(!unsafe { inert_layout(&layout) });
+        layout.step_count = 0;
+        layout.scan_words -= 1;
+        // SAFETY: a malformed length must refuse before reading any words.
+        assert!(!unsafe { inert_layout(&layout) });
+        layout.scan_words = u64::MAX;
+        // SAFETY: unknown metadata must refuse before reading any words.
+        assert!(!unsafe { inert_layout(&layout) });
+    }
 }

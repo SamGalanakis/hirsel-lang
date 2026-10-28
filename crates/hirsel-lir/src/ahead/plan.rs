@@ -1015,10 +1015,14 @@ impl AheadPlan {
         if !permitted {
             return None;
         }
-        let LayoutKind::Block { payload } = table.layout(layout)?.kind else {
+        let ty = unit.types.get(unit.values.get(value.index())?.ty.index())?;
+        if ty.repr != ValueRepr::Block
+            || !matches!(table.layout(ty.layout)?.kind, LayoutKind::Block { payload } if payload == layout)
+        {
             return None;
-        };
-        let record = table.layout(payload)?;
+        }
+        // Release names the payload layout, as checked by Ready validation.
+        let record = table.layout(layout)?;
         let LayoutKind::Sequence { element } = record.kind else {
             return None;
         };
@@ -1026,7 +1030,7 @@ impl AheadPlan {
             && record.drop.is_empty()
             && record.scan.is_empty()
             && scalar_image(table, element))
-        .then_some((value, payload))
+        .then_some((value, layout))
     }
     pub fn cpu_allocation(&self, id: ContentHash, instruction: usize) -> bool {
         self.roots

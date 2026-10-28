@@ -192,7 +192,6 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
                     && descriptor < (*ctx).heap_ref().layout_count()
                     && (*(*ctx).descriptor(descriptor)).finalizer.is_none()
                     && (*(*ctx).descriptor(descriptor)).step_count == 0
-                    && (*(*ctx).descriptor(descriptor)).scan_words == 0
             };
         let released = valid
             && unsafe {

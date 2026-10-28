@@ -353,6 +353,36 @@ fn cpu_allocating_mapper_graph_binds_heap_handoffs_cleanup_and_both_final_frames
         let mapper = root.cpu.as_ref().unwrap().mapper.as_ref().unwrap();
         assert!(!mapper.allocations.is_empty());
         assert!(!mapper.cleanup.is_empty());
+        let (unit, instruction, value, payload) = mapper
+            .cleanup
+            .iter()
+            .find_map(|(id, instruction)| {
+                let unit = program
+                    .units
+                    .iter()
+                    .find(|u| u.unit().header.instance == *id)?
+                    .unit();
+                let hirsel_lir::ir::Inst::Release {
+                    value,
+                    layout,
+                    live: hirsel_lir::ir::MaskRef::All,
+                    ..
+                } = unit.instructions[*instruction]
+                else {
+                    return None;
+                };
+                matches!(
+                    program.table.layout(layout)?.kind,
+                    hirsel_lir::layout_types::LayoutKind::Sequence { .. }
+                )
+                .then_some((unit, *instruction, value, layout))
+            })
+            .expect("the mapper releases its pointer-free sequence payload");
+        assert_eq!(
+            plan.cpu_release(unit, instruction, &program.table),
+            Some((value, payload)),
+            "Release names its payload, rather than the block-reference layout"
+        );
         let units: Vec<_> = program.units.iter().collect();
         assert!(hirsel_lir::ahead::validate_cpu_mapper_graph(
             &units,
