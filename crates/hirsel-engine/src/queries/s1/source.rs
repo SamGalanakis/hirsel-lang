@@ -377,6 +377,7 @@ impl TirSource for FrozenSource<'_> {
                 .get(&id)
                 .map(|entry| entry.memo.reads.clone())
                 .unwrap_or_default(),
+            checked_prefix: None,
             resolution: self
                 .resolutions
                 .get(&id)

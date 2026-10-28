@@ -150,6 +150,7 @@ impl Inference {
                     syntax: input.syntax.clone(),
                     signature: Ok(input.signature.clone()),
                     signature_reads: signature_reads.clone(),
+                    checked_prefix: None,
                     text: input.syntax.text_hash,
                     resolution: None,
                     checked: None,
