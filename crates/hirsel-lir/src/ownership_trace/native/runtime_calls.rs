@@ -16,12 +16,6 @@ pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> b
     {
         return false;
     }
-    let channel = record.fields.is_empty()
-        && record.scan.len() == 1
-        && matches!(
-            record.drop.as_slice(),
-            [crate::layout_types::DropStep::CloseHandle { offset: 0 }]
-        );
     record.scan.iter().all(|step| match step {
         ScanStep::Handle {
             kind: HandleKind::Scope,
@@ -33,20 +27,46 @@ pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> b
             obtains: Some(payload),
             ..
         } => plain(layouts, *payload, 0),
-        ScanStep::Handle {
-            offset: 0,
-            kind: HandleKind::Sender,
-            ty: Some(schema),
-            obtains: None,
-        } => channel && *schema == layout,
-        ScanStep::Handle {
-            offset: 0,
-            kind: HandleKind::Receiver,
-            ty: Some(schema),
-            obtains: Some(payload),
-        } => channel && *schema == layout && plain(layouts, *payload, 0),
         _ => false,
     })
+}
+
+// Only resource selection uses this proof. Owned selection retains its
+// original channel custody requirements.
+pub(super) fn plain_channel_handle(layouts: &LayoutTable, layout: LayoutId) -> bool {
+    use crate::layout_types::{DropStep, HandleKind, ScanStep};
+    let Some(record) = layouts.layout(layout) else {
+        return false;
+    };
+    if !matches!(record.kind, LayoutKind::Handle)
+        || record.finalizer.is_some()
+        || !record.fields.is_empty()
+        || !matches!(
+            record.drop.as_slice(),
+            [DropStep::CloseHandle { offset: 0 }]
+        )
+    {
+        return false;
+    }
+    match record.scan.as_slice() {
+        [
+            ScanStep::Handle {
+                offset: 0,
+                kind: HandleKind::Sender,
+                ty: Some(schema),
+                obtains: None,
+            },
+        ] => *schema == layout,
+        [
+            ScanStep::Handle {
+                offset: 0,
+                kind: HandleKind::Receiver,
+                ty: Some(schema),
+                obtains: Some(payload),
+            },
+        ] => *schema == layout && plain(layouts, *payload, 0),
+        _ => false,
+    }
 }
 
 // Only a complete program request can additionally prove the callback's code
@@ -298,7 +318,7 @@ mod tests {
                     _ => unreachable!(),
                 }
                 assert_eq!(
-                    resource_free_handle(&table, channel),
+                    plain_channel_handle(&table, channel),
                     corruption == "none",
                     "{kind:?}/{corruption}"
                 );

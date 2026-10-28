@@ -27,6 +27,7 @@ impl Selection {
                 )
                 || (matches!(record.kind, LayoutKind::Handle)
                     && !resource_free_handle(layouts, layout)
+                    && !super::runtime_calls::plain_channel_handle(layouts, layout)
                     && !data_handle(record))
             {
                 return true;
