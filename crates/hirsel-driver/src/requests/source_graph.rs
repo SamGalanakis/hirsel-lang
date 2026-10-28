@@ -798,6 +798,16 @@ impl Plan {
             FrontLowerQueries::input_bytes(definitions).ok_or_else(|| uninstalled())?;
         let growth_inventory =
             FrontGrowthQueries::input_bytes(definitions, metadata).ok_or_else(|| uninstalled())?;
+        let storage_inventory = if needs_storage {
+            hirsel_engine::FrontStorageQueries::input_bytes_for_definitions(definitions)
+                .and_then(|recipes| {
+                    hirsel_engine::FrontStorageGraphQueries::input_bytes(definitions)
+                        .and_then(|graph| recipes.checked_add(graph))
+                })
+                .ok_or_else(|| uninstalled())?
+        } else {
+            0
+        };
         let run_inventory = if needs_run { run_input_bytes } else { 0 };
         let native_inventory = if needs_native {
             super::native_selection::Footprint::minimum(definitions).ok_or_else(|| uninstalled())?
@@ -819,6 +829,7 @@ impl Plan {
             footprint.front_inputs,
             lower_inventory,
             growth_inventory,
+            storage_inventory,
             check_inventory,
             run_inventory,
             native_inventory,
@@ -918,7 +929,7 @@ impl Plan {
         let run_slack = slack - front_slack - lower_slack - growth_slack - check_slack;
         let front = footprint.front_inputs + front_slack;
         let lower = lower_inventory + lower_slack;
-        let growth = growth_inventory + growth_slack;
+        let growth = growth_inventory + storage_inventory + growth_slack;
         let check = check_inventory + check_slack;
         let run = ownership
             .as_ref()
@@ -1501,10 +1512,29 @@ pub(super) fn install(
             .map_err(|_| uninstalled())?;
     }
     let storage_allowance = if !matches!(request.operation, CompileOperation::Expand) {
-        let share = growth.bytes() / 3;
+        // Each producer keeps its fixed input inventory. Only the remaining
+        // output grant is shared; splitting the whole grant steals Growth's
+        // already admitted source roots on large source scopes.
+        let recipe_inputs =
+            hirsel_engine::FrontStorageQueries::input_bytes(&front).ok_or_else(|| uninstalled())?;
+        let graph_inputs = hirsel_engine::FrontStorageGraphQueries::input_bytes(&definitions)
+            .ok_or_else(|| uninstalled())?;
+        let growth_inputs = FrontGrowthQueries::input_bytes(&definitions, plan.root)
+            .ok_or_else(|| uninstalled())?;
+        let share = growth
+            .bytes()
+            .checked_sub(recipe_inputs)
+            .and_then(|bytes| bytes.checked_sub(graph_inputs))
+            .and_then(|bytes| bytes.checked_sub(growth_inputs))
+            .ok_or_else(|| uninstalled())?
+            / 3;
         Some((
-            growth.split(share).ok_or_else(|| uninstalled())?,
-            growth.split(share).ok_or_else(|| uninstalled())?,
+            growth
+                .split(recipe_inputs + share)
+                .ok_or_else(|| uninstalled())?,
+            growth
+                .split(graph_inputs + share)
+                .ok_or_else(|| uninstalled())?,
         ))
     } else {
         None

@@ -40,9 +40,17 @@ impl FrontStorageQueries {
     /// Potential recipe address/path slots only; actual recipe demands debit
     /// their existing output bound from the remainder of this reservation.
     pub fn input_bytes(front: &FrontBodyQueries) -> Option<u64> {
-        front.inputs.values().try_fold(0u64, |n, input| {
+        Self::input_bytes_for_definitions(
+            front.inputs.values().map(|input| input.definition.path()),
+        )
+    }
+    /// The same potential recipe inventory before the front owner exists.
+    pub fn input_bytes_for_definitions<'a>(
+        definitions: impl IntoIterator<Item = &'a DefPath>,
+    ) -> Option<u64> {
+        definitions.into_iter().try_fold(0u64, |n, path| {
             n.checked_add((std::mem::size_of::<(Key, DefPath)>() + 64) as u64)?
-                .checked_add(bincode::serialized_size(&input.definition).ok()?)
+                .checked_add(bincode::serialized_size(path).ok()?)
         })
     }
 
