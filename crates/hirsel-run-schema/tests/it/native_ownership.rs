@@ -21,6 +21,7 @@ fn fixture() -> (Log, Units) {
         let metadata = Box::new(Metadata {
             empty_environment: false,
             optional_carrier: false,
+            task_result: None,
             channel: None,
             action,
             callee: None,
@@ -322,6 +323,11 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
             | Row::Operation { .. }
             | Row::Spawn { .. }
             | Row::TaskEnd { .. }
+            | Row::TaskResultHeld { .. }
+            | Row::TaskResultJoin { .. }
+            | Row::TaskResultMoved { .. }
+            | Row::TaskResultDiscarded { .. }
+            | Row::TaskResultUnavailable { .. }
             | Row::QueueCreated { .. }
             | Row::QueueSent { .. }
             | Row::QueuePublished { .. }
@@ -404,6 +410,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
         let metadata = Box::new(Metadata {
             empty_environment: false,
             optional_carrier: false,
+            task_result: None,
             channel: None,
             action,
             callee: None,
@@ -517,6 +524,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
             Box::new(Metadata {
                 empty_environment: false,
                 optional_carrier: false,
+                task_result: None,
                 channel: None,
                 action,
                 callee: None,
@@ -804,6 +812,7 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
             Box::new(Metadata {
                 empty_environment: false,
                 optional_carrier: false,
+                task_result: None,
                 channel: None,
                 action,
                 callee: None,
@@ -1964,6 +1973,7 @@ fn native_empty_spawn_still_binds_the_actual_child_and_rejects_hidden_capture_cr
         callee: Some([8; 32]),
         empty_environment: true,
         optional_carrier: false,
+        task_result: None,
         channel: None,
         ..*base.clone()
     });

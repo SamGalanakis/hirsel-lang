@@ -43,6 +43,7 @@ fn fixture() -> (Log, Units) {
             id,
             Box::new(Metadata {
                 action,
+                task_result: None,
                 channel: (action == 8).then_some(ChannelBinding {
                     direction: if id == 1 {
                         ChannelDirection::Send

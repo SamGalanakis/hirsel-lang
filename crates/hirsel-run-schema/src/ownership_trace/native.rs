@@ -9,9 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod cleanups;
 mod queues;
+mod results;
 mod transfers;
 
-pub const VERSION: u32 = 15;
+pub const VERSION: u32 = 16;
 const MUTABLE_PARAMETER: u64 = (u32::MAX - 1) as u64;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
@@ -40,6 +41,39 @@ pub enum Row {
     /// Runtime completion after the compiled body and environment cleanup.
     TaskEnd {
         task: u64,
+    },
+    TaskResultHeld {
+        task: u64,
+        frame: u64,
+        marker: u32,
+        layout: u32,
+    },
+    TaskResultJoin {
+        task: u64,
+        frame: u64,
+        marker: u32,
+        child: u64,
+    },
+    TaskResultMoved {
+        task: u64,
+        frame: u64,
+        marker: u32,
+        child: u64,
+        source_frame: u64,
+        source_marker: u32,
+        layout: u32,
+    },
+    TaskResultDiscarded {
+        task: u64,
+        frame: u64,
+        marker: u32,
+    },
+    TaskResultUnavailable {
+        task: u64,
+        frame: u64,
+        marker: u32,
+        child: u64,
+        status: u32,
     },
     /// Canonical operation ordinal assigned by this task's runtime policy.
     /// This is a diagnostic association, never a clock or a retirement proof.
@@ -186,6 +220,7 @@ pub struct Log {
 pub struct Metadata {
     pub action: u32,
     pub channel: Option<ChannelBinding>,
+    pub task_result: Option<TaskResultBinding>,
     /// Empty callable custody, proved by the complete checked code graph.
     pub empty_environment: bool,
     /// The checked structural carrier has a Resource-free alternative. An
@@ -222,6 +257,16 @@ pub enum ChannelDirection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChannelBinding {
     pub direction: ChannelDirection,
+    pub descriptor: u32,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskResultDirection {
+    Hold,
+    Join,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskResultBinding {
+    pub direction: TaskResultDirection,
     pub descriptor: u32,
 }
 /// Static checked declaration ordinals for a projected slot location.
@@ -470,9 +515,27 @@ fn decode(
     for markers in units.values() {
         for (&id, metadata) in markers {
             if metadata.optional_carrier
-                && (!matches!(metadata.action, 1 | 8)
+                && (!matches!(metadata.action, 1 | 8 | 9 | 10)
                     || metadata.empty_environment
                     || metadata.cleanup.is_some())
+            {
+                return Err(Error::InvalidMarker(id));
+            }
+            if matches!(metadata.action, 9 | 10) != metadata.task_result.is_some()
+                || metadata.task_result.is_some_and(|binding| {
+                    let (action, parameter) = match binding.direction {
+                        TaskResultDirection::Hold => (9, 0),
+                        TaskResultDirection::Join => (10, 2),
+                    };
+                    metadata.action != action
+                        || metadata.owner != ((2u64 << 32) | parameter)
+                        || metadata.channel.is_some()
+                        || metadata.callee.is_some()
+                        || metadata.empty_environment
+                        || metadata.cleanup.is_some()
+                        || !metadata.cleanup_paths.is_empty()
+                        || !metadata.additional_drops.is_empty()
+                })
             {
                 return Err(Error::InvalidMarker(id));
             }
@@ -560,6 +623,7 @@ fn decode(
     let mut tracker = Tracker::new(limit);
     let mut queues = queues::Queues::default();
     let mut cleanups = cleanups::Cleanups::default();
+    let mut results = results::Results::default();
     for &row in &log.rows {
         match row {
             Row::Task { task, depth } => {
@@ -652,6 +716,11 @@ fn decode(
             | Row::Leave { task, .. }
             | Row::Spawn { task, .. }
             | Row::TaskEnd { task }
+            | Row::TaskResultHeld { task, .. }
+            | Row::TaskResultJoin { task, .. }
+            | Row::TaskResultMoved { task, .. }
+            | Row::TaskResultDiscarded { task, .. }
+            | Row::TaskResultUnavailable { task, .. }
             | Row::QueueCreated { task, .. }
             | Row::QueueSent { task, .. }
             | Row::QueuePublished { task, .. }
@@ -673,6 +742,30 @@ fn decode(
         }
         if ended_tasks.contains(&task) {
             return Err(Error::InvalidTask(task));
+        }
+        if let Row::TaskResultJoin { child, .. }
+        | Row::TaskResultMoved { child, .. }
+        | Row::TaskResultUnavailable { child, .. } = row
+            && (child == 0 || child == task || !tasks.contains_key(&child))
+        {
+            return Err(Error::InvalidTask(child));
+        }
+        if let Row::TaskResultMoved { child, .. } = row
+            && (ended_tasks.contains(&child) || slots.get(&(child as u32)) != Some(&child))
+        {
+            return Err(Error::InvalidTask(child));
+        }
+        if results.observe(
+            row,
+            stacks
+                .get(&task)
+                .and_then(|frames| frames.last())
+                .map(|frame| frame.id),
+            &identity.path,
+            identity.operation.unwrap_or(0),
+            &mut tracker,
+        )? {
+            continue;
         }
         if let Row::QueueDetached {
             queue,
@@ -848,6 +941,11 @@ fn decode(
             | Row::Operation { .. }
             | Row::Spawn { .. }
             | Row::TaskEnd { .. }
+            | Row::TaskResultHeld { .. }
+            | Row::TaskResultJoin { .. }
+            | Row::TaskResultMoved { .. }
+            | Row::TaskResultDiscarded { .. }
+            | Row::TaskResultUnavailable { .. }
             | Row::QueueCreated { .. }
             | Row::QueueSent { .. }
             | Row::QueuePublished { .. }
@@ -1194,6 +1292,40 @@ fn decode(
                     });
                     continue;
                 }
+                if matches!(action, 9 | 10) {
+                    let binding = expected.task_result.ok_or(Error::InvalidMarker(marker))?;
+                    if calls.is_none()
+                        || match binding.direction {
+                            TaskResultDirection::Hold => action != 9,
+                            TaskResultDirection::Join => action != 10,
+                        }
+                    {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    results.intent(
+                        match row {
+                            Row::Event { task, .. } => task,
+                            _ => unreachable!(),
+                        },
+                        frame,
+                        marker,
+                        results::Intent {
+                            binding,
+                            owner: projected_owner(
+                                task,
+                                frame,
+                                parent,
+                                current.environment.as_ref(),
+                                &current.parameters,
+                                token,
+                                token_path,
+                            )?,
+                            source: expected.source.clone(),
+                            optional: expected.optional_carrier,
+                        },
+                    )?;
+                    continue;
+                }
                 if action == 6 {
                     if calls.is_none() || recipient >> 32 != 2 || expected.empty_environment {
                         return Err(Error::InvalidMarker(marker));
@@ -1432,6 +1564,7 @@ fn decode(
         return Err(Error::Incomplete);
     }
     cleanups.finish()?;
+    results.finish()?;
     queues.finish_cleanups(cleanup_layouts)?;
     tracker.finish(program, true).map_err(Error::Consistency)
 }

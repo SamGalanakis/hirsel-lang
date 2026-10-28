@@ -236,6 +236,7 @@ pub(crate) fn emit_relocated(
                 }))
             };
             let metadata = Box::new(Metadata {
+                task_result: None,
                 action: marker.kind,
                 channel: plan
                     .channel_binding(body, inputs.layouts, marker.id)
