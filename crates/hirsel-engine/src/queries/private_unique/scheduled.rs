@@ -761,7 +761,10 @@ impl QueryEngine {
                 modes: modes.clone(),
                 environment: self.environment_value(),
                 result: Mutex::new(None),
-                expected,
+                // Written-only bootstrap has a different proof inventory.
+                // Compare the settled cache after generated registrations
+                // restore the full module, as required for publication below.
+                expected: expected.filter(|_| complete),
                 complete,
                 reference,
                 store: self.result_store.clone(),
