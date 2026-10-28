@@ -101,7 +101,7 @@ fn cpu_fixture_four_engine_source(width: u32, source: String, expected_output: &
 fn cpu_fixture_allocating_four_engine_agreement(width: u32) {
     cpu_fixture_allocating_four_engine_mapper(
         width,
-        "fn(take job: u64) -> unique List[u64] uses {} { let mut out = [job]; list.reserve(mut out, 128u64); list.push(mut out, job + 7u64); take out }",
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut checksum = 0u64; for i in 0u64..96u64 { let mut chunk = [job]; list.reserve(mut chunk, 128u64); list.push(mut chunk, i); checksum = int.wrapping_add(checksum, chunk[1]) }; let mut out = [job]; list.reserve(mut out, 128u64); list.push(mut out, job + checksum - 4553u64); take out }",
     );
 }
 

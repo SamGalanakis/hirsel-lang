@@ -69,6 +69,12 @@ fn cpu_interpreter_cut_exact_source_fuel_stops() {
 }
 
 include!("support/cpu_pool/four_engine.rs");
+include!("support/cpu_pool/replay.rs");
+
+#[test]
+fn ordered_allocating_jobs_match_serial_reference_and_replay() {
+    ordered_replay_width_mode(1, true);
+}
 
 #[test]
 fn ordered_allocating_fixture_agrees_across_four_engines_width_1() {

@@ -10,6 +10,7 @@ const IDLE: u32 = 0;
 const REQUESTED: u32 = 1;
 const SUMMARIZED: u32 = 2;
 const CHARGED: u32 = 3;
+const LEASED: u32 = 4;
 pub(super) const REASON: u32 = 8;
 
 #[repr(C)]
@@ -53,6 +54,7 @@ impl Request {
                 super::super::engine::CpuAllocation::Paused => return Ok(false),
                 super::super::engine::CpuAllocation::Summarized => SUMMARIZED,
                 super::super::engine::CpuAllocation::Settled => CHARGED,
+                super::super::engine::CpuAllocation::Leased => LEASED,
             };
         }
         if self.phase == SUMMARIZED {
@@ -62,7 +64,7 @@ impl Request {
                 self.phase = CHARGED;
             }
         }
-        assert!(matches!(self.phase, SUMMARIZED | CHARGED));
+        assert!(matches!(self.phase, SUMMARIZED | CHARGED | LEASED));
         Ok(true)
     }
     pub(super) fn complete(&mut self) {

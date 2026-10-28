@@ -84,6 +84,160 @@ fn write_cpu_recording(path: &std::path::Path, recording: &hirsel_rt::launch::Re
 fn ordered_replay_width(width: usize) {
     ordered_replay_width_mode(width, false);
 }
+
+fn ordered_allocation_memory_fixture(width: usize, backend: &str, root: &std::path::Path) {
+    let root = root.join(format!("memory-{backend}"));
+    fs::create_dir(&root).unwrap();
+    let source = format!(
+        r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {{
+  let tasks = io.tasks(rt)?
+  let rows = core@1/cpu.map_scoped(tasks, {width}u32,
+    fn() -> List[u64] uses {{}} {{ [1u64] }},
+    fn(take job: u64) -> unique List[u64] uses {{}} {{
+      let mut out = [job]
+      list.reserve(mut out, 128u64)
+      let mut pressure = [job]
+      list.reserve(mut pressure, 262144u64)
+      list.push(mut out, pressure[0] + 7u64)
+      take out
+    }})
+  failure.check(rows == Ok([[1u64, 8u64]]), Bounds())
+  Ok(())
+}}
+"#
+    );
+    let manifest = qual_manifest(&root, &source);
+    let grants = root.join("grants.json");
+    let mut authority = qual_grants(width);
+    authority["io"]["tasks"] = serde_json::json!("tasks.cooperative@1");
+    authority["placement"] = serde_json::json!({"cores":1,"reorder":"auto"});
+    fs::write(&grants, authority.to_string()).unwrap();
+    let executable = root.join(backend);
+    checked(
+        cpu_compiler()
+            .args(["build", "--fuel", "--validate-stages", "--backend", backend])
+            .arg(&manifest)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap(),
+    );
+    let tape = root.join("success.tape");
+    checked(
+        Command::new(&executable)
+            .arg("--hirsel-grants")
+            .arg(&grants)
+            .arg("--hirsel-record")
+            .arg(&tape)
+            .output()
+            .unwrap(),
+    );
+    let recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
+    let summary = recording
+        .events
+        .iter()
+        .find_map(|event| match &event.request {
+            hirsel_rt::io::Request::CpuSummary(summary) => Some(summary),
+            _ => None,
+        })
+        .unwrap();
+    for grant_only in [false, true] {
+        ordered_allocation_memory_cut(&executable, &root, &grants, summary, grant_only);
+    }
+}
+
+fn ordered_allocation_memory_cut(
+    executable: &std::path::Path,
+    root: &std::path::Path,
+    grants: &std::path::Path,
+    summary: &hirsel_rt::io::CpuSummary,
+    grant_only: bool,
+) {
+    let native = summary.native.as_ref().unwrap();
+    assert_eq!(native.pieces.len(), 1);
+    let piece = &native.pieces[0];
+    let start = native.level.checked_add_signed(-piece.net).unwrap();
+    let peak = piece.envelope.last().unwrap().1 as u64;
+    // Small mapper allocations fit; the temporary large reserve does not.
+    // Leave room for publisher slab padding in the physical batch ledger too.
+    let limit = start + peak / 2;
+    let mut reference = None;
+    for reorder in ["off", "auto"] {
+        let mut authority: serde_json::Value =
+            serde_json::from_slice(&fs::read(grants).unwrap()).unwrap();
+        authority["placement"]["reorder"] = serde_json::json!(reorder);
+        if grant_only {
+            authority["io"]["cpu"]["max_batch_bytes"] = serde_json::json!(limit);
+        } else {
+            authority["budgets"] = serde_json::json!({
+                "provider": "budgets.limits@2", "memory_bytes": limit
+            });
+        }
+        let limited = root.join("memory-cut.json");
+        fs::write(&limited, authority.to_string()).unwrap();
+        let tape = root.join("memory-cut.tape");
+        let events = root.join("memory-cut.events");
+        let live = Command::new(executable)
+            .env("HIRSEL_RT_BOUNDED_STOP_TRACE", "1")
+            .arg("--hirsel-grants")
+            .arg(&limited)
+            .arg("--hirsel-record")
+            .arg(&tape)
+            .arg("--hirsel-trace-events")
+            .arg(&events)
+            .output()
+            .unwrap();
+        assert_eq!(
+            live.status.code(),
+            Some(hirsel_run_schema::exit::BUDGET_EXCEEDED),
+            "{live:?}"
+        );
+        let canonical = fs::read(&events).unwrap();
+        let rows: Vec<serde_json::Value> = std::str::from_utf8(&canonical)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let terminal = rows
+            .iter()
+            .find(|row| row["outcome"]["kind"] == "stopped")
+            .unwrap();
+        assert_eq!(
+            terminal["task"],
+            serde_json::json!([0]),
+            "limit {limit}, start {start}, peak {peak}, grant-only {grant_only}, {reorder}: {native:?}\n{}",
+            std::str::from_utf8(&canonical).unwrap()
+        );
+        let mut recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
+        let binding = recording.binding.as_mut().unwrap();
+        binding.admitted_at = 0;
+        binding.placement = None;
+        let cut = (canonical.clone(), recording);
+        if let Some(reference) = &reference {
+            assert_eq!(
+                &cut, reference,
+                "lease and serial stop at the same allocation"
+            );
+        } else {
+            reference = Some(cut);
+        }
+        let replayed = Command::new(executable)
+            .env("HIRSEL_RT_BOUNDED_STOP_TRACE", "1")
+            .arg("--hirsel-replay")
+            .arg(&tape)
+            .arg("--hirsel-trace-events")
+            .arg(&events)
+            .env("HIRSEL_RT_WORKERS", "1")
+            .output()
+            .unwrap();
+        assert_eq!(replayed.status.code(), live.status.code(), "{replayed:?}");
+        assert_eq!(replayed.stdout, live.stdout);
+        assert_eq!(replayed.stderr, live.stderr);
+        assert_eq!(fs::read(&events).unwrap(), canonical);
+    }
+}
+
 fn ordered_replay_width_mode(width: usize, allocating: bool) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
@@ -169,6 +323,9 @@ fn ordered_replay_width_mode(width: usize, allocating: bool) {
                 2 * width,
                 "{backend} {reorder}: generated summaries"
             );
+            if allocating && reorder == "auto" {
+                ordered_allocation_memory_fixture(width, backend, root);
+            }
             for (ordinal, summary) in summaries.iter().enumerate() {
                 assert_eq!(summary.version, 2);
                 assert_eq!(summary.ordinal, ordinal as u64);
@@ -192,7 +349,7 @@ fn ordered_replay_width_mode(width: usize, allocating: bool) {
                 };
                 assert_eq!(summary.value, encoded);
             }
-            if width == 8 && reorder == "auto" {
+            if (width == 8 || allocating) && reorder == "auto" {
                 // Every corrupted tape byte is refused by the real frame codec.
                 let bytes = fs::read(&tape).unwrap();
                 for at in 0..bytes.len() {

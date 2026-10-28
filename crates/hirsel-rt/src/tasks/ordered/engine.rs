@@ -210,6 +210,9 @@ fn capture_fuel(ctx: *mut TaskCtx) {
     unsafe { (*ctx).ordered_charge_trace.capture(word) };
     let remaining = word.max(0) as u64;
     let (task, driver) = fuel_state(ctx);
+    // A lease is valid only within this uninterrupted charge prefix. Captures
+    // precede every save and canonical boundary that can change its frontier.
+    driver.cpu_allocation_leases.remove(&task);
     let budgets = driver.budgets;
     let freed = unsafe { (*ctx).ordered_freed.replace(0) };
     if freed != 0 {
@@ -328,6 +331,20 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 /// request and logical budget untouched; only head promotion can resume it.
 pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
     unsafe { super::ahead::barrier(ctx) };
+    if lease_cpu_allocation(ctx, bytes) {
+        unsafe {
+            (*ctx)
+                .ordered_charge_trace
+                .capture((*ctx).view.compiled.fuel);
+            (*ctx).ordered_charge_trace.allocation(bytes);
+            assert_eq!(
+                (*ctx).ordered_allocation.replace(bytes),
+                0,
+                "one upcoming leased heap/pool charge"
+            );
+        }
+        return Ok(());
+    }
     let task = with_current_driver(ctx, |task, driver| {
         driver.enter(task, crate::pool::compute_index().unwrap_or(0));
         task
@@ -2463,11 +2480,78 @@ pub(crate) enum CpuAllocation {
     Paused,
     Summarized,
     Settled,
+    Leased,
+}
+
+/// Consume a conservative head lease. Refill checks the accumulated prefix
+/// against both limits, but does not settle it or introduce a receipt piece.
+/// Fuel-bearing prefixes retain the exact allocation/fuel interleaving below.
+fn lease_cpu_allocation(ctx: *mut TaskCtx, bytes: u64) -> bool {
+    with_current_driver(ctx, |task, driver| {
+        if driver.budgets.fuel || !driver.memory || !driver.head_ready(task) {
+            return false;
+        }
+        let Some(limit) = driver
+            .cpu_batch
+            .as_ref()
+            .and_then(|batch| batch.limit(task))
+        else {
+            return false;
+        };
+        let budgets = driver.budgets;
+        let freed = unsafe { (*ctx).ordered_freed.replace(0) };
+        if freed != 0 {
+            driver
+                .stretches
+                .entry(task)
+                .or_insert_with(|| Stretch::new(budgets))
+                .free(freed);
+            driver
+                .frontier
+                .as_mut()
+                .unwrap()
+                .credit_speculative(task, freed);
+        }
+        let lease = driver.cpu_allocation_leases.entry(task).or_default();
+        if *lease < bytes {
+            let mut state = driver.frontier.as_ref().unwrap().settled;
+            state.limit = state.limit.min(limit);
+            if let Some(prefix) = driver.stretches.get(&task)
+                && state.settle(prefix).is_err()
+            {
+                *lease = 0;
+                return false;
+            }
+            let room = state.limit.saturating_sub(state.level);
+            if bytes > room {
+                *lease = 0;
+                return false;
+            }
+            *lease = room.min(bytes.max(64 * 1024));
+        }
+        *lease -= bytes;
+        driver
+            .stretches
+            .entry(task)
+            .or_insert_with(|| Stretch::new(budgets))
+            .alloc(bytes)
+            .expect("unfueled lease coalesces its allocation envelope");
+        true
+    })
 }
 
 /// An idle allocation records a non-head charge in its bound job's Stretch.
 /// Physical refusal retains that admission; retry never appends it again.
 pub(crate) fn ahead_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<CpuAllocation> {
+    if lease_cpu_allocation(ctx, bytes) {
+        unsafe {
+            (*ctx)
+                .ordered_charge_trace
+                .capture((*ctx).view.compiled.fuel);
+            (*ctx).ordered_charge_trace.allocation(bytes);
+        }
+        return Ok(CpuAllocation::Leased);
+    }
     let task = current(ctx);
     let nonhead = with_driver(ctx, |d| {
         d.frontier.as_ref().unwrap().head() != Some(task)
