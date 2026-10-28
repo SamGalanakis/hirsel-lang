@@ -416,9 +416,13 @@ fn front_store_retains_prior_actions_at_one_logical_address() {
             let (_, outputs) = publish(store.clone(), source, jobs);
             assert!(outputs.iter().all(|o| o.result.is_ok()));
             let count = store.indexes.lock().unwrap().len();
+            // Two definitions each publish Signature, Modes and Summary.
+            // The parsed source (93611be0) and the module's PrivateInference
+            // proof (6507acbf) each have one independent logical address.
             assert_eq!(
-                count, 7,
-                "93611be0 adds one parsed-source domain to the six per-definition addresses"
+                count,
+                2 * 3 + 1 + 1,
+                "six per-definition products, one parse and one module proof"
             );
             let changed = source.replace("{1u32}", "{2u32}");
             let (edited, outputs) = publish(store.clone(), &changed, jobs);
