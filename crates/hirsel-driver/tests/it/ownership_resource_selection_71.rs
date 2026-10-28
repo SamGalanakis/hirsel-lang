@@ -1,5 +1,43 @@
 //! Source resource diagnostics preserve ordinary owned data alongside Resources.
 #[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn resource_channel_transfers_two_equal_tokens_without_recreating_their_lineage() {
+    for policy in ["tasks.cooperative@1", "tasks.free@1"] {
+        super::ownership_owned_call_49::source_calls_granted(
+            r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let (tx,rx):(Sender[Token],Receiver[Token])=channel.open(tasks)
+  let child=task.async(s,fn() {
+   let mut receiver=take rx
+   let first=channel.receive(tasks,mut receiver)
+   let second=channel.receive(tasks,mut receiver)
+   let Ok(a)=take first else { failure.check(false,Bounds())
+return }
+   let Ok(b)=take second else { failure.check(false,Bounds())
+return }
+  })
+  let mut sender=take tx
+  let first=Token()
+  let second=Token()
+  let _=channel.send(tasks,mut sender,take first)
+  let _=channel.send(tasks,mut sender,take second)
+  let _=task.await(s,take child)
+ })
+ Ok(())
+}
+"#,
+            2,
+            0,
+            &serde_json::json!({"io":{"tasks":policy,"dirs":[]}}).to_string(),
+        );
+    }
+}
+
+#[test]
 fn source_resource_selection_keeps_owned_strings_out_of_resource_lineage() {
     super::ownership_owned_call_49::source_calls(
         r#"
