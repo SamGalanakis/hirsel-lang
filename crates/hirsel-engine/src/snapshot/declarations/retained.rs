@@ -238,7 +238,7 @@ mod tests {
                             identity: [0; 4],
                         }));
                         let _ = row.sites();
-                        index.rows.insert(DefId::intern(path), row);
+                        Arc::make_mut(&mut index.rows).insert(DefId::intern(path), row);
                     }
                     let (predicted, inspection) =
                         crate::test_alloc::measured_independent(|| index.source_carry_bytes());
@@ -307,41 +307,43 @@ mod tests {
                             candidates: Default::default(),
                             identity: [0; 4],
                         };
-                        index
-                            .rows
+                        Arc::make_mut(&mut index.rows)
                             .insert(DefId::intern(path), Arc::new(Row::from(row)));
-                        index.anchors.insert(span.anchor, FileId(i as u32));
-                        index.paths.insert(
+                        Arc::make_mut(&mut index.anchors).insert(span.anchor, FileId(i as u32));
+                        Arc::make_mut(&mut index.paths).insert(
                             std::path::PathBuf::from(format!("source_{i}.hir")),
                             [FileId(i as u32)].into(),
                         );
-                        index.inputs.signature_metadata.definitions.insert(
-                            path.clone(),
-                            DefinitionMetadata {
-                                public: true,
-                                alias: false,
-                            },
-                        );
-                        index
-                            .inputs
+                        Arc::make_mut(&mut index.inputs)
+                            .signature_metadata
+                            .definitions
+                            .insert(
+                                path.clone(),
+                                DefinitionMetadata {
+                                    public: true,
+                                    alias: false,
+                                },
+                            );
+                        Arc::make_mut(&mut index.inputs)
                             .signature_metadata
                             .declarations
                             .push(DeclarationSite {
                                 definition: path.clone(),
                                 name_span: span,
                             });
-                        index.inputs.exposures.push(DependencyExposure {
-                            head: format!("head_{i}"),
-                            package: package.clone(),
-                            modules: path.0.modules.clone(),
-                        });
+                        Arc::make_mut(&mut index.inputs)
+                            .exposures
+                            .push(DependencyExposure {
+                                head: format!("head_{i}"),
+                                package: package.clone(),
+                                modules: path.0.modules.clone(),
+                            });
                     }
-                    index
-                        .inputs
+                    let exposures = index.inputs.exposures.clone();
+                    Arc::make_mut(&mut index.inputs)
                         .package_exposures
-                        .insert(package.clone(), index.inputs.exposures.clone());
-                    index
-                        .inputs
+                        .insert(package.clone(), exposures);
+                    Arc::make_mut(&mut index.inputs)
                         .package_dependencies
                         .insert(package.clone(), vec![package.clone(); width]);
                     let (before, inspection) = crate::test_alloc::measured_independent(|| {

@@ -25,12 +25,19 @@ impl QueryEngine {
                 .unwrap_or(QueryError::NotImplemented))
         })
     }
+    pub(super) fn private_summary(&self, id: DefId) -> Option<&hirsel_types::UniqueSummary> {
+        self.private_summaries.get(&id).or_else(|| {
+            self.header_products
+                .as_ref()
+                .and_then(|headers| headers.summary(id))
+        })
+    }
     pub(super) fn attach_private_summary(
         &self,
         signature: &mut hirsel_types::Signature,
         dependencies: &[SignatureDependency],
     ) {
-        if let Some(summary) = self.private_summaries.get(&signature.definition) {
+        if let Some(summary) = self.private_summary(signature.definition) {
             signature.metadata.inferred_unique = summary.clone();
             if let Ok(fingerprint) =
                 hirsel_types::encoding::fingerprint(&self.types, signature, dependencies)
@@ -46,7 +53,7 @@ impl QueryEngine {
         observed: &mut Observed,
     ) {
         let id = signature.definition;
-        if self.private_summaries.contains_key(&id)
+        if self.private_summary(id).is_some()
             || signature.metadata.visibility == hirsel_syntax::Visibility::Private
                 && matches!(&signature.kind, SignatureKind::Function(f) if f.foreign.is_none())
                 && self
@@ -56,7 +63,7 @@ impl QueryEngine {
             // A declaration normalized without a Modes adapter still observes
             // its conservative proof. It cannot be a wildcard cache variant
             // after inference publishes a stronger result for the same header.
-            let summary = self.private_summaries.get(&id).cloned().unwrap_or_default();
+            let summary = self.private_summary(id).cloned().unwrap_or_default();
             observed.merged.record(
                 crate::memo::ReadKey::PrivateSummary(id),
                 memos::private_summary_value(&summary),

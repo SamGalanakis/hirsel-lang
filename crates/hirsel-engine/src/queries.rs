@@ -1024,7 +1024,7 @@ impl QueryEngine {
             self.active
                 .remove(&(definition.clone(), QueryKind::Signature));
             if let Some(entry) = stored.filter(|entry| {
-                self.private_summaries.get(&id).is_none_or(|summary| {
+                self.private_summary(id).is_none_or(|summary| {
                     entry
                         .result()
                         .is_ok_and(|output| output.value.metadata.inferred_unique == *summary)

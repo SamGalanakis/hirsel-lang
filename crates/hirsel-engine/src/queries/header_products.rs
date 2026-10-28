@@ -64,7 +64,6 @@ pub(crate) struct HeaderProducts {
     limits: crate::ComptimeLimits,
     staged: BTreeMap<DefPath, crate::comptime::StagedConstant>,
     summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
-    summary_reads: BTreeMap<DefId, Arc<Reads>>,
     failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
 }
 impl HeaderProducts {
@@ -113,7 +112,6 @@ impl HeaderProducts {
             limits: engine.comptime_limits,
             staged: engine.staged_constants.clone(),
             summaries: engine.private_summaries.clone(),
-            summary_reads: engine.private_summary_reads.clone(),
             failures: engine.private_unique_failures.clone(),
         })
     }
@@ -141,9 +139,6 @@ impl HeaderProducts {
         engine.verify_store = self.verify_store;
         engine.comptime_limits = self.limits;
         engine.staged_constants = self.staged.clone();
-        engine.private_summaries = self.summaries.clone();
-        engine.private_summary_reads = self.summary_reads.clone();
-        engine.private_unique_failures = self.failures.clone();
         engine.header_products = Some(self.clone());
         engine
     }
@@ -159,6 +154,9 @@ impl HeaderProducts {
     ) -> Result<(), QueryError> {
         self.syntax
             .archive(self.types.clone(), self.owners.clone(), store)
+    }
+    pub(super) fn summary(&self, id: DefId) -> Option<&hirsel_types::UniqueSummary> {
+        self.summaries.get(&id)
     }
     pub(crate) fn owners(&self) -> &Arc<crate::NativeRecordContext> {
         &self.owners
@@ -182,6 +180,12 @@ impl HeaderProducts {
         cell.get()
     }
     pub(crate) fn demand(self: &Arc<Self>, engine: &mut QueryEngine, id: DefId) -> SignatureOutput {
+        if let Some(failures) = self.failures.get(&id) {
+            engine
+                .private_unique_failures
+                .entry(id)
+                .or_insert_with(|| failures.clone());
+        }
         let Some(cell) = self.rows.get(&id) else {
             return engine.signature_query_local(id);
         };

@@ -309,7 +309,7 @@ impl QueryEngine {
         &mut self,
         id: DefId,
     ) -> Option<hirsel_types::UniqueSummary> {
-        if let Some(summary) = self.private_summaries.get(&id) {
+        if let Some(summary) = self.private_summary(id) {
             return Some(summary.clone());
         }
         // A body-free consumer can validate the producer's complete module
