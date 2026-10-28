@@ -193,4 +193,112 @@ mod tests {
             assert_eq!(task_result_payload(&forged, LayoutId(2)), None, "mutation {mutation}");
         }
     }
+
+    fn call_fixture(direction: TaskResultDirection) -> (LirUnit<Ready>, LayoutTable) {
+        use crate::{abi_types::FnAbiId, objects::UnitKey, testing::UnitBuilder};
+        use hirsel_core_contract::{OperationId, Passing};
+        let hash = ContentHash::of_bytes(b"task-result-formals");
+        let mut b = UnitBuilder::new(LirUnit::<Ready>::new(UnitHeader {
+            source_count: 0, track_caller: false, stage: crate::stage::StageKind::Ready,
+            lir_version: crate::LIR_VERSION, origin: UnitOrigin::Library, key: UnitKey(hash),
+            definition: hirsel_syntax::DefPath::core("task_result_formals"),
+            implementation_revision: hash, instance: hash, target: hash, abi: FnAbiId(0),
+        }));
+        let mut table = LayoutTable::new(&TargetSpec::x86_64_unknown_linux_gnu());
+        table.layouts = vec![
+            record(LayoutKind::Resource), record(LayoutKind::Scalar(ScalarKind::U64)),
+            record(LayoutKind::Handle), record(LayoutKind::Variant),
+            record(LayoutKind::Scalar(ScalarKind::U32)),
+        ];
+        table.layouts[2].fields.push(FieldLayout {
+            ordinal: 0, offset: 0, layout: LayoutId(1), unaligned: false,
+        });
+        table.layouts[2].scan.push(ScanStep::Handle {
+            offset: 0, kind: HandleKind::Task, ty: Some(LayoutId(2)), obtains: Some(LayoutId(0)),
+        });
+        table.layouts[3].tag = Some(TagEncoding {
+            offset: 0, form: TagForm::Ordinal, variants: vec![
+                VariantLayout { ordinal: 0, fields: vec![] },
+                VariantLayout { ordinal: 1, fields: vec![FieldLayout {
+                    ordinal: 0, offset: 0, layout: LayoutId(0), unaligned: false,
+                }] },
+            ],
+        });
+        let block = b.block(BlockKind::Body, &[]);
+        let word = b.plain(ValueRepr::Scalar(ScalarKind::U64), LayoutId(1));
+        let descriptor = b.plain(ValueRepr::Scalar(ScalarKind::U32), LayoutId(4));
+        let task = b.plain(ValueRepr::Handle, LayoutId(2));
+        let none = b.owned(ValueRepr::Aggregate, LayoutId(3));
+        let symbol = b.symbol(SymbolKind::Type, hirsel_syntax::DefPath::core("Option"));
+        let construct = b.construct(
+            ConstructorKind::Variant { definition: symbol, variant: 0 }, LayoutId(3), &[],
+            Placement::Fixed(StorageOwner::Heap(TaskDomainId(0))),
+        );
+        b.push(block, Inst::Construct { result: none, construct, failure: FailureId(0) });
+        let slot = b.slot(ValueRepr::Aggregate, LayoutId(3), SlotKind::Temporary);
+        let address = b.address(AddressBase::Slot(slot), &[], ValueRepr::Aggregate, LayoutId(3));
+        let version = b.plain(ValueRepr::Aggregate, LayoutId(3));
+        let target = ArgumentValue::Address { address, version };
+        let (name, arguments) = match direction {
+            TaskResultDirection::Hold => ("$intrinsic.TaskFinish", vec![
+                (Passing::Mut, target), (Passing::Borrow, ArgumentValue::Value(none)),
+                (Passing::Borrow, ArgumentValue::Value(word)),
+                (Passing::Borrow, ArgumentValue::Value(descriptor)),
+            ]),
+            TaskResultDirection::Join => ("$intrinsic.TaskJoin", vec![
+                (Passing::Borrow, ArgumentValue::Value(word)),
+                (Passing::Take, ArgumentValue::Value(task)), (Passing::Mut, target),
+                (Passing::Borrow, ArgumentValue::Value(word)),
+            ]),
+        };
+        let callee = b.operation(OperationId {
+            definition: hirsel_syntax::DefPath::core(name), declaration_digest: hash,
+        });
+        b.call(callee, &arguments, None);
+        b.ret(block, None);
+        (b.finish(), table)
+    }
+
+    #[test]
+    fn task_result_formals_bind_both_intrinsics_without_crossing_payloads() {
+        for direction in [TaskResultDirection::Hold, TaskResultDirection::Join] {
+            let (unit, table) = call_fixture(direction);
+            let call = &unit.tables.calls[0];
+            let binding = task_result_call(&unit, &table, call).unwrap();
+            assert_eq!(binding.direction, direction);
+            assert_eq!(binding.layout, LayoutId(3));
+            for mutation in 0..6 {
+                let mut forged = unit.clone();
+                let arguments = &mut forged.pools.call_arguments;
+                match mutation {
+                    0 => arguments[3].parameter = 0,
+                    1 => arguments[if direction == TaskResultDirection::Hold {0} else {2}].passing
+                        = Passing::Borrow,
+                    2 => forged.tables.calls[0].pretransfer_failure = Some(FailureId(0)),
+                    3 => forged.tables.calls[0].result = Some(ValueId(0)),
+                    4 => forged.tables.operations[0].definition
+                        = hirsel_syntax::DefPath::core("$intrinsic.Other"),
+                    5 => arguments[1].passing = Passing::Mut,
+                    _ => unreachable!(),
+                }
+                assert!(task_result_call(&forged, &table, &forged.tables.calls[0]).is_none(),
+                    "{direction:?} mutation {mutation}");
+            }
+        }
+    }
+
+    #[test]
+    fn held_result_requires_an_actual_none_origin_and_join_requires_matching_task_payload() {
+        let (mut unit, mut table) = call_fixture(TaskResultDirection::Hold);
+        let Inst::Construct { construct, .. } = unit.instructions[0] else { panic!() };
+        let ConstructorKind::Variant { definition, .. } = unit.tables.constructs[construct.index()].constructor
+            else { panic!() };
+        unit.tables.constructs[construct.index()].constructor = ConstructorKind::Variant { definition, variant: 1 };
+        assert!(task_result_call(&unit, &table, &unit.tables.calls[0]).is_none());
+        let (unit, _) = call_fixture(TaskResultDirection::Join);
+        if let ScanStep::Handle { obtains, .. } = &mut table.layouts[2].scan[0] {
+            *obtains = Some(LayoutId(1));
+        }
+        assert!(task_result_call(&unit, &table, &unit.tables.calls[0]).is_none());
+    }
 }
