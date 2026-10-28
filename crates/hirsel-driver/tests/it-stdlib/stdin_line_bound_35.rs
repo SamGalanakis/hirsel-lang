@@ -2,10 +2,7 @@
 //! (Go), NOTICES). Owned text, retained LF/CR and consumed overflow probe:
 //! see fixtures/stdin-line-bound-35/README.md for the semantic adaptations.
 use hirsel_driver::{native::*, *};
-use hirsel_engine::{
-    LoadedProgram, RunConfiguration, ToolError, run_observed_checked, run_observed_snapshot,
-    with_compiler_stack,
-};
+use hirsel_engine::{LoadedProgram, RunConfiguration, ToolError, with_compiler_stack};
 use hirsel_rt::io::{Completion, Event, Request};
 use std::path::{Path, PathBuf};
 
@@ -178,13 +175,13 @@ fn recipe(row: &Row) -> Fixture {
     }
 }
 fn simulations(
-    loaded: &mut LoadedProgram,
+    prepared: &requests::TirExecution,
     id: &str,
     world: hirsel_engine::SimulationConfig,
     expected: &[u8],
 ) {
     let run = RunConfiguration {
-        entry: loaded.entry.clone(),
+        entry: prepared.entry.clone(),
         hash_seed: 0,
         inputs: vec![],
     };
@@ -197,11 +194,13 @@ fn simulations(
             continue;
         }
         eprintln!("STDIN_STARTED {id} checked={checked}");
-        let result = if checked {
-            run_observed_checked(&mut loaded.engine, &run, world.clone())
-        } else {
-            run_observed_snapshot(&mut loaded.engine, &run, world.clone())
-        }
+        let result = testing::observe_tir(
+            prepared,
+            &run,
+            world.clone(),
+            hirsel_interp::Limits::default(),
+            checked,
+        )
         .unwrap();
         let observed = result
             .observation
@@ -249,6 +248,10 @@ fn four_engine_lines_cursor_and_offline_replay() {
             &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
         )
         .unwrap();
+        let entry = loaded.entry.clone();
+        drop(validated);
+        drop(loaded);
+        let prepared = request_tir(&path, hirsel_engine::Verify::On, None).unwrap();
         let sites = Sites::new(&input);
         let dir = retained("matrix");
         let tools = Toolchain::in_tree_with_runtime(
@@ -294,20 +297,14 @@ fn four_engine_lines_cursor_and_offline_replay() {
             }
             let (expected, reads) = oracle(&row, false);
             let fixture = recipe(&row);
-            simulations(&mut loaded, row.id, (&fixture).into(), &expected);
+            simulations(&prepared, row.id, (&fixture).into(), &expected);
             let mut runnables = vec![];
             for (backend, objects) in &objects {
                 let launch = dir.join(format!("{}-{backend:?}", row.id));
                 std::fs::create_dir_all(&launch).unwrap();
-                let runnable = link_fixture_runnable(
-                    &ready,
-                    &loaded.entry,
-                    objects,
-                    &tools,
-                    &launch,
-                    &fixture,
-                )
-                .unwrap();
+                let runnable =
+                    link_fixture_runnable(&ready, &entry, objects, &tools, &launch, &fixture)
+                        .unwrap();
                 runnables.push((runnable, launch));
             }
             let offline = Fixture {
@@ -364,13 +361,7 @@ fn four_engine_lines_cursor_and_offline_replay() {
                 let bytes = std::fs::read(&tape).unwrap();
                 let recording = hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap();
                 assert_reads(&recording.events, &reads);
-                for (label, replay) in [
-                    (
-                        "reference",
-                        replay_observations as fn(&Path, &Path, Option<u64>) -> _,
-                    ),
-                    ("checked", replay_observations_checked),
-                ] {
+                for (label, checked) in [("reference", false), ("checked", true)] {
                     if !pending(&format!("{cell}/replay/{label}")) {
                         continue;
                     }
@@ -379,7 +370,9 @@ fn four_engine_lines_cursor_and_offline_replay() {
                         row.id,
                         launch.display()
                     );
-                    let replayed = replay(&path, &tape, Some(1_000_000)).unwrap();
+                    let replayed =
+                        replay_prepared_observations(&prepared, &tape, Some(1_000_000), checked)
+                            .unwrap();
                     assert_eq!(Observation::of_reference(&replayed), observation);
                     eprintln!("STDIN_PASS {} replay {}->{label}", row.id, launch.display());
                 }
@@ -422,7 +415,7 @@ fn four_engine_lines_cursor_and_offline_replay() {
                 }
                 if row.id == "cap-lf" {
                     refusal_controls(
-                        &path,
+                        &prepared,
                         &tape,
                         &recording,
                         &runnables,
@@ -438,7 +431,7 @@ fn four_engine_lines_cursor_and_offline_replay() {
 }
 
 fn refusal_controls(
-    path: &Path,
+    prepared: &requests::TirExecution,
     tape: &Path,
     record: &hirsel_rt::launch::Recording,
     runnables: &[(Runnable, PathBuf)],
@@ -486,19 +479,14 @@ fn refusal_controls(
             "STDIN_CONTROL_TAPE {cell} {mode} {}",
             hex(&std::fs::read(&changed).unwrap())
         );
-        for (label, replay) in [
-            (
-                "reference",
-                replay_observations as fn(&Path, &Path, Option<u64>) -> _,
-            ),
-            ("checked", replay_observations_checked),
-        ] {
+        for (label, checked) in [("reference", false), ("checked", true)] {
             if !pending(&format!("{cell}/refusal/{mode}/{label}")) {
                 continue;
             }
-            let refusal = replay(path, &changed, Some(1_000_000))
-                .unwrap_err()
-                .to_string();
+            let refusal =
+                replay_prepared_observations(prepared, &changed, Some(1_000_000), checked)
+                    .unwrap_err()
+                    .to_string();
             assert!(
                 refusal.contains(&error),
                 "{mode}/{label}: expected {error}, got {refusal}"
@@ -560,7 +548,7 @@ fn refusal_controls(
 fn underlying_input_error_kinds_and_limit_precedence() {
     with_compiler_stack(|| {
         use hirsel_interp::library::simulation::Fault;
-        let mut loaded = checked(&fixture("main"), None);
+        let prepared = request_tir(&fixture("main"), hirsel_engine::Verify::On, None).unwrap();
         for (id, fault, expected) in [
             (
                 "fault",
@@ -582,7 +570,7 @@ fn underlying_input_error_kinds_and_limit_precedence() {
             })
                 .into();
             world.faults.insert("stdin.read".into(), [fault].into());
-            simulations(&mut loaded, id, world, expected.as_bytes());
+            simulations(&prepared, id, world, expected.as_bytes());
         }
     });
 }
