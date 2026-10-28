@@ -311,11 +311,10 @@ impl QueryEngine {
     /// It performs no body checking, lowering or compile-time execution.
     pub fn front_source_roots(&mut self) -> Vec<DefPath> {
         let _ = self.signature_inputs();
-        let mut roots: BTreeSet<_> = self
-            .source_growth
-            .required()
-            .map(|id| id.path().clone())
-            .collect();
+        // The source-only index restores every declaration but no legacy
+        // growth controller. Its pending set therefore contains only edited
+        // declarations, never the complete source Check obligation set.
+        let mut roots: BTreeSet<_> = self.source_paths().into_iter().collect();
         // A warm source catalog carries only the written declaration. Its fact
         // helper is still a required body of the source check transaction.
         for path in roots.clone() {
