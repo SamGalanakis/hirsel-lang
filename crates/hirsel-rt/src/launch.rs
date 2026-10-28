@@ -2641,6 +2641,9 @@ pub(crate) unsafe fn execute(
     unsafe { &mut *ctx }.run().value_codes = program.value_codes.clone();
     // F0's free-mode test channel, when the environment sets it, replaces the schedule.
     crate::free::install(unsafe { &mut *ctx }, &launch_config.run_identity)?;
+    if cpu_fixture.is_some() && unsafe { (*ctx).run_ref().free_mode } {
+        unsafe { crate::tasks::free::enable(ctx) };
+    }
     if production_free {
         if replay.is_some() {
             let requested = control.width.load(std::sync::atomic::Ordering::Acquire);

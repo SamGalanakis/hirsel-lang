@@ -130,7 +130,9 @@ fn agree_in(
                             std::fs::read_to_string(dir.join("roots")).unwrap_or_default()
                         )
                     }),
-                    reference
+                    reference,
+                    "{backend:?} Free={free} CPU={:?}",
+                    fixture.cpu
                 );
             }
         }
