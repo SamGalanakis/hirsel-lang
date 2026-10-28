@@ -77,7 +77,10 @@ impl InspectionLedger {
             return Err(unavailable());
         }
         if state.memory.is_none() {
-            state.memory = Some(self.budget.reserve(self.capacity).map_err(ToolError::Io)?);
+            state.memory = Some(
+                super::host_selector::GraphBudget::reserve_product(&self.budget, self.capacity)
+                    .map_err(ToolError::Io)?,
+            );
         }
         Ok(())
     }
