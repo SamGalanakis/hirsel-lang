@@ -49,10 +49,15 @@ sources before replacing any destination, so equal payloads retain their distinc
 identities. Resources created and dropped inside a child task are supported
 along with captured Resources transferred at the actual committed spawn. The
 compiler binds the callback and capture paths from the complete checked code
-graph. Unknown callbacks and Resource-bearing task results refuse before launch.
+graph. Statically nested Resource results keep their original credits through
+the actual child-to-parent result copy. A detached result stays with its child
+until its cleanup drops it. Failed children create no parent result credit.
+Unknown callbacks and unsupported dynamic result storage refuse before launch.
 The runtime sidecar binds each created task's generation and canonical path,
 so interleaved frames and reused scheduler slots remain distinct. Channel
-payloads and unsupported dynamic storage still refuse before launch.
+payloads with statically nested Resources preserve FIFO item identity through
+sends, receives and queued cleanup. Unsupported dynamic storage still refuses
+before launch.
 Native launches accept the validated grants, arguments and recording or replay
 selected for the ordinary program. The diagnostic runtime must be available;
 the default runtime archive contains no ownership hooks.

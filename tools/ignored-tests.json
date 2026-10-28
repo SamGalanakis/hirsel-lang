@@ -671,5 +671,13 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_result_71::joining_two_started_children_preserves_results_without_immediate_join_hints": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_result_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }

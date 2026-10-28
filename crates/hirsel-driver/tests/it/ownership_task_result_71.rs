@@ -132,3 +132,25 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         [0, 1, 0, 0, 1],
     );
 }
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn joining_two_started_children_preserves_results_without_immediate_join_hints() {
+    results(
+        r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let first=task.async(s,fn()->Token {Token()})
+  let second=task.async(s,fn()->Token {Token()})
+  let a=task.await(s,take first)
+  let b=task.await(s,take second)
+ })
+ Ok(())
+}
+"#,
+        0,
+        [2, 2, 2, 0, 0],
+    );
+}
