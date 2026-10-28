@@ -4,7 +4,10 @@ use hirsel_engine::{
     store::{MemStore, ResultStore},
     *,
 };
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 #[test]
 fn admitted_native_definition_products_match_independent_scalar_products() {
@@ -14,6 +17,7 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
         let manifest = directory.path().join("hirsel.json");
         std::fs::write(&path,"pub type Secret{level:u64}\nconst A:u64=comptime 3u64;\nfn view(x:Secret)->u64{x.level}\npub fn main()->u64{A+view(Secret(level:4u64))}\n").unwrap();
         std::fs::write(&manifest,r#"{"schema":1,"package":{"name":"catalogue","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let mut previous_products = BTreeMap::new();
         for (jobs, verify) in [
             (1, Verify::On),
             (2, Verify::On),
@@ -98,6 +102,23 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 .into_iter()
                 .map(|p| native.outcome(p).unwrap())
                 .collect::<Vec<_>>();
+            for output in &outputs {
+                let product = output.product.product.unwrap();
+                let bytes = store.get_content(product.record).unwrap();
+                if let Some(previous) = previous_products.insert(
+                    (
+                        verify == Verify::On,
+                        output.product.source.definition.clone(),
+                    ),
+                    bytes.to_vec(),
+                ) {
+                    assert_eq!(
+                        previous.as_slice(),
+                        &*bytes,
+                        "unchanged native product, jobs={jobs}"
+                    );
+                }
+            }
             assert!(
                 definitions
                     .iter()
@@ -139,10 +160,10 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 .iter()
                 .find(|o| o.product.source.definition == program.entry)
                 .unwrap();
-            let payload = store
+            let payload_bytes = store
                 .get_content(main_output.product.product.unwrap().record)
-                .unwrap()
-                .len() as u64;
+                .unwrap();
+            let payload = payload_bytes.len() as u64;
             // Reuse settled producers, but give a fresh native owner exactly
             // one payload's allowance. A byte less must refuse publication.
             for (available, accepts) in [(payload - 1, false), (payload, true)] {
@@ -162,6 +183,7 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                         errors,
                     )
                     .unwrap();
+                assert_eq!(bounded.query(&program.entry), native.query(&program.entry));
                 let mut bounded_runtime = AdmittedRuntime::new(
                     hirsel_intern::jobs::Jobs::new(jobs),
                     budget.reserve(512 << 20).unwrap(),
@@ -184,10 +206,7 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 let result = bounded_runtime.wait(request);
                 if accepts {
                     let product = result.expect("one payload fits exactly")[0];
-                    assert_eq!(
-                        store.get_content(product.record).unwrap().len() as u64,
-                        payload
-                    );
+                    assert_eq!(store.get_content(product.record).unwrap(), payload_bytes);
                     assert_eq!(
                         bounded.outcome(product).unwrap().product.source.definition,
                         program.entry

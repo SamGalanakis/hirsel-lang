@@ -215,10 +215,12 @@ impl FrontRunQueries {
         *remaining = remaining
             .checked_sub(charge)
             .ok_or_else(|| operational("native source roots exceed Run admission"))?;
+        let roots_identity =
+            ContentHash::of_parts("hirsel.front.run.source-roots.v1", [bytes.as_slice()]);
         for id in this.ids.values_mut() {
             id.address = hirsel_artifact_store::Address(ContentHash::of_parts(
-                "hirsel.front.run.source-root-set.v1",
-                [id.address.0.0.as_slice(), bytes.as_slice()],
+                "hirsel.front.run.source-root-set.v2",
+                [id.address.0.0.as_slice(), roots_identity.0.as_slice()],
             ));
         }
         this.native_roots = roots;

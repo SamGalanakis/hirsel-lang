@@ -10,7 +10,7 @@ use std::{sync::Mutex, task::Poll};
 pub const FRONT_NATIVE_DEFINITION_KIND: u32 = 0x4600_0017;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0018,
-    schema: 2,
+    schema: 3,
 };
 const FAILURE: Domain = Domain {
     kind: 0x4600_0019,
@@ -390,7 +390,8 @@ impl Task {
                         &source.definition,
                         &source.signature,
                         &source.signature_dependencies,
-                        &source.source.syntax,
+                        // The parser already identifies these immutable source arenas.
+                        source.source.syntax.text_hash,
                         source
                             .source
                             .generated
@@ -659,7 +660,13 @@ impl QueryEngine {
         let anchors = crate::NativeRecordContext::capture(self);
         let mut inputs = BTreeMap::new();
         let mut ids = BTreeMap::new();
-        let namespace = serde_json::to_vec(definitions).map_err(|_| refuse())?;
+        let namespace = ContentHash::of_parts(
+            "hirsel.front.native-definition-selection.v1",
+            [serde_json::to_vec(definitions)
+                .map_err(|_| refuse())?
+                .as_slice()],
+        );
+        let environment = self.environment_value();
         for path in definitions {
             let generated = if self.generated.contains_key(path) {
                 let accepted = registration(path).ok_or_else(|| {
@@ -728,10 +735,10 @@ impl QueryEngine {
             let id = QueryId {
                 kind: FRONT_NATIVE_DEFINITION_KIND,
                 address: hirsel_artifact_store::Address(ContentHash::of_parts(
-                    "hirsel.front.native-definition-address.v1",
+                    "hirsel.front.native-definition-address.v2",
                     [
-                        self.environment_value().0.as_slice(),
-                        namespace.as_slice(),
+                        environment.0.as_slice(),
+                        namespace.0.as_slice(),
                         bytes.as_slice(),
                     ],
                 )),

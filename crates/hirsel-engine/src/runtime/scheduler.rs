@@ -10,7 +10,7 @@ use super::*;
 use hirsel_intern::jobs::{COMPILER_STACK_BYTES, Jobs};
 use hirsel_syntax::ContentHash;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -763,7 +763,7 @@ impl State {
         self.account();
     }
     fn reaches(&self, from: Key, target: Key) -> bool {
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::new();
         let mut pending = vec![from];
         while let Some(key) = pending.pop() {
             if key == target {
