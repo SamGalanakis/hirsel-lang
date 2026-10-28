@@ -4,7 +4,10 @@ use native::queries::{
     ARENA_CANDIDATES_KIND, ARENA_CHOSEN_KIND, INSTANCE_KIND, READY_KIND,
     arena_tasks::{ARENA_GRAPH_KIND, ArenaTaskFactory, ArenaTasks},
     declarations::NativeDeclarations,
-    instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks},
+    instance::CALLABLE_VALUE_KIND,
+    instance_tasks::{
+        CALLABLE_GRAPH_KIND, DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks,
+    },
     products::{EmissionOptions, NativeSnapshot},
     source_inputs::NativeInstanceInputs,
     tasks::{NativeTaskFactory, NativeTasks},
@@ -320,7 +323,13 @@ fn ready_case_inner_mutation(
             )
             .unwrap();
             let traced = Arc::new(Traced(factory.clone(), trace.clone()));
-            for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
+            for kind in [
+                INSTANCE_KIND,
+                INSTANCE_INPUT_KIND,
+                DISCOVERY_KIND,
+                CALLABLE_GRAPH_KIND,
+                CALLABLE_VALUE_KIND,
+            ] {
                 runtime.register(kind, traced.clone()).unwrap();
             }
             let arenas = ArenaTasks::new(
@@ -599,6 +608,7 @@ fn ready_case_inner_mutation(
             .unwrap();
             for kind in [
                 INSTANCE_KIND,
+                CALLABLE_VALUE_KIND,
                 ARENA_CANDIDATES_KIND,
                 ARENA_CHOSEN_KIND,
                 READY_KIND,
