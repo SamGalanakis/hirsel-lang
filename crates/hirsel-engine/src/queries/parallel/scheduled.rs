@@ -778,6 +778,19 @@ impl FrontBodyQueries {
             lowering: selected.lowering.clone(),
         })
     }
+    /// Failure of an already settled body, without decoding or demanding it.
+    pub(crate) fn completed_error(&self, path: &DefPath) -> Option<QueryError> {
+        let query = self.query(path)?;
+        let outcomes = self
+            .outcomes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let outcome = outcomes.get(&query.address.0)?;
+        outcome.status.clone().err().or_else(|| {
+            has_errors(&outcome.diagnostics)
+                .then(|| QueryError::Diagnostics(outcome.diagnostics.clone()))
+        })
+    }
     /// An immutable outcome, including exact error-phase and read evidence.
     /// This lookup never adopts a product into a mutable source namespace.
     pub fn outcome(self: &Arc<Self>, reference: Reference) -> Option<FrontBodyOutput> {

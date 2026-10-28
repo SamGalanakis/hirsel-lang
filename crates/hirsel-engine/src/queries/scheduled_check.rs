@@ -91,6 +91,7 @@ pub struct FrontCheckQueries {
     storage: Option<Arc<FrontStorageGraphQueries>>,
     lint: Option<DeadArmLint>,
     constants: BTreeSet<DefId>,
+    instances: Vec<DefPath>,
     sources: SourceMap,
     /// The indexed modules, read only to explain a missing name (PROG-1).
     declarations: Arc<crate::snapshot::Declarations>,
@@ -152,13 +153,14 @@ impl FrontCheckQueries {
             + 2 * std::mem::size_of::<(DefPath, ProductRef)>()
             + 2 * std::mem::size_of::<(DefPath, Reference)>()
             + std::mem::size_of::<DefId>()
+            + 2 * std::mem::size_of::<DefPath>()
             + 128) as u64;
         let base = weight.retained.checked_add(
             (files as u64).checked_mul((2 * std::mem::size_of::<FileInput>() + 128) as u64)?,
         )?;
         definitions.iter().try_fold(base, |total, path| {
             total.checked_add(
-                path_slot.checked_add(bincode::serialized_size(path).ok()?.checked_mul(3)?)?,
+                path_slot.checked_add(bincode::serialized_size(path).ok()?.checked_mul(5)?)?,
             )
         })
     }
@@ -219,6 +221,8 @@ impl QueryFactory for Factory {
             stage: Stage::Front,
             file: 0,
             root: 0,
+            selecting_instances: false,
+            instances: Vec::new(),
             reads: ReadsBuilder::new(),
             front: Vec::new(),
             lowered: Vec::new(),
@@ -277,6 +281,8 @@ struct Task {
     stage: Stage,
     file: usize,
     root: usize,
+    selecting_instances: bool,
+    instances: Vec<DefPath>,
     reads: ReadsBuilder,
     front: Vec<(DefPath, ProductRef)>,
     lowered: Vec<(DefPath, ProductRef)>,
@@ -332,6 +338,20 @@ impl Task {
                                     pending.push(id);
                                 }
                             }
+                        }
+                    }
+                    // Accepted instance P work is pure and speculative, like
+                    // ordinary P above. Its diagnostics publish only when a
+                    // clean file selects its instance Lower obligations.
+                    for path in &self.queries.instances {
+                        let id = self
+                            .queries
+                            .plan
+                            .front
+                            .query(path)
+                            .ok_or(self.queries.errors.protocol)?;
+                        if cx.read(id).is_pending() {
+                            pending.push(id);
                         }
                     }
                     // Every Pending read in this poll must be returned to
@@ -493,13 +513,44 @@ impl Task {
                     let rest = matches!(self.stage, Stage::Rest);
                     while self.file < self.files.len() {
                         let file = &mut self.files[self.file];
-                        let paths = if rest { &file.rest } else { &file.comptime };
                         if !file.clean()
                             || (rest && file.input.lowering != LoweringPolicy::Reachable)
-                            || self.root == paths.len()
                         {
                             self.file += 1;
                             self.root = 0;
+                            self.selecting_instances = false;
+                            self.instances.clear();
+                            continue;
+                        }
+                        let paths = if rest {
+                            &file.rest
+                        } else if self.selecting_instances {
+                            &self.instances
+                        } else {
+                            &file.comptime
+                        };
+                        if self.root == paths.len() {
+                            if !rest && !self.selecting_instances {
+                                let roots = file.input.paths.iter().map(|(path, _)| path.clone());
+                                match self
+                                    .queries
+                                    .plan
+                                    .lower
+                                    .selected_instances(roots, self.queries.weight.scratch)
+                                {
+                                    Ok(instances) => {
+                                        self.instances = instances.into_iter().collect()
+                                    }
+                                    Err(error) => file.error(error, Some(QueryKind::Lower)),
+                                }
+                                self.selecting_instances = true;
+                                self.root = 0;
+                                continue;
+                            }
+                            self.file += 1;
+                            self.root = 0;
+                            self.selecting_instances = false;
+                            self.instances.clear();
                             continue;
                         }
                         let path = &paths[self.root];
@@ -781,10 +832,22 @@ impl QueryEngine {
             }
             files.push(input);
         }
-        let definitions: Vec<_> = files
+        let mut instances: Vec<_> = plan.lower.instance_definitions().cloned().collect();
+        instances.sort();
+        instances.dedup();
+        for path in &instances {
+            if plan.front.query(path).is_none() || plan.lower.query(path).is_none() {
+                return Err(refusal());
+            }
+        }
+        // This also reserves the static instance inventory and the one saved
+        // per-file selection cursor. The selection walk uses root scratch.
+        let definitions: BTreeSet<_> = files
             .iter()
             .flat_map(|file| file.paths.iter().map(|(path, _)| path.clone()))
+            .chain(instances.iter().cloned())
             .collect();
+        let definitions: Vec<_> = definitions.into_iter().collect();
         let lint = (!lint.declarations.is_empty()).then_some(lint);
         let required = FrontCheckQueries::input_bytes(&definitions, files.len(), weight)
             .and_then(|required| required.checked_add(lint.as_ref().map_or(0, DeadArmLint::bytes)))
@@ -814,10 +877,13 @@ impl QueryEngine {
                 file_identity.extend(path.fingerprint().0);
             }
         }
+        for instance in &instances {
+            file_identity.extend(instance.fingerprint().0);
+        }
         let query = QueryId {
             kind: FRONT_CHECK_KIND,
             address: hirsel_artifact_store::Address(ContentHash::of_parts(
-                "hirsel.front.check.address.v1",
+                "hirsel.front.check.address.v2",
                 [
                     self.environment_value().0.as_slice(),
                     file_identity.as_slice(),
@@ -836,6 +902,7 @@ impl QueryEngine {
             storage: None,
             lint,
             constants,
+            instances,
             sources: self.sources.clone(),
             declarations: self.declarations.frozen(),
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),

@@ -681,6 +681,14 @@ impl FrontLowerQueries {
             .map(|selected| selected.map(|id| id.path().clone()))
     }
 
+    pub(crate) fn instance_definitions(&self) -> impl Iterator<Item = &DefPath> {
+        self.instances
+            .instances
+            .values()
+            .flat_map(|instances| instances.values())
+            .map(|instance| instance.definition.path())
+    }
+
     /// Close CT-5 calls through generic helpers using this view's settled
     /// summaries and instance table. Unlike source registration, Run cannot
     /// create a missing instance or execute its generator.
@@ -742,10 +750,11 @@ impl FrontLowerQueries {
             {
                 continue;
             }
-            let product = self
-                .front
-                .checked_definition(path.path())
-                .ok_or_else(refused)?;
+            let product = self.front.checked_definition(path.path()).ok_or_else(|| {
+                self.front
+                    .completed_error(path.path())
+                    .unwrap_or_else(refused)
+            })?;
             let summary = &product.summary.summary;
             if bindings.is_empty() && summary.frames[0].generic {
                 continue;
