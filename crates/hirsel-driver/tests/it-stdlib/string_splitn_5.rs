@@ -1,6 +1,6 @@
 //! Rust a7c37f9f library/core/src/str/iter.rs:937-951 and
 //! library/alloctests/tests/str.rs:1412-1427,2278-2282 (MIT).
-use hirsel_driver::*;
+use crate::source_std::tir;
 use hirsel_engine::*;
 use hirsel_interp::{Integer, Limits, Outcome, Value, library::Library};
 use hirsel_types::Primitive;
@@ -17,14 +17,11 @@ pub fn bounded(take s: String, sep: String, limit: u64) -> List[String] uses {} 
 }
 pub fn main() -> () { let _ = bounded("a:b", ":", 2) }
 "#;
-        let mut loaded = load_program_source(&fixture, Some(source)).unwrap();
-        loaded.check_for_execution().unwrap();
-        let runtime = loaded.engine.runtime_types().unwrap();
-        let sources = loaded.engine.sources.clone();
-        let mut entry = loaded.entry.clone();
-        entry.0.name = "bounded".into();
+        let prepared = tir(&fixture, Some(source), Some("bounded")).unwrap();
+        let runtime = &prepared.runtime;
+        let sources = &prepared.sources;
         let configuration = RunConfiguration {
-            entry,
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -54,8 +51,8 @@ pub fn main() -> () { let _ = bounded("a:b", ":", 2) }
                     .collect::<Vec<_>>();
                 let mut library = Library::new(&configuration, Default::default()).unwrap();
                 let execution = hirsel_interp::run_with_runtime(
-                    &mut loaded.engine,
-                    &sources,
+                    &mut prepared.provider(),
+                    sources,
                     &configuration,
                     vec![
                         Value::String(input.clone()),
@@ -64,7 +61,7 @@ pub fn main() -> () { let _ = bounded("a:b", ":", 2) }
                     ],
                     Limits::default(),
                     &mut library,
-                    &runtime,
+                    runtime,
                 )
                 .unwrap();
                 let Outcome::Returned {
@@ -129,8 +126,8 @@ pub fn main() -> () { let _ = bounded("a:b", ":", 2) }
         for &(input, separator, limit, expected) in go_rows {
             let mut library = Library::new(&configuration, Default::default()).unwrap();
             let execution = hirsel_interp::run_with_runtime(
-                &mut loaded.engine,
-                &sources,
+                &mut prepared.provider(),
+                sources,
                 &configuration,
                 vec![
                     Value::String(input.into()),
@@ -139,7 +136,7 @@ pub fn main() -> () { let _ = bounded("a:b", ":", 2) }
                 ],
                 Limits::default(),
                 &mut library,
-                &runtime,
+                runtime,
             )
             .unwrap();
             match (expected, execution.outcome) {
@@ -177,8 +174,8 @@ pub fn main() -> () { let _ = bounded("a:b", ":", 2) }
         let input = format!("INFO|worker|{tail}");
         let mut library = Library::new(&configuration, Default::default()).unwrap();
         let execution = hirsel_interp::run_with_runtime(
-            &mut loaded.engine,
-            &sources,
+            &mut prepared.provider(),
+            sources,
             &configuration,
             vec![
                 Value::String(input),
@@ -187,7 +184,7 @@ pub fn main() -> () { let _ = bounded("a:b", ":", 2) }
             ],
             Limits::default(),
             &mut library,
-            &runtime,
+            runtime,
         )
         .unwrap();
         let Outcome::Returned {

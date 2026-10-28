@@ -1,6 +1,6 @@
 //! strsim dacc84c0dc61eff0ee0ff66962bcf2e17018ad26, src/lib.rs:985-1026.
 //! The oracle deliberately uses a full matrix, independently of std's one row.
-use hirsel_driver::*;
+use crate::source_std::tir;
 use hirsel_engine::*;
 use hirsel_interp::{Integer, Limits, Outcome, Value, library::Library};
 use hirsel_types::Primitive;
@@ -45,14 +45,11 @@ pub fn bounded(a: String, b: String, cells: u64, scalars: u64) -> u64 uses {} {
 }
 pub fn main() -> () { let _ = bounded("", "", 0, 0) }
 "#;
-        let mut loaded = load_program_source(&fixture, Some(source)).unwrap();
-        loaded.check_for_execution().unwrap();
-        let runtime = loaded.engine.runtime_types().unwrap();
-        let sources = loaded.engine.sources.clone();
-        let mut entry = loaded.entry.clone();
-        entry.0.name = "bounded".into();
+        let prepared = tir(&fixture, Some(source), Some("bounded")).unwrap();
+        let runtime = &prepared.runtime;
+        let sources = &prepared.sources;
         let config = RunConfiguration {
-            entry,
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -62,8 +59,8 @@ pub fn main() -> () { let _ = bounded("", "", 0, 0) }
         for &(a, b, cells, scalars, expected) in rows {
             let mut library = Library::new(&config, Default::default()).unwrap();
             let execution = hirsel_interp::run_with_runtime(
-                &mut loaded.engine,
-                &sources,
+                &mut prepared.provider(),
+                sources,
                 &config,
                 vec![
                     Value::String(a.into()),
@@ -73,7 +70,7 @@ pub fn main() -> () { let _ = bounded("", "", 0, 0) }
                 ],
                 Limits::default(),
                 &mut library,
-                &runtime,
+                runtime,
             )
             .unwrap();
             match execution.outcome {

@@ -1,6 +1,6 @@
 //! Step counts expose the quadratic substring scan that output-only vectors
 //! cannot distinguish. Inputs double together, so a nested scan grows by four.
-use hirsel_driver::*;
+use crate::source_std::tir;
 use hirsel_engine::*;
 use hirsel_interp::{Limits, Outcome, Value, library::Library};
 use std::path::PathBuf;
@@ -17,14 +17,11 @@ pub fn search(source: String, needle: String) -> bool uses {} {
 }
 pub fn main() -> () { let _ = search("a", "b") }
 "#;
-        let mut loaded = load_program_source(&fixture, Some(source)).unwrap();
-        loaded.check_for_execution().unwrap();
-        let runtime = loaded.engine.runtime_types().unwrap();
-        let sources = loaded.engine.sources.clone();
-        let mut entry = loaded.entry.clone();
-        entry.0.name = "search".into();
+        let prepared = tir(&fixture, Some(source), Some("search")).unwrap();
+        let runtime = &prepared.runtime;
+        let sources = &prepared.sources;
         let configuration = RunConfiguration {
-            entry,
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -42,8 +39,8 @@ pub fn main() -> () { let _ = search("a", "b") }
                 let needle = String::from_utf8(needle).unwrap();
                 let mut library = Library::new(&configuration, Default::default()).unwrap();
                 let execution = hirsel_interp::run_with_runtime(
-                    &mut loaded.engine,
-                    &sources,
+                    &mut prepared.provider(),
+                    sources,
                     &configuration,
                     vec![Value::String(haystack), Value::String(needle)],
                     Limits {
@@ -51,7 +48,7 @@ pub fn main() -> () { let _ = search("a", "b") }
                         ..Default::default()
                     },
                     &mut library,
-                    &runtime,
+                    runtime,
                 )
                 .unwrap();
                 assert!(

@@ -6,24 +6,21 @@ use std::path::Path;
 fn execute(source: &str) {
     with_compiler_stack(|| {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_numeric.hir");
-        let mut loaded = load_program_source(&fixture, Some(source)).unwrap();
-        loaded.check_for_execution().unwrap();
-        loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
-            limits: hirsel_interp::Limits {
-                steps: Some(100_000_000),
-                call_depth: 256,
-                source: None,
-            },
-            ..Default::default()
-        }));
-        let run = run_observed_snapshot(
-            &mut loaded.engine,
+        let prepared = crate::source_std::tir(&fixture, Some(source), None).unwrap();
+        let run = testing::observe_tir(
+            &prepared,
             &RunConfiguration {
-                entry: loaded.entry,
+                entry: prepared.entry.clone(),
                 hash_seed: 0,
                 inputs: vec![],
             },
             SimulationConfig::default(),
+            hirsel_interp::Limits {
+                steps: Some(100_000_000),
+                call_depth: 256,
+                source: None,
+            },
+            false,
         )
         .unwrap();
         assert!(
