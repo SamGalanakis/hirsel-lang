@@ -1314,7 +1314,7 @@ impl<S: Stage> Editor<S> {
 
     /// Flatten the blocks and drop what the rewrite left unreachable or unnamed.
     pub fn finish(self) -> LirUnit<S> {
-        self.finish_reporting(|_, _| ()).0
+        self.finish_reporting(|_, _, _| ()).0
     }
 
     /// Diagnostic callers retain the exact block/edge compaction performed by
@@ -1322,7 +1322,7 @@ impl<S: Stage> Editor<S> {
     /// not clone either map. Instruction origins belong to the rewriting pass.
     pub(crate) fn finish_reporting<R>(
         mut self,
-        report: impl FnOnce(&[Option<BlockId>], &[Option<u32>]) -> R,
+        report: impl FnOnce(&[Option<BlockId>], &[Option<u32>], &[Option<CleanupAnchorId>]) -> R,
     ) -> (LirUnit<S>, R) {
         let n = self.unit.blocks.len();
         let succ = |unit: &LirUnit<S>, code: &[Vec<Inst>], b: usize| -> Vec<BlockId> {
@@ -1509,8 +1509,8 @@ impl<S: Stage> Editor<S> {
         self.unit.terminators = terminators;
         self.unit.instructions = instructions;
         compact_values(&mut self.unit);
-        prune_anchors(&mut self.unit);
-        let report = report(&block_map, &edge_map);
+        let anchors = prune_anchors(&mut self.unit);
+        let report = report(&block_map, &edge_map, &anchors);
         (self.unit, report)
     }
 }
@@ -3930,9 +3930,12 @@ fn released_slot(ed: &Editor<Rc>, facts: &Facts, b: BlockId, i: usize) -> Option
 }
 
 /// Delete these cleanup anchors from the table, renumbering the rest.
-fn remove_anchors<S>(unit: &mut LirUnit<S>, gone: &BTreeSet<CleanupAnchorId>) {
+fn remove_anchors<S>(
+    unit: &mut LirUnit<S>,
+    gone: &BTreeSet<CleanupAnchorId>,
+) -> Vec<Option<CleanupAnchorId>> {
     if gone.is_empty() {
-        return;
+        return Vec::new();
     }
     let mut map = Vec::new();
     let mut next = 0u32;
@@ -3956,6 +3959,7 @@ fn remove_anchors<S>(unit: &mut LirUnit<S>, gone: &BTreeSet<CleanupAnchorId>) {
             *anchor = map[anchor.index()].expect("a named anchor stays");
         }
     }
+    map
 }
 
 fn anchor_mut(inst: &mut Inst) -> Option<&mut CleanupAnchorId> {
@@ -3971,7 +3975,7 @@ fn anchor_mut(inst: &mut Inst) -> Option<&mut CleanupAnchorId> {
 
 /// Anchors no kept instruction discharges any more: their only cleanup sat
 /// on a path the rewrite removed, so nothing can skip them.
-fn prune_anchors<S>(unit: &mut LirUnit<S>) {
+fn prune_anchors<S>(unit: &mut LirUnit<S>) -> Vec<Option<CleanupAnchorId>> {
     let mut named = BTreeSet::new();
     for inst in &mut unit.instructions {
         if let Some(a) = anchor_mut(inst) {
@@ -3982,7 +3986,7 @@ fn prune_anchors<S>(unit: &mut LirUnit<S>) {
         .map(CleanupAnchorId)
         .filter(|a| !named.contains(a))
         .collect();
-    remove_anchors(unit, &gone);
+    remove_anchors(unit, &gone)
 }
 
 /// Rename every value the unit names through `map`. Exhaustive over the

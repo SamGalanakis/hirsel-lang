@@ -350,6 +350,116 @@ mod tests {
             assert!(Selection::Resources.tracks_layout(&table, LayoutId(4)));
         }
     }
+    #[test]
+    fn empty_variant_retirement_requires_one_incoming_occurrence_even_when_an_edge_is_reused() {
+        use crate::{abi_types::FnAbiId, objects::UnitKey, testing::UnitBuilder};
+        for alternate in ["none", "otherwise", "predecessor", "failure"] {
+            let hash = ContentHash::of_bytes(b"empty-variant-retirement");
+            let mut b = UnitBuilder::new(LirUnit::<Ready>::new(UnitHeader {
+                source_count: 0,
+                track_caller: false,
+                stage: crate::stage::StageKind::Ready,
+                lir_version: crate::LIR_VERSION,
+                origin: UnitOrigin::Source,
+                key: UnitKey(hash),
+                definition: hirsel_syntax::DefPath::core("empty_variant_retirement"),
+                implementation_revision: hash,
+                instance: hash,
+                target: hash,
+                abi: FnAbiId(0),
+            }));
+            let entry = b.block(BlockKind::Body, &[]);
+            let empty = b.block(BlockKind::Cleanup, &[]);
+            let other = b.block(BlockKind::Body, &[]);
+            let slot = b.slot(ValueRepr::Aggregate, LayoutId(0), SlotKind::Temporary);
+            let address = b.address(
+                AddressBase::Slot(slot),
+                &[],
+                ValueRepr::Aggregate,
+                LayoutId(0),
+            );
+            let borrowed = b.plain(ValueRepr::Aggregate, LayoutId(0));
+            b.push(
+                entry,
+                Inst::Read {
+                    result: borrowed,
+                    address,
+                    reaching: borrowed,
+                    mode: ReadMode::Borrow,
+                },
+            );
+            let value = b.owned(ValueRepr::Aggregate, LayoutId(0));
+            b.push(
+                empty,
+                Inst::Read {
+                    result: value,
+                    address,
+                    reaching: borrowed,
+                    mode: ReadMode::Take,
+                },
+            );
+            b.push(empty, Inst::Forget { value });
+            let selected = b.edge(empty, &[]);
+            let otherwise = b.edge(other, &[]);
+            let arms = PoolRange::push(
+                &mut b.unit.pools.switch_arms,
+                [SwitchArm {
+                    value: 0,
+                    edge: selected,
+                }],
+            );
+            b.term(
+                entry,
+                Terminator::Switch {
+                    value: borrowed,
+                    arms,
+                    otherwise: if alternate == "otherwise" {
+                        selected
+                    } else {
+                        otherwise
+                    },
+                },
+            );
+            b.ret(empty, None);
+            if alternate == "predecessor" {
+                b.term(other, Terminator::Jump(selected));
+            } else {
+                if alternate == "failure" {
+                    let failure = b.failure(selected, None, &[]);
+                    b.push(other, Inst::Address { address, failure });
+                }
+                b.ret(other, None);
+            }
+            let unit = b.finish();
+            let mut table = LayoutTable::new(&TargetSpec::x86_64_unknown_linux_gnu());
+            let mut variant = record(LayoutKind::Variant);
+            variant.tag = Some(TagEncoding {
+                offset: 0,
+                form: TagForm::Ordinal,
+                variants: vec![
+                    VariantLayout {
+                        ordinal: 0,
+                        fields: vec![],
+                    },
+                    VariantLayout {
+                        ordinal: 1,
+                        fields: vec![FieldLayout {
+                            ordinal: 0,
+                            offset: 0,
+                            layout: LayoutId(1),
+                            unaligned: false,
+                        }],
+                    },
+                ],
+            });
+            table.layouts = vec![variant, record(LayoutKind::Resource)];
+            assert_eq!(
+                super::super::variants::empty_retirement(&unit, &table, empty, 1, value),
+                alternate == "none",
+                "{alternate}"
+            );
+        }
+    }
 }
 
 /// Prove resource-free callable environments from checked capture equations.

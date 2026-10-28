@@ -7,7 +7,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 11;
+pub const VERSION: u32 = 12;
 const MUTABLE_PARAMETER: u64 = (u32::MAX - 1) as u64;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
@@ -108,6 +108,9 @@ pub struct Metadata {
     pub action: u32,
     /// Empty callable custody, proved by the complete checked code graph.
     pub empty_environment: bool,
+    /// The checked structural carrier has a Resource-free alternative. An
+    /// absent subtree never authorizes overwriting retained destination credit.
+    pub optional_carrier: bool,
     /// Independently checked exact call-site target, present only for Alias.
     pub callee: Option<[u8; 32]>,
     /// Declaration ordinals and unit-local layouts in actual descriptor drop order.
@@ -177,6 +180,21 @@ fn projected_owner(
     location: u64,
     path: Option<&LocationPath>,
 ) -> Result<Owner, Error> {
+    if location >> 32 >= 8 && location >> 32 < MUTABLE_PARAMETER {
+        if let Some(path) = path {
+            let [super::Projection::VariantField { field, .. }] = path.fields.as_slice() else {
+                return Err(Error::InvalidLocation(location));
+            };
+            if path.root != location & u64::from(u32::MAX)
+                || u64::from(*field) != (location >> 32) - 8
+            {
+                return Err(Error::InvalidLocation(location));
+            }
+            let mut at = owner(task, frame, parent, environment, parameters, path.root)?;
+            at.path.extend(path.fields.iter().cloned());
+            return Ok(at);
+        }
+    }
     if location >> 32 != 7 {
         if path.is_some() {
             return Err(Error::InvalidLocation(location));
@@ -323,6 +341,23 @@ fn decode(
     }
     for markers in units.values() {
         for (&id, metadata) in markers {
+            if metadata.optional_carrier
+                && (metadata.action != 1
+                    || metadata.empty_environment
+                    || metadata.cleanup.is_some())
+            {
+                return Err(Error::InvalidMarker(id));
+            }
+            if metadata.action == 7
+                && (metadata.token != metadata.owner
+                    || metadata.token_path != metadata.owner_path
+                    || metadata.empty_environment
+                    || metadata.callee.is_some()
+                    || metadata.cleanup.is_some()
+                    || !metadata.cleanup_paths.is_empty())
+            {
+                return Err(Error::InvalidMarker(id));
+            }
             if metadata.additional_drops.is_empty() {
                 continue;
             }
@@ -1072,15 +1107,28 @@ fn decode(
                         }
                     }
                     1 => {
+                        let retained = |root: &Owner| {
+                            tracker.inventory().owners.keys().any(|at| {
+                                at.task == root.task
+                                    && at.storage == root.storage
+                                    && at.path.starts_with(&root.path)
+                            })
+                        };
+                        if expected.optional_carrier && !retained(&from) {
+                            if retained(&to) {
+                                return Err(Error::RetainedEnvironment(marker));
+                            }
+                            continue;
+                        }
                         tracker
                             .move_tree(&context, &from, &to)
                             .map_err(Error::Consistency)?;
                     }
-                    // A callable shell has no Resource identity. Its
+                    // Empty storage has no Resource identity. Its
                     // checked physical retirement is complete only when every
                     // actual captured resource already left or was dropped.
                     // Never infer descendant resource drops from the shell.
-                    4 if from == to => {
+                    4 | 7 if from == to => {
                         if tracker.inventory().owners.keys().any(|at| {
                             at.task == from.task
                                 && at.storage == from.storage

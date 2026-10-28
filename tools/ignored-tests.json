@@ -539,5 +539,13 @@
     "inputs": [],
     "target": "//:hirsel-cli-test-cpu_pool_4",
     "standalone": true
+  },
+  "ownership_resource_selection_71::source_resource_selection_preserves_the_active_and_empty_arms_of_owned_options": {
+    "source": "crates/hirsel-driver/tests/it/ownership_resource_selection_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }

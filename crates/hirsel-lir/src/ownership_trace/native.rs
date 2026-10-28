@@ -10,8 +10,10 @@ use std::collections::BTreeSet;
 
 mod calls;
 mod edges;
+mod reachability;
 mod runtime_calls;
 mod selection;
+mod variants;
 use runtime_calls::{resource_free_handle, runtime_call};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
@@ -145,9 +147,17 @@ impl LeafPlan {
                     .layout(layout)
                     .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }));
             let aggregate_move = kind == Kind::Move
-                && layouts
-                    .layout(layout)
-                    .is_some_and(|record| matches!(record.kind, LayoutKind::Aggregate));
+                && layouts.layout(layout).is_some_and(|record| {
+                    matches!(record.kind, LayoutKind::Aggregate)
+                        || (selection == Selection::Resources
+                            && matches!(record.kind, LayoutKind::Variant)
+                            && static_resource_tree(
+                                layouts,
+                                layout,
+                                selection,
+                                &mut BTreeSet::new(),
+                            ))
+                });
             let source_aggregate = source_only
                 && layouts.layout(layout).is_some_and(|record| {
                     matches!(
@@ -360,6 +370,12 @@ impl LeafPlan {
                         mode: ReadMode::Take,
                         ..
                     } if owned(result) => {
+                        if selection == Selection::Resources
+                            && matches!(block.instructions.get(&unit.instructions).and_then(|code| code.get(index + 1)), Some(Inst::Forget { value }) if *value == result)
+                            && variants::empty_retirement(unit, layouts, b, index + 1, result)
+                        {
+                            continue;
+                        }
                         push(
                             after,
                             Kind::Move,
@@ -510,6 +526,13 @@ impl LeafPlan {
                     }
                     Inst::ArenaToken { result, .. } if !owned(result) => (),
                     Inst::RegionExit { .. } => (),
+                    Inst::Forget { value }
+                        if !owned(value)
+                            || (selection == Selection::Resources
+                                && variants::empty_retirement(unit, layouts, b, index, value)) =>
+                    {
+                        ()
+                    }
                     Inst::Share { value } if !selection.tracks_layout(layouts, layout(value)) => (),
                     Inst::StorageLive { .. }
                     | Inst::StorageDead { .. }
@@ -774,6 +797,10 @@ impl LeafPlan {
             .ok_or("ownership physical marker overflow")?;
         for observation in &plan.observations {
             let marker = &observation.marker;
+            if matches!(observation.point, Point::Unreachable { .. }) {
+                markers.insert(marker.id, Vec::new());
+                continue;
+            }
             if matches!(observation.point, Point::StagedReturn { .. }) {
                 let staged = super::staged::binding(body, observation)
                     .ok_or("ownership staged return lost checked storage")?;
@@ -859,6 +886,71 @@ impl LeafPlan {
                 markers.insert(marker.id, physical);
                 continue;
             }
+            if matches!(observation.point, Point::EmptyDrop { .. }) {
+                let Location::Address(address) = marker.token else {
+                    return Err("erased ownership drop has no checked slot".into());
+                };
+                let info = &body.addresses[address.index()];
+                let layout = body.types[info.ty.index()].layout;
+                let native = NativeMarker {
+                    id: marker.id,
+                    kind: 7,
+                    token: location(body, layouts, marker.token, observation.point)?,
+                    owner: location(body, layouts, marker.owner, observation.point)?,
+                    site: marker.site,
+                    layout,
+                };
+                markers.insert(marker.id, vec![native]);
+                commits.push((observation.point, native));
+                continue;
+            }
+            let mut staged_moves = Vec::new();
+            if let Point::CompoundDrop {
+                block,
+                staged: Some((at, storage)),
+                ..
+            } = observation.point
+            {
+                let code = body.blocks[block.index()]
+                    .instructions
+                    .get(&body.instructions)
+                    .ok_or("compound ownership staging has no code")?;
+                let Inst::Read { result, .. } = code[at as usize] else {
+                    return Err("compound ownership staging has no checked take".into());
+                };
+                for (index, token, owner) in [
+                    (at, marker.token, Location::Value(result)),
+                    (at + 2, Location::Value(result), Location::Address(storage)),
+                ] {
+                    let point = Point::Instruction {
+                        block,
+                        index,
+                        moment: Moment::After,
+                    };
+                    let row = expected
+                        .plan
+                        .observations
+                        .iter()
+                        .find(|row| {
+                            row.point == point
+                                && row.marker.kind == Kind::Move
+                                && row.marker.token == token
+                                && row.marker.owner == owner
+                        })
+                        .ok_or("compound staging has no independent Ready transition")?;
+                    if !covered.insert(row.marker.id) {
+                        return Err("compound staging covers a Ready transition twice".into());
+                    }
+                    let mut native = expected.markers[&row.marker.id][0];
+                    native.id = MarkerId(next_physical);
+                    next_physical = next_physical
+                        .checked_add(1)
+                        .ok_or("ownership physical marker overflow")?;
+                    native.site = marker.site;
+                    staged_moves.push(native);
+                    commits.push((point, native));
+                }
+            }
             let points = checked
                 .commits(body, marker.id)
                 .map_err(|error| error.to_string())?;
@@ -933,7 +1025,7 @@ impl LeafPlan {
             }
             let mut layout = None;
             let compound = matches!(observation.point, Point::CompoundDrop { .. });
-            let mut physical = Vec::new();
+            let mut physical = staged_moves;
             for (point, kind, token, owner, site) in obligations {
                 let expected_observation = expected
                     .plan
@@ -975,7 +1067,7 @@ impl LeafPlan {
                 }
             }
             if compound {
-                if physical.is_empty() {
+                if !physical.iter().any(|marker| marker.kind == 2) {
                     return Err("compound ownership has no completion".into());
                 }
                 markers.insert(marker.id, physical);
@@ -1006,14 +1098,16 @@ impl LeafPlan {
             markers.insert(marker.id, vec![native]);
             commits.extend(points.into_iter().map(|point| (point, native)));
         }
-        if covered.len() != expected.plan.observations.len() {
+        let excluded = reachability::variant_failures(body)
+            .ok_or("ownership Ready variant reachability could not be proved")?;
+        if let Some(missing) = expected
+            .plan
+            .observations
+            .iter()
+            .find(|row| !covered.contains(&row.marker.id) && !excluded.contains(row.point))
+        {
             return Err(format!(
-                "ownership plan omits a Ready transition: {:?}",
-                expected
-                    .plan
-                    .observations
-                    .iter()
-                    .find(|row| !covered.contains(&row.marker.id))
+                "ownership plan omits a Ready transition: {missing:?}"
             ));
         }
         let mut prepared = Self {
@@ -1085,7 +1179,9 @@ impl LeafPlan {
                 .get_mut(&original)
                 .ok_or("additional cleanup lost its prepared source marker")?;
             for mut native in physical {
-                native.id = original;
+                if native.id == temporary {
+                    native.id = original;
+                }
                 native.site = site;
                 if !target.contains(&native) {
                     target.push(native);
@@ -1140,6 +1236,7 @@ impl LeafPlan {
                 Point::FinalizerDrop { .. }
                     | Point::ReleaseDrop { .. }
                     | Point::CompoundDrop { .. }
+                    | Point::EmptyDrop { .. }
             )
         {
             return None;
@@ -1179,6 +1276,11 @@ impl LeafPlan {
             .iter()
             .filter(move |(at, _)| *at == point)
             .map(|(_, marker)| *marker)
+    }
+    pub fn at_empty_drop(&self, block: BlockId) -> impl Iterator<Item = NativeMarker> + '_ {
+        self.commits.iter().filter_map(move |(point, marker)| {
+            matches!(point, Point::EmptyDrop { block: at, .. } if *at == block).then_some(*marker)
+        })
     }
     pub fn at_call(
         &self,
@@ -1493,15 +1595,26 @@ fn static_resource_tree(
     let Some(record) = table.layout(layout) else {
         return false;
     };
-    if !matches!(record.kind, LayoutKind::Resource | LayoutKind::Aggregate)
-        || !active.insert(layout)
-    {
+    if !active.insert(layout) {
         return false;
     }
-    let supported = record
-        .fields
-        .iter()
-        .all(|field| static_resource_tree(table, field.layout, selection, active));
+    let supported = match record.kind {
+        LayoutKind::Resource | LayoutKind::Aggregate => record
+            .fields
+            .iter()
+            .all(|field| static_resource_tree(table, field.layout, selection, active)),
+        LayoutKind::Variant if selection == Selection::Resources => {
+            record.tag.as_ref().is_some_and(|tag| {
+                tag.variants.iter().all(|variant| {
+                    variant
+                        .fields
+                        .iter()
+                        .all(|field| static_resource_tree(table, field.layout, selection, active))
+                })
+            })
+        }
+        _ => false,
+    };
     active.remove(&layout);
     supported
 }
@@ -1682,6 +1795,19 @@ pub struct CleanupCapture {
     pub layout: LayoutId,
 }
 impl LeafPlan {
+    /// Only a Resource-free arm of a checked structural carrier may move with
+    /// no child lineage. Resource leaves retain the strict nonempty contract.
+    pub fn optional_carrier(&self, layouts: &LayoutTable, id: MarkerId) -> bool {
+        self.plan.selection == Selection::Resources
+            && self
+                .commits
+                .iter()
+                .find(|(_, marker)| marker.id == id)
+                .is_some_and(|(_, marker)| {
+                    marker.kind == 1 && variants::may_be_empty(layouts, marker.layout)
+                })
+    }
+
     /// A statically known function reference or resource-free environment has
     /// no Resource lineage to move. Unknown code never proves emptiness.
     pub fn empty_environment(
@@ -2042,6 +2168,9 @@ pub fn projected_location<S>(
     layouts: &LayoutTable,
     location: NativeLocation,
 ) -> Result<Option<NativePath>, String> {
+    if location.kind >= 8 && location.kind < MUTABLE_PARAMETER {
+        return variants::constructed_field(unit, location);
+    }
     if location.kind != 7 {
         return Ok(None);
     }

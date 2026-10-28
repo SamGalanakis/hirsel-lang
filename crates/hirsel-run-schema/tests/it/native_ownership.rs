@@ -20,6 +20,7 @@ fn fixture() -> (Log, Units) {
     ] {
         let metadata = Metadata {
             empty_environment: false,
+            optional_carrier: false,
             action,
             callee: None,
             cleanup: None,
@@ -391,6 +392,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
     let mut event = |unit, frame, marker, action, token, owner| {
         let metadata = Metadata {
             empty_environment: false,
+            optional_carrier: false,
             action,
             callee: None,
             cleanup: None,
@@ -502,6 +504,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
             marker,
             Metadata {
                 empty_environment: false,
+                optional_carrier: false,
                 action,
                 callee: None,
                 cleanup: None,
@@ -631,34 +634,36 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
 
 #[test]
 fn native_empty_carrier_retirement_never_invents_resource_drops() {
-    let (mut log, mut units) = fixture();
-    let owner = 1u64 << 32;
-    let mut marker = units[&[7; 32]][&2].clone();
-    marker.action = 4;
-    marker.token = owner;
-    marker.owner = owner;
-    units.get_mut(&[7; 32]).unwrap().insert(20, marker.clone());
-    let retirement = Row::Event {
-        task: 0,
-        frame: 1,
-        marker: 20,
-        action: 4,
-        token: owner,
-        owner,
-        site: marker.site,
-        layout: marker.layout,
-    };
-    log.rows.insert(4, retirement); // immediately after actual Resource Drop
-    log.row_count += 1;
-    let trace = decode_leaf(&log, [49; 32], &units, 100).unwrap();
-    assert_eq!(trace.events.len(), 6);
-    assert_eq!(trace.analyze([49; 32], 100).unwrap().dropped, 2);
-    log.rows.remove(4);
-    log.rows.insert(3, retirement); // still-owned resource before actual Drop
-    assert_eq!(
-        decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
-        Error::RetainedEnvironment(20)
-    );
+    for action in [4, 7] {
+        let (mut log, mut units) = fixture();
+        let owner = 1u64 << 32;
+        let mut marker = units[&[7; 32]][&2].clone();
+        marker.action = action;
+        marker.token = owner;
+        marker.owner = owner;
+        units.get_mut(&[7; 32]).unwrap().insert(20, marker.clone());
+        let retirement = Row::Event {
+            task: 0,
+            frame: 1,
+            marker: 20,
+            action,
+            token: owner,
+            owner,
+            site: marker.site,
+            layout: marker.layout,
+        };
+        log.rows.insert(4, retirement); // immediately after actual Resource Drop
+        log.row_count += 1;
+        let trace = decode_leaf(&log, [49; 32], &units, 100).unwrap();
+        assert_eq!(trace.events.len(), 6);
+        assert_eq!(trace.analyze([49; 32], 100).unwrap().dropped, 2);
+        log.rows.remove(4);
+        log.rows.insert(3, retirement); // still-owned resource before actual Drop
+        assert_eq!(
+            decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
+            Error::RetainedEnvironment(20)
+        );
+    }
 }
 
 #[test]
@@ -785,6 +790,7 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
             marker,
             Metadata {
                 empty_environment: false,
+                optional_carrier: false,
                 action,
                 callee: None,
                 cleanup: None,
@@ -1941,6 +1947,7 @@ fn native_empty_spawn_still_binds_the_actual_child_and_rejects_hidden_capture_cr
         owner: parameter,
         callee: Some([8; 32]),
         empty_environment: true,
+        optional_carrier: false,
         ..base.clone()
     };
     let mut units = BTreeMap::from([
@@ -2041,4 +2048,139 @@ fn native_empty_spawn_still_binds_the_actual_child_and_rejects_hidden_capture_cr
         .unwrap()
         .empty_environment = false;
     assert!(decode_local_calls(&log, [49; 32], &units, &calls, 100).is_err());
+}
+
+#[test]
+fn native_optional_resource_carriers_keep_present_children_and_refuse_retained_destinations() {
+    let (log, mut units) = fixture();
+    for metadata in units.get_mut(&[7; 32]).unwrap().values_mut() {
+        metadata.optional_carrier = metadata.action == 1;
+    }
+    let trace = decode_leaf(&log, [49; 32], &units, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    let empty = Log {
+        rows: vec![log.rows[0], log.rows[2], *log.rows.last().unwrap()],
+        row_count: 3,
+        ..log.clone()
+    };
+    assert!(
+        decode_leaf(&empty, [49; 32], &units, 100)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    let mut strict = units.clone();
+    strict
+        .get_mut(&[7; 32])
+        .unwrap()
+        .get_mut(&1)
+        .unwrap()
+        .optional_carrier = false;
+    assert!(matches!(
+        decode_leaf(&empty, [49; 32], &strict, 100),
+        Err(Error::Consistency(_))
+    ));
+    let mut retained = empty.clone();
+    retained.rows.insert(1, log.rows[1]);
+    if let Row::Event { token, owner, .. } = &mut retained.rows[1] {
+        *token = 1u64 << 32;
+        *owner = *token;
+    }
+    retained.row_count += 1;
+    let mut destination = units.clone();
+    let create = destination.get_mut(&[7; 32]).unwrap().get_mut(&0).unwrap();
+    create.token = 1u64 << 32;
+    create.owner = create.token;
+    assert!(matches!(
+        decode_leaf(&retained, [49; 32], &destination, 100),
+        Err(Error::RetainedEnvironment(1))
+    ));
+    for action in [0, 2, 4] {
+        let mut forged = units.clone();
+        forged
+            .get_mut(&[7; 32])
+            .unwrap()
+            .get_mut(&1)
+            .unwrap()
+            .action = action;
+        assert!(matches!(
+            decode_leaf(&empty, [49; 32], &forged, 100),
+            Err(Error::InvalidMarker(1))
+        ));
+    }
+    let mut lost_child = log.clone();
+    lost_child.rows.remove(2);
+    lost_child.row_count -= 1;
+    assert!(decode_leaf(&lost_child, [49; 32], &units, 100).is_err());
+}
+
+#[test]
+fn native_constructed_variant_fields_bind_the_exact_ssa_and_declaration_field() {
+    let (mut log, mut units) = fixture();
+    let slot = 1u64 << 32;
+    let field = (10u64 << 32) | 9;
+    for row in &mut log.rows {
+        if let Row::Event { token, owner, .. } = row {
+            if *token == slot {
+                *token = field
+            }
+            if *owner == slot {
+                *owner = field
+            }
+        }
+    }
+    let path = LocationPath {
+        root: 9,
+        fields: vec![Projection::VariantField {
+            variant: 1,
+            field: 2,
+        }],
+    };
+    for metadata in units.get_mut(&[7; 32]).unwrap().values_mut() {
+        if metadata.token == slot {
+            metadata.token = field;
+            metadata.token_path = Some(path.clone())
+        }
+        if metadata.owner == slot {
+            metadata.owner = field;
+            metadata.owner_path = Some(path.clone())
+        }
+    }
+    let calls = BTreeMap::from([([7; 32], Default::default())]);
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    assert!(decode_leaf(&log, [49; 32], &units, 100).is_err());
+    assert!(trace.analyze([49; 32], 100).unwrap().live.is_empty());
+    assert!(
+        trace
+            .events
+            .iter()
+            .any(|event| event.action.owner().path == path.fields)
+    );
+    for mutation in 0..4 {
+        let mut forged = units.clone();
+        let at = forged
+            .get_mut(&[7; 32])
+            .unwrap()
+            .get_mut(&1)
+            .unwrap()
+            .owner_path
+            .as_mut()
+            .unwrap();
+        match mutation {
+            0 => at.root += 1,
+            1 => {
+                at.fields = vec![Projection::VariantField {
+                    variant: 1,
+                    field: 0,
+                }]
+            }
+            2 => at.fields = vec![Projection::Field { field: 2 }],
+            _ => at.fields.push(Projection::Field { field: 0 }),
+        }
+        assert!(decode_local_calls(&log, [49; 32], &forged, &calls, 100).is_err());
+    }
 }

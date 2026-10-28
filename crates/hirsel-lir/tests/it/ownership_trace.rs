@@ -2038,6 +2038,16 @@ fn ownership_trace_relocated_native_plan_refuses_missing_and_duplicate_coverage(
     check(after.unit(), &missing).unwrap();
     let error = native::LeafPlan::from_relocated(&after, &table, &missing).unwrap_err();
     assert!(error.contains("omits a Ready transition"), "{error}");
+    let mut erased_live = output.clone();
+    let row = &mut erased_live.observations[0];
+    row.point = Point::Unreachable {
+        origin: hirsel_syntax::ContentHash::of_bytes(b"forged history"),
+        marker: row.marker.id,
+        site: row.marker.site,
+    };
+    check(after.unit(), &erased_live).unwrap();
+    let error = native::LeafPlan::from_relocated(&after, &table, &erased_live).unwrap_err();
+    assert!(error.contains("omits a Ready transition"), "{error}");
     let mut duplicate = output.clone();
     let mut extra = output.observations[2].clone();
     extra.marker.id = MarkerId(999);
@@ -3323,48 +3333,80 @@ fn compound_drop_fixture_with_children(
     CleanupAnchorId,
     hirsel_lir::layout_types::LayoutTable,
 ) {
+    compound_drop_fixture_with_layout(alternatives, parent, child, l::PAIR)
+}
+
+fn compound_drop_fixture_with_layout(
+    alternatives: bool,
+    parent: bool,
+    child: hirsel_lir::LayoutId,
+    container: hirsel_lir::LayoutId,
+) -> (
+    hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>,
+    Plan,
+    Plan,
+    CleanupAnchorId,
+    hirsel_lir::layout_types::LayoutTable,
+) {
     use hirsel_lir::layout_types::{CopyRecipe, DropStep};
-    let mut t = Lir::<Rc>::new(&[(Passing::Take, l::PAIR)], None);
-    let pair = &mut t.table.layouts[l::PAIR.0 as usize];
-    pair.fields[0].layout = child;
-    pair.fields[1].layout = child;
-    pair.copy = CopyRecipe::NotCopyable;
-    pair.drop = vec![
-        DropStep::Child {
-            offset: 8,
-            layout: child,
-        },
-        DropStep::Child {
-            offset: 0,
-            layout: child,
-        },
-    ];
-    if parent {
-        pair.kind = hirsel_lir::layout_types::LayoutKind::Resource;
-        pair.finalizer = Some(hirsel_lir::layout_types::FinalizerRef {
-            definition: support::path("Pair"),
-            body: 1,
-            unsafe_ffi_package: false,
-        });
-        pair.drop.insert(0, DropStep::Finalize);
-    }
-    pair.scan.clear();
-    if child == l::BLK {
-        pair.scan = vec![
-            hirsel_lir::layout_types::ScanStep::Counted { offset: 0 },
-            hirsel_lir::layout_types::ScanStep::Counted { offset: 8 },
-        ];
+    let mut t = Lir::<Rc>::new(&[(Passing::Take, container)], None);
+    if container == l::OPT {
+        let carrier = &mut t.table.layouts[container.0 as usize];
+        carrier.tag.as_mut().unwrap().variants[1].fields[0].layout = child;
+        carrier.copy = CopyRecipe::NotCopyable;
+        carrier.drop = vec![DropStep::ActiveVariant {
+            tag_offset: 0,
+            form: hirsel_lir::layout_types::TagForm::Ordinal,
+            variants: vec![(
+                1,
+                vec![DropStep::Child {
+                    offset: 8,
+                    layout: child,
+                }],
+            )],
+        }];
+    } else {
+        let pair = &mut t.table.layouts[container.0 as usize];
+        pair.fields[0].layout = child;
+        pair.fields[1].layout = child;
+        pair.copy = CopyRecipe::NotCopyable;
         pair.drop = vec![
-            DropStep::Release { offset: 8 },
-            DropStep::Release { offset: 0 },
+            DropStep::Child {
+                offset: 8,
+                layout: child,
+            },
+            DropStep::Child {
+                offset: 0,
+                layout: child,
+            },
         ];
         if parent {
+            pair.kind = hirsel_lir::layout_types::LayoutKind::Resource;
+            pair.finalizer = Some(hirsel_lir::layout_types::FinalizerRef {
+                definition: support::path("Pair"),
+                body: 1,
+                unsafe_ffi_package: false,
+            });
             pair.drop.insert(0, DropStep::Finalize);
+        }
+        pair.scan.clear();
+        if child == l::BLK {
+            pair.scan = vec![
+                hirsel_lir::layout_types::ScanStep::Counted { offset: 0 },
+                hirsel_lir::layout_types::ScanStep::Counted { offset: 8 },
+            ];
+            pair.drop = vec![
+                DropStep::Release { offset: 8 },
+                DropStep::Release { offset: 0 },
+            ];
+            if parent {
+                pair.drop.insert(0, DropStep::Finalize);
+            }
         }
     }
     let abi = t.abi(&[(Passing::Borrow, l::RES)], None);
-    let parent_abi = t.abi(&[(Passing::Borrow, l::PAIR)], None);
-    let slot = t.slot(l::PAIR, SlotKind::Parameter(0), ROOT);
+    let parent_abi = t.abi(&[(Passing::Borrow, container)], None);
+    let slot = t.slot(container, SlotKind::Parameter(0), ROOT);
     let version = t.version_of(slot);
     t.param(version);
     let address = t.at(ENTRY, slot, &[], &[support::Undo::Drop(slot)]);
@@ -3440,7 +3482,7 @@ fn compound_drop_fixture_with_children(
     )]));
     if parent {
         finalizers.0.insert(
-            l::PAIR,
+            container,
             hirsel_rc::cleanup::Finalizer {
                 origin: UnitOrigin::Source,
                 definition: support::path("Pair"),
@@ -4193,7 +4235,7 @@ fn ownership_trace_staged_return_keeps_original_token_and_refuses_forged_storage
         .find(|old| old.marker.id == row.marker.id)
         .unwrap();
     assert_eq!(row.marker, old.marker);
-    let Point::StagedReturn { block, address } = row.point else {
+    let Point::StagedReturn { block, .. } = row.point else {
         unreachable!()
     };
     let mut forged = plan.clone();
@@ -4549,8 +4591,25 @@ fn ownership_mutable_actual_formal_relation_survives_recipes_and_rejects_forgery
 #[test]
 fn ownership_resource_selection_is_immutable_and_reproved_by_native_requests() {
     use hirsel_lir::stage::Value;
-    for layout in [l::BLK, l::RES] {
+    for layout in [l::BLK, l::RES, l::OPT] {
         let mut t = Lir::<Value>::new(&[(Passing::Take, layout)], Some(layout));
+        if layout == l::OPT {
+            use hirsel_lir::layout_types::{CopyRecipe, DropStep, TagForm};
+            let carrier = &mut t.table.layouts[layout.0 as usize];
+            carrier.tag.as_mut().unwrap().variants[1].fields[0].layout = l::RES;
+            carrier.copy = CopyRecipe::NotCopyable;
+            carrier.drop = vec![DropStep::ActiveVariant {
+                tag_offset: 0,
+                form: TagForm::Ordinal,
+                variants: vec![(
+                    1,
+                    vec![DropStep::Child {
+                        offset: 8,
+                        layout: l::RES,
+                    }],
+                )],
+            }];
+        }
         let value = t.owned(layout);
         t.param(value);
         t.builder.ret(ENTRY, Some(value));
@@ -4563,7 +4622,7 @@ fn ownership_resource_selection_is_immutable_and_reproved_by_native_requests() {
         assert_eq!(plan.selection, Selection::Resources);
         assert_eq!(
             plan.observations.len(),
-            if layout == l::RES { 2 } else { 0 }
+            if layout != l::BLK { 2 } else { 0 }
         );
         let mut changed = plan.clone();
         changed.selection = Selection::Owned;
@@ -4603,15 +4662,23 @@ fn ownership_resource_selection_is_immutable_and_reproved_by_native_requests() {
         let ready = checked_native_fixture(output.unit, &table);
         let plans =
             std::collections::BTreeMap::from([(ready.unit().digest(), output.plan.clone())]);
-        native::Request::Resources(&plans)
+        let prepared = native::Request::Resources(&plans)
             .prepare(&[&ready], &table)
             .unwrap();
+        for prepared in prepared.values() {
+            for marker in prepared.markers() {
+                assert_eq!(
+                    prepared.optional_carrier(&table, marker.id),
+                    layout == l::OPT
+                );
+            }
+        }
         assert!(
             native::Request::Relocated(&plans)
                 .prepare(&[&ready], &table)
                 .is_err()
         );
-        if layout == l::RES {
+        if layout != l::BLK {
             let mut missing = output.plan;
             missing.observations.clear();
             assert!(native::LeafPlan::from_relocated(&ready, &table, &missing).is_err());
@@ -5112,4 +5179,609 @@ fn ownership_trace_staged_return_covers_failed_region_exit_release() {
             "{corruption}"
         );
     }
+}
+
+#[test]
+fn ownership_trace_compound_drop_checks_exact_variant_staging_and_all_child_exits() {
+    let (after, output, original, _, _) =
+        compound_drop_fixture_with_layout(false, false, l::RES, l::OPT);
+    let checked = check(after.unit(), &output).unwrap();
+    assert_eq!(
+        output.observations[0].marker,
+        original.observations[0].marker
+    );
+    assert!(matches!(
+        output.observations[0].point,
+        Point::CompoundDrop {
+            staged: Some(_),
+            ..
+        }
+    ));
+    let commits = checked.commits(after.unit(), MarkerId(0)).unwrap();
+    let Point::CompoundDrop {
+        staged: Some((_, storage)),
+        anchor,
+        ..
+    } = output.observations[0].point
+    else {
+        unreachable!()
+    };
+    let slot = |mut address: AddressId| {
+        for _ in 0..after.unit().addresses.len() {
+            match after.unit().addresses[address.index()].base {
+                AddressBase::Slot(slot) => return slot,
+                AddressBase::Address(parent) => address = parent,
+                _ => panic!("fixture cleanup has nonlocal storage"),
+            }
+        }
+        panic!("fixture cleanup has a cyclic address")
+    };
+    let target_slot = slot(storage);
+    let Point::CompoundDrop {
+        block: entry,
+        normal,
+        ..
+    } = output.observations[0].point
+    else {
+        unreachable!()
+    };
+    // Address preparation has its own alternative cleanup of the same slot.
+    // Select this action's finalizer through its ordinary control-flow edges.
+    let mut reachable = std::collections::BTreeSet::new();
+    let mut pending = vec![entry];
+    while let Some(block) = pending.pop() {
+        if block == normal || !reachable.insert(block) {
+            continue;
+        }
+        for edge in after.unit().terminators[block.index()].normal_edges(&after.unit().pools) {
+            pending.push(after.unit().tables.edges[edge.index()].target);
+        }
+    }
+    let groups = reachable
+        .iter()
+        .flat_map(|block| {
+            after.unit().blocks[block.index()]
+                .instructions
+                .get(&after.unit().instructions)
+                .unwrap()
+                .iter()
+                .filter_map(move |instruction| match instruction {
+                    Inst::FinalizeBegin {
+                        address,
+                        anchor: action,
+                    } if slot(*address) == target_slot && *action == anchor => {
+                        Some((*block, *address))
+                    }
+                    _ => None,
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        groups.len(),
+        1,
+        "one finalizer for the active Resource child"
+    );
+    let (call_block, child) = groups[0];
+    let Terminator::Call {
+        normal: Some(success),
+        failure,
+        ..
+    } = after.unit().terminators[call_block.index()]
+    else {
+        unreachable!()
+    };
+    let code = after.unit().blocks[call_block.index()]
+        .instructions
+        .get(&after.unit().instructions)
+        .unwrap();
+    let guards = code
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Inst::FrameEnter { failure } => Some(*failure),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(guards.len(), 1);
+    let targets = [
+        success,
+        after.unit().tables.failures[failure.index()].cleanup,
+        after.unit().tables.failures[guards[0].index()].cleanup,
+    ];
+    let completions = targets.map(|edge| {
+        let block = after.unit().tables.edges[edge.index()].target;
+        let code = after.unit().blocks[block.index()]
+            .instructions
+            .get(&after.unit().instructions)
+            .unwrap();
+        let ends = code
+            .iter()
+            .enumerate()
+            .filter_map(|(index, instruction)| {
+                matches!(instruction, Inst::FinalizeEnd { address, anchor: action }
+                if *address == child && *action == anchor)
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ends.len(), 1);
+        Point::Instruction {
+            block,
+            index: ends[0] as u32,
+            moment: Moment::After,
+        }
+    });
+    assert_eq!(
+        commits.len(),
+        3,
+        "normal, call failure and FrameEnter rejection"
+    );
+    assert!(completions.iter().all(|point| commits.contains(point)));
+    for field in 0..3 {
+        let mut forged = output.clone();
+        let Location::Address(original) = forged.observations[0].marker.token else {
+            unreachable!()
+        };
+        let Point::CompoundDrop {
+            anchor,
+            staged: Some((at, storage)),
+            ..
+        } = &mut forged.observations[0].point
+        else {
+            unreachable!()
+        };
+        match field {
+            0 => *at += 1,
+            1 => {
+                *storage = original;
+            }
+            _ => *anchor = CleanupAnchorId(u32::MAX),
+        }
+        assert!(check(after.unit(), &forged).is_err());
+    }
+    for wrong_tag in [false, true] {
+        let mut forged = after.unit().clone();
+        if wrong_tag {
+            let mut address = child;
+            let projection = loop {
+                let info = &forged.addresses[address.index()];
+                if let Some(offset) = info
+                    .projection
+                    .get(&forged.pools.projections)
+                    .unwrap()
+                    .iter()
+                    .position(|step| matches!(step, ProjectionStep::VariantField { .. }))
+                {
+                    break &mut forged.pools.projections[(info.projection.start as usize) + offset];
+                }
+                let AddressBase::Address(parent) = info.base else {
+                    panic!("child has no variant field")
+                };
+                address = parent;
+            };
+            let ProjectionStep::VariantField { variant, .. } = projection else {
+                unreachable!()
+            };
+            *variant = 0;
+        } else {
+            let Location::Address(original) = output.observations[0].marker.token else {
+                unreachable!()
+            };
+            let switch = forged
+                .terminators
+                .iter()
+                .position(|term| matches!(term, Terminator::Switch { .. }))
+                .unwrap();
+            let code = forged.blocks[switch].instructions;
+            let Inst::Read {
+                address,
+                mode: ReadMode::Borrow,
+                ..
+            } = &mut forged.instructions[(code.start + code.len - 1) as usize]
+            else {
+                unreachable!()
+            };
+            *address = original;
+        }
+        let mut stale = output.clone();
+        stale.unit = forged.digest();
+        assert!(
+            check(&forged, &stale).is_err(),
+            "wrong selected root or tag: {wrong_tag}"
+        );
+    }
+    let mut missing = after.into_raw();
+    let Point::Instruction { block, index, .. } = completions[0] else {
+        unreachable!()
+    };
+    let offset = missing.blocks[block.index()].instructions.start + index;
+    missing.instructions[offset as usize] = Inst::FrameLeave;
+    let mut stale = output;
+    stale.unit = missing.digest();
+    assert!(check(&missing, &stale).is_err());
+}
+
+#[test]
+fn erased_cleanup_drop_preserves_its_marker_and_requires_an_empty_jump_boundary() {
+    let (mut before, _) = fixture();
+    let address = AddressId(0);
+    let block = BlockId(before.blocks.len() as u32);
+    let anchor = CleanupAnchorId(before.tables.cleanup_anchors.len() as u32);
+    let site = before.tables.source_anchors[0].site;
+    before.tables.cleanup_anchors.push(CleanupAnchor {
+        body: 0,
+        cleanup: 0,
+        action: 0,
+        site,
+    });
+    let mut info = before.blocks[ENTRY.index()].clone();
+    info.parameters = PoolRange::EMPTY;
+    info.instructions = PoolRange::push(
+        &mut before.instructions,
+        [Inst::Drop {
+            address,
+            if_live: false,
+            anchor,
+            failure: FailureId(0),
+        }],
+    );
+    before.blocks.push(info);
+    let edge = EdgeId(before.tables.edges.len() as u32);
+    before.tables.edges.push(Edge {
+        target: ENTRY,
+        arguments: PoolRange::EMPTY,
+    });
+    before.terminators.push(Terminator::Jump(edge));
+    let input = Plan::new(
+        &before,
+        vec![Observation {
+            marker: ObserveOwnership {
+                id: MarkerId(0),
+                site,
+                kind: Kind::Drop,
+                token: Location::Address(address),
+                owner: Location::Address(address),
+            },
+            point: Point::Instruction {
+                block,
+                index: 0,
+                moment: Moment::Before,
+            },
+        }],
+    );
+    check(&before, &input).unwrap();
+    let mut after = before.clone();
+    after.blocks[block.index()].instructions = PoolRange::EMPTY;
+    let mut output = Plan::new(&after, input.observations.clone());
+    output.observations[0].point = Point::EmptyDrop {
+        anchor: (&before.tables.cleanup_anchors[anchor.index()]).into(),
+        block,
+    };
+    // The ordinary anchor table contains no action after its drop is erased.
+    after.tables.cleanup_anchors.clear();
+    output.unit = after.digest();
+    let checked = check_transform(
+        &before,
+        &input,
+        &after,
+        &output,
+        Some(&recipe(&input, &output)),
+    )
+    .unwrap();
+    assert_eq!(
+        checked.commits(&after, MarkerId(0)).unwrap(),
+        vec![output.observations[0].point]
+    );
+    let mut nonempty = after.clone();
+    nonempty.blocks[block.index()].instructions = before.blocks[block.index()].instructions;
+    let nonempty_plan = Plan::new(&nonempty, output.observations.clone());
+    assert!(matches!(
+        check(&nonempty, &nonempty_plan),
+        Err(Error::InvalidBinding(_))
+    ));
+    let mut returning = after.clone();
+    returning.terminators[block.index()] = Terminator::Return(None);
+    let returning_plan = Plan::new(&returning, output.observations.clone());
+    assert!(matches!(
+        check(&returning, &returning_plan),
+        Err(Error::InvalidBinding(_))
+    ));
+    let mut forged = output.clone();
+    forged.observations[0].marker.kind = Kind::Create;
+    assert!(matches!(
+        check(&after, &forged),
+        Err(Error::InvalidBinding(_))
+    ));
+    let mut wrong_action = output.clone();
+    if let Point::EmptyDrop { anchor, .. } = &mut wrong_action.observations[0].point {
+        anchor.action += 1;
+    }
+    assert!(matches!(
+        check_transform(
+            &before,
+            &input,
+            &after,
+            &wrong_action,
+            Some(&recipe(&input, &wrong_action))
+        ),
+        Err(Error::InvalidTransport(_))
+    ));
+    let missing = Plan::new(&after, vec![]);
+    assert_eq!(
+        check_transform(
+            &before,
+            &input,
+            &after,
+            &missing,
+            Some(&recipe(&input, &missing))
+        )
+        .unwrap_err(),
+        Error::MissingMarker(MarkerId(0))
+    );
+}
+
+#[test]
+fn unreachable_markers_keep_history_but_cannot_hide_live_or_failure_reachable_transitions() {
+    let (after, plan) = fixture();
+    let mut row = plan.observations.last().unwrap().clone();
+    let Location::Value(result) = row.marker.token else {
+        panic!()
+    };
+    let mut before = after.clone();
+    let dead = BlockId(before.blocks.len() as u32);
+    let mut block = before.blocks[ENTRY.index()].clone();
+    block.parameters = PoolRange::EMPTY;
+    block.instructions = PoolRange::EMPTY;
+    before.blocks.push(block);
+    before.terminators.push(Terminator::Return(Some(result)));
+    row.point = Point::Return(dead);
+    let input = Plan::new(&before, vec![row.clone()]);
+    row.point = Point::Unreachable {
+        origin: before.digest(),
+        marker: row.marker.id,
+        site: row.marker.site,
+    };
+    let output = Plan::new(&after, vec![row]);
+    let checked = check_transform(
+        &before,
+        &input,
+        &after,
+        &output,
+        Some(&recipe(&input, &output)),
+    )
+    .unwrap();
+    assert!(
+        checked
+            .commits(&after, output.observations[0].marker.id)
+            .unwrap()
+            .is_empty()
+    );
+    // This history can cross an identity boundary, but can never revive.
+    check_transform(
+        &after,
+        &output,
+        &after,
+        &output,
+        Some(&recipe(&output, &output)),
+    )
+    .unwrap();
+    let mut rewritten = output.clone();
+    if let Point::Unreachable { origin, .. } = &mut rewritten.observations[0].point {
+        *origin = after.digest();
+    }
+    let mut changed_after = after.clone();
+    changed_after.header.key =
+        hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash::of_bytes(b"next pass"));
+    rewritten.unit = changed_after.digest();
+    assert!(matches!(
+        check_transform(
+            &after,
+            &output,
+            &changed_after,
+            &rewritten,
+            Some(&recipe(&output, &rewritten))
+        ),
+        Err(Error::InvalidTransport(_))
+    ));
+    let mut revived = output.clone();
+    revived.observations[0].point = Point::Return(ENTRY);
+    assert!(matches!(
+        check_transform(
+            &after,
+            &output,
+            &after,
+            &revived,
+            Some(&recipe(&output, &revived))
+        ),
+        Err(Error::InvalidTransport(_))
+    ));
+    for through_failure in [false, true] {
+        let mut live = before.clone();
+        let edge = EdgeId(live.tables.edges.len() as u32);
+        live.tables.edges.push(Edge {
+            target: dead,
+            arguments: PoolRange::EMPTY,
+        });
+        if through_failure {
+            let failure = live.blocks[ENTRY.index()]
+                .instructions
+                .get(&live.instructions)
+                .unwrap()
+                .iter()
+                .find_map(Inst::failure)
+                .unwrap();
+            live.tables.failures[failure.index()].cleanup = edge;
+        } else {
+            live.terminators[ENTRY.index()] = Terminator::Jump(edge);
+        }
+        let input = Plan::new(&live, input.observations.clone());
+        let mut forged = output.clone();
+        if let Point::Unreachable { origin, .. } = &mut forged.observations[0].point {
+            *origin = live.digest();
+        }
+        assert!(
+            matches!(
+                check_transform(
+                    &live,
+                    &input,
+                    &after,
+                    &forged,
+                    Some(&recipe(&input, &forged))
+                ),
+                Err(Error::InvalidTransport(_))
+            ),
+            "failure={through_failure}"
+        );
+    }
+    let missing = Plan::new(&after, vec![]);
+    assert!(matches!(
+        check_transform(
+            &before,
+            &input,
+            &after,
+            &missing,
+            Some(&recipe(&input, &missing))
+        ),
+        Err(Error::MissingMarker(_))
+    ));
+    let mut forged = output.clone();
+    let mut extra = forged.observations[0].clone();
+    extra.marker.id = MarkerId(999);
+    if let Point::Unreachable { marker, .. } = &mut extra.point {
+        *marker = extra.marker.id;
+    }
+    forged.observations.push(extra);
+    assert!(matches!(
+        check_transform(
+            &before,
+            &input,
+            &after,
+            &forged,
+            Some(&recipe(&input, &forged))
+        ),
+        Err(Error::ForgedRelocation(_)) | Err(Error::ForgedMarker(_))
+    ));
+}
+
+#[test]
+fn only_an_exact_empty_drop_can_eliminate_its_failure_cleanup_observation() {
+    let (mut before, old) = fixture();
+    let mut retired = old.observations.last().unwrap().clone();
+    let Location::Value(result) = retired.marker.token else {
+        panic!()
+    };
+    let site = retired.marker.site;
+    let anchor = CleanupAnchorId(before.tables.cleanup_anchors.len() as u32);
+    before.tables.cleanup_anchors.push(CleanupAnchor {
+        body: 0,
+        cleanup: 0,
+        action: 42,
+        site,
+    });
+    let mut block = before.blocks[ENTRY.index()].clone();
+    block.parameters = PoolRange::EMPTY;
+    block.instructions = PoolRange::EMPTY;
+    let empty = BlockId(before.blocks.len() as u32);
+    let normal = BlockId(empty.0 + 1);
+    let failed = BlockId(empty.0 + 2);
+    before.blocks.extend([block.clone(), block.clone(), block]);
+    let leave = EdgeId(before.tables.edges.len() as u32);
+    before.tables.edges.push(Edge {
+        target: normal,
+        arguments: PoolRange::EMPTY,
+    });
+    let enter = EdgeId(before.tables.edges.len() as u32);
+    before.tables.edges.push(Edge {
+        target: empty,
+        arguments: PoolRange::EMPTY,
+    });
+    let failed_edge = EdgeId(before.tables.edges.len() as u32);
+    before.tables.edges.push(Edge {
+        target: failed,
+        arguments: PoolRange::EMPTY,
+    });
+    before.terminators[ENTRY.index()] = Terminator::Jump(enter);
+    before.terminators.extend([
+        Terminator::Jump(leave),
+        Terminator::Return(Some(result)),
+        Terminator::Return(Some(result)),
+    ]);
+    let failure = FailureId(before.tables.failures.len() as u32);
+    let mut failure_info = before.tables.failures[0].clone();
+    failure_info.cleanup = failed_edge;
+    before.tables.failures.push(failure_info);
+    let original = before.blocks[ENTRY.index()]
+        .instructions
+        .get(&before.instructions)
+        .unwrap()
+        .to_vec();
+    let index = original.len() as u32;
+    let code = original.iter().cloned().chain([Inst::Drop {
+        address: AddressId(0),
+        if_live: true,
+        anchor,
+        failure,
+    }]);
+    before.blocks[ENTRY.index()].instructions = PoolRange::push(&mut before.instructions, code);
+    retired.point = Point::Return(failed);
+    let drop = Observation {
+        marker: ObserveOwnership {
+            id: MarkerId(998),
+            site,
+            kind: Kind::Drop,
+            token: Location::Address(AddressId(0)),
+            owner: Location::Address(AddressId(0)),
+        },
+        point: Point::Instruction {
+            block: ENTRY,
+            index,
+            moment: Moment::IfLive,
+        },
+    };
+    let input = Plan::new(&before, vec![drop, retired]);
+    let mut after = before.clone();
+    after.blocks[ENTRY.index()].instructions = PoolRange::push(&mut after.instructions, original);
+    after.blocks.pop();
+    after.terminators.pop();
+    let mut rows = input.observations.clone();
+    rows[0].point = Point::EmptyDrop {
+        anchor: (&before.tables.cleanup_anchors[anchor.index()]).into(),
+        block: empty,
+    };
+    rows[1].point = Point::Unreachable {
+        origin: before.digest(),
+        marker: rows[1].marker.id,
+        site,
+    };
+    let output = Plan::new(&after, rows);
+    check_transform(
+        &before,
+        &input,
+        &after,
+        &output,
+        Some(&recipe(&input, &output)),
+    )
+    .unwrap();
+    let mut shared_failure = before.clone();
+    let other = shared_failure.blocks[ENTRY.index()]
+        .instructions
+        .get(&shared_failure.instructions)
+        .unwrap()
+        .iter()
+        .find_map(Inst::failure)
+        .unwrap();
+    shared_failure.tables.failures[other.index()].cleanup = failed_edge;
+    let input = Plan::new(&shared_failure, input.observations.clone());
+    let mut output = output.clone();
+    if let Point::Unreachable { origin, .. } = &mut output.observations[1].point {
+        *origin = shared_failure.digest();
+    }
+    assert!(matches!(
+        check_transform(
+            &shared_failure,
+            &input,
+            &after,
+            &output,
+            Some(&recipe(&input, &output))
+        ),
+        Err(Error::InvalidTransport(_))
+    ));
 }

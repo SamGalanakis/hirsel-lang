@@ -105,3 +105,28 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         r#"{"io":{"tasks":"tasks.cooperative@1","dirs":[]}}"#,
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn source_resource_selection_preserves_the_active_and_empty_arms_of_owned_options() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token {}
+drop(x) {}
+fn choose(take token:Token,keep:bool)->Option[Token] {
+ if keep { Some(take token) } else { None() }
+}
+pub fn main()->Result[(),u64] {
+ let first=Token()
+ let second=Token()
+ let present=choose(take first,true)
+ let absent=choose(take second,false)
+ let Some(received)=take present else { return Error(1u64) }
+ let None()=take absent else { return Error(2u64) }
+ let moved=take received
+ Ok(())
+}
+"#,
+        2,
+    );
+}

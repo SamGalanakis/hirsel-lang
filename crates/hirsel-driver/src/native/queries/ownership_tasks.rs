@@ -224,6 +224,22 @@ impl OwnershipTasks {
             &BTreeMap<ContentHash, Plan>,
         ) -> Result<R, String>,
     ) -> Result<R, String> {
+        self.with_bound_ready(root, |units, emit, plans| {
+            hirsel_lir::ownership_trace::native::Request::Resources(plans)
+                .prepare(units, emit.layouts)?;
+            use_units(units, emit, plans)
+        })
+    }
+
+    fn with_bound_ready<R>(
+        &self,
+        root: ProductRef,
+        use_units: impl FnOnce(
+            &[&hirsel_lir::stage::ValidatedUnit<Ready>],
+            &hirsel_lir::emission::EmitInputs<'_>,
+            &BTreeMap<ContentHash, Plan>,
+        ) -> Result<R, String>,
+    ) -> Result<R, String> {
         use hirsel_lir::{
             products::{Binding, LayoutClosure},
             validate::Inputs,
@@ -381,8 +397,6 @@ impl OwnershipTasks {
             fuel: snapshot.emission.fuel,
         };
         let units = units.iter().collect::<Vec<_>>();
-        hirsel_lir::ownership_trace::native::Request::Resources(&plans)
-            .prepare(&units, &binding.table)?;
         use_units(&units, &emit, &plans)
     }
 
@@ -400,6 +414,24 @@ impl OwnershipTasks {
             &BTreeMap<ContentHash, Plan>,
         ) -> Result<R, String>,
     ) -> Result<R, String> {
+        self.with_bound_link_context(root, source, |program, units, emit, plans| {
+            hirsel_lir::ownership_trace::native::Request::Resources(plans)
+                .prepare(units, emit.layouts)?;
+            use_context(program, units, emit, plans)
+        })
+    }
+
+    fn with_bound_link_context<R>(
+        &self,
+        root: ProductRef,
+        source: &crate::native::root_source::NativeLinkSource,
+        use_context: impl FnOnce(
+            &crate::native::ReadyProgram,
+            &[&hirsel_lir::stage::ValidatedUnit<Ready>],
+            &hirsel_lir::emission::EmitInputs<'_>,
+            &BTreeMap<ContentHash, Plan>,
+        ) -> Result<R, String>,
+    ) -> Result<R, String> {
         use hirsel_lir::{fragment::UnitSummary, ir::UnitOrigin};
         let snapshot = &self.native.snapshot;
         if source.input() != &snapshot.emission.input
@@ -407,7 +439,7 @@ impl OwnershipTasks {
         {
             return Err("ownership linker source differs from selected emission input".into());
         }
-        self.with_ready(root, |units, emit, plans| {
+        self.with_bound_ready(root, |units, emit, plans| {
             let raw = units
                 .iter()
                 .map(|unit| unit.unit().clone())
@@ -511,6 +543,55 @@ impl OwnershipTasks {
                 },
                 |program| use_context(program, units, emit, plans),
             )
+        })
+    }
+
+    /// Project executable bodies from the complete C-admitted source scope.
+    /// Certification-only roots remain checked but cannot introduce unbound
+    /// callable parameters into the executable call equations.
+    pub fn with_execution_context<R>(
+        &self,
+        root: ProductRef,
+        source: &crate::native::root_source::NativeLinkSource,
+        entry: &hirsel_syntax::DefPath,
+        use_context: impl FnOnce(
+            &crate::native::ReadyProgram,
+            &[&hirsel_lir::stage::ValidatedUnit<Ready>],
+            &hirsel_lir::emission::EmitInputs<'_>,
+            &BTreeMap<ContentHash, Plan>,
+        ) -> Result<R, String>,
+    ) -> Result<R, String> {
+        self.with_bound_link_context(root, source, |program, units, emit, plans| {
+            let selected = super::ownership_closure::select(program, units, entry)?;
+            let mut executable = program.clone();
+            executable
+                .summaries
+                .retain(|summary| selected.contains(&summary.instance));
+            executable.callbacks = executable
+                .summaries
+                .iter()
+                .flat_map(|summary| summary.glue.callbacks.iter().map(|(path, _)| path.clone()))
+                .collect();
+            executable.entries = crate::native::stages::summary_entries(&executable.summaries);
+            let units = units
+                .iter()
+                .copied()
+                .filter(|unit| selected.contains(&unit.unit().header.instance))
+                .collect::<Vec<_>>();
+            let plans = units
+                .iter()
+                .map(|unit| {
+                    let digest = unit.unit().digest();
+                    plans
+                        .get(&digest)
+                        .cloned()
+                        .map(|plan| (digest, plan))
+                        .ok_or_else(|| "missing executable ownership plan".to_owned())
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?;
+            hirsel_lir::ownership_trace::native::Request::Resources(&plans)
+                .prepare(&units, emit.layouts)?;
+            use_context(&executable, &units, emit, &plans)
         })
     }
 

@@ -220,6 +220,21 @@ pub fn lower_observed<S: Stage>(
     )
     .map_err(|error| error.to_string())?;
     output.unit = after.digest();
+    for row in &mut output.observations {
+        if let hirsel_lir::ownership_trace::Point::Unreachable { origin, .. } = &mut row.point
+            && input.observations.iter().any(|old| {
+                old.marker.id == row.marker.id
+                    && !matches!(
+                        old.point,
+                        hirsel_lir::ownership_trace::Point::Unreachable { .. }
+                    )
+            })
+        {
+            // The public recipe proves the complete cleanup boundary, including
+            // the exact EmptyDrop expansions which removed failure edges.
+            *origin = before.digest();
+        }
+    }
     let recipe = hirsel_lir::ownership_trace::Recipe {
         cleanups: input
             .cleanups
@@ -286,7 +301,8 @@ fn lower_reporting<S: Stage, R: Reporter>(
     };
     lower_copies(&mut ed, lay)?;
     report.prelude(&ed)?;
-    let mut lowering = Lowering {
+    let mut lowering = Lowering::<R> {
+        reporter: std::marker::PhantomData,
         index,
         ed: &mut ed,
         facts: &mut facts,
@@ -298,6 +314,8 @@ fn lower_reporting<S: Stage, R: Reporter>(
         flags: BTreeMap::new(),
         retire_flags: BTreeMap::new(),
         drop_at: BlockId(0),
+        drop_source: AddressId(0),
+        staged: None,
     };
     // Later drops of a block first, so splitting a block leaves the
     // indices of its earlier drops in place; a preparation inserted before
@@ -1460,7 +1478,8 @@ enum Action {
     },
 }
 
-struct Lowering<'e, 'a> {
+struct Lowering<'e, 'a, R: Reporter> {
+    reporter: std::marker::PhantomData<R>,
     ed: &'e mut Editor<Ready>,
     facts: &'e mut Facts,
     lay: Lay<'a>,
@@ -1475,6 +1494,8 @@ struct Lowering<'e, 'a> {
     retire_flags: BTreeMap<(SlotId, Vec<Step>), (SlotId, AddressId, ValueId)>,
     /// The block of the drop being lowered.
     drop_at: BlockId,
+    drop_source: AddressId,
+    staged: Option<(BlockId, u32, AddressId)>,
 }
 
 /// What every action of one drop shares.
@@ -1486,10 +1507,10 @@ struct Site {
     failure: FailureEdge,
 }
 
-impl Lowering<'_, '_> {
+impl<R: Reporter> Lowering<'_, '_, R> {
     /// Lower the drop at `b`'s instruction `i`; `flag` decides content that
     /// is there on some paths only.
-    fn drop<R: Reporter>(
+    fn drop(
         &mut self,
         b: BlockId,
         i: usize,
@@ -1595,7 +1616,11 @@ impl Lowering<'_, '_> {
             &mut self.ed.unit.terminators[b.index()],
             Terminator::Unreachable,
         );
-        let at = self.sequence(b, &actions, &site)?;
+        if R::ENABLED {
+            self.drop_source = address;
+            self.staged = None;
+        }
+        let mut at = self.sequence(b, &actions, &site)?;
         if retire_shell && actions.is_empty() {
             self.ed.code[at.index()].push(Inst::StorageDead {
                 slot,
@@ -1614,12 +1639,45 @@ impl Lowering<'_, '_> {
         let release = release.or_else(|| {
             (!actions.is_empty() && !whole_release && (!whole_finalizer || finalizer_fields))
                 .then_some(hirsel_lir::ownership_trace::Point::CompoundDrop {
+                    anchor,
+                    staged: self
+                        .staged
+                        .filter(|(block, _, _)| *block == b)
+                        .map(|(_, at, storage)| (at, storage)),
                     block: b,
                     normal: at,
                     index: self.ed.code[at.index()].len() as u32,
                     failure: self.ed.unit.tables.edges[site.failure.cleanup.index()].target,
                 })
         });
+        let release = if R::ENABLED && release.is_none() && actions.is_empty() {
+            let empty = if tail.is_empty()
+                && self.ed.code[at.index()].is_empty()
+                && matches!(terminator, Terminator::Jump(_))
+            {
+                at
+            } else {
+                // Keep the assertion at an independently checked empty jump,
+                // including when the erased Drop has a prefix or suffix.
+                // Only diagnostic lowering adds these pure forwarding edges.
+                let info = &self.ed.unit.blocks[b.index()];
+                let (kind, source) = (info.kind, info.anchor);
+                let empty = self.ed.block(kind, &[], source);
+                let after = self.ed.block(kind, &[], source);
+                let enter = self.ed.edge(empty, &[]);
+                self.ed.unit.terminators[at.index()] = Terminator::Jump(enter);
+                let leave = self.ed.edge(after, &[]);
+                self.ed.unit.terminators[empty.index()] = Terminator::Jump(leave);
+                at = after;
+                empty
+            };
+            Some(hirsel_lir::ownership_trace::Point::EmptyDrop {
+                anchor: (&self.ed.unit.tables.cleanup_anchors[anchor.index()]).into(),
+                block: empty,
+            })
+        } else {
+            release
+        };
         report.splice(observation::Splice {
             block: b,
             index: i,
@@ -1648,7 +1706,7 @@ impl Lowering<'_, '_> {
     /// A drop of content there on some paths only: `b` branches on the slot's
     /// flag into a block of its own that drops the content, then both go on
     /// to the rest of `b`.
-    fn flagged<R: Reporter>(
+    fn flagged(
         &mut self,
         b: BlockId,
         i: usize,
@@ -1783,6 +1841,17 @@ impl Lowering<'_, '_> {
         Ok(())
     }
 
+    fn inserted_at(&mut self, block: BlockId, index: usize) {
+        if R::ENABLED
+            && let Some((at_block, at, _)) = &mut self.staged
+            && *at_block == block
+            && *at as usize >= index
+        {
+            *at += 1;
+        }
+        self.inserted.push((block, index));
+    }
+
     /// Record the editor's exact entry insertion alongside cleanup's splices.
     fn whole(&mut self, slot: SlotId) -> AddressId {
         let before = self.ed.code[self.ed.unit.entry.index()].len();
@@ -1792,7 +1861,7 @@ impl Lowering<'_, '_> {
             .unwrap_or(0);
         let address = self.ed.whole(self.facts, slot);
         if self.ed.code[self.ed.unit.entry.index()].len() > before {
-            self.inserted.push((self.ed.unit.entry, insertion));
+            self.inserted_at(self.ed.unit.entry, insertion);
         }
         address
     }
@@ -2242,7 +2311,7 @@ impl Lowering<'_, '_> {
                 constant,
             },
         );
-        self.inserted.push((self.ed.unit.entry, 0));
+        self.inserted_at(self.ed.unit.entry, 0);
         Ok(self.ed.edge(joined, &[absent]))
     }
 
@@ -2453,6 +2522,9 @@ impl Lowering<'_, '_> {
         let whole = self.whole(slot);
         let value = self.ed.value(ty, Holding::Owned);
         let version = self.ed.value(ty, Holding::Plain);
+        if R::ENABLED && source == self.drop_source {
+            self.staged = Some((at, self.ed.code[at.index()].len() as u32, whole));
+        }
         self.ed.code[at.index()].extend([
             Inst::Read {
                 result: value,
@@ -2614,7 +2686,7 @@ impl Lowering<'_, '_> {
                         });
                     self.ed.code[self.ed.unit.entry.index()]
                         .insert(0, Inst::Const { result, constant });
-                    self.inserted.push((self.ed.unit.entry, 0));
+                    self.inserted_at(self.ed.unit.entry, 0);
                     ProjectionStep::Index(result)
                 }
                 _ => {
@@ -3003,7 +3075,7 @@ impl Lowering<'_, '_> {
                 failure,
             },
         );
-        self.inserted.push((self.ed.unit.entry, at + 1));
+        self.inserted_at(self.ed.unit.entry, at + 1);
         Ok(id)
     }
 
@@ -3133,7 +3205,7 @@ impl Lowering<'_, '_> {
                     failure: clone,
                 },
             );
-            self.inserted.push((BlockId(b as u32), i + 1));
+            self.inserted_at(BlockId(b as u32), i + 1);
         }
         Ok(())
     }
@@ -3239,7 +3311,8 @@ mod pending_tests {
         assert_eq!(slot_state.taken, before.taken);
         let finalizers = Finalizers::default();
         let index = hirsel_lir::LayoutIndex::new(&table);
-        let lowering = Lowering {
+        let lowering = Lowering::<NoObservations> {
+            reporter: std::marker::PhantomData,
             index: &index,
             ed: &mut ed,
             facts: &mut facts,
@@ -3251,6 +3324,8 @@ mod pending_tests {
             flags: BTreeMap::new(),
             retire_flags: BTreeMap::new(),
             drop_at: BlockId(0),
+            drop_source: AddressId(0),
+            staged: None,
         };
         let mut actions = Vec::new();
         lowering
@@ -3302,7 +3377,8 @@ mod pending_tests {
         let mut ed = Editor::new(unit);
         let finalizers = Finalizers::default();
         let index = hirsel_lir::LayoutIndex::new(&table);
-        let lowering = Lowering {
+        let lowering = Lowering::<NoObservations> {
+            reporter: std::marker::PhantomData,
             index: &index,
             ed: &mut ed,
             facts: &mut facts,
@@ -3314,6 +3390,8 @@ mod pending_tests {
             flags: BTreeMap::new(),
             retire_flags: BTreeMap::new(),
             drop_at: BlockId(0),
+            drop_source: AddressId(0),
+            staged: None,
         };
         let mut state = crate::insert::SlotState {
             live: Tri::Yes,

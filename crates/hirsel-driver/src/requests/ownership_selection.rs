@@ -58,9 +58,10 @@ impl OwnershipExecution {
     /// original Value marker ids through checked rebinding. Ordinary objects
     /// and a second source compilation cannot substitute for these products.
     pub fn emit(self: &Arc<Self>, backend: native::Backend) -> Result<OwnershipObjects, String> {
-        let objects = self.tasks.with_link_context(
+        let objects = self.tasks.with_execution_context(
             self.root,
             &self.link,
+            &self.entry,
             |program, units, inputs, plans| {
                 native::ownership_trace::emit_relocated(
                     program,
@@ -96,7 +97,7 @@ impl OwnershipExecution {
             return Err("ownership objects belong to another selected completion".into());
         }
         self.tasks
-            .with_link_context(self.root, &self.link, |program, _, _, _| {
+            .with_execution_context(self.root, &self.link, &self.entry, |program, _, _, _| {
                 objects
                     .objects
                     .launch(program, tools, directory, event_limit)
@@ -190,7 +191,7 @@ impl OwnershipExecution {
             _ => return Err("ownership launch binding changed form".into()),
         };
         self.tasks
-            .with_link_context(self.root, &self.link, |program, _, _, _| {
+            .with_execution_context(self.root, &self.link, &self.entry, |program, _, _, _| {
                 objects
                     .objects
                     .launch_selected(program, tools, directory, event_limit, Some(&run), tape)
@@ -209,7 +210,7 @@ impl OwnershipExecution {
             return Err("ownership objects belong to another selected completion".into());
         }
         self.tasks
-            .with_link_context(self.root, &self.link, |program, _, _, _| {
+            .with_execution_context(self.root, &self.link, &self.entry, |program, _, _, _| {
                 let sites = self.link.sites();
                 match native::observe_run(launched, program, &sites)
                     .map_err(|error| error.to_string())?

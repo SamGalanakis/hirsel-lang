@@ -24,8 +24,12 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
     origins: &[Vec<Option<u32>>],
     generated: Vec<CleanupObservation>,
 ) -> Result<(LirUnit<B>, Plan, Recipe), String> {
-    let (after, (blocks, edges)) =
-        ed.finish_reporting(|blocks, edges| (blocks.to_vec(), edges.to_vec()));
+    let collect = |blocks: &[Option<BlockId>],
+                   edges: &[Option<u32>],
+                   anchors: &[Option<hirsel_lir::ir::CleanupAnchorId>]| {
+        (blocks.to_vec(), edges.to_vec(), anchors.to_vec())
+    };
+    let (after, (blocks, edges, anchors)) = ed.finish_reporting(collect);
     let after_digest = after.digest();
     let mut output = input.clone();
     let mut relocations = vec![];
@@ -38,7 +42,37 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
     };
     let remap =
         |point: Point, token: trace::Location, id: trace::MarkerId| -> Result<Point, String> {
+            let removed = match point {
+                Point::Entry | Point::Unreachable { .. } => false,
+                Point::Edge(edge) => edges.get(edge.index()).copied().flatten().is_none(),
+                Point::Instruction { block, .. }
+                | Point::ReleaseDrop { block, .. }
+                | Point::FinalizerDrop { block }
+                | Point::EmptyDrop { block, .. }
+                | Point::CompoundDrop { block, .. }
+                | Point::StagedReturn { block, .. }
+                | Point::CallEntered(block)
+                | Point::CallReturned(block)
+                | Point::Return(block) => blocks.get(block.index()).copied().flatten().is_none(),
+            };
+            if removed {
+                let site = input
+                    .observations
+                    .iter()
+                    .find(|row| row.marker.id == id)
+                    .ok_or("removed ownership point has no original marker")?
+                    .marker
+                    .site;
+                // The checker below independently proves that this exact input
+                // point is unreachable. A missing map entry alone grants nothing.
+                return Ok(Point::Unreachable {
+                    origin: before.digest(),
+                    marker: id,
+                    site,
+                });
+            }
             Ok(match point {
+                Point::Unreachable { .. } => point,
                 Point::Instruction {
                     block,
                     index,
@@ -105,11 +139,31 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
                     address,
                 },
                 Point::CompoundDrop {
+                    anchor,
+                    staged,
                     block,
                     normal,
                     index,
                     failure,
                 } => Point::CompoundDrop {
+                    anchor: if anchors.is_empty() {
+                        anchor
+                    } else {
+                        anchors
+                            .get(anchor.index())
+                            .copied()
+                            .flatten()
+                            .ok_or("ownership trace: removed compound cleanup anchor")?
+                    },
+                    staged: staged
+                        .map(|(at, storage)| {
+                            origins[block.index()]
+                                .iter()
+                                .position(|origin| *origin == Some(at))
+                                .map(|at| (at as u32, storage))
+                                .ok_or("ownership trace: lost staged cleanup take")
+                        })
+                        .transpose()?,
                     block: remap_block(block)?,
                     normal: remap_block(normal)?,
                     index: if index == before.blocks[normal.index()].instructions.len {
@@ -123,6 +177,10 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
                     },
                     failure: remap_block(failure)?,
                 },
+                Point::EmptyDrop { anchor, block } => Point::EmptyDrop {
+                    anchor,
+                    block: remap_block(block)?,
+                },
                 Point::FinalizerDrop { block } => Point::FinalizerDrop {
                     block: remap_block(block)?,
                 },
@@ -133,7 +191,8 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
             observation.point,
             observation.marker.token,
             observation.marker.id,
-        )?;
+        )
+        .map_err(|error| format!("{error}: {observation:?}"))?;
         relocations.push(Relocation {
             id: observation.marker.id,
             point: observation.point,

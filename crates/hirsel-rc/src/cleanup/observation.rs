@@ -4,6 +4,7 @@ use super::*;
 use hirsel_lir::ownership_trace::{self as trace, Plan, Point};
 
 pub(super) trait Reporter {
+    const ENABLED: bool = false;
     type Output;
     fn edge(&mut self, _old: EdgeId, _new: EdgeId) -> Result<(), PassError> {
         Ok(())
@@ -69,7 +70,58 @@ fn snapshot(ed: &Editor<Ready>) -> LirUnit<Ready> {
 fn refused(message: impl std::fmt::Display) -> PassError {
     PassError::Unsupported(format!("ownership trace cleanup: {message}"))
 }
+fn refused_plan(error: impl std::fmt::Display, unit: &LirUnit<Ready>, plan: &Plan) -> PassError {
+    let message = error.to_string();
+    let Some(row) = plan
+        .observations
+        .iter()
+        .find(|row| message.contains(&format!("{:?}", row.marker.id)))
+    else {
+        return refused(message);
+    };
+    let block = match row.point {
+        Point::Instruction { block, .. }
+        | Point::ReleaseDrop { block, .. }
+        | Point::FinalizerDrop { block }
+        | Point::CompoundDrop { block, .. }
+        | Point::EmptyDrop { block, .. }
+        | Point::StagedReturn { block, .. }
+        | Point::CallEntered(block)
+        | Point::CallReturned(block)
+        | Point::Return(block) => Some(block),
+        Point::Entry => Some(unit.entry),
+        Point::Unreachable { .. } => None,
+        Point::Edge(edge) => unit.tables.edges.get(edge.index()).map(|edge| edge.target),
+    };
+    let code = block
+        .and_then(|block| unit.blocks.get(block.index()))
+        .and_then(|block| block.instructions.get(&unit.instructions));
+    let owner_parameters = unit
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let trace::Location::Value(owner) = row.marker.owner else {
+                return None;
+            };
+            block
+                .parameters
+                .get(&unit.pools.values)
+                .is_some_and(|values| values.contains(&owner))
+                .then(|| {
+                    (
+                        BlockId(index as u32),
+                        unit.tables.source_anchors[block.anchor.index()].site,
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    refused(format!(
+        "{message}: {row:?}; code {code:?}; owner parameters {owner_parameters:?}"
+    ))
+}
 impl Reporter for Observations {
+    const ENABLED: bool = true;
     type Output = Plan;
     fn edge(&mut self, old: EdgeId, new: EdgeId) -> Result<(), PassError> {
         if let Some(previous) = self.edges.get(&old) {
@@ -113,6 +165,20 @@ impl Reporter for Observations {
                     .flat_map(|row| [&mut row.point]),
             );
         for point in points {
+            if let Point::CompoundDrop {
+                block,
+                staged: Some((at, _)),
+                ..
+            } = point
+            {
+                for &(b, i) in insertions {
+                    if *block == b && *at as usize >= i {
+                        *at = at
+                            .checked_add(1)
+                            .ok_or_else(|| refused("staged cleanup index overflow"))?;
+                    }
+                }
+            }
             let at = match point {
                 Point::Instruction { block, index, .. }
                 | Point::ReleaseDrop { block, index }
@@ -138,7 +204,7 @@ impl Reporter for Observations {
     fn prelude(&mut self, ed: &Editor<Ready>) -> Result<(), PassError> {
         let unit = snapshot(ed);
         self.plan.unit = unit.digest();
-        trace::check(&unit, &self.plan).map_err(refused)?;
+        trace::check(&unit, &self.plan).map_err(|error| refused_plan(error, &unit, &self.plan))?;
         Ok(())
     }
     fn versions(&mut self, ed: &Editor<Ready>, before: bool) -> Result<(), PassError> {
@@ -147,7 +213,7 @@ impl Reporter for Observations {
             let mut plan =
                 Plan::selected(&unit, self.plan.selection, self.plan.observations.clone());
             plan.cleanups = self.plan.cleanups.clone();
-            trace::check(&unit, &plan).map_err(refused)?;
+            trace::check(&unit, &plan).map_err(|error| refused_plan(error, &unit, &plan))?;
             self.versions = Some((unit, plan));
         } else {
             let (input, plan) = self
@@ -158,8 +224,8 @@ impl Reporter for Observations {
             // Plain phi parameters/arguments. Instruction and existing owned
             // parameter coordinates stay fixed. Author an explicit identity
             // recipe and check every original marker against both boundaries.
-            let (_, output, _) =
-                crate::observation::identity(&input, &plan, unit).map_err(refused)?;
+            let (_, output, _) = crate::observation::identity(&input, &plan, unit)
+                .map_err(|error| refused_plan(error, &input, &plan))?;
             self.plan = output;
         }
         Ok(())
@@ -202,11 +268,17 @@ impl Reporter for Observations {
                     index: shift(block, index)?,
                 },
                 Point::CompoundDrop {
+                    anchor,
+                    staged,
                     block,
                     normal,
                     index,
                     failure,
                 } => Point::CompoundDrop {
+                    anchor,
+                    staged: staged
+                        .map(|(at, storage)| shift(block, at).map(|at| (at, storage)))
+                        .transpose()?,
                     block,
                     normal,
                     index: shift(normal, index)?,
@@ -254,6 +326,8 @@ impl Reporter for Observations {
                 Point::CallEntered(b) if b == block => Point::CallEntered(tail),
                 Point::CallReturned(b) if b == block => Point::CallReturned(tail),
                 Point::CompoundDrop {
+                    anchor,
+                    staged,
                     block: entry,
                     normal,
                     index: cut,
@@ -267,6 +341,23 @@ impl Reporter for Observations {
                         unreachable!()
                     };
                     Point::CompoundDrop {
+                        anchor,
+                        staged: if entry == block {
+                            staged
+                                .map(|(at, storage)| {
+                                    if at as usize <= index {
+                                        Err(refused("staged cleanup take overlaps another drop"))
+                                    } else {
+                                        Ok((relocate(at), storage))
+                                    }
+                                })
+                                .transpose()?
+                        } else {
+                            match shifted {
+                                Point::CompoundDrop { staged, .. } => staged,
+                                _ => unreachable!(),
+                            }
+                        },
                         block: if entry == block { tail } else { entry },
                         normal: if normal == block && cut as usize > index {
                             tail
@@ -285,6 +376,10 @@ impl Reporter for Observations {
                         failure,
                     }
                 }
+                Point::EmptyDrop { anchor, block: b } if b == block => Point::EmptyDrop {
+                    anchor,
+                    block: tail,
+                },
                 Point::FinalizerDrop { block: b } if b == block => {
                     Point::FinalizerDrop { block: tail }
                 }
@@ -309,8 +404,8 @@ impl Reporter for Observations {
             .iter()
             .map(|code| (0..code.len()).map(|index| Some(index as u32)).collect())
             .collect();
-        let (after, plan, _) =
-            crate::observation::finish(&before, &plan, ed, &origins).map_err(refused)?;
+        let (after, plan, _) = crate::observation::finish(&before, &plan, ed, &origins)
+            .map_err(|error| refused_plan(error, &before, &plan))?;
         Ok((after, plan))
     }
 }

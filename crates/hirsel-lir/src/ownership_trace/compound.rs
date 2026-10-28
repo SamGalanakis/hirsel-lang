@@ -2,7 +2,7 @@
 //! Addresses name checked declaration paths, never payload bits or byte offsets.
 use super::*;
 
-fn path<S>(unit: &LirUnit<S>, address: AddressId) -> Option<(SlotId, Vec<u32>)> {
+fn path<S>(unit: &LirUnit<S>, address: AddressId) -> Option<(SlotId, Vec<ProjectionStep>)> {
     let mut at = address;
     let mut segments = Vec::new();
     for _ in 0..unit.addresses.len() {
@@ -11,7 +11,7 @@ fn path<S>(unit: &LirUnit<S>, address: AddressId) -> Option<(SlotId, Vec<u32>)> 
         let fields = fields
             .iter()
             .map(|step| match *step {
-                ProjectionStep::Field(field) => Some(field),
+                ProjectionStep::Field(_) | ProjectionStep::VariantField { .. } => Some(*step),
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()?;
@@ -27,12 +27,106 @@ fn path<S>(unit: &LirUnit<S>, address: AddressId) -> Option<(SlotId, Vec<u32>)> 
     None
 }
 
+// A static variant address immediately inside its unique selecting arm has
+// already passed its tag test. Its synthetic failure edge is infeasible.
+// Require the actual borrowed scrutinee, exact slot/path, unique incoming edge,
+// and no intervening instruction except ending the switch's loan.
+pub(super) fn selected_addresses<S: Stage>(
+    unit: &LirUnit<S>,
+) -> Option<std::collections::BTreeSet<(BlockId, u32)>> {
+    let mut incoming = vec![0usize; unit.blocks.len()];
+    let mut add = |edge: EdgeId| -> Option<()> {
+        let target = unit.tables.edges.get(edge.index())?.target;
+        let count = incoming.get_mut(target.index())?;
+        *count = count.checked_add(1)?;
+        Some(())
+    };
+    for term in &unit.terminators {
+        for edge in term.normal_edges(&unit.pools) {
+            add(edge)?;
+        }
+        for failure in term.failure_edges(&unit.tables) {
+            add(unit.tables.failures.get(failure.index())?.cleanup)?;
+        }
+    }
+    for block in &unit.blocks {
+        for inst in block.instructions.get(&unit.instructions)? {
+            if let Some(failure) = inst.failure() {
+                add(unit.tables.failures.get(failure.index())?.cleanup)?;
+            }
+        }
+    }
+    let mut selected = std::collections::BTreeSet::new();
+    for (at, term) in unit.terminators.iter().enumerate() {
+        let Terminator::Switch { value, arms, .. } = term else {
+            continue;
+        };
+        let code = unit.blocks.get(at)?.instructions.get(&unit.instructions)?;
+        let Some(Inst::Read {
+            result,
+            address,
+            mode: ReadMode::Borrow,
+            ..
+        }) = code.last()
+        else {
+            continue;
+        };
+        if result != value {
+            continue;
+        }
+        let Some((slot, prefix)) = path(unit, *address) else {
+            continue;
+        };
+        for arm in arms.get(&unit.pools.switch_arms)? {
+            let block = unit.tables.edges.get(arm.edge.index())?.target;
+            if incoming[block.index()] != 1 {
+                continue;
+            }
+            let code = unit
+                .blocks
+                .get(block.index())?
+                .instructions
+                .get(&unit.instructions)?;
+            for (index, inst) in code.iter().enumerate() {
+                match *inst {
+                    Inst::EndLoan {
+                        if_active: false, ..
+                    } => (),
+                    Inst::Address { address, .. } => {
+                        let Some((target, steps)) = path(unit, address) else {
+                            break;
+                        };
+                        if target != slot || !steps.starts_with(&prefix) {
+                            break;
+                        }
+                        let Some((ProjectionStep::VariantField { variant, .. }, tail)) =
+                            steps[prefix.len()..].split_first()
+                        else {
+                            break;
+                        };
+                        if *variant != arm.value
+                            || !tail.iter().all(|s| matches!(s, ProjectionStep::Field(_)))
+                        {
+                            break;
+                        }
+                        selected.insert((block, index as u32));
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+    Some(selected)
+}
+
 pub(super) fn parts<S: Stage>(
     unit: &LirUnit<S>,
     point: Point,
     root: AddressId,
 ) -> Option<Vec<(BlockId, AddressId)>> {
     let Point::CompoundDrop {
+        anchor,
+        staged,
         block,
         normal,
         index,
@@ -44,8 +138,52 @@ pub(super) fn parts<S: Stage>(
     if block == failure || normal == failure {
         return None;
     }
-    let (first, anchor) = finalizer::begin(unit, block)?;
-    let (slot, prefix) = path(unit, root)?;
+    let (storage, start) = if let Some((at, storage)) = staged {
+        let code = unit
+            .blocks
+            .get(block.index())?
+            .instructions
+            .get(&unit.instructions)?;
+        let [
+            Inst::Read {
+                result,
+                address,
+                mode: ReadMode::Take,
+                ..
+            },
+            Inst::StorageLive { slot },
+            Inst::Store {
+                address: to, value, ..
+            },
+        ] = code.get(at as usize..at.checked_add(3)? as usize)?
+        else {
+            return None;
+        };
+        let target = unit.addresses.get(storage.index())?;
+        if *address != root
+            || *result != *value
+            || *to != storage
+            || root == storage
+            || target.base != AddressBase::Slot(*slot)
+            || target.projection.len != 0
+            || unit.slots.get(slot.index())?.kind != SlotKind::Temporary
+            || unit.addresses.get(root.index())?.ty != target.ty
+        {
+            return None;
+        }
+        (storage, at)
+    } else {
+        let (first, actual) = finalizer::begin(unit, block)?;
+        if actual != anchor
+            || !path(unit, first).is_some_and(|(s, p)| {
+                path(unit, root).is_some_and(|(r, q)| s == r && p.starts_with(&q))
+            })
+        {
+            return None;
+        }
+        (root, 0)
+    };
+    let (slot, prefix) = path(unit, storage)?;
     // The containing Resource has its own finalizer before its child actions.
     // The exact slot/prefix and common cleanup anchor still bind the whole cut.
     let descendant = |address: AddressId, strict: bool| {
@@ -53,19 +191,20 @@ pub(super) fn parts<S: Stage>(
             s == slot && p.starts_with(&prefix) && (!strict || p.len() > prefix.len())
         })
     };
-    if !descendant(first, false) {
-        return None;
-    }
     struct Walk {
+        selected: std::collections::BTreeSet<(BlockId, u32)>,
         state: Vec<u8>,
         parts: Vec<(BlockId, AddressId)>,
         normal: bool,
+        prefix_len: usize,
     }
     #[allow(clippy::too_many_arguments)]
     fn visit<S: Stage>(
         unit: &LirUnit<S>,
         block: BlockId,
         entry: BlockId,
+        start: u32,
+        staged: bool,
         normal: BlockId,
         index: u32,
         failure: BlockId,
@@ -95,17 +234,31 @@ pub(super) fn parts<S: Stage>(
         // Preparing an address before the semantic drop enters its first
         // phase can fail into another cleanup action. That action retains its
         // own original marker; it is not a completion of this drop.
-        let code = if block == entry {
-            let start = code
-                .iter()
-                .position(|inst| matches!(inst, Inst::FinalizeBegin { .. }))?;
-            &code[start..]
+        let offset = if block == entry {
+            let start = if staged {
+                start as usize
+            } else {
+                code.iter()
+                    .position(|inst| matches!(inst, Inst::FinalizeBegin { .. }))?
+            };
+            start
         } else {
-            code
+            0
         };
+        let code = code.get(offset..)?;
         let mut next = Vec::new();
         for (index, instruction) in code.iter().enumerate() {
             match *instruction {
+                Inst::Address { address, .. }
+                    if descendant(address, false)
+                        && path(unit, address)?.1[walk.prefix_len..]
+                            .iter()
+                            .any(|step| matches!(step, ProjectionStep::VariantField { .. })) =>
+                {
+                    if !walk.selected.contains(&(block, (offset + index) as u32)) {
+                        return None;
+                    }
+                }
                 Inst::FinalizeBegin {
                     address,
                     anchor: action,
@@ -150,7 +303,10 @@ pub(super) fn parts<S: Stage>(
                 Inst::Release { .. } | Inst::Drop { .. } => return None,
                 _ => (),
             }
-            if let Some(failure) = instruction.failure() {
+            if let Some(failure) = instruction.failure()
+                && !(matches!(instruction, Inst::Address { .. })
+                    && walk.selected.contains(&(block, (offset + index) as u32)))
+            {
                 next.push(unit.tables.failures.get(failure.index())?.cleanup);
             }
         }
@@ -163,7 +319,24 @@ pub(super) fn parts<S: Stage>(
                 if action != anchor || !descendant(address, false) {
                     return None;
                 }
+            } else if let Terminator::Switch { value, .. } = term {
+                let address = code.iter().find_map(|inst| match inst {
+                    Inst::Read {
+                        result,
+                        address,
+                        mode: ReadMode::Borrow,
+                        ..
+                    } if result == value => Some(*address),
+                    _ => None,
+                })?;
+                if !descendant(address, false) {
+                    return None;
+                }
             } else if !matches!(term, Terminator::Jump(_) | Terminator::Branch { .. }) {
+                if matches!(term, Terminator::Unreachable) && code.is_empty() {
+                    walk.state[block.index()] = 2;
+                    return Some(());
+                }
                 return None;
             }
             next.extend(term.normal_edges(&unit.pools));
@@ -176,6 +349,8 @@ pub(super) fn parts<S: Stage>(
                 unit,
                 unit.tables.edges.get(edge.index())?.target,
                 entry,
+                start,
+                staged,
                 normal,
                 index,
                 failure,
@@ -188,14 +363,18 @@ pub(super) fn parts<S: Stage>(
         Some(())
     }
     let mut walk = Walk {
+        selected: selected_addresses(unit)?,
         state: vec![0; unit.blocks.len()],
         parts: Vec::new(),
         normal: false,
+        prefix_len: prefix.len(),
     };
     visit(
         unit,
         block,
         block,
+        start,
+        staged.is_some(),
         normal,
         index,
         failure,

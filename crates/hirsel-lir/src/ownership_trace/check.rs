@@ -2,8 +2,11 @@ use super::*;
 use hirsel_core_contract::Passing;
 
 /// Check the plan's exact unit binding, unique inventory and local operation
-/// correspondence. Unsupported placements fail closed; no fallback observation
-/// is inferred from counters, equal payload bits or a nearby source operation.
+/// correspondence. Historical Unreachable rows have no current operation;
+/// authenticating them requires the complete checked transformation chain.
+/// Native preparation separately requires coverage of every current transition.
+/// Unsupported placements fail closed; no fallback observation is inferred
+/// from counters, equal payload bits or a nearby source operation.
 pub fn check<'a, S: Stage>(unit: &'a LirUnit<S>, plan: &'a Plan) -> Result<CheckedPlan<'a>, Error> {
     if plan.version != VERSION {
         return Err(Error::Version(plan.version));
@@ -101,13 +104,36 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
                 return Err(Error::IdentityRewrite(id));
             }
         }
+        if old.marker.kind != new.marker.kind
+            || old.marker.site != new.marker.site
+            || new.point != relocation.point
+            || new.marker.token != relocation.token
+            || new.marker.owner != relocation.owner
+        {
+            return Err(Error::ChangedMarker(id));
+        }
+        if let Point::Unreachable { origin, .. } = new.point {
+            if matches!(old.point, Point::Unreachable { .. }) {
+                if old.point != new.point {
+                    return Err(Error::InvalidTransport(id));
+                }
+            } else if origin != before.digest()
+                || unreachable(before, old.point, input.plan, output.plan) != Some(true)
+            {
+                return Err(Error::InvalidTransport(id));
+            }
+            continue;
+        }
+        if matches!(old.point, Point::Unreachable { .. }) {
+            return Err(Error::InvalidTransport(id));
+        }
         let form = (old.marker.kind == Kind::Drop)
             .then(|| drop_form(before, old.point))
             .flatten();
         let replacement = (new.marker.kind == Kind::Drop)
             .then(|| drop_form(after, new.point))
             .flatten();
-        if form != replacement && !(form == Some(0) && matches!(replacement, Some(1 | 2 | 3))) {
+        if form != replacement && !(form == Some(0) && matches!(replacement, Some(1 | 2 | 3 | 4))) {
             return Err(Error::InvalidTransport(id));
         }
         if old.marker.kind == Kind::Move && !edge_transport(before, old.point, after, new.point) {
@@ -143,14 +169,6 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
                 Point::StagedReturn { address: old, .. } if old == address => (),
                 _ => return Err(Error::InvalidTransport(id)),
             }
-        }
-        if old.marker.kind != new.marker.kind
-            || old.marker.site != new.marker.site
-            || new.point != relocation.point
-            || new.marker.token != relocation.token
-            || new.marker.owner != relocation.owner
-        {
-            return Err(Error::ChangedMarker(id));
         }
     }
     for &id in output.markers.keys() {
@@ -503,6 +521,7 @@ pub(super) fn binding<S: Stage>(
             .ok_or(Error::InvalidPoint(m.id))
     };
     Ok(match observation.point {
+        Point::Unreachable { origin, marker, .. } => marker == m.id && origin != unit.digest(),
         Point::Entry => {
             unit.parameters
                 .iter()
@@ -647,6 +666,13 @@ pub(super) fn binding<S: Stage>(
                 Inst::Release { value, live: MaskRef::All, .. },
             ]) if result == value && same(Drop, Address(*address)))
         }
+        Point::EmptyDrop { block: b, .. } => {
+            matches!(tuple, (Drop, Address(address), Address(owner)) if address == owner
+                && unit.addresses.get(address.index()).is_some_and(|info|
+                    matches!(info.base, AddressBase::Slot(_)) && info.projection.len == 0))
+                && block(b)?.instructions.len == 0
+                && matches!(term(b)?, Terminator::Jump(_))
+        }
         Point::CompoundDrop { .. } => {
             matches!(tuple, (Drop, Address(address), Address(owner)) if address == owner
                 && super::compound::parts(unit, observation.point, address).is_some())
@@ -721,8 +747,10 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
     let cleanup = |id: CleanupAnchorId| unit.tables.cleanup_anchors.get(id.index()).map(|a| a.site);
     let block_site = |b: BlockId| source(unit.blocks.get(b.index())?.anchor);
     match point {
+        Point::Unreachable { site, .. } => Some(site),
         Point::Entry => block_site(unit.entry),
-        Point::CompoundDrop { block, .. } => cleanup(super::finalizer::begin(unit, block)?.1),
+        Point::CompoundDrop { anchor, .. } => cleanup(anchor),
+        Point::EmptyDrop { anchor, .. } => Some(anchor.site),
         Point::FinalizerDrop { block } => {
             // Drop markers use the cleanup action. Failure-join Move markers
             // retain the recipient block's source, as their original edge did.
@@ -762,10 +790,21 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
 
 // Exact cleanup identity is stricter than equal source ranges: two actions of
 // one source statement may have the same span and still name different drops.
-pub(super) fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnchor> {
-    if let Point::FinalizerDrop { block } | Point::CompoundDrop { block, .. } = point {
+pub(super) fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<CleanupAnchor> {
+    if let Point::EmptyDrop { anchor, .. } = point {
+        return Some(CleanupAnchor {
+            body: anchor.body,
+            cleanup: anchor.cleanup,
+            action: anchor.action,
+            site: anchor.site,
+        });
+    }
+    if let Point::CompoundDrop { anchor, .. } = point {
+        return unit.tables.cleanup_anchors.get(anchor.index()).cloned();
+    }
+    if let Point::FinalizerDrop { block } = point {
         let (_, anchor) = super::finalizer::begin(unit, block)?;
-        return unit.tables.cleanup_anchors.get(anchor.index());
+        return unit.tables.cleanup_anchors.get(anchor.index()).cloned();
     }
     let (block, index, moment) = match point {
         Point::Instruction {
@@ -811,7 +850,7 @@ pub(super) fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&
         | (Inst::FinalizeEnd { anchor, .. }, Moment::After) => *anchor,
         _ => return None,
     };
-    unit.tables.cleanup_anchors.get(anchor.index())
+    unit.tables.cleanup_anchors.get(anchor.index()).cloned()
 }
 
 // A bundled logical drop cannot be reduced to one of its physical exits.
@@ -821,6 +860,7 @@ pub(super) fn drop_form<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<u8>
         Point::ReleaseDrop { .. } => Some(1),
         Point::FinalizerDrop { .. } => Some(2),
         Point::CompoundDrop { .. } => Some(3),
+        Point::EmptyDrop { .. } => Some(4),
         Point::Instruction {
             block,
             index,
@@ -874,4 +914,100 @@ fn edge_transport<A: Stage, B: Stage>(
         (Point::FinalizerDrop { .. }, _) => false,
         _ => true,
     }
+}
+
+// A semantic Drop expanded to an exact EmptyDrop assertion has no physical
+// failure edge. All other instruction and terminator failures remain live in
+// this proof, including another use of the same edge. C independently validates
+// the ordinary rewrite; the diagnostic assertion checks empty runtime custody.
+// A malformed graph cannot certify elimination.
+fn unreachable<S: Stage>(
+    unit: &LirUnit<S>,
+    point: Point,
+    input: &Plan,
+    output: &Plan,
+) -> Option<bool> {
+    let mut erased = std::collections::BTreeSet::new();
+    for old in &input.observations {
+        let Some(new) = output
+            .observations
+            .iter()
+            .find(|row| row.marker == old.marker)
+        else {
+            continue;
+        };
+        let (
+            Point::Instruction { block, index, .. },
+            Point::EmptyDrop {
+                anchor: retained, ..
+            },
+        ) = (old.point, new.point)
+        else {
+            continue;
+        };
+        let code = unit
+            .blocks
+            .get(block.index())?
+            .instructions
+            .get(&unit.instructions)?;
+        let Inst::Drop { anchor, .. } = code.get(index as usize)? else {
+            continue;
+        };
+        if ErasedCleanup::from(unit.tables.cleanup_anchors.get(anchor.index())?) == retained {
+            erased.insert((block, index));
+        }
+    }
+    let mut blocks = std::collections::BTreeSet::new();
+    let mut edges = std::collections::BTreeSet::new();
+    let mut pending = vec![unit.entry];
+    while let Some(block) = pending.pop() {
+        if !blocks.insert(block) {
+            continue;
+        }
+        let code = unit
+            .blocks
+            .get(block.index())?
+            .instructions
+            .get(&unit.instructions)?;
+        let term = unit.terminators.get(block.index())?;
+        if let Terminator::Switch { arms, .. } = term {
+            arms.get(&unit.pools.switch_arms)?;
+        }
+        if let Terminator::Call { call, .. } = term {
+            unit.tables.calls.get(call.index())?;
+        }
+        let mut next = term.normal_edges(&unit.pools);
+        for failure in
+            term.failure_edges(&unit.tables)
+                .into_iter()
+                .chain(code.iter().enumerate().filter_map(|(index, inst)| {
+                    if erased.contains(&(block, index as u32)) {
+                        None
+                    } else {
+                        inst.failure()
+                    }
+                }))
+        {
+            next.push(unit.tables.failures.get(failure.index())?.cleanup);
+        }
+        for edge in next {
+            let target = unit.tables.edges.get(edge.index())?.target;
+            edges.insert(edge);
+            pending.push(target);
+        }
+    }
+    Some(match point {
+        Point::Entry => false,
+        Point::Unreachable { .. } => true,
+        Point::Edge(edge) => !edges.contains(&edge),
+        Point::Instruction { block, .. }
+        | Point::ReleaseDrop { block, .. }
+        | Point::CompoundDrop { block, .. }
+        | Point::FinalizerDrop { block }
+        | Point::EmptyDrop { block, .. }
+        | Point::StagedReturn { block, .. }
+        | Point::CallEntered(block)
+        | Point::CallReturned(block)
+        | Point::Return(block) => !blocks.contains(&block),
+    })
 }

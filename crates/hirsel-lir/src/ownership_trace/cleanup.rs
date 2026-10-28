@@ -95,7 +95,8 @@ fn block(point: Point) -> Option<BlockId> {
         Point::Instruction { block, .. }
         | Point::ReleaseDrop { block, .. }
         | Point::FinalizerDrop { block }
-        | Point::CompoundDrop { block, .. } => Some(block),
+        | Point::CompoundDrop { block, .. }
+        | Point::EmptyDrop { block, .. } => Some(block),
         _ => None,
     }
 }

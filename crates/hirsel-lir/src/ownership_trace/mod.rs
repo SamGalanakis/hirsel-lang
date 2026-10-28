@@ -32,7 +32,7 @@ mod finalizer;
 pub mod native;
 mod staged;
 
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 12;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -99,11 +99,46 @@ snapshot_enum!(Moment {
     IfLive
 });
 
+/// Original cleanup identity retained only by the diagnostic plan after the
+/// ordinary editor removes an erased action from its checked anchor table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct ErasedCleanup {
+    pub body: u32,
+    pub cleanup: u32,
+    pub action: u32,
+    pub site: SiteRange,
+}
+snapshot_struct!(ErasedCleanup {
+    body,
+    cleanup,
+    action,
+    site
+});
+impl From<&CleanupAnchor> for ErasedCleanup {
+    fn from(anchor: &CleanupAnchor) -> Self {
+        Self {
+            body: anchor.body,
+            cleanup: anchor.cleanup,
+            action: anchor.action,
+            site: anchor.site,
+        }
+    }
+}
+
 /// A commit point, rather than a scheduling point. In particular CallEntered is
 /// not the attempted call: pretransfer rejection leaves its actuals with caller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Point {
     Entry,
+    /// Historical marker whose physical site was unreachable at a checked
+    /// rewriting boundary. Only check_transform may establish this state;
+    /// it proves reachability over every normal and failure edge. The marker
+    /// stays in the conserved inventory and has no runtime commit.
+    Unreachable {
+        origin: ContentHash,
+        marker: MarkerId,
+        site: SiteRange,
+    },
     Instruction {
         block: BlockId,
         index: u32,
@@ -135,10 +170,20 @@ pub enum Point {
     FinalizerDrop {
         block: BlockId,
     },
+    /// A semantic Drop erased by cleanup in an otherwise empty jump block.
+    /// It asserts empty shadow custody and never emits a Resource drop.
+    EmptyDrop {
+        anchor: ErasedCleanup,
+        block: BlockId,
+    },
     /// One semantic aggregate drop, with exact normal/failure cleanup cuts.
     /// Each descendant retirement is an actual finalizer completion; the
     /// aggregate shell never invents a Resource identity or descendant drop.
     CompoundDrop {
+        /// Exact original cleanup action, including switch-first cuts.
+        anchor: CleanupAnchorId,
+        /// A pass-authored take/store into private cleanup storage.
+        staged: Option<(u32, AddressId)>,
         block: BlockId,
         normal: BlockId,
         index: u32,
@@ -147,6 +192,7 @@ pub enum Point {
 }
 snapshot_enum!(Point {
     Entry,
+    Unreachable { origin, marker, site },
     Instruction { block, index, moment },
     Edge(edge),
     CallEntered(block),
@@ -155,7 +201,8 @@ snapshot_enum!(Point {
     StagedReturn { block, address },
     ReleaseDrop { block, index },
     FinalizerDrop { block },
-    CompoundDrop { block, normal, index, failure }
+    CompoundDrop { anchor, staged, block, normal, index, failure },
+    EmptyDrop { anchor, block }
 });
 
 /// At Create/Drop `token == owner`. At Move `token` is the previous shadow
@@ -324,6 +371,7 @@ impl<'a> CheckedPlan<'a> {
         }
         let observation = self.observation(id).ok_or(Error::MissingMarker(id))?;
         match observation.point {
+            Point::Unreachable { .. } => Ok(Vec::new()),
             Point::FinalizerDrop { block } if observation.marker.kind == Kind::Move => {
                 let Location::Value(parameter) = observation.marker.owner else {
                     return Err(Error::InvalidBinding(id));

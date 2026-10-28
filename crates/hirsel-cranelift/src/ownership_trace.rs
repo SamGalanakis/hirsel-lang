@@ -68,6 +68,13 @@ impl FnEmitter<'_, '_, '_> {
         let markers: Vec<_> = plan.at(block, index, moment).collect();
         self.ownership_markers(markers)
     }
+    pub(crate) fn ownership_empty_drop(&mut self, block: BlockId) -> Emitted {
+        let Some(plan) = self.ownership else {
+            return Ok(());
+        };
+        let markers = plan.at_empty_drop(block).collect();
+        self.ownership_markers(markers)
+    }
     pub(crate) fn ownership_point(&mut self, point: Point) -> Emitted {
         let Some(plan) = self.ownership else {
             return Ok(());
