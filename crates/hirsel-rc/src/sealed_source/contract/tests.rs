@@ -706,3 +706,29 @@ fn shared_capture_174_keeps_original_demand_without_a_redundant_child_snapshot()
             .is_err()
     );
 }
+
+#[test]
+fn shared_snapshot_184_requires_the_exact_original_capture_profile() {
+    for usage in [UseKind::Borrow, UseKind::Copy, UseKind::Take] {
+        let mut fixture = captured_fixture_shape(usage, false, true);
+        let original = fixture.profiles[&Port::Capture(0)].clone();
+        fixture.profiles.insert(
+            Port::Capture(0),
+            captured_fixture(usage, false).profiles[&Port::Capture(0)].clone(),
+        );
+        assert_eq!(
+            fixture.derive().unwrap_err(),
+            SourceError::Malformed("receipt profile differs from full original source type")
+        );
+        fixture.profiles.insert(Port::Capture(0), original);
+        assert!(
+            fixture
+                .derive()
+                .unwrap()
+                .contract()
+                .unwrap()
+                .captures
+                .is_empty()
+        );
+    }
+}

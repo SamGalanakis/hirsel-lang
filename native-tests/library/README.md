@@ -41,9 +41,18 @@ Unproved recursive forwarding, returned input data and owning closure captures
 supply no nonretention contract.
 `MEM-4-sealed-task-unique-list-run.hir` also qualifies moving a unique heap
 list's Region into a task, reading it there and awaiting completion.
-Original source declarations and ordered child receipts remain mandatory.
-Captured receipt transport, additional mutation recipes and
-fully elided payload custody remain unsupported on this path.
+The unchanged `MEM-4-sealed-callback-failure-run.hir` and
+`MEM-4-sealed-callback-drop-cause-run.hir` qualify public callbacks on reference,
+checked H, LLVM, Cranelift and real LLVM record/replay. Their ordinary heap
+closure environments capture copied `Shared[Bytes]` roots. ABI 95 construction
+kind 4 snapshots each Shared root's actual identity with Shared origin, zero
+evacuation charge and no owned children. Typed descriptor edges check that
+identity and origin; metadata takes no language storage credit. The programs
+check primary failure, reverse finalizers, finalizer cause order and final thaw.
+Original source declarations, complete ordinary environments and ordered child
+receipts remain mandatory. Captured receipt transport for other demanded
+payloads, additional mutation recipes and fully elided payload custody remain
+unsupported on this path.
 
 `exact-sums.txt` was retained verbatim from the interpreter's 256 Python Fraction vectors (seed 20261008). `GraphemeBreakTest.txt` is the complete official Unicode 16.0.0 fixture, including its source and license header, retained verbatim from interpreter fixtures. `hirsel-driver/tests/stdlib_wave2_num.rs` checks the rational vectors against ordinary std source; `hirsel-driver/tests/stdlib_graphemes.rs` checks the shipped source over full strings and nonzero-origin slices.
 

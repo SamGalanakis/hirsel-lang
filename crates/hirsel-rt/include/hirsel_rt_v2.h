@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 94
+#define HIRSEL_RT_V2_ABI_VERSION 95
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -656,7 +656,8 @@ void hirsel_rt_v2_receipt_region_enter(hirsel_rt_v2_ctx *ctx, void *guard);
 uint8_t hirsel_rt_v2_receipt_region_exit(hirsel_rt_v2_ctx *ctx, void *guard,
                                         uint64_t anchor, uint64_t operation_site);
 /* Construct original semantic metadata. kind 0 = inline, 1 = newly constructed
- * heap block, 2 = static byte literal. Inputs borrow ordered inline receipts.
+ * heap block, 2 = static byte literal, 4 = atomic Shared root (ABI 95).
+ * Inputs borrow ordered inline receipts.
  * The returned holder acquires metadata only; no source holder is acquired. */
 /* Publish an original retained arena block with no outgoing owned holders.
  * C supplies the exact allocation correspondence. No source credit moves. */

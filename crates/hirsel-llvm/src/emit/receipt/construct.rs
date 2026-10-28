@@ -68,6 +68,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 }
                 children.push(self.get(receipt)?);
             } else if matches!(
+                self.layout(self.value_type(input.original)?.layout)?.kind,
+                LayoutKind::Shared { .. }
+            ) {
+                let receipt = self.construction_snapshot(input.original, 4, &[])?;
+                children.push(receipt);
+                temporary.push(receipt);
+            } else if matches!(
                 source.producer,
                 PayloadProducer::Literal(PayloadLiteral::String(_) | PayloadLiteral::Bytes(_))
             ) {
@@ -180,7 +187,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(())
     }
 
-    fn construction_snapshot(
+    pub(super) fn construction_snapshot(
         &mut self,
         value: ValueId,
         kind: u8,

@@ -1,5 +1,6 @@
 use super::*;
 use hirsel_lir::sealed_payload::*;
+use std::collections::BTreeSet;
 
 fn setup(full: bool) -> (Fixture, Config, LayoutId, ValueId) {
     let mut x = fixture();
@@ -1069,4 +1070,78 @@ fn h_capture_174_keeps_borrowed_payload_companions_closed() {
     program.layouts.fn_abis[0].key.receipt_contract = Some(contract.content().unwrap());
     program.layouts.fn_abis[0].receipts = Some(contract);
     assert_eq!(program.check().unwrap_err().kind, V::Unsupported);
+}
+
+#[test]
+fn h_shared_snapshot_184_refuses_nonshared_origin_and_descriptor_edge_mismatch() {
+    for full in [false, true] {
+        for mutation in 0..2 {
+            let mut x = fixture();
+            set_root(&mut x.p, 4);
+            let c = config(&mut x.p, 4, &[], full);
+            let mut ops = NoOperations;
+            let mut m = Machine::new(&x.p, &c, &mut ops);
+            let LayoutKind::Shared { payload } = m.record(x.shared).unwrap().kind else {
+                panic!("Shared")
+            };
+            let mut bytes = Extent::new(8);
+            bytes.write_bytes(0, &73u64.to_le_bytes());
+            let shared = alloc(&mut m, false, payload, bytes, 1);
+            m.ledger.get_mut(shared.alloc).count = Some(Count::Root(1));
+            let mut image = header(1, 8);
+            image.put_cell(
+                16,
+                8,
+                Cell::Data {
+                    ptr: shared,
+                    counted: true,
+                    borrow: None,
+                },
+            );
+            let list = alloc(&mut m, false, x.shared_payload, image, 1);
+            let descriptor = &x.p.units[0].tables.seal_descriptors[4];
+            let snapshot = m
+                .receipt_snapshot(descriptor.root_type.clone(), Val::Ptr(list))
+                .unwrap();
+            let mut seen = BTreeSet::new();
+            let mut roots = BTreeMap::new();
+            assert_eq!(
+                m.receipt_occurrences(&snapshot, descriptor, 0, &mut seen, &mut roots)
+                    .unwrap(),
+                Some(8)
+            );
+            assert_eq!(roots.get(&shared), Some(&1));
+            let saved = m.ledger.clone();
+            if mutation == 0 {
+                m.ledger.get_mut(shared.alloc).count = Some(Count::Finite(1));
+            } else {
+                m.ledger.get_mut(shared.alloc).layout = Some(x.payloads[1]);
+            }
+            let forged = m
+                .receipt_snapshot(descriptor.root_type.clone(), Val::Ptr(list))
+                .unwrap();
+            assert!(
+                m.receipt_occurrences(
+                    &forged,
+                    descriptor,
+                    0,
+                    &mut BTreeSet::new(),
+                    &mut BTreeMap::new(),
+                )
+                .is_err()
+            );
+            m.ledger = saved;
+            assert_eq!(
+                m.receipt_occurrences(
+                    &snapshot,
+                    descriptor,
+                    0,
+                    &mut BTreeSet::new(),
+                    &mut BTreeMap::new(),
+                )
+                .unwrap(),
+                Some(8)
+            );
+        }
+    }
 }

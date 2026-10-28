@@ -12,8 +12,14 @@ use hirsel_lir::stage::{InputIdentity, Ready};
 use hirsel_lir::{abi_types::*, ir::*, layout_types::*};
 use std::collections::BTreeSet;
 
-fn probe(target: &TargetSpec, malformed: u8, inventory: bool) -> Vec<u8> {
-    let (table, mut unit, abi) = super::seal_bits_tests::fixture(target, 4, 0);
+fn probe(target: &TargetSpec, malformed: u8, inventory: bool, shared: bool) -> Vec<u8> {
+    let (mut table, mut unit, abi) = super::seal_bits_tests::fixture(target, 4, 0);
+    if shared {
+        table.layouts[1].kind = LayoutKind::Shared {
+            payload: LayoutId(3),
+        };
+        table.layouts[1].scan = vec![ScanStep::Root { offset: 0 }];
+    }
     use hirsel_lir::sealed_payload::*;
     let allocation = SourceAnchorId(unit.tables.source_anchors.len() as u32);
     unit.tables.source_anchors.push(SourceAnchor {
@@ -114,7 +120,10 @@ fn probe(target: &TargetSpec, malformed: u8, inventory: bool) -> Vec<u8> {
     };
     let value = f.load(f.layout_shape(LayoutId(1)).unwrap(), input);
     f.define(ValueId(1), value).unwrap();
-    let read = if inventory {
+    let read = if shared {
+        let receipt = f.construction_snapshot(ValueId(1), 4, &[]).unwrap();
+        f.define1(ValueId(4), receipt)
+    } else if inventory {
         f.arena_inventory(
             ValueId(2),
             allocation,
@@ -183,7 +192,7 @@ fn receipt_construct_96_emits_original_heap_recipe_on_both_targets() {
         let symbol = hirsel_lir::glue::descriptor_index_symbol(&keys.key(LayoutId(1)));
         super::tests::execute(
             &target,
-            probe(&target, 0, false),
+            probe(&target, 0, false, false),
             "cranelift-receipt-construct-96",
             &HARNESS.replace("INDEX_SYMBOL", &symbol),
         );
@@ -192,7 +201,7 @@ fn receipt_construct_96_emits_original_heap_recipe_on_both_targets() {
 
 #[test]
 fn receipt_construct_96_refuses_an_unimplemented_source_recipe_before_imports() {
-    probe(&TargetSpec::x86_64_unknown_linux_gnu(), 1, false);
+    probe(&TargetSpec::x86_64_unknown_linux_gnu(), 1, false, false);
 }
 
 const INVENTORY_HARNESS: &str = r#"
@@ -221,10 +230,32 @@ fn native_inventory_96_emits_source_allocation_without_minting_receipts_or_repla
         let symbol = hirsel_lir::glue::descriptor_index_symbol(&keys.key(LayoutId(1)));
         super::tests::execute(
             &target,
-            probe(&target, 0, true),
+            probe(&target, 0, true, false),
             "cranelift-inventory-96",
             &INVENTORY_HARNESS.replace("INDEX_SYMBOL", &symbol),
         );
-        probe(&target, 1, true);
+        probe(&target, 1, true, false);
+    }
+}
+
+#[test]
+fn shared_snapshot_184_emits_atomic_kind_without_child_receipts_on_both_targets() {
+    for target in TargetSpec::executed() {
+        let (mut table, _, _) = super::seal_bits_tests::fixture(&target, 4, 0);
+        table.layouts[1].kind = LayoutKind::Shared {
+            payload: LayoutId(3),
+        };
+        table.layouts[1].scan = vec![ScanStep::Root { offset: 0 }];
+        let keys = hirsel_lir::LayoutKeys::new(&table);
+        let symbol = hirsel_lir::glue::descriptor_index_symbol(&keys.key(LayoutId(1)));
+        let harness = HARNESS
+            .replace("INDEX_SYMBOL", &symbol)
+            .replace("kind == 1", "kind == 4");
+        super::tests::execute(
+            &target,
+            probe(&target, 0, false, true),
+            "shared-snapshot-184",
+            &harness,
+        );
     }
 }

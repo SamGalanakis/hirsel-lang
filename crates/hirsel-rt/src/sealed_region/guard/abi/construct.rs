@@ -47,6 +47,42 @@ pub(super) unsafe fn extent(ctx: *mut TaskCtx, block: *mut Header) -> usize {
     usize::try_from(size).unwrap_or_else(|_| crate::fault("construction extent overflow"))
 }
 
+unsafe fn check_child(
+    ctx: *mut TaskCtx,
+    source: *const u8,
+    edge: &descriptors::Edge,
+    child: &Snapshot,
+) -> Result<(), &'static str> {
+    let block = unsafe {
+        source
+            .add(edge.offset)
+            .cast::<*mut Header>()
+            .read_unaligned()
+    };
+    if block.is_null()
+        || edge.shared != (child.record().origin() == Origin::Shared)
+        || (edge.shared
+            && (child.record().logical_charge() != Charge::Bytes(0)
+                || child.record().heap_charge() != Charge::Bytes(0)
+                || child.record().outgoing_heap_charge() != Charge::Bytes(0)
+                || child.children().len() != 0))
+        || edge
+            .payload
+            .is_some_and(|id| id != unsafe { (*block).index() })
+    {
+        return Err("construction receipt child differs from its typed holder");
+    }
+    let actual = if edge.shared {
+        block.addr().to_ne_bytes().to_vec()
+    } else {
+        unsafe { image(payload(block), extent(ctx, block)) }.to_vec()
+    };
+    if child.bytes() != Some(actual.as_slice()) {
+        return Err("construction receipt child describes another value");
+    }
+    Ok(())
+}
+
 pub(super) unsafe fn snapshot(
     ctx: *mut TaskCtx,
     index: u32,
@@ -63,28 +99,8 @@ pub(super) unsafe fn snapshot(
         crate::fault("construction receipt omits an original occurrence");
     }
     for (edge, child) in edges.iter().zip(children) {
-        let block = unsafe {
-            source
-                .add(edge.offset)
-                .cast::<*mut Header>()
-                .read_unaligned()
-        };
-        if block.is_null()
-            || edge.shared != (child.record().origin() == Origin::Shared)
-            || edge
-                .payload
-                .is_some_and(|id| id != unsafe { (*block).index() })
-        {
-            crate::fault("construction receipt child differs from its typed holder");
-        }
-        let actual = if edge.shared {
-            block.addr().to_ne_bytes().to_vec()
-        } else {
-            unsafe { image(payload(block), extent(ctx, block)) }.to_vec()
-        };
-        if child.bytes() != Some(actual.as_slice()) {
-            crate::fault("construction receipt child describes another value");
-        }
+        unsafe { check_child(ctx, source, edge, child) }
+            .unwrap_or_else(|message| crate::fault(message));
     }
     let logical = if origin == Origin::Inline || origin == Origin::Shared {
         Charge::Bytes(0)
@@ -120,7 +136,8 @@ pub(super) unsafe fn snapshot(
 /// # Safety
 /// `ctx`, `index` and initialized `value` describe this successful original
 /// construction. `kind` is proven from its source recipe: 0 inline, 1 heap,
-/// 2 static byte literal. Each of the `input_count` nonnull handles in `inputs`
+/// 2 static byte literal, 4 atomic Shared root. Each of the `input_count` nonnull handles in
+/// `inputs`
 /// is a live, same-run, paired inline snapshot in original field order. Plain
 /// scalar inputs may be omitted. All source storage stays live for this call.
 /// Descriptor extent, logical size and occurrence correspondence have passed C.
@@ -133,7 +150,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_receipt_construct(
     inputs: *mut *mut c_void,
     input_count: u64,
 ) -> *mut c_void {
-    if kind > 2 {
+    if !matches!(kind, 0..=2 | 4) {
         crate::fault("invalid construction receipt kind");
     }
     unsafe { construct(ctx, index, value, kind, inputs, input_count, None) }
@@ -166,7 +183,7 @@ unsafe fn construct(
     input_count: u64,
     arena: Option<*mut c_void>,
 ) -> *mut c_void {
-    if ctx.is_null() || (input_count != 0 && inputs.is_null()) || kind > 3 {
+    if ctx.is_null() || (input_count != 0 && inputs.is_null()) || kind > 4 {
         crate::fault("invalid construction receipt arguments");
     }
     let run = unsafe { metadata_run(ctx) };
@@ -192,7 +209,28 @@ unsafe fn construct(
     if layout.flags & crate::LAYOUT_DYNAMIC != 0 || (layout.size != 0 && value.is_null()) {
         crate::fault("invalid construction root image");
     }
-    if kind != 0 {
+    if kind == 4 {
+        let edges = unsafe {
+            descriptors::edges(ctx, index, value.cast_mut().cast(), layout.size as usize)
+        }
+        .unwrap_or_else(|_| crate::fault("invalid Shared construction coverage"));
+        let [edge] = edges.as_slice() else {
+            crate::fault("Shared construction requires one root")
+        };
+        if edge.offset != 0 || !edge.shared || edge.slice || !children.is_empty() {
+            crate::fault("invalid Shared construction boundary");
+        }
+        let node = semantic::snapshot(
+            run,
+            Origin::Shared,
+            Charge::Bytes(0),
+            unsafe { image(value.cast(), size_of::<usize>()) },
+            align_of::<usize>(),
+            &[],
+        )
+        .unwrap_or_else(|_| crate::fault("invalid Shared construction receipt"));
+        children.push(node);
+    } else if kind != 0 {
         let edges = unsafe {
             descriptors::edges(ctx, index, value.cast_mut().cast(), layout.size as usize)
         }
@@ -373,5 +411,131 @@ mod tests {
                 crate::release::hirsel_rt_v2_release(ctx, block, sequence.0 + 2, ptr::null(), 0, 0);
             }
         });
+    }
+}
+
+#[cfg(all(test, feature = "diagnostic"))]
+mod shared_tests {
+    use super::*;
+    use hirsel_layout::layout::{LayoutBuilder, Owners};
+    use hirsel_lir::layout_types::{LayoutKind, TargetSpec};
+    use hirsel_types::{BuiltinType, GenericArgument, Primitive, testing::Types};
+
+    #[test]
+    fn atomic_shared_184_snapshots_identity_without_acquiring_storage_credit() {
+        fixture(|ctx, index, payload_index| unsafe {
+            let block =
+                crate::alloc::hirsel_rt_v2_alloc(ctx, payload_index, 8, 8, crate::DOMAIN_HEAP, 0);
+            payload(block).cast::<u64>().write(73);
+            assert_eq!(crate::roots::count(&*ctx, block), 1);
+            let root = Snapshot::from_raw(hirsel_rt_v2_receipt_construct(
+                ctx,
+                index,
+                ptr::from_ref(&block).cast(),
+                4,
+                ptr::null_mut(),
+                0,
+            ));
+            assert_eq!(root.record().origin(), Origin::Inline);
+            assert_eq!(root.record().heap_charge(), Charge::Bytes(0));
+            let nodes: Vec<_> = root.children().collect();
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0].record().origin(), Origin::Shared);
+            assert_eq!(nodes[0].record().logical_charge(), Charge::Bytes(0));
+            assert_eq!(
+                nodes[0].bytes(),
+                Some(block.addr().to_ne_bytes().as_slice())
+            );
+            drop(root);
+            assert_eq!(crate::roots::count(&*ctx, block), 1);
+            crate::roots::hirsel_rt_v2_root_release(ctx, block);
+        });
+    }
+
+    fn fixture(test: impl FnOnce(*mut TaskCtx, u32, u32)) {
+        let target = TargetSpec::executed().into_iter().next().unwrap();
+        let mut types = Types::default();
+        let integer = types.p(Primitive::U64);
+        let shared = types.builtin(BuiltinType::Shared, vec![GenericArgument::Type(integer)]);
+        let owners = Owners::default();
+        let mut builder = LayoutBuilder::new(&target, &owners);
+        let shared_id = builder.layout(&types.store, shared).unwrap();
+        let table = builder.finish();
+        let LayoutKind::Shared { payload } = table.layouts[shared_id.0 as usize].kind else {
+            panic!("Shared")
+        };
+        crate::sealed_region::planner::tests::compiler::native(&table, |ctx| {
+            test(ctx, shared_id.0 + 2, payload.0 + 2);
+        });
+    }
+
+    fn refusal(mutation: u8) {
+        fixture(|ctx, index, payload_index| unsafe {
+            let block =
+                crate::alloc::hirsel_rt_v2_alloc(ctx, payload_index, 8, 8, crate::DOMAIN_HEAP, 0);
+            payload(block).cast::<u64>().write(73);
+            let source = ptr::from_ref(&block).cast::<u8>();
+            let mut edges = descriptors::edges(ctx, index, source.cast_mut(), 8).unwrap();
+            let run = metadata_run(ctx);
+            let good = semantic::snapshot(
+                run,
+                Origin::Shared,
+                Charge::Bytes(0),
+                &block.addr().to_ne_bytes(),
+                8,
+                &[],
+            )
+            .unwrap();
+            assert!(check_child(ctx, source, &edges[0], &good).is_ok());
+            let address = block.addr() + if mutation == 0 { 8 } else { 0 };
+            let origin = if mutation == 1 {
+                Origin::Heap
+            } else {
+                Origin::Shared
+            };
+            let node = semantic::snapshot(
+                run,
+                origin,
+                Charge::Bytes(0),
+                &address.to_ne_bytes(),
+                8,
+                &[],
+            )
+            .unwrap();
+            if mutation == 2 {
+                edges[0].payload = Some(payload_index + 1);
+            }
+            assert!(check_child(ctx, source, &edges[0], &node).is_err());
+            crate::roots::hirsel_rt_v2_root_release(ctx, block);
+        });
+    }
+
+    #[test]
+    fn atomic_shared_184_refuses_forged_snapshot_root() {
+        refusal(0);
+    }
+
+    #[test]
+    fn atomic_shared_184_refuses_nonshared_origin() {
+        refusal(1);
+    }
+
+    #[test]
+    fn atomic_shared_184_refuses_descriptor_edge_mismatch() {
+        refusal(2);
+    }
+
+    #[test]
+    fn atomic_shared_184_refuses_nonzero_evacuation_charge() {
+        let run = MetadataRun::new();
+        for charge in [Charge::Bytes(1), Charge::Overflow] {
+            assert!(matches!(
+                semantic::snapshot(run, Origin::Shared, charge, &[0; 8], 8, &[]),
+                Err(semantic::Error::InvalidBoundary)
+            ));
+        }
+        assert!(
+            semantic::snapshot(run, Origin::Shared, Charge::Bytes(0), &[0; 8], 8, &[],).is_ok()
+        );
     }
 }
