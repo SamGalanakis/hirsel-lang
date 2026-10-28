@@ -761,6 +761,25 @@ fn decode(
         {
             return Err(Error::InvalidTask(child));
         }
+        if let Row::TaskResultMoved {
+            task,
+            frame,
+            child,
+            source_frame,
+            ..
+        } = row
+        {
+            for (issuer, expected_frame) in [(task, frame), (child, source_frame)] {
+                if stacks.get(&issuer).is_none_or(|frames| {
+                    !frames
+                        .iter()
+                        .rev()
+                        .any(|active| active.id == expected_frame)
+                }) {
+                    return Err(Error::InvalidFrame(expected_frame));
+                }
+            }
+        }
         if results.observe(
             row,
             stacks
