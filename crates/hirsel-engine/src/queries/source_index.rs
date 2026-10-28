@@ -249,7 +249,8 @@ impl QueryEngine {
             }
             w.add(environment.compiler_version.capacity());
         });
-        weight.tree::<(DefPath, QueryKind), ContentHash>(
+        // into_source_index bulk-collects these selected keys in sorted order.
+        weight.bulk_tree::<(DefPath, QueryKind), ContentHash>(
             self.syntax_keys
                 .keys()
                 .filter(|(_, kind)| *kind == QueryKind::Signature)

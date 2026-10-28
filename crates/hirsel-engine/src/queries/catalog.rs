@@ -186,24 +186,31 @@ impl Clone for Catalog {
 }
 impl Catalog {
     pub(super) fn retained_payload_bytes(&self) -> u64 {
-        self.payload_bytes(true)
+        self.payload_bytes(true, false)
     }
-    fn payload_bytes(&self, cached_facts: bool) -> u64 {
+    fn payload_bytes(&self, cached_facts: bool, packed: bool) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
         let facts = |weight: &mut crate::NativeMetadataWeight, facts: &SourceFacts| {
             weight.flat_vec(&facts.comptime);
             weight.flat_vec(&facts.associations);
             weight.vec(&facts.arms, |w, (name, _, _)| w.add(name.capacity()));
         };
-        weight.map(&self.files, |w, _, context| {
-            w.add(context.package.name.capacity());
-            w.add(context.package.version.capacity());
-            w.vec(&context.modules, |w, module| w.add(module.capacity()));
-        });
-        weight.map(&self.candidates, |w, path, candidates| {
-            w.path(path);
-            w.vec(candidates, |w, candidate| facts(w, &candidate.facts));
-        });
+        if packed {
+            weight.bulk_tree::<FileId, FileContext>(self.files.len());
+            weight.bulk_tree::<DefPath, Vec<Candidate>>(self.candidates.len());
+        } else {
+            weight.tree::<FileId, FileContext>(self.files.len());
+            weight.tree::<DefPath, Vec<Candidate>>(self.candidates.len());
+        }
+        for context in self.files.values() {
+            weight.add(context.package.name.capacity());
+            weight.add(context.package.version.capacity());
+            weight.vec(&context.modules, |w, module| w.add(module.capacity()));
+        }
+        for (path, candidates) in &self.candidates {
+            weight.path(path);
+            weight.vec(candidates, |w, candidate| facts(w, &candidate.facts));
+        }
         if cached_facts {
             weight.map(
                 &self.facts_cache.read().unwrap_or_else(|e| e.into_inner()),
@@ -242,6 +249,10 @@ impl Catalog {
             candidates.sort_by_key(|c| c.occurrence);
             carry.candidates.insert(path.clone(), candidates);
         }
+        // Source carry is immutable until restoration. Rebuild sorted nodes
+        // with alloc's bulk collector so its physical bound uses full nodes.
+        carry.files = carry.files.into_iter().collect();
+        carry.candidates = carry.candidates.into_iter().collect();
         carry
     }
 
@@ -253,13 +264,15 @@ impl Catalog {
         indexed: &BTreeMap<FileId, (FileContext, QueryEnvironment)>,
     ) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
-        weight.add(self.payload_bytes(false) as usize);
+        weight.add(self.payload_bytes(false, true) as usize);
         weight.map(indexed, |w, _, (context, _)| {
             w.add(context.package.name.capacity());
             w.add(context.package.version.capacity());
             w.vec(&context.modules, |w, module| w.add(module.capacity()));
         });
-        weight.map(items, |w, path, syntaxes| {
+        weight.bulk_tree::<DefPath, Vec<Candidate>>(items.len());
+        for (path, syntaxes) in items {
+            let w = &mut weight;
             w.path(path);
             // Existing candidate vectors are charged above; with_capacity in
             // source_carry allocates exactly the combined candidate count.
@@ -309,7 +322,7 @@ impl Catalog {
                     }
                 }
             }
-        });
+        }
         weight.bytes()
     }
 
