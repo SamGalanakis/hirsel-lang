@@ -551,6 +551,7 @@ impl ObjectTaskSnapshot for LinkTasks {
             {
                 return Err("Link producer received a different settled dependency scope".into());
             }
+            hirsel_intern::memory::checkpoint("native workers complete");
             let end = settled.len() - usize::from(execution_query.is_some());
             let reads = &settled[end - plan.ready.len()..end];
             let native = SettledProducts::new(self.root.native.snapshot.clone(), reads)?;

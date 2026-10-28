@@ -2144,9 +2144,24 @@ pub(super) fn install(
             "compiler query inventory exceeds its planned admission".into(),
         ));
     }
+    let native_budget = runtime.bytes();
     let mut runtime =
         AdmittedRuntime::with_query_capacity(config.jobs, runtime, errors, plan.query_capacity)
             .map_err(ToolError::Io)?;
+    if (native.is_some() || native_artifacts.is_some()) && hirsel_intern::timings::enabled() {
+        use hirsel_intern::timings::{Count, count_peak};
+        let workers = runtime.stats().workers as u64;
+        count_peak(Count::NativeBudgetBytes, native_budget);
+        count_peak(Count::NativeWorkers, workers);
+        count_peak(
+            Count::NativeStackBytes,
+            if workers > 1 {
+                workers * hirsel_intern::jobs::COMPILER_STACK_BYTES as u64
+            } else {
+                0
+            },
+        );
+    }
     runtime
         .register(hirsel_engine::FRONT_BODY_KIND, front.factory())
         .map_err(registration)?;

@@ -466,6 +466,28 @@ impl NativeProducts for DemandProducts {
     }
 
     fn ready(&mut self, key: &InstanceAddress) -> Result<Arc<ReadyProduct>, String> {
+        if let Some(selected) = self.selected.get(&key.address(READY_KIND).0) {
+            let operations = self
+                .snapshot
+                .instances
+                .operations(key, &self.snapshot.environment())?;
+            let current = self
+                .local
+                .queries
+                .lookup(
+                    key,
+                    selected.action,
+                    &NativeEnvironment {
+                        operations: &operations,
+                        ..self.snapshot.environment()
+                    },
+                )
+                .ok_or("selected Ready dependency lost current C admission")?;
+            if current.product != *selected {
+                return Err("selected Ready dependency changed".into());
+            }
+            return Ok(current);
+        }
         self.local.guard = self.snapshot.guard_selection()?;
         let product = self.local.ready(
             &self.snapshot.instances,

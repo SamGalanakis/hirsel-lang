@@ -241,6 +241,7 @@ impl CompilationTasks {
             };
         }
         let completed = self.instances.completed_instances(discovery)?;
+        hirsel_intern::memory::checkpoint("global Value complete");
         let guard_bytes = if completed
             .iter()
             .any(|(_, output)| output.seal_demand.has_seal())
@@ -503,6 +504,9 @@ impl CompilationTasks {
     }
 
     fn publish(&self, outputs: Vec<ProductRef>) -> Result<ProductRef, String> {
+        if !self.emit_only {
+            hirsel_intern::memory::checkpoint("link complete");
+        }
         let bytes = serde_json::to_vec(
             &outputs
                 .iter()

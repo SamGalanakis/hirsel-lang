@@ -16,6 +16,34 @@ pub const UNIT_SUMMARY_DOMAIN: Domain = Domain {
     schema: 1,
 };
 
+static VALUE_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+struct ValueMemory(u64);
+impl ValueMemory {
+    fn new(value: &hirsel_lir::LirUnit<Value>) -> Self {
+        use std::sync::atomic::Ordering::Relaxed;
+        let bytes = if hirsel_intern::timings::enabled() {
+            value.retained_bytes() as u64
+        } else {
+            0
+        };
+        if bytes != 0 {
+            let active = VALUE_BYTES.fetch_add(bytes, Relaxed) + bytes;
+            hirsel_intern::timings::count_peak(
+                hirsel_intern::timings::Count::NativeValueBytes,
+                active,
+            );
+        }
+        Self(bytes)
+    }
+}
+impl Drop for ValueMemory {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            VALUE_BYTES.fetch_sub(self.0, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
 struct SelectedContents(Arc<dyn ResultStore>);
 impl Contents for SelectedContents {
     fn get_content(&self, reference: Reference) -> Option<hirsel_engine::store::Bytes> {
@@ -391,6 +419,7 @@ impl ReadyQueries {
             .preflight()
             .map_err(|errors| format!("Ready input table: {errors:?}"))?;
         self.counts.transformations += 1;
+        let value_memory = ValueMemory::new(&miss.value);
         let ready = lower_local_raw(
             miss.value,
             miss.options,
@@ -400,6 +429,7 @@ impl ReadyQueries {
             &context,
         )
         .map_err(|e| e.to_string())?;
+        drop(value_memory);
         self.counts.validations += 1;
         let (checked, output) = {
             let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::LirValidate);

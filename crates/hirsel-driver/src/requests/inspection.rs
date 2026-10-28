@@ -414,8 +414,17 @@ impl Drop for GraphMeter {
 /// workers have joined; the callback never reenters or blocks producer work.
 pub(super) struct MeterOwner(pub Arc<GraphMeter>);
 impl RuntimeObserver for MeterOwner {
-    fn record(&self, _: RuntimeEvent) {
+    fn record(&self, event: RuntimeEvent) {
         let _ = &self.0;
+        if hirsel_intern::timings::enabled()
+            && let RuntimeEvent::Admit { query, charged, .. } = event
+            && matches!(query.kind >> 24, 0x4e | 0x4f)
+        {
+            hirsel_intern::timings::count_peak(
+                hirsel_intern::timings::Count::NativeActiveBytes,
+                charged,
+            );
+        }
     }
 }
 fn unavailable() -> ToolError {

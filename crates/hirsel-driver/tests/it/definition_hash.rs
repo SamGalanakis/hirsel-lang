@@ -157,7 +157,12 @@ fn the_hash_is_a_pinned_function_of_content() {
         // 2a938017 bumped TIR 10 -> 11; 4a539389 bumped it to 12 for invocation proofs.
         // b664ed74 and 4aecabbc added private uniqueness headers in TIR 14/15;
         // ca2c887f moved TIR to 16. Those versions enter this hash preimage.
-        const PINNED: &str = "def1369726952ad9d50dfbeb2db255baba2216fa95aa5fe91c89f4592bf85b8f";
+        // cefa8ea6 added the third, nonretaining UniqueSummary list to the
+        // content encoding without changing TIR 16. Removing that list from
+        // both summaries and restoring the scalar result Root reproduces
+        // def13697. Restoring Root alone reproduces 357dddcc; 589e59d4
+        // deliberately removed that inert scalar proof under MODE-2.
+        const PINNED: &str = "f2eef0b90be6b80e06240bf2e0438fc2b963c53f65db5da1a7955d1d53daadaf";
         let hash = hashes("fn f(x: u64) -> u64 { x + 1u64 }\n", &["f"])[0];
         let text: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
         assert!(

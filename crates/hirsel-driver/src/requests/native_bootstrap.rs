@@ -291,6 +291,7 @@ impl NativeBootstrap {
             .outcome(product)
             .ok_or("native source root is unavailable")?
             .products;
+        hirsel_intern::memory::checkpoint("front complete");
         let (mut plan, admission) = self
             .pending
             .lock()
