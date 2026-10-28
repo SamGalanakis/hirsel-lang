@@ -25,7 +25,9 @@ impl Staged {
     }
     pub(super) fn retained_bytes(&self) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
-        weight.tree::<DefId, crate::comptime::StagedConstant>(self.declarations.len());
+        if !self.declarations.is_empty() {
+            weight.tree::<DefId, crate::comptime::StagedConstant>(self.declarations.len());
+        }
         for row in self.declarations.values() {
             weight.path(&row.owner);
             weight.flat_vec(&row.inputs);
@@ -125,5 +127,35 @@ impl FrontLowerQueries {
             );
         }
         Ok(query)
+    }
+}
+
+// Preserve request order and repetitions. A semantic read set cannot recover
+// which concrete size instances the interpreter actually selected.
+pub(super) type Selections = Vec<(DefId, Vec<u64>)>;
+pub(super) fn selection_bytes(rows: &Selections) -> u64 {
+    let mut weight = crate::NativeMetadataWeight::default();
+    weight.vec(rows, |weight, (_, arguments)| weight.flat_vec(arguments));
+    weight.bytes()
+}
+impl FrontLowerQueries {
+    pub(super) async fn restore_selections(
+        &self,
+        selections: &Selections,
+        reads: &QueryReads,
+    ) -> Result<(), Reference> {
+        for (declaration, arguments) in selections {
+            let id = self
+                .staged_query(declaration.path(), arguments)
+                .map_err(|_| self.errors.resource)?;
+            let selected = reads.read_consuming(id).await;
+            let outcome = self
+                .selected(id, selected)
+                .ok_or_else(|| selected.err().unwrap_or(self.errors.protocol))?;
+            if !matches!(outcome.result, Ok(Value::Constant(_))) {
+                return Err(selected.err().unwrap_or(self.errors.protocol));
+            }
+        }
+        Ok(())
     }
 }

@@ -10,6 +10,7 @@ pub(super) type Descriptor = (
     Reads,
     DepthEvidence<Span>,
     bool,
+    staged::Selections,
 );
 #[derive(Clone)]
 pub(super) struct Archive {
@@ -31,12 +32,13 @@ impl Archive {
                 return None;
             }
             let bytes = store.get_content(self.reference)?;
-            let (_, _, reads, _, _): (
+            let (_, _, reads, _, _, _): (
                 Materialized,
                 Vec<(hirsel_syntax::ExprId, Materialized)>,
                 Reads,
                 DepthEvidence<Span>,
                 bool,
+                staged::Selections,
             ) = records.decode(anchors, &bytes)?;
             return (reads.len() == self.len && self.dependencies == 0).then_some(reads);
         }
@@ -133,6 +135,7 @@ mod tests {
             expected.clone(),
             depth,
             false,
+            Vec::new(),
         );
         let (bytes, working) = records
             .encode_with_decode_bytes(&anchors, &descriptor)
@@ -197,6 +200,7 @@ mod tests {
             }))),
             reads: expected.clone(),
             reads_decode_bytes: bound,
+            selections: Vec::new(),
             depth: descriptor.6.clone().into(),
             executed: false,
             execution: None,
@@ -281,7 +285,7 @@ mod tests {
         );
         let depth = DepthEvidence::leaf(32);
         let bytes = constants
-            .encode(&records, &anchors, &reads, &depth, false)
+            .encode(&records, &anchors, &reads, &depth, false, &Vec::new())
             .unwrap();
         let reference = store.put_content(CONSTANT_DESCRIPTOR, &bytes).unwrap();
         let bound = constants.working_bytes();
@@ -289,6 +293,7 @@ mod tests {
             result: Ok(Value::Constant(Box::new(constants))),
             reads: reads.clone(),
             reads_decode_bytes: 0,
+            selections: Vec::new(),
             depth: depth.into(),
             executed: false,
             execution: None,

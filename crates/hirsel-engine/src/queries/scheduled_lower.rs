@@ -44,7 +44,7 @@ const FAILURE: Domain = Domain {
 };
 const LOWER_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0006,
-    schema: 5,
+    schema: 6,
 };
 // Ordinary immutable substitution bytes, owned by the selected provider like
 // the original body archive. Inspectors decode under their working allowance.
@@ -54,7 +54,7 @@ const LOWER_MATERIALIZED: Domain = Domain {
 };
 const CONSTANT_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0007,
-    schema: 3,
+    schema: 4,
 };
 const LOWER_VERIFICATION: Domain = Domain {
     kind: 0x4600_0033,
@@ -161,6 +161,7 @@ struct Outcome {
     result: Result<Value, QueryError>,
     reads: Reads,
     reads_decode_bytes: u64,
+    selections: staged::Selections,
     depth: depth::Depth,
     executed: bool,
     execution: Option<hirsel_validate::ExecutionReceipt>,
@@ -231,6 +232,7 @@ impl Outcome {
             weight.add(bytes);
         }
         weight.add(self.depth.retained_bytes());
+        weight.add(staged::selection_bytes(&self.selections).try_into().ok()?);
         match &self.result {
             Ok(Value::Lower(lower)) => {
                 weight.add(size_of::<LowerProduct>() + 2 * size_of::<usize>());
@@ -1011,7 +1013,7 @@ impl FrontLowerQueries {
             true
         };
         if can_restore {
-            if let Some(product) = self.load_carry(id, &path, key) {
+            if let Some(product) = self.load_carry(id, &path, key, &reads).await {
                 match product {
                     // The compact descriptor can outlive V's independently
                     // evictable content. A current V miss needs the ordinary
@@ -1022,7 +1024,7 @@ impl FrontLowerQueries {
                     product => return product,
                 }
             }
-            if let Some(product) = self.load_stored(id, &path, key) {
+            if let Some(product) = self.load_stored(id, &path, key, &reads).await {
                 return product;
             }
         }
@@ -1033,6 +1035,7 @@ impl FrontLowerQueries {
             owner: self.clone(),
             reads,
             observed: Rc::new(RefCell::new(ReadsBuilder::new())),
+            selections: Rc::new(RefCell::new(Vec::new())),
             refusal: Rc::new(Cell::new(None)),
             depth: Rc::new(RefCell::new(DepthEvidence::leaf(dependency_limit(
                 self.limits.call_depth,
@@ -1079,6 +1082,7 @@ impl FrontLowerQueries {
             .as_ref()
             .ok()
             .and_then(|_| source.evidence.borrow().finish(&observed));
+        let selections = std::mem::take(&mut *source.selections.borrow_mut());
         let mut reads_decode_bytes = 0;
         let bytes = match &mut result {
             Ok(Value::Lower(lower)) => {
@@ -1100,6 +1104,11 @@ impl FrontLowerQueries {
                     weight.add(bytes);
                 }
                 weight.add(size_of_val(&*depth.first));
+                weight.add(
+                    staged::selection_bytes(&selections)
+                        .try_into()
+                        .map_err(|_| self.errors.resource)?,
+                );
                 let (bytes, working) = self
                     .records
                     .encode_with_decode_bytes(
@@ -1113,6 +1122,7 @@ impl FrontLowerQueries {
                             &observed,
                             &depth,
                             executed,
+                            &selections,
                         ),
                     )
                     .ok_or(self.errors.resource)?;
@@ -1123,9 +1133,14 @@ impl FrontLowerQueries {
                     .ok_or(self.errors.resource)?;
                 Some(bytes)
             }
-            Ok(Value::Constant(value)) => {
-                value.encode(&self.records, &self.anchors, &observed, &depth, executed)
-            }
+            Ok(Value::Constant(value)) => value.encode(
+                &self.records,
+                &self.anchors,
+                &observed,
+                &depth,
+                executed,
+                &selections,
+            ),
             Err(error) => self
                 .records
                 .encode(&self.anchors, &(&path, error, &observed, &depth, executed)),
@@ -1149,6 +1164,7 @@ impl FrontLowerQueries {
             result,
             reads: observed,
             reads_decode_bytes,
+            selections,
             depth: depth.into(),
             executed,
             execution,
@@ -1567,12 +1583,37 @@ struct Source {
     owner: Arc<FrontLowerQueries>,
     reads: QueryReads,
     observed: Rc<RefCell<ReadsBuilder>>,
+    selections: Rc<RefCell<staged::Selections>>,
     refusal: Rc<Cell<Option<Reference>>>,
     depth: Rc<RefCell<DepthEvidence<Span>>>,
     framed: bool,
     evidence: Rc<RefCell<Evidence>>,
 }
 impl Source {
+    fn select(&self, rows: &[(DefId, Vec<u64>)]) -> Result<(), QueryError> {
+        let mut selections = self.selections.borrow_mut();
+        let count = selections
+            .len()
+            .checked_add(rows.len())
+            .ok_or_else(|| self.refused(self.owner.errors.resource))?;
+        let arguments = selections
+            .iter()
+            .chain(rows)
+            .try_fold(0u64, |sum, (_, values)| {
+                sum.checked_add(size_of_val(values.as_slice()) as u64)
+            })
+            .ok_or_else(|| self.refused(self.owner.errors.resource))?;
+        let bytes = (count as u64)
+            .checked_mul(size_of::<(DefId, Vec<u64>)>() as u64)
+            .and_then(|bytes| bytes.checked_add(arguments))
+            .and_then(|bytes| bytes.checked_mul(2))
+            .ok_or_else(|| self.refused(self.owner.errors.resource))?;
+        if bytes > self.owner.weight.scratch {
+            return Err(self.refused(self.owner.errors.resource));
+        }
+        selections.extend_from_slice(rows);
+        Ok(())
+    }
     fn refused(&self, reference: Reference) -> QueryError {
         if self.refusal.get().is_none() {
             self.refusal.set(Some(reference));
@@ -1644,6 +1685,7 @@ impl Source {
                 .reads(&self.owner)
                 .ok_or_else(|| self.refused(self.owner.errors.resource))?,
         );
+        self.select(&outcome.selections)?;
         self.evidence
             .borrow_mut()
             .dependency(outcome.executed, outcome.execution.as_ref());
@@ -1737,6 +1779,7 @@ impl s1::AsyncDependencySource for Source {
         }
         let result = async {
             let id = self.owner.staged_query(path, arguments)?;
+            self.select(&[(DefId::intern(path), arguments.to_vec())])?;
             let declaration = self
                 .owner
                 .staged
@@ -2125,6 +2168,7 @@ mod retention_tests {
             )])
             .unwrap(),
             reads_decode_bytes: 0,
+            selections: Vec::new(),
             depth: DepthEvidence::leaf(32).into(),
             executed: false,
             execution: None,

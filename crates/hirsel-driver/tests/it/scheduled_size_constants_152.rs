@@ -4,10 +4,26 @@ use std::sync::Arc;
 
 #[test]
 fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_restore() {
+    check_size_instances(false);
+}
+
+#[test]
+fn restored_parent_replays_nested_selections_without_selecting_dead_branch_instances() {
+    check_size_instances(true);
+}
+
+fn check_size_instances(nested: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
         let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,4]=[1,2,3,4];scaled(xs)}\n";
+        let source = if nested {
+            format!(
+                "{source}const C:u64=comptime {{if false {{let xs:Inline[u8,3]=[1,2,3];scaled(xs)}} else {{B+A+B}}}}\n"
+            )
+        } else {
+            source.to_owned()
+        };
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
         std::fs::write(&manifest,r#"{"schema":1,"package":{"name":"stage","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[]}"#).unwrap();
         for jobs in [1, 2, 8] {
@@ -112,7 +128,12 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
                 runtime
                     .register_local(FRONT_EVALUATE_KIND, lower.factory())
                     .unwrap();
-                let paths = [b, a, b];
+                let paths = if nested {
+                    let c = definitions.iter().find(|path| path.0.name == "C").unwrap();
+                    [c, c, c]
+                } else {
+                    [b, a, b]
+                };
                 let roots: Vec<_> = paths
                     .iter()
                     .map(|path| lower.evaluate_query(path).unwrap())
@@ -129,7 +150,8 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
                     products[0], products[2],
                     "duplicate roots select one immutable product"
                 );
-                for (path, expected) in paths.iter().zip([16, 4, 16]) {
+                let expected = if nested { [36, 36, 36] } else { [16, 4, 16] };
+                for (path, expected) in paths.iter().zip(expected) {
                     let value = lower.settled_constant(path, &[]).unwrap();
                     assert_eq!(
                         value.root.kind,
@@ -158,6 +180,13 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
                     hidden
                 };
                 if warm {
+                    for path in paths {
+                        assert_eq!(
+                            lower.work(path).initializers,
+                            0,
+                            "the restored root does not execute"
+                        );
+                    }
                     assert_eq!(
                         lower.work(a).initializers,
                         0,

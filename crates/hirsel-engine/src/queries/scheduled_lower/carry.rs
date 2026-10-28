@@ -314,11 +314,12 @@ impl FrontLowerQueries {
     }
     /// The carried outcome of this query, adopted when its text and reads are
     /// current. Its content returns to this graph's store before publication.
-    pub(super) fn load_carry(
+    pub(super) async fn load_carry(
         &self,
         id: QueryId,
         path: &DefPath,
         key: &EntryKey,
+        query_reads: &QueryReads,
     ) -> Option<Result<ProductRef, Reference>> {
         let carry = self.carry()?;
         let rows = carry.rows.lock().unwrap_or_else(|e| e.into_inner());
@@ -333,6 +334,8 @@ impl FrontLowerQueries {
             });
         if row.text != key.1
             || row.descriptor.len() as u64 > self.weight.scratch
+            || row.reads_decode_bytes > self.weight.scratch
+            || row.constant_decode_bytes > self.weight.scratch
             || (!clean
                 && row
                     .reads
@@ -346,7 +349,17 @@ impl FrontLowerQueries {
         }
         let result = if id.kind == FRONT_LOWER_KIND {
             let retained = row.lower.clone()?;
-            let (definition, body, diagnostics, dependencies, materialized, reads, depth, executed): (
+            let (
+                definition,
+                body,
+                diagnostics,
+                dependencies,
+                materialized,
+                reads,
+                depth,
+                executed,
+                selections,
+            ): (
                 DefId,
                 Reference,
                 Vec<Diagnostic>,
@@ -355,6 +368,7 @@ impl FrontLowerQueries {
                 Reads,
                 DepthEvidence<Span>,
                 bool,
+                staged::Selections,
             ) = self.records.decode(&self.anchors, &row.descriptor)?;
             let lower = LowerProduct {
                 definition,
@@ -368,23 +382,36 @@ impl FrontLowerQueries {
                 definition_decode_layout: retained.definition_decode_layout,
                 constant_selection_bytes: retained.constant_selection_bytes,
             };
-            (Value::Lower(Box::new(lower)), reads, depth, executed)
+            (
+                Value::Lower(Box::new(lower)),
+                reads,
+                depth,
+                executed,
+                selections,
+            )
         } else {
             if row.constant_decode_bytes > self.weight.scratch {
                 return None;
             }
-            let (value, substitutions, reads, depth, executed): (
+            let (value, substitutions, reads, depth, executed, selections): (
                 Materialized,
                 Vec<(hirsel_syntax::ExprId, Materialized)>,
                 Reads,
                 DepthEvidence<Span>,
                 bool,
+                staged::Selections,
             ) = self.records.decode(&self.anchors, &row.descriptor)?;
             let mut constants = Constants::new(value, substitutions);
             constants.set_working_bytes(row.constant_decode_bytes);
-            (Value::Constant(Box::new(constants)), reads, depth, executed)
+            (
+                Value::Constant(Box::new(constants)),
+                reads,
+                depth,
+                executed,
+                selections,
+            )
         };
-        let (value, reads, depth, executed) = result;
+        let (value, reads, depth, executed, selections) = result;
         if reads.len() != row.reads.len() {
             return None;
         }
@@ -397,6 +424,9 @@ impl FrontLowerQueries {
         } else {
             CONSTANT_DESCRIPTOR
         };
+        if let Err(error) = self.restore_selections(&selections, query_reads).await {
+            return Some(Err(error));
+        }
         let result = self.publish(
             id,
             key,
@@ -406,6 +436,7 @@ impl FrontLowerQueries {
                 result: Ok(value),
                 reads,
                 reads_decode_bytes,
+                selections,
                 depth: depth.into(),
                 executed,
                 execution,

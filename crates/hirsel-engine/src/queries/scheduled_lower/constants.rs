@@ -50,17 +50,19 @@ impl Constants {
                     return None;
                 }
                 let bytes = store.get_content(*record)?;
-                let (value, substitutions, _, _, _): (
+                let (value, substitutions, _, _, _, _): (
                     Materialized,
                     Vec<(hirsel_syntax::ExprId, Materialized)>,
                     Reads,
                     DepthEvidence<Span>,
                     bool,
+                    staged::Selections,
                 ) = records.decode(anchors, &bytes)?;
                 Some((value, substitutions))
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn encode(
         &mut self,
         records: &crate::NativeRecords,
@@ -68,12 +70,15 @@ impl Constants {
         reads: &Reads,
         depth: &DepthEvidence<Span>,
         executed: bool,
+        selections: &staged::Selections,
     ) -> Option<Vec<u8>> {
         let Data::Decoded(value, substitutions) = &self.data else {
             return None;
         };
-        let (bytes, record_working) = records
-            .encode_with_decode_bytes(anchors, &(value, substitutions, reads, depth, executed))?;
+        let (bytes, record_working) = records.encode_with_decode_bytes(
+            anchors,
+            &(value, substitutions, reads, depth, executed, selections),
+        )?;
         let metadata = reads
             .allocations()
             .map(|(_, bytes)| bytes as u64)
@@ -81,6 +86,7 @@ impl Constants {
         self.decode_bytes = self
             .data_bytes
             .checked_add(metadata)?
+            .checked_add(staged::selection_bytes(selections))?
             .checked_mul(2)?
             .checked_add(record_working)?;
         Some(bytes)
@@ -148,6 +154,7 @@ mod tests {
                 &Reads::default(),
                 &DepthEvidence::leaf(32),
                 false,
+                &Vec::new(),
             )
             .unwrap();
         let record = store.put_content(CONSTANT_DESCRIPTOR, &bytes).unwrap();

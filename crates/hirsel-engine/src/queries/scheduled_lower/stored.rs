@@ -68,11 +68,12 @@ impl FrontLowerQueries {
         debug_assert!(matches!(id.kind, FRONT_LOWER_KIND | FRONT_EVALUATE_KIND));
     }
 
-    pub(super) fn load_stored(
+    pub(super) async fn load_stored(
         &self,
         id: QueryId,
         path: &DefPath,
         key: &EntryKey,
+        query_reads: &QueryReads,
     ) -> Option<Result<ProductRef, Reference>> {
         if !self.store.query_cache_enabled() {
             return None;
@@ -96,13 +97,22 @@ impl FrontLowerQueries {
             return None;
         }
         let descriptor = self.store.get_content(record.descriptor)?;
-        let (value, reads, depth, executed) = if id.kind == FRONT_LOWER_KIND {
+        let (value, reads, depth, executed, selections) = if id.kind == FRONT_LOWER_KIND {
             let (layout, constant_selection_bytes) = record.lower?;
             if layout.total()? > self.weight.scratch {
                 return None;
             }
-            let (definition, body, diagnostics, dependencies, materialized, reads, depth, executed):
-                reads::Descriptor = self.records.decode(&self.anchors, &descriptor)?;
+            let (
+                definition,
+                body,
+                diagnostics,
+                dependencies,
+                materialized,
+                reads,
+                depth,
+                executed,
+                selections,
+            ): reads::Descriptor = self.records.decode(&self.anchors, &descriptor)?;
             if definition.path() != path
                 || body.domain != crate::NATIVE_ORIGINAL_BODY
                 || body.len > self.weight.scratch
@@ -168,21 +178,29 @@ impl FrontLowerQueries {
                 reads,
                 depth,
                 executed,
+                selections,
             )
         } else {
             if record.lower.is_some() {
                 return None;
             }
-            let (value, substitutions, reads, depth, executed): (
+            let (value, substitutions, reads, depth, executed, selections): (
                 Materialized,
                 Vec<(hirsel_syntax::ExprId, Materialized)>,
                 Reads,
                 DepthEvidence<Span>,
                 bool,
+                staged::Selections,
             ) = self.records.decode(&self.anchors, &descriptor)?;
             let mut constants = Constants::new(value, substitutions);
             constants.set_working_bytes(record.constant_decode_bytes);
-            (Value::Constant(Box::new(constants)), reads, depth, executed)
+            (
+                Value::Constant(Box::new(constants)),
+                reads,
+                depth,
+                executed,
+                selections,
+            )
         };
         if reads != variant.reads
             || depth.first.len() != dependency_limit(self.limits.call_depth) as usize + 1
@@ -205,11 +223,18 @@ impl FrontLowerQueries {
             result: Ok(value),
             reads,
             reads_decode_bytes: record.reads_decode_bytes,
+            selections,
             depth: depth.into(),
             executed,
             execution,
             execution_subject,
         };
+        if let Err(error) = self
+            .restore_selections(&outcome.selections, query_reads)
+            .await
+        {
+            return Some(Err(error));
+        }
         self.remember_carry(id, key, &descriptor, &outcome);
         Some(self.publish(id, key, domain, &descriptor, outcome, false))
     }

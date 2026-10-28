@@ -126,6 +126,7 @@ impl FrontRegistrationQueries {
                 owner: self.lower.clone(),
                 reads,
                 observed: Rc::new(RefCell::new(ReadsBuilder::new())),
+                selections: Rc::new(RefCell::new(Vec::new())),
                 refusal: Rc::new(Cell::new(None)),
                 depth: Rc::new(RefCell::new(DepthEvidence::leaf(dependency_limit(
                     self.lower.limits.call_depth,
