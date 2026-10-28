@@ -1109,5 +1109,52 @@ fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
                 "{backend:?}"
             );
         }
+        let mixed = source.replace(
+            "  Ok(())",
+            r#"
+  let _ = core@1/cpu.map_scoped(tasks, 4,
+    fn() -> List[(u64, u64)] uses {} { [(1u64, 2u64)] },
+    fn(take pair: (u64, u64)) -> unique List[u64] uses {} {
+      let mut out = [1u64]; list.reserve(mut out, 128u64); take out
+    })
+  Ok(())"#,
+        );
+        let mixed = ready_with_regions(&mixed, false);
+        let plan = native::ahead_plan(&mixed);
+        let offsets: std::collections::BTreeSet<_> = plan
+            .cpu_workers
+            .values()
+            .map(|worker| mixed.table.layout(worker.environment).unwrap().fields[4].offset)
+            .collect();
+        assert!(
+            offsets.len() >= 2,
+            "the two original worker ordinal locations differ"
+        );
+        assert!(
+            plan.refusals
+                .values()
+                .any(|reason| reason == "ambiguous CPU growth ordinal custody"),
+            "{:?}",
+            plan.refusals
+        );
+        let all: Vec<_> = mixed.units.iter().collect();
+        assert!(hirsel_lir::ahead::validate_cpu_workers(
+            &all,
+            &mixed.table,
+            &mixed.target,
+            &plan,
+            mixed.fuel
+        ));
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            native::emit_backend_objects(
+                &mixed,
+                backend,
+                hirsel_lir::emission::OptLevel::Default,
+                native::Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+        }
     });
 }

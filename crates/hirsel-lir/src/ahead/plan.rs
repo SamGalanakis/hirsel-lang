@@ -299,6 +299,37 @@ impl AheadPlan {
                 }
             }
         }
+        // A shared alternate has one ordinal source. Refuse conflicting CPU
+        // roots before emitting any body, so ordinary compilation still works.
+        let conflicting: Vec<_> = plan
+            .roots
+            .iter()
+            .filter_map(|(id, root)| {
+                let mapper = root.cpu.as_ref()?.mapper.as_ref()?;
+                mapper
+                    .growth
+                    .keys()
+                    .any(|&(body, instruction)| {
+                        plan.cpu_growth(body, instruction, table).is_none()
+                            || plan.roots.values().any(|other| {
+                                other.cpu.is_none() && other.graph.bodies.contains_key(&body)
+                            })
+                    })
+                    .then_some(*id)
+            })
+            .collect();
+        if !conflicting.is_empty() {
+            for id in conflicting {
+                plan.roots.remove(&id);
+                plan.refusals
+                    .insert(id, "ambiguous CPU growth ordinal custody".into());
+            }
+            plan.bodies = plan
+                .roots
+                .values()
+                .flat_map(|root| root.graph.bodies.clone())
+                .collect();
+        }
         // Discover known wrapper values with the same monotone SSA join used
         // by code-target specialization, including storage and CFG arguments.
         for unit in units {
