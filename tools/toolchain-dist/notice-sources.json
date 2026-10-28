@@ -42,7 +42,7 @@
       ]
     },
     {
-      "component": "Native runtime archives and link kit (glibc startup/nonshared objects, LLVM libunwind and compiler-rt)",
+      "component": "Native runtime archives and link kit (glibc startup and static archives, LLVM libunwind and compiler-rt)",
       "status": "Selected through HIRSEL_RUNTIME_ARCHIVES and HIRSEL_LINK_KIT; not copied by hirsel-toolchain. Adding these to the release bundle requires extending this inventory; unexpected top-level bundle entries are refused.",
       "pins": [
         "Cargo.lock",

@@ -384,7 +384,56 @@ impl FrozenLinkKit {
                     .map_err(|e| e.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let capture = linker.capture(store, &root, &arguments, limits)?;
+        let mut capture = linker.capture(store, &root, &arguments, limits)?;
+        if parsed
+            .has_static(&target.triple)
+            .map_err(|e| e.to_string())?
+        {
+            let static_link = super::super::kit::Link {
+                kind: super::super::kit::Kind::StaticExecutable,
+                ..link
+            };
+            let (arguments, _) = static_link.invocation().map_err(|e| e.to_string())?;
+            let arguments = arguments
+                .iter()
+                .map(|arg| {
+                    arg.to_str()
+                        .map(str::to_owned)
+                        .ok_or("non-UTF8 static link argument")
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let archives = linker.capture(store, &root, &arguments, limits)?;
+            let mut combined = capture.record(store)?;
+            let mut files = BTreeMap::new();
+            for file in combined
+                .files
+                .into_iter()
+                .chain(archives.record(store)?.files)
+            {
+                if let Some(previous) = files.insert(file.name, file.bytes.clone())
+                    && Reference::from(previous) != Reference::from(file.bytes)
+                {
+                    return Err("kit input changed between archive and DSO capture".into());
+                }
+            }
+            if files.len() > limits.files {
+                return Err("combined kit closure exceeds admitted file count".into());
+            }
+            let mut bytes = 0u64;
+            for reference in files.values() {
+                bytes = bytes
+                    .checked_add(blob_record(store, reference.clone().into())?.len)
+                    .ok_or("combined kit closure size overflow")?;
+            }
+            if bytes > limits.archive_bytes {
+                return Err("combined kit closure exceeds admitted bytes".into());
+            }
+            combined.files = files
+                .into_iter()
+                .map(|(name, bytes)| FileRecord { name, bytes })
+                .collect();
+            capture = CapturedLink(put_record(store, CAPTURE, &combined)?);
+        }
         let record = KitRecord {
             root: root.to_str().ok_or("non-UTF8 kit root")?.into(),
             triple: target.triple.clone(),

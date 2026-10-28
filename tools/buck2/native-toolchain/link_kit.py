@@ -226,6 +226,7 @@ def cross_check(abilists, zig, index, ours, name):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--llvm", type=Path, required=True)
+    parser.add_argument("--arm-sysroot", type=Path, required=True)
     parser.add_argument("--abilists", type=Path, required=True)
     parser.add_argument("--libunwind", type=Path, required=True)
     parser.add_argument("--compiler-rt", type=Path, required=True)
@@ -263,7 +264,7 @@ def main():
             members = [m for m in archive.getmembers() if "/libunwind/" in m.name]
             archive.extractall(scratch, members=members, filter="data")
         with tarfile.open(args.compiler_rt) as archive:
-            members = [m for m in archive.getmembers() if m.name.endswith(("compiler-rt/lib/builtins/crtbegin.c", "compiler-rt/lib/builtins/crtend.c"))]
+            members = [m for m in archive.getmembers() if "/compiler-rt/lib/builtins/" in m.name]
             archive.extractall(scratch, members=members, filter="data")
         source = next(scratch.glob("llvm-project-*.src"))
         unwind = source / "libunwind"
@@ -281,9 +282,41 @@ def main():
 
             # glibc 2.28's own startup objects and nonshared archive, unchanged.
             development = root / "usr/lib" / target["multiarch"]
+            # Debian's 2.28 AArch64 package predates its static PIE CRT. Use
+            # the already pinned Arm GNU sysroot's static closure on that
+            # target; the dynamic ABI floor remains 2.28 on both targets.
+            static_development = (args.arm_sysroot / "usr/lib64" if target["deb"] == "arm64" else development)
+            static_source = ("Arm GNU Toolchain 14.3.rel1 sysroot: usr/lib64" if target["deb"] == "arm64" else
+                             f"libc6-dev {target['deb']}: usr/lib/{target['multiarch']}")
             for name in ("Scrt1.o", "crti.o", "crtn.o", "libc_nonshared.a"):
                 shutil.copyfile(development / name, directory / name)
                 record(name, source=f"libc6-dev {target['deb']}: usr/lib/{target['multiarch']}/{name}")
+            # The release's static PIE startup and archives. Keep these apart
+            # from the link-only DSOs used by hosts, images and shared foreign
+            # calls. In particular libm.a may be an absolute-path linker script;
+            # select the actual archives it names, never the invoking sysroot.
+            shutil.copyfile(static_development / "rcrt1.o", directory / "rcrt1.o")
+            record("rcrt1.o", source=f"{static_source}/rcrt1.o")
+            static_libraries = []
+            # Static glibc before 2.34 needs pthread's private definitions to
+            # precede libc's archive fallbacks, as on GCC's -lpthread -lc line.
+            for library in [library for library in LINK_ORDER if library != "c"] + ["c"]:
+                if library == "ld":
+                    continue
+                names = ([f"lib{library}.a"] if library != "m" else
+                         [path.name for pattern in ("libm.a", "libm-*.a", "libmvec.a")
+                          for path in sorted(static_development.glob(pattern))])
+                for name in names:
+                    original = static_development / name
+                    if not original.read_bytes().startswith(b"!<arch>\n"):
+                        if library == "m" and name == "libm.a":
+                            continue
+                        raise SystemExit(f"{triple} {name}: static library is not an archive")
+                    (directory / "static").mkdir(exist_ok=True)
+                    shutil.copyfile(original, directory / "static" / name)
+                    static_libraries.append("static/" + name)
+                    record("static/" + name, source=f"{static_source}/{name}")
+            static_libraries.append("libc_nonshared.a")
             # Link-only stubs at the floor: the release's own dynamic symbol
             # tables, cross-checked against Zig's abilists.
             zig = abilists.symbols(target["zig"], FLOOR)
@@ -324,6 +357,16 @@ def main():
             run([ar, "rcsD", directory / "libunwind.a", *objects])
             record("libunwind.a", source="libunwind " + " ".join(UNWIND_SOURCES), flags=UNWIND_FLAGS,
                    c_flags=UNWIND_C_FLAGS, cxx_flags=UNWIND_CXX_FLAGS, headers="libc6-dev and linux-libc-dev at the floor")
+            # C cleanup frames in static glibc use this personality. The Rust
+            # runtime supplies its own language personality and builtins; never
+            # resolve this remaining symbol from the host's libgcc_eh.
+            personality = scratch / f"{triple}-gcc_personality_v0.o"
+            personality_flags = ["-std=c11", "-O2", "-fPIC", "-fvisibility=hidden"]
+            run([clang, f"--target={target['clang']}", *personality_flags, *floor_headers,
+                 "-I", unwind / "include", "-c", builtins / "gcc_personality_v0.c", "-o", personality])
+            run([ar, "rcsD", directory / "libcompiler_rt_personality.a", personality])
+            record("libcompiler_rt_personality.a", source="compiler-rt lib/builtins/gcc_personality_v0.c",
+                   flags=personality_flags, headers="libc6-dev, linux-libc-dev and LLVM libunwind")
             sonames = {library: target["loader"] if library == "ld" else f"lib{library}.so.{sover}" for library, sover in LIBRARIES}
             manifest["targets"][triple] = {
                 # What a link names, in order around the program, runtime and foreign inputs.
@@ -334,6 +377,11 @@ def main():
                 "libraries": [f"lib/{sonames[library]}" for library in LINK_ORDER],
                 "nonshared": "libc_nonshared.a",
                 "end": ["crtendS.o", "crtn.o"],
+                "static": {
+                    "start": ["rcrt1.o", "crti.o", "crtbeginS.o"],
+                    "libraries": static_libraries,
+                    "personality": "libcompiler_rt_personality.a",
+                },
                 "files": files,
             }
     text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"

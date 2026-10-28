@@ -120,6 +120,16 @@ finished executable's debug information into `<build-id>.debug` beside it,
 named by its `.gnu_debuglink`. `native::test_path`'s dispatching `main` is LLVM
 IR compiled in process, and its adapters are ordinary link inputs.
 
+The kit also captures a separate static PIE closure. It contains glibc 2.28's
+archives and `rcrt1.o` on x86-64, and the pinned Arm GNU 14.3.rel1 sysroot's
+glibc 2.40 archives and CRT on AArch64. The latter's minimum kernel is 3.7;
+the dynamic ABI floor remains glibc 2.28 on both targets. Static links group
+the runtime, LLVM unwinder, foreign archives and libc archives with the pinned
+compiler-rt `gcc_personality_v0.c` implementation. They never read host libgcc.
+Frozen kits retain both closures within the existing file and byte bounds.
+This static link kind is available to internal consumers; ordinary executable
+selection still uses the dynamic line above.
+
 Production native import uses `hirsel-layout` for type-to-layout and ABI derivation.
 
 `run_path_on_host` is the production interpreter launch. `bind_host_run` either validates

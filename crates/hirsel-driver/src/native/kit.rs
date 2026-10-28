@@ -32,6 +32,14 @@ struct Target {
     libraries: Vec<PathBuf>,
     nonshared: PathBuf,
     end: Vec<PathBuf>,
+    static_link: Option<Static>,
+}
+
+#[derive(Debug)]
+struct Static {
+    start: Vec<PathBuf>,
+    libraries: Vec<PathBuf>,
+    personality: PathBuf,
 }
 
 /// A loaded kit: its identity and each target's inputs.
@@ -105,6 +113,23 @@ impl Kit {
                     libraries: paths("libraries")?,
                     nonshared: directory.join(text("nonshared")?),
                     end: paths("end")?,
+                    static_link: if target.get("static").is_some() {
+                        let input = &target["static"];
+                        let paths = |key: &str| -> Option<Vec<PathBuf>> {
+                            input[key]
+                                .as_array()?
+                                .iter()
+                                .map(|value| Some(directory.join(value.as_str()?)))
+                                .collect()
+                        };
+                        Some(Static {
+                            start: paths("start")?,
+                            libraries: paths("libraries")?,
+                            personality: directory.join(input["personality"].as_str()?),
+                        })
+                    } else {
+                        None
+                    },
                 })
             })()
             .ok_or_else(|| failed(format!("the link kit manifest's {triple} is malformed")))?;
@@ -137,6 +162,11 @@ impl Kit {
         files.extend(target.libraries.iter().cloned());
         files.push(target.nonshared.clone());
         files.extend(target.end.iter().cloned());
+        if let Some(link) = &target.static_link {
+            files.extend(link.start.iter().cloned());
+            files.extend(link.libraries.iter().cloned());
+            files.push(link.personality.clone());
+        }
         files.sort();
         files.dedup();
         Ok(files)
@@ -144,6 +174,10 @@ impl Kit {
 
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub(crate) fn has_static(&self, triple: &str) -> Result<bool, NativeError> {
+        Ok(self.target(triple)?.static_link.is_some())
     }
 
     /// `triple`'s stub DSOs, in the loader's search order.
@@ -171,6 +205,8 @@ impl Kit {
 /// What a link writes.
 #[derive(Clone, Debug)]
 pub(crate) enum Kind {
+    /// A static PIE with the kit's archive closure and compiler-rt personality.
+    StaticExecutable,
     /// A position-independent executable, loaded by the target's canonical
     /// interpreter or, for a checking tool's launch, by `loader` with
     /// `library_path` as its run path.
@@ -220,7 +256,24 @@ impl Link<'_> {
             .collect();
         args.extend(target.options.iter().map(OsString::from));
         let executable = !matches!(self.kind, Kind::Image { .. });
+        let static_link = if matches!(self.kind, Kind::StaticExecutable) {
+            Some(
+                target
+                    .static_link
+                    .as_ref()
+                    .ok_or_else(|| failed("the selected link kit has no static archive closure"))?,
+            )
+        } else {
+            None
+        };
         match &self.kind {
+            Kind::StaticExecutable => {
+                args.extend(
+                    ["-static", "-pie", "--no-dynamic-linker", "-z", "text"]
+                        .into_iter()
+                        .map(OsString::from),
+                );
+            }
             Kind::Executable { loader: None } | Kind::Host { .. } => {
                 args.push("-pie".into());
                 args.push(format!("--dynamic-linker={}", target.interpreter).into());
@@ -254,18 +307,34 @@ impl Link<'_> {
             }
         }
         if executable {
-            args.extend(target.start.iter().map(Into::into));
+            args.extend(
+                static_link
+                    .map_or(&target.start, |link| &link.start)
+                    .iter()
+                    .map(Into::into),
+            );
         }
         args.extend(self.objects.iter().map(Into::into));
+        if static_link.is_some() {
+            args.push("--start-group".into());
+        }
         args.extend(self.runtime.map(Into::into));
         if self.unwind {
             args.push((&target.unwind).into());
         }
         args.extend(self.foreign.iter().map(Into::into));
-        args.push("--as-needed".into());
-        args.extend(target.libraries.iter().map(Into::into));
+        if let Some(link) = static_link {
+            args.push((&link.personality).into());
+            args.extend(link.libraries.iter().map(Into::into));
+            args.push("--end-group".into());
+        } else {
+            args.push("--as-needed".into());
+            args.extend(target.libraries.iter().map(Into::into));
+        }
         if executable {
-            args.push((&target.nonshared).into());
+            if static_link.is_none() {
+                args.push((&target.nonshared).into());
+            }
             args.extend(target.end.iter().map(Into::into));
         }
         args.push("--gc-sections".into());
@@ -472,6 +541,83 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn static_kit_bootstraps_threads_tls_and_retained_runtime_on_both_targets() {
+        let root = tempfile::tempdir().unwrap();
+        let kit = Kit::load(&input("HIRSEL_LINK_KIT")).unwrap();
+        let llvm = input("LLVM_SYS_231_PREFIX");
+        let source = root.path().join("main.c");
+        std::fs::write(
+            &source,
+            r#"
+extern void hirsel_rt_v2_launch(void);
+static void (*volatile keep)(void) = hirsel_rt_v2_launch;
+extern int pthread_create(unsigned long *, const void *, void *(*)(void *), void *);
+extern int pthread_join(unsigned long, void **);
+static __thread unsigned value;
+static void *worker(void *argument) {
+    value = (unsigned)(unsigned long)argument;
+    return (void *)(unsigned long)value;
+}
+int main(void) {
+    unsigned long thread;
+    void *result = (void *)0;
+    value = 17;
+    if (pthread_create(&thread, (void *)0, worker, (void *)42) != 0) return 2;
+    if (pthread_join(thread, &result) != 0) return 3;
+    return value == 17 && result == (void *)42 && keep != (void *)0 ? 0 : 4;
+}
+"#,
+        )
+        .unwrap();
+        for target in [
+            TargetSpec::x86_64_unknown_linux_gnu(),
+            TargetSpec::aarch64_unknown_linux_gnu(),
+        ] {
+            let object = root.path().join(format!("{}.o", target.triple));
+            let compiled = Command::new(llvm.join("bin/clang"))
+                .env_clear()
+                .env("LD_LIBRARY_PATH", llvm.join("lib"))
+                .arg(format!("--target={}", target.triple))
+                .args(["-O2", "-fPIC", "-nostdlibinc", "-c"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&object)
+                .output()
+                .unwrap();
+            assert!(compiled.status.success(), "{compiled:?}");
+            let runtime = input("HIRSEL_RUNTIME_ARCHIVES")
+                .join(&target.triple)
+                .join("default/libhirsel_rt.a");
+            let objects = [object];
+            let link = Link {
+                kit: &kit,
+                triple: &target.triple,
+                kind: Kind::StaticExecutable,
+                objects: &objects,
+                runtime: Some(&runtime),
+                unwind: true,
+                foreign: &[],
+            };
+            let executable = root.path().join(&target.triple);
+            let (mut command, _) = link.command(&llvm.join("bin/ld.lld"), &executable).unwrap();
+            let linked = command.output().unwrap();
+            assert!(linked.status.success(), "{}: {linked:?}", target.triple);
+            let mut command = if target.triple.starts_with("aarch64") {
+                let mut command = Command::new(input("HIRSEL_QEMU_AARCH64"));
+                command.arg(&executable);
+                command
+            } else {
+                Command::new(&executable)
+            };
+            command.env_clear();
+            let ran =
+                super::super::link::bounded(&mut command, std::time::Duration::from_secs(120))
+                    .unwrap();
+            assert!(ran.status.success(), "{}: {ran:?}", target.triple);
+        }
     }
 
     #[test]

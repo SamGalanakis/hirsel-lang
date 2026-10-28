@@ -29,7 +29,7 @@ unpack_toolchain(
 [http_file(name = "link-kit-" + name.replace(":", "-"), urls = [pin["url"]], sha256 = pin["sha256"], size_bytes = pin["size"]) for name, pin in LINK_KIT.items()]
 
 link_kit(
-    name = "kit", llvm = ":llvm", pins = LINK_KIT,
+    name = "kit", llvm = ":llvm", arm = ":arm", pins = dict(LINK_KIT, arm_static = NATIVE["arm"]),
     sources = {name: ":link-kit-" + name.replace(":", "-") for name in LINK_KIT},
     visibility = ["PUBLIC"],
 )
