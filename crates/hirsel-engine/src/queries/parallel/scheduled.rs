@@ -148,8 +148,6 @@ struct Input {
     syntax: Reference,
     text: ContentHash,
     implementation: ContentHash,
-    signature: Result<Arc<QueryOutput<SignatureRef>>, QueryError>,
-    signature_reads: Arc<Reads>,
     registration: Option<Arc<AcceptedFrontRegistration>>,
     key: EntryKey,
     weight: MemoryWeight,
@@ -307,6 +305,40 @@ impl FrontBodyQueries {
     /// The exact immutable signature universe selected with these P inputs.
     pub fn signatures(&self) -> Arc<SignatureSnapshot> {
         self.snapshot.clone()
+    }
+    fn signature(&self, input: &Input) -> Result<Arc<QueryOutput<SignatureRef>>, QueryError> {
+        if let Some(product) = self
+            .snapshot
+            .header_products()
+            .and_then(|headers| headers.product(input.definition))
+        {
+            return product.result.clone();
+        }
+        match self.snapshot.signature(input.definition) {
+            Some(Ok(signature)) => Ok(Arc::new(output(signature.clone()))),
+            Some(Err(error)) => Err(error.clone()),
+            None => Err(QueryError::NotImplemented),
+        }
+    }
+    fn signature_reads(&self, input: &Input) -> Result<Arc<Reads>, QueryError> {
+        let mut reads = ReadsBuilder::new();
+        if let Some(product) = self
+            .snapshot
+            .header_products()
+            .and_then(|headers| headers.product(input.definition))
+            && let Some(entry) = &product.entry
+        {
+            reads.merge(entry.reads());
+        }
+        if let Some(registration) = &input.registration {
+            reads.merge(&registration.reads);
+        }
+        reads.finish().map(Arc::new).map_err(|read| {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "front inherited reads".into(),
+                message: format!("inconsistent registration read: {read:?}"),
+            })
+        })
     }
     fn syntax(&self, input: &Input) -> Option<Arc<ItemSyntax>> {
         // Accepted literals are parser-created immutable source, and legitimately
@@ -881,7 +913,7 @@ impl FrontBodyQueries {
             .inputs
             .values()
             .find(|input| input.definition.path() == path)?;
-        Some((self.syntax(input)?, input.signature.as_ref().ok()?.clone()))
+        Some((self.syntax(input)?, self.signature(input).ok()?))
     }
 
     /// Distinct decoded bodies currently owned by active output consumers.
@@ -1168,8 +1200,10 @@ impl BodyTask {
             index: 0,
             definition: input.definition.path().clone(),
             syntax,
-            signature: input.signature.clone(),
-            signature_reads: input.signature_reads.clone(),
+            signature: queries.signature(input),
+            signature_reads: queries
+                .signature_reads(input)
+                .map_err(|_| queries.errors.protocol)?,
             text: input.text,
             resolution: None,
             checked: None,
@@ -1688,33 +1722,9 @@ impl QueryEngine {
         let mut inputs = BTreeMap::new();
         for (definition, syntax, text, implementation, key, registration) in selected {
             let id = DefId::intern(&definition);
-            let signature = match snapshot.signature(id) {
-                Some(Ok(signature)) => self
-                    .signatures
-                    .get(&id)
-                    .and_then(|entry| entry.result().ok())
-                    .map(Ok)
-                    .unwrap_or_else(|| Ok(Arc::new(output(signature.clone())))),
-                Some(Err(error)) => Err(error.clone()),
-                None => Err(QueryError::NotImplemented),
-            };
-            let mut signature_reads = ReadsBuilder::new();
-            if let Some(reads) = self.shared_memo_reads(&definition, QueryKind::Signature) {
-                signature_reads.merge(&reads);
-            }
-            if let Some(accepted) = &registration {
-                signature_reads.merge(&accepted.reads);
-            }
             inputs.insert(
                 key.0,
                 Input {
-                    signature,
-                    signature_reads: Arc::new(signature_reads.finish().map_err(|read| {
-                        QueryError::Operational(hirsel_types::OperationalFailure {
-                            operation: "front inherited reads".into(),
-                            message: format!("inconsistent registration read: {read:?}"),
-                        })
-                    })?),
                     registration,
                     definition: id,
                     syntax,

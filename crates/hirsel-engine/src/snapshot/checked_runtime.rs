@@ -10,11 +10,12 @@ impl SignatureSnapshot {
             arena_with: Some(DefPath::core("arena.with")),
             ..Default::default()
         };
-        let mut definitions: Vec<_> = self.signatures.keys().copied().collect();
+        let mut definitions: Vec<_> = self.definitions();
         definitions.sort_by(|a, b| a.path().cmp(b.path()));
         for definition in definitions {
-            let signature = self.signatures[&definition]
-                .as_ref()
+            let signature = self
+                .signature(definition)
+                .ok_or(QueryError::NotImplemented)?
                 .map_err(Clone::clone)?;
             if let hirsel_types::SignatureKind::Type(declaration) = &signature.kind {
                 if declaration.layout.flat {

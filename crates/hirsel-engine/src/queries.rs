@@ -7,6 +7,7 @@ pub(crate) mod catalog;
 pub use candidate_products::{CheckedProductEncoder, CheckedProducts};
 mod arm_fixes;
 mod frontier;
+pub(crate) mod header_products;
 mod source_index;
 pub use source_index::SourceIndexState;
 pub(crate) mod recipes;
@@ -252,6 +253,7 @@ pub struct QueryEngine {
     pub(crate) builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
     syntax_keys: BTreeMap<(DefPath, QueryKind), ContentHash>,
     signatures: Table<hirsel_types::SignatureRef>,
+    header_products: Option<Arc<header_products::HeaderProducts>>,
     resolutions: Table<Resolution>,
     specialization_dependencies: BTreeMap<DefId, parallel::SpecializationDependencies>,
     checked: Table<TypedBody>,
@@ -648,6 +650,7 @@ impl QueryEngine {
             builtins: BTreeMap::new(),
             syntax_keys: BTreeMap::new(),
             signatures: Default::default(),
+            header_products: None,
             resolutions: Default::default(),
             specialization_dependencies: Default::default(),
             checked: Default::default(),
@@ -725,10 +728,21 @@ impl QueryEngine {
             .collect()
     }
     pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> usize {
+        let pending = if kind == QueryKind::Signature {
+            self.snapshot
+                .as_ref()
+                .and_then(|(_, s)| s.header_products())
+                .map_or(0, |headers| {
+                    headers.pending_recomputes(DefId::intern(definition))
+                })
+        } else {
+            0
+        };
         self.recomputes
             .get(&(definition.clone(), kind))
             .copied()
             .unwrap_or(0)
+            + pending
     }
     pub fn dependency_reads(
         &self,
@@ -815,6 +829,7 @@ impl QueryEngine {
         self.graph.begin_touch_tracking();
     }
     pub fn take_touched_memos(&mut self) -> Vec<crate::memo::MemoKey> {
+        self.adopt_completed_headers();
         self.graph.take_touched_memos()
     }
 
@@ -919,6 +934,27 @@ impl QueryEngine {
     }
 
     fn signature_query_id(
+        &mut self,
+        id: DefId,
+    ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
+        if let Some(headers) = self.header_products.clone() {
+            return headers.demand(self, id);
+        }
+        let headers = self
+            .snapshot
+            .as_ref()
+            .filter(|(stamp, _)| *stamp == self.snapshot_stamp())
+            .and_then(|(_, snapshot)| snapshot.header_products())
+            .cloned();
+        if let Some(headers) = headers
+            && headers.contains(id)
+        {
+            return headers.demand(self, id);
+        }
+        self.signature_query_local(id)
+    }
+
+    fn signature_query_local(
         &mut self,
         id: DefId,
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {

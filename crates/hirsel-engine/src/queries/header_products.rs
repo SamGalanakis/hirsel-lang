@@ -1,0 +1,300 @@
+//! Immutable source inputs and ordinary per-definition signature products.
+//! Execution uses the scalar producer's stack-local recorder and canonical store
+//! codec. No mutable query engine survives a production call.
+use super::*;
+use std::sync::{
+    OnceLock, Weak,
+    atomic::{AtomicBool, Ordering},
+};
+mod sources;
+use sources::HeaderSources;
+
+type SignatureOutput = Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError>;
+pub(crate) struct HeaderProduct {
+    pub(crate) result: SignatureOutput,
+    pub(crate) entry: Option<Arc<Entry<hirsel_types::SignatureRef>>>,
+    pub(crate) recomputes: usize,
+    origin: Weak<Entry<hirsel_types::SignatureRef>>,
+    accounted: AtomicBool,
+}
+#[derive(Clone)]
+struct HeaderPhases {
+    lexer: Option<Arc<dyn LexerPhase>>,
+    parser: Option<Arc<dyn ParserPhase>>,
+    signature: Option<Arc<dyn SignaturePhase>>,
+}
+impl HeaderPhases {
+    fn capture(adapters: &PhaseAdapters) -> Self {
+        Self {
+            lexer: adapters.lexer.clone(),
+            parser: adapters.parser.clone(),
+            signature: adapters.signature.clone(),
+        }
+    }
+    fn adapters(&self) -> PhaseAdapters {
+        PhaseAdapters {
+            lexer: self.lexer.clone(),
+            parser: self.parser.clone(),
+            signature: self.signature.clone(),
+            ..Default::default()
+        }
+    }
+}
+pub(crate) struct HeaderProducts {
+    rows: hirsel_syntax::DefMap<OnceLock<HeaderProduct>>,
+    environment: QueryEnvironment,
+    adapters: HeaderPhases,
+    sources: SourceMap,
+    ownership: Arc<native_records::SourceOwnership>,
+    owners: Arc<crate::NativeRecordContext>,
+    provisional: bool,
+    failure: Option<QueryError>,
+    syntax: HeaderSources,
+    declarations: crate::DeclarationIndex,
+    catalog: catalog::Catalog,
+    types: Arc<hirsel_types::TypeInterner>,
+    memo: Arc<hirsel_types::TypeMemo>,
+    builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
+    registry: crate::registry::BuiltinRegistry,
+    package_manifests: BTreeMap<hirsel_syntax::PackageId, ContentHash>,
+    published_manifest: Option<ContentHash>,
+    store: Option<Arc<dyn crate::store::ResultStore>>,
+    identity: ContentHash,
+    verify_store: crate::store::VerifyStore,
+    limits: crate::ComptimeLimits,
+    staged: BTreeMap<DefPath, crate::comptime::StagedConstant>,
+    summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
+    summary_reads: BTreeMap<DefId, Arc<Reads>>,
+    failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
+}
+impl HeaderProducts {
+    pub(crate) fn capture(engine: &QueryEngine) -> Arc<Self> {
+        let rows = engine
+            .source_paths()
+            .into_iter()
+            .map(|path| {
+                let id = DefId::intern(&path);
+                let cell = OnceLock::new();
+                if engine.unmarked_signature(id).is_some() {
+                    let entry = engine.signatures[&id].clone();
+                    let _ = cell.set(HeaderProduct {
+                        result: entry.result(),
+                        entry: Some(project(&entry)),
+                        recomputes: 0,
+                        origin: Arc::downgrade(&entry),
+                        accounted: AtomicBool::new(true),
+                    });
+                }
+                (id, cell)
+            })
+            .collect();
+        let owners = Arc::new(crate::NativeRecordContext::capture(engine));
+        Arc::new(Self {
+            rows,
+            environment: engine.environment.clone(),
+            adapters: HeaderPhases::capture(&engine.adapters),
+            sources: engine.sources.clone(),
+            ownership: engine.source_ownership.clone(),
+            owners: owners.clone(),
+            provisional: engine.private_summary_active,
+            failure: engine.current_private_summary_failure().cloned(),
+            syntax: HeaderSources::capture(engine, owners),
+            declarations: engine.declarations.observations(),
+            catalog: engine.catalog.clone(),
+            types: engine.types.clone(),
+            memo: engine.memo.clone(),
+            builtins: engine.builtins.clone(),
+            registry: engine.registry.clone(),
+            package_manifests: engine.package_manifests.clone(),
+            published_manifest: engine.published_manifest,
+            store: engine.result_store.clone(),
+            identity: engine.store_identity,
+            verify_store: engine.verify_store,
+            limits: engine.comptime_limits,
+            staged: engine.staged_constants.clone(),
+            summaries: engine.private_summaries.clone(),
+            summary_reads: engine.private_summary_reads.clone(),
+            failures: engine.private_unique_failures.clone(),
+        })
+    }
+    fn execution(self: &Arc<Self>) -> QueryEngine {
+        let mut engine =
+            QueryEngine::new_with_hold_bytes(self.environment.clone(), self.adapters.adapters(), 0);
+        engine.sources = self.sources.clone();
+        engine.source_ownership = self.ownership.clone();
+        engine.private_summary_active = self.provisional;
+        engine.private_summary_failure = self
+            .failure
+            .clone()
+            .map(|error| (engine.graph.revision(), error));
+        engine.items = native_records::SourceTable::new(self.ownership.clone());
+        engine.declarations = self.declarations.clone();
+        engine.catalog = self.catalog.clone();
+        engine.types = self.types.clone();
+        engine.memo = self.memo.clone();
+        engine.builtins = self.builtins.clone();
+        engine.registry = self.registry.clone();
+        engine.package_manifests = self.package_manifests.clone();
+        engine.published_manifest = self.published_manifest;
+        engine.result_store = self.store.clone();
+        engine.store_identity = self.identity;
+        engine.verify_store = self.verify_store;
+        engine.comptime_limits = self.limits;
+        engine.staged_constants = self.staged.clone();
+        engine.private_summaries = self.summaries.clone();
+        engine.private_summary_reads = self.summary_reads.clone();
+        engine.private_unique_failures = self.failures.clone();
+        engine.header_products = Some(self.clone());
+        engine
+    }
+    pub(crate) fn definitions(&self) -> impl Iterator<Item = DefId> + '_ {
+        self.rows.keys().copied()
+    }
+    pub(crate) fn owners(&self) -> &Arc<crate::NativeRecordContext> {
+        &self.owners
+    }
+    pub(crate) fn materialize(
+        &self,
+        engine: &mut QueryEngine,
+        path: &DefPath,
+    ) -> Result<bool, QueryError> {
+        self.syntax.materialize(engine, path)
+    }
+    pub(crate) fn contains(&self, id: DefId) -> bool {
+        self.rows.contains_key(&id)
+    }
+    pub(crate) fn product(self: &Arc<Self>, id: DefId) -> Option<&HeaderProduct> {
+        let cell = self.rows.get(&id)?;
+        if cell.get().is_none() {
+            let mut engine = self.execution();
+            let _ = self.demand(&mut engine, id);
+        }
+        cell.get()
+    }
+    pub(crate) fn demand(self: &Arc<Self>, engine: &mut QueryEngine, id: DefId) -> SignatureOutput {
+        let Some(cell) = self.rows.get(&id) else {
+            return engine.signature_query_local(id);
+        };
+        if engine
+            .active
+            .contains(&(id.path().clone(), QueryKind::Signature))
+        {
+            return engine.signature_query_local(id);
+        }
+        if let Some(product) = cell.get() {
+            if engine.header_products.is_none() {
+                engine.adopt_header_product(id, product);
+            } else if let Some(entry) = &product.entry {
+                engine.graph.adopt(
+                    entry.memo.key,
+                    entry.memo.reads.clone(),
+                    entry.memo.durability,
+                );
+                engine.signatures.insert(id, entry.clone());
+            }
+            return product.result.clone();
+        }
+        let result = engine.signature_query_local(id);
+        let source = engine.signatures.get(&id);
+        let local = engine.header_products.is_none();
+        let origin = source
+            .filter(|_| local)
+            .map_or_else(Weak::new, Arc::downgrade);
+        let entry = source.map(project);
+        // Never wait while holding a recursive header stack. Concurrent pure
+        // normalizations race only to publish the same immutable source product.
+        let recomputes = engine.recompute_count(id.path(), QueryKind::Signature);
+        let _ = cell.set(HeaderProduct {
+            result,
+            entry,
+            recomputes,
+            origin,
+            accounted: AtomicBool::new(local),
+        });
+        cell.get()
+            .expect("a completed producer publishes its row")
+            .result
+            .clone()
+    }
+    pub(crate) fn ready(&self, id: DefId) -> Option<&HeaderProduct> {
+        self.rows.get(&id)?.get()
+    }
+    pub(crate) fn pending_recomputes(&self, id: DefId) -> usize {
+        self.ready(id)
+            .filter(|p| !p.accounted.load(Ordering::Relaxed))
+            .map_or(0, |p| p.recomputes)
+    }
+    pub(crate) fn completed(&self) -> impl Iterator<Item = (DefId, &HeaderProduct)> {
+        self.rows
+            .iter()
+            .filter_map(|(id, cell)| cell.get().map(|product| (*id, product)))
+    }
+}
+
+impl QueryEngine {
+    pub(crate) fn adopt_completed_headers(&mut self) {
+        if let Some(headers) = self
+            .snapshot
+            .as_ref()
+            .filter(|(stamp, _)| *stamp == self.snapshot_stamp())
+            .and_then(|(_, snapshot)| snapshot.header_products())
+            .cloned()
+        {
+            self.adopt_header_products(&headers);
+        }
+    }
+    pub(crate) fn adopt_header_products(&mut self, headers: &header_products::HeaderProducts) {
+        for (id, product) in headers.completed() {
+            self.adopt_header_product(id, product);
+        }
+    }
+    fn adopt_header_product(&mut self, id: DefId, product: &HeaderProduct) {
+        if !product.accounted.swap(true, Ordering::Relaxed) {
+            *self
+                .recomputes
+                .entry((id.path().clone(), QueryKind::Signature))
+                .or_default() += product.recomputes;
+        }
+        let Some(entry) = &product.entry else {
+            return;
+        };
+        if self.signatures.get(&id).is_some_and(|current| {
+            Arc::ptr_eq(current, entry)
+                || product
+                    .origin
+                    .upgrade()
+                    .is_some_and(|origin| Arc::ptr_eq(current, &origin))
+        }) {
+            return;
+        }
+        self.graph.adopt(
+            entry.memo.key,
+            entry.memo.reads.clone(),
+            entry.memo.durability,
+        );
+        self.signatures.insert(id, entry.clone());
+        self.snapshot_sources.insert(id, Arc::downgrade(entry));
+    }
+}
+
+fn project(
+    entry: &Arc<Entry<hirsel_types::SignatureRef>>,
+) -> Arc<Entry<hirsel_types::SignatureRef>> {
+    if entry.products.resolution.is_none() {
+        return entry.clone();
+    }
+    Arc::new(Entry {
+        memo: entry.memo.clone(),
+        detail: entry.detail.clone(),
+        products: Arc::new(PhaseProducts {
+            resolution: None,
+            ..(*entry.products).clone()
+        }),
+        covered: entry.covered.clone(),
+        depth: entry.depth.clone(),
+        acceptance: entry.acceptance.clone(),
+        verification: Default::default(),
+        selections: entry.selections.clone(),
+        consistent: entry.consistent,
+    })
+}

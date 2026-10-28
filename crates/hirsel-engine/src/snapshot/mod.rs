@@ -30,6 +30,7 @@ pub struct SignatureSnapshot {
     epoch: Revision,
     types: Arc<TypeInterner>,
     signatures: DefMap<Result<SignatureRef, QueryError>>,
+    headers: Option<Arc<crate::queries::header_products::HeaderProducts>>,
     /// Each opaque type's private view, which only its own package's bodies see.
     private: DefMap<SignatureRef>,
     /// Signature inputs are sufficient for P; V builds its universe on demand.
@@ -134,6 +135,7 @@ impl SignatureSnapshot {
             epoch,
             types,
             signatures,
+            headers: None,
             private,
             validation: OnceLock::new(),
             validation_inputs: Mutex::new(Some(candidates)),
@@ -143,6 +145,22 @@ impl SignatureSnapshot {
             verifier_policy: ContentHash::default(),
             lookup: LookupInput::default(),
         }
+    }
+    fn with_headers(
+        mut self,
+        headers: Arc<crate::queries::header_products::HeaderProducts>,
+    ) -> Self {
+        for d in headers.definitions() {
+            self.public_views.entry(d).or_default();
+            self.private_views.entry(d).or_default();
+        }
+        self.headers = Some(headers);
+        self
+    }
+    pub(crate) fn header_products(
+        &self,
+    ) -> Option<&Arc<crate::queries::header_products::HeaderProducts>> {
+        self.headers.as_ref()
     }
     fn validation_candidates(&self) -> ValidationCandidates {
         if let Some(state) = self.validation.get() {
@@ -176,11 +194,11 @@ impl SignatureSnapshot {
                 ValidatedSignatures::with_cache(self.verifier.clone(), self.verifier_policy);
             let views = Arc::new(ViewTable::from_views(
                 t,
-                self.signatures.iter().filter_map(|(d, s)| {
-                    s.as_ref().ok().map(|s| {
-                        self.public_views[d]
+                self.definitions().into_iter().filter_map(|d| {
+                    self.signature(d).and_then(Result::ok).map(|s| {
+                        self.public_views[&d]
                             .get_or_init(|| {
-                                View::new(t, s.clone(), previous.and_then(|p| p.views.get(*d)))
+                                View::new(t, s.clone(), previous.and_then(|p| p.views.get(d)))
                             })
                             .clone()
                     })
@@ -239,13 +257,16 @@ impl SignatureSnapshot {
                 bases.insert(package.clone(), base);
             }
             let mut owned: BTreeMap<PackageId, Vec<View>> = BTreeMap::new();
-            for (d, view) in &self.private {
+            for d in self.definitions() {
+                let Some(view) = self.private_view(d) else {
+                    continue;
+                };
                 let package = &d.path().0.package;
                 let earlier = previous
                     .and_then(|p| p.packages.get(package))
-                    .and_then(|p| p.replacement(*d));
+                    .and_then(|p| p.replacement(d));
                 owned.entry(package.clone()).or_default().push(
-                    self.private_views[d]
+                    self.private_views[&d]
                         .get_or_init(|| View::new(t, view.clone(), earlier))
                         .clone(),
                 );
@@ -353,7 +374,10 @@ impl SignatureSnapshot {
             let definition =
                 crate::queries::lookup_path(context, path).ok_or(QueryError::NotImplemented)?;
             let d = DefId::intern(&definition);
-            if self.signatures.contains_key(&d) || self.lookup.builtins.contains(&d) {
+            if self.signatures.contains_key(&d)
+                || self.headers.as_ref().is_some_and(|h| h.contains(d))
+                || self.lookup.builtins.contains(&d)
+            {
                 Ok(definition)
             } else {
                 self.lookup
@@ -378,6 +402,17 @@ impl SignatureSnapshot {
         crate::queries::memos::optional(self.failed_signature_key(d))
     }
     pub(crate) fn failed_signature_key(&self, d: DefId) -> Option<ContentHash> {
+        if let Some(product) = self.headers.as_ref().and_then(|headers| headers.product(d)) {
+            return product.entry.as_ref().map(|entry| {
+                ContentHash::of_parts(
+                    "hirsel.failed-signature.v1",
+                    [
+                        entry.memo.text.0.as_slice(),
+                        entry.memo.reads.digest().0.as_slice(),
+                    ],
+                )
+            });
+        }
         self.lookup.failed.get(&d).copied().flatten()
     }
     pub fn epoch(&self) -> Revision {
@@ -389,6 +424,9 @@ impl SignatureSnapshot {
     }
     /// The public signature of `d`, or the error normalizing it reported.
     pub fn signature(&self, d: DefId) -> Option<Result<&SignatureRef, &QueryError>> {
+        if let Some(product) = self.headers.as_ref().and_then(|headers| headers.product(d)) {
+            return Some(product.result.as_ref().map(|output| &output.value));
+        }
         self.signatures.get(&d).map(Result::as_ref)
     }
     /// The view of `d` a body of `package` sees: an opaque type's private view
@@ -398,19 +436,44 @@ impl SignatureSnapshot {
         package: &PackageId,
         d: DefId,
     ) -> Option<Result<&SignatureRef, &QueryError>> {
-        match self.private.get(&d) {
-            Some(view) if &d.path().0.package == package => Some(Ok(view)),
-            _ => self.signature(d),
+        if &d.path().0.package == package
+            && let Some(view) = self.private_view(d)
+        {
+            return Some(Ok(view));
         }
+        self.signature(d)
     }
-    /// Every public opaque definition: what a body of its own package reads
-    /// the private representation of.
+    fn private_view(&self, d: DefId) -> Option<&SignatureRef> {
+        if let Some(view) = self.private.get(&d) {
+            return Some(view);
+        }
+        let product = self.headers.as_ref()?.product(d)?;
+        let public = &product.result.as_ref().ok()?.value;
+        if public.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque {
+            return None;
+        }
+        let owner = product.entry.as_ref()?.products.representation.as_ref()?;
+        Some(&owner.body_view(&self.types, public).0)
+    }
+    pub(crate) fn definitions(&self) -> Vec<DefId> {
+        self.signatures
+            .keys()
+            .copied()
+            .chain(
+                self.headers
+                    .iter()
+                    .flat_map(|headers| headers.definitions()),
+            )
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+    /// Every public opaque definition read by a body of its defining package.
     pub(crate) fn opaque_definitions(&self) -> impl Iterator<Item = DefId> + '_ {
-        self.signatures.iter().filter_map(|(d, signature)| {
-            signature
-                .as_ref()
-                .is_ok_and(|s| s.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque)
-                .then_some(*d)
+        self.definitions().into_iter().filter(|d| {
+            self.signature(*d).is_some_and(|s| {
+                s.is_ok_and(|s| s.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque)
+            })
         })
     }
     /// `d`'s view in its own package (an opaque type's private view) with
@@ -428,20 +491,20 @@ impl SignatureSnapshot {
                 return Some(Ok((view.signature(), view.digest())));
             }
             let view = state.views.get(d);
-            return match self.signatures.get(&d)? {
+            return match self.signature(d)? {
                 Ok(_) => view.map(|v| Ok((v.signature(), v.digest()))),
                 Err(error) => Some(Err(error)),
             };
         }
-        let view = if let Some(private) = self.private.get(&d) {
+        let view = if let Some(private) = self.private_view(d) {
             private
         } else {
-            match self.signatures.get(&d)? {
+            match self.signature(d)? {
                 Ok(public) => public,
                 Err(error) => return Some(Err(error)),
             }
         };
-        let products = if self.private.contains_key(&d) {
+        let products = if self.private_view(d).is_some() {
             &self.private_views
         } else {
             &self.public_views
@@ -498,9 +561,9 @@ impl SignatureSnapshot {
 
 impl hirsel_validate::ReplayEnvironment for SignatureSnapshot {
     fn base_digest(&self, package: &PackageId) -> Option<ContentHash> {
-        self.signatures
-            .iter()
-            .any(|(id, _)| id.path().0.package == *package)
+        self.definitions()
+            .into_iter()
+            .any(|id| id.path().0.package == *package)
             .then(|| self.validation_input_digest(package))
     }
     fn views(
@@ -522,49 +585,39 @@ impl QueryEngine {
     pub fn signature_snapshot(&mut self) -> Arc<SignatureSnapshot> {
         let snapshot = self.signature_inputs();
         snapshot.validation_state();
+        self.adopt_completed_headers();
         snapshot
     }
     /// P needs immutable signatures and views, without eagerly validating V's universe.
     pub(crate) fn signature_inputs(&mut self) -> Arc<SignatureSnapshot> {
+        self.adopt_completed_headers();
         self.prepare_signature_snapshot();
         let stamp = self.snapshot_stamp();
         if let Some((kept, snapshot)) = &self.snapshot
             && *kept == stamp
+            && !snapshot
+                .headers
+                .as_ref()
+                .is_some_and(|headers| headers.completed().any(|(_, p)| p.result.is_err()))
         {
             return snapshot.clone();
         }
-        let mut row_sources = DefMap::default();
-        let mut signatures: Vec<(DefId, Result<SignatureRef, QueryError>)> = self
+        let headers = crate::queries::header_products::HeaderProducts::capture(self);
+        let row_sources = self
+            .source_paths()
+            .into_iter()
+            .filter_map(|path| {
+                let id = DefId::intern(&path);
+                self.unmarked_signature(id)?;
+                self.signature_memo_source(id)
+                    .map(|entry| (id, Arc::downgrade(entry)))
+            })
+            .collect();
+        let mut signatures: Vec<_> = self
             .registry
             .signatures()
             .map(|s| (s.definition, Ok(s.clone())))
             .collect();
-        let mut private = vec![];
-        let mut complete = true;
-        for path in self.source_paths() {
-            let d = DefId::intern(&path);
-            // A new universe need not demand unchanged signature queries.
-            // Reuse this snapshot's own immutable row only when its exact
-            // producer is still current and unmarked. A replacement, missing
-            // entry, transient failure or changed input follows normal demand.
-            let retained = self
-                .retained_snapshot_signature(d)
-                .or_else(|| self.unmarked_signature(d));
-            let signature = retained.unwrap_or_else(|| self.signature(d));
-            if let Some(entry) = self.signature_memo_source(d) {
-                row_sources.insert(d, Arc::downgrade(entry));
-            }
-            if let Ok(public) = &signature {
-                match self.body_signature(&path.0.package, public.clone()) {
-                    Ok((view, _)) if !Arc::ptr_eq(&view, public) => private.push(view),
-                    Ok(_) => {}
-                    Err(_) => complete = false,
-                }
-            } else {
-                complete = false;
-            }
-            signatures.push((d, signature));
-        }
         for (path, constant) in &self.staged_constants {
             signatures.push((DefId::intern(path), Ok(constant.signature.clone())));
         }
@@ -597,9 +650,10 @@ impl QueryEngine {
                 self.snapshot_epoch,
                 self.types.clone(),
                 signatures,
-                private,
+                [],
                 previous.as_deref(),
             )
+            .with_headers(headers)
             .with_lookup(lookup)
             .with_verifier(
                 self.result_store.as_ref().and_then(|s| s.verifier()),
@@ -612,10 +666,8 @@ impl QueryEngine {
                 ),
             ),
         );
-        if complete {
-            self.snapshot = Some((stamp, snapshot.clone()));
-            self.snapshot_sources = row_sources;
-        }
+        self.snapshot = Some((stamp, snapshot.clone()));
+        self.snapshot_sources = row_sources;
         snapshot
     }
     /// Observe a published signature without another phase memo query. The
@@ -821,6 +873,112 @@ mod tests {
                 .is_some(),
             "incomplete package inputs retain full-world validation"
         );
+    }
+
+    #[test]
+    fn signature_inputs_demand_only_the_observed_header_until_a_universe_consumer_reads_all() {
+        struct Header(Arc<Mutex<Vec<DefPath>>>);
+        impl SignaturePhase for Header {
+            fn signature(
+                &self,
+                types: &TypeInterner,
+                _: &hirsel_types::TypeMemo,
+                syntax: Arc<ItemSyntax>,
+                _: &Declarations,
+                _: &mut PhaseProducts,
+                _: &mut dyn SignatureProvider,
+            ) -> Result<QueryOutput<Signature>, QueryError> {
+                self.0.lock().unwrap().push(syntax.item.definition.clone());
+                Ok(crate::queries::output(Signature {
+                    metadata: Default::default(),
+                    definition: DefId::intern(&syntax.item.definition),
+                    kind: SignatureKind::Const {
+                        ty: types.intern(Type::unit()),
+                        generics: Default::default(),
+                    },
+                    fingerprint: syntax.text_hash,
+                }))
+            }
+        }
+        crate::with_compiler_stack(|| {
+            let trace = Arc::new(Mutex::new(Vec::new()));
+            let mut adapters = crate::phases::engine_only_adapters();
+            adapters.signature = Some(Arc::new(Header(trace.clone())));
+            let mut engine = QueryEngine::new(default_environment(), adapters);
+            let context = default_context();
+            let file = engine
+                .sources
+                .add(
+                    "demand.hir",
+                    r#"extern "used" fn used()
+extern "unused" fn unused()"#
+                        .into(),
+                )
+                .unwrap();
+            let parsed = engine.parse_file(file, &context).unwrap();
+            let used = parsed.value.items[0].item.definition.clone();
+            let unused = parsed.value.items[1].item.definition.clone();
+            let snapshot = engine.signature_inputs();
+            assert!(trace.lock().unwrap().is_empty());
+            let first = snapshot.signature(DefId::intern(&used)).unwrap().unwrap();
+            let second = snapshot.signature(DefId::intern(&used)).unwrap().unwrap();
+            assert!(Arc::ptr_eq(first, second));
+            assert_eq!(*trace.lock().unwrap(), vec![used]);
+            snapshot.validation(&context.package);
+            assert!(trace.lock().unwrap().contains(&unused));
+        });
+    }
+
+    #[test]
+    fn archived_header_demand_does_not_hold_the_written_body_arenas() {
+        struct Header;
+        impl SignaturePhase for Header {
+            fn signature(
+                &self,
+                types: &TypeInterner,
+                _: &hirsel_types::TypeMemo,
+                syntax: Arc<ItemSyntax>,
+                _: &Declarations,
+                _: &mut PhaseProducts,
+                _: &mut dyn SignatureProvider,
+            ) -> Result<QueryOutput<Signature>, QueryError> {
+                Ok(crate::queries::output(Signature {
+                    metadata: Default::default(),
+                    definition: DefId::intern(&syntax.item.definition),
+                    kind: SignatureKind::Const {
+                        ty: types.intern(Type::unit()),
+                        generics: Default::default(),
+                    },
+                    fingerprint: syntax.text_hash,
+                }))
+            }
+        }
+        crate::with_compiler_stack(|| {
+            let mut adapters = crate::phases::engine_only_adapters();
+            adapters.signature = Some(Arc::new(Header));
+            let store = Arc::new(crate::store::MemStore::default());
+            let mut engine =
+                QueryEngine::new(default_environment(), adapters).with_result_store(store);
+            let context = default_context();
+            let file = engine
+                .sources
+                .add(
+                    "archived.hir",
+                    "fn used() { () }\nfn unused() { () }".into(),
+                )
+                .unwrap();
+            let parsed = engine.parse_file(file, &context).unwrap();
+            let path = parsed.value.items[0].item.definition.clone();
+            let written = Arc::downgrade(&parsed.value.items[0]);
+            let snapshot = engine.signature_inputs();
+            drop(parsed);
+            drop(engine);
+            assert!(
+                written.upgrade().is_none(),
+                "a demand source retains only ordinary archive handles"
+            );
+            assert!(snapshot.signature(DefId::intern(&path)).unwrap().is_ok());
+        });
     }
 
     /// Receipt observation uses a settled immutable row without touching its

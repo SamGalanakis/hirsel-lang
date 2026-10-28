@@ -146,6 +146,9 @@ impl NativeRecordContext {
     }
 
     pub fn capture(engine: &QueryEngine) -> Self {
+        if let Some(headers) = &engine.header_products {
+            return (**headers.owners()).clone();
+        }
         engine.source_records()
     }
 

@@ -955,6 +955,11 @@ impl QueryEngine {
         self.retire_snapshot();
     }
     pub(crate) fn materialize(&mut self, path: &DefPath) -> Result<(), QueryError> {
+        if let Some(headers) = self.header_products.clone()
+            && headers.materialize(self, path)?
+        {
+            return Ok(());
+        }
         if !self.items.contains_key(path)
             && let Some(owner) = hirsel_check_protocol::fact::fact_owner(path)
         {

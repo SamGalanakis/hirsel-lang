@@ -118,6 +118,7 @@ impl Recorder<'_> {
     /// in source order; None when it is not a type declaration of this
     /// session. A path naming one of its generic parameters names no type.
     fn type_references(&mut self, definition: &DefPath) -> Option<Vec<DefPath>> {
+        self.engine.materialize(definition).ok()?;
         let snapshot = self.engine.items.get(definition)?.first()?.clone();
         let item = &snapshot.item;
         let ItemKind::Type { generics, body, .. } = &item.kind else {
@@ -153,6 +154,7 @@ impl Recorder<'_> {
                     if !parameter
                         && let Ok(target) = self.lookup(&context, path).result
                         && target.0.package == definition.0.package
+                        && self.engine.materialize(&target).is_ok()
                         && self.engine.items.get(&target).is_some_and(|items| {
                             items
                                 .first()

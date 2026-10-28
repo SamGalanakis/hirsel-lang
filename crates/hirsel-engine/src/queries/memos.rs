@@ -689,6 +689,7 @@ impl QueryEngine {
     /// the subscribers of every changed read (S0's change set). Removed
     /// definitions forget their memos.
     pub(crate) fn note_inputs(&mut self, paths: impl IntoIterator<Item = DefPath>) {
+        self.adopt_completed_headers();
         let mut changes = ChangeSet::default();
         let mut any_names_changed = false;
         for path in paths {

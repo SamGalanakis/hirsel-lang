@@ -398,6 +398,14 @@ impl QueryEngine {
         mut self,
         allowance: MemoryReservation,
     ) -> Result<SourceIndexState, QueryError> {
+        if let Some(headers) = self
+            .snapshot
+            .as_ref()
+            .and_then(|(_, snapshot)| snapshot.header_products())
+            .cloned()
+        {
+            self.adopt_header_products(&headers);
+        }
         let types = self.source_types()?;
         let required = self.source_index_bytes_with_types(types.retained_bytes())?;
         if allowance.bytes() < required {
