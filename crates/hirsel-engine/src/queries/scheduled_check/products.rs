@@ -176,31 +176,11 @@ impl FrontCheckScope {
             return Err(QueryError::NotImplemented);
         }
         let lower = &self.owner().plan.lower;
-        // A clean cold check registers every specialization in the settled
-        // source inventory, including nested clauses inside an adopted body.
-        // Adopted front read logs need not repeat those internal header reads.
-        // A failed check includes only the specializations its completed
-        // obligations actually named.
-        let named: Option<BTreeSet<DefId>> =
-            (!self.owner().plan.front.settled_clean()).then(|| {
-                self.reads()
-                    .values()
-                    .flat_map(|reads| reads.iter())
-                    .filter_map(|(read, _)| match read {
-                        ReadKey::Signature(id) => Some(*id),
-                        _ => None,
-                    })
-                    .collect()
-            });
+        // The receipt records the complete settled header inventory, including
+        // nested clauses whose adopted front facts need no repeated read.
+        // Rejected Check bodies still withhold their separate Lower products.
         let mut signatures = BTreeMap::new();
         for (path, _) in headers.signatures() {
-            if hirsel_types::specialization_parts(path).is_some()
-                && named
-                    .as_ref()
-                    .is_some_and(|named| !named.contains(&DefId::intern(path)))
-            {
-                continue;
-            }
             signatures.insert(
                 path.clone(),
                 headers.section(path).ok_or_else(|| {

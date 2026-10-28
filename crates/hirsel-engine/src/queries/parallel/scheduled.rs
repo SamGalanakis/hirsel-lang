@@ -618,14 +618,6 @@ impl FrontBodyQueries {
             }
         })
     }
-    /// Whether every body settled so far checked without an error.
-    pub fn settled_clean(&self) -> bool {
-        self.outcomes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .all(|outcome| outcome.status.is_ok())
-    }
     /// Memo rows adopted through unchanged input subscriptions.
     pub fn clean_memos(&self) -> BTreeSet<crate::memo::MemoKey> {
         self.clean_memos
