@@ -93,11 +93,13 @@ impl CompileOutput {
             CompileResult::Check(checked)
             | CompileResult::SafeCheck { checked, .. }
             | CompileResult::CheckedProducts { checked, .. } => {
-                checked.sources = checked.sources.clone().retain_owner(owner.clone());
+                checked.sources =
+                    super::host_selector::retain_sources(checked.sources.clone(), owner.clone());
             }
             CompileResult::Tir(execution) => {
                 let execution = Arc::make_mut(execution);
-                execution.sources = execution.sources.clone().retain_owner(owner.clone());
+                execution.sources =
+                    super::host_selector::retain_sources(execution.sources.clone(), owner.clone());
             }
             CompileResult::TirBatch(batch) => {
                 Arc::make_mut(batch).owner = owner.clone();

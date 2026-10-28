@@ -7,6 +7,7 @@ use super::{
 use hirsel_engine::{
     CheckCompletion, CheckOutput, ToolError, loader_inputs::FrozenInputs, runtime::*,
 };
+use hirsel_span::SourceMap;
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -483,10 +484,14 @@ pub(super) fn retain_error(error: ToolError, owner: Arc<dyn Send + Sync>) -> Too
         } => ToolError::Query {
             error,
             phase,
-            sources: sources.retain_owner(owner),
+            sources: retain_sources(sources, owner),
         },
         other => other,
     }
+}
+
+pub(super) fn retain_sources(sources: SourceMap, owner: Arc<dyn Send + Sync>) -> SourceMap {
+    sources.clone().replace_owner(Arc::new((sources, owner)))
 }
 
 /// Already completed export outputs. Native receipt/object bytes come from
