@@ -113,3 +113,109 @@ fn admitted_staged_declarations_match_scalar_without_executing_or_publishing() {
         }
     });
 }
+
+#[test]
+fn staged_acceptance_checks_all_reads_and_admits_the_installed_copy() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        let source = directory.path().join("main.hir");
+        std::fs::write(
+            &source,
+            "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\npub fn main(){}\n",
+        )
+        .unwrap();
+        std::fs::write(&manifest,r#"{"schema":1,"package":{"name":"stage","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store: Arc::new(MemStore::default()),
+                hold_bytes: 0,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_program(&manifest)
+            .unwrap();
+        let definitions = program.engine.front_source_roots();
+        let scaled = definitions
+            .iter()
+            .find(|path| path.0.name == "scaled")
+            .unwrap();
+        let budget = ProcessBudget::new(1 << 30);
+        let errors = crate::scheduled_front::errors();
+        let weight = MemoryWeight {
+            retained: 64 << 10,
+            scratch: 8 << 20,
+            stack: 0,
+        };
+        let front = program
+            .engine
+            .front_body_queries(
+                &definitions,
+                weight,
+                budget.reserve(8 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+        let stage = FrontStageQueries::new(
+            &definitions,
+            front.clone(),
+            weight,
+            budget.reserve(1 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+        let mut runtime = AdmittedRuntime::new(
+            hirsel_intern::jobs::Jobs::new(2),
+            budget.reserve(512 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+        runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+        runtime.register(FRONT_STAGE_KIND, stage.factory()).unwrap();
+        let request = runtime.request(&[stage.query(scaled).unwrap()]);
+        let products = runtime.wait(request).unwrap();
+        let output = stage.outcome(products[0]).unwrap();
+        let (path, expected) = output.declarations().unwrap().next().unwrap();
+        let path = path.clone();
+        let expected = expected.clone();
+        assert!(
+            program
+                .engine
+                .signature_snapshot()
+                .signature(hirsel_syntax::DefId::intern(&path))
+                .is_none()
+        );
+        assert!(
+            program
+                .engine
+                .accept_front_staged(&output, budget.reserve(1).unwrap())
+                .is_err()
+        );
+        assert!(
+            program
+                .engine
+                .signature_snapshot()
+                .signature(hirsel_syntax::DefId::intern(&path))
+                .is_none()
+        );
+        program
+            .engine
+            .accept_front_staged(&output, budget.reserve(64 << 10).unwrap())
+            .unwrap();
+        assert_eq!(
+            *program.engine.item_signature(&path).unwrap().value,
+            expected
+        );
+        runtime.shutdown();
+        drop(runtime);
+        drop(output);
+        drop(stage);
+        drop(front);
+        assert!(
+            budget.reserved() > 0,
+            "installed source must retain its own grant"
+        );
+        drop(program);
+        assert_eq!(budget.reserved(), 0);
+    });
+}

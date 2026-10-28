@@ -40,6 +40,17 @@ impl FrontStageOutput {
     pub fn reads(&self) -> &Arc<Reads> {
         &self.data.reads
     }
+    pub fn installation_bytes(&self) -> Result<u64, QueryError> {
+        let registrations = self.data.result.as_ref().map_err(Clone::clone)?;
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(
+            crate::memo::retained::retained_staged_declaration_bytes(registrations)
+                .try_into()
+                .map_err(|_| QueryError::NotImplemented)?,
+        );
+        weight.tree::<DefPath, crate::comptime::StagedConstant>(registrations.len());
+        Ok(weight.bytes())
+    }
     pub fn declarations(&self) -> Result<impl Iterator<Item = (&DefPath, &Signature)>, QueryError> {
         let registrations = self.data.result.as_ref().map_err(Clone::clone)?;
         Ok(registrations
@@ -373,5 +384,83 @@ impl FrontStageQueries {
             errors,
             allowance,
         }))
+    }
+}
+
+impl QueryEngine {
+    /// Syntactic candidates only. The stage producer determines the actual
+    /// size inputs after ordinary P; selecting roots executes no body phase.
+    pub fn front_staged_roots(
+        &mut self,
+        definitions: &[DefPath],
+    ) -> Result<Vec<DefPath>, QueryError> {
+        let mut roots = Vec::new();
+        for path in definitions {
+            let signature = self.item_signature(path)?.value;
+            if !signature
+                .generics()
+                .iter()
+                .any(|parameter| matches!(parameter, hirsel_types::GenericParameter::Size { .. }))
+            {
+                continue;
+            }
+            let syntax = self.snapshot(path)?;
+            if syntax
+                .tree
+                .expressions
+                .iter()
+                .any(|expression| matches!(expression.kind, hirsel_syntax::ExprKind::Comptime(_)))
+            {
+                roots.push(path.clone());
+            }
+        }
+        Ok(roots)
+    }
+
+    /// Publish only a completed declaration product whose full source reads
+    /// still hold. The caller admits the installed copy independently of the
+    /// producer's retained output, just as accepted generated syntax does.
+    pub fn accept_front_staged(
+        &mut self,
+        output: &FrontStageOutput,
+        mut allowance: MemoryReservation,
+    ) -> Result<(), QueryError> {
+        let refused = |message: String| {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "staged declaration acceptance".into(),
+                message,
+            })
+        };
+        let registrations = output.data.result.as_ref().map_err(Clone::clone)?;
+        if let Some(key) = output
+            .reads()
+            .first_changed(|key| self.observe(output.owner(), key))
+        {
+            return Err(refused(format!(
+                "{}: changed staged declaration read {key:?}",
+                output.owner()
+            )));
+        }
+        if registrations
+            .iter()
+            .any(|row| row.constant.owner != *output.owner())
+        {
+            return Err(refused(
+                "declaration belongs to another source owner".into(),
+            ));
+        }
+        let installed = allowance
+            .split(output.installation_bytes()?)
+            .ok_or_else(|| {
+                refused("installed declarations exceed their source reservation".into())
+            })?;
+        // Check all reads and reserve the entire copy before publishing any
+        // declaration. Source/view clones keep that copy's original grant.
+        let registrations = registrations.clone();
+        self.sources = self.sources.clone().retain_owner(Arc::new(installed));
+        for registration in registrations {
+            self.install_staged(registration);
+        }
+        Ok(())
     }
 }
