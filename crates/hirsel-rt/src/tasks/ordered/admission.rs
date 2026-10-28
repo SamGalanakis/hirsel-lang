@@ -32,19 +32,41 @@ impl Admission {
         Ok(Some(Self { policy }))
     }
 
-    /// Install after topology, budgets and the run's mode are configured, and
-    /// before root publication. Width one uses the same saved-frame dispatcher
-    /// as wider Ordered runs; the home thread keeps its service ownership.
+    /// Activate before the first Tasks projection, while the sole root owns
+    /// the role. Earlier scalar effects have already completed in tape order.
+    /// # Safety
+    /// The caller supplies its live context; no runtime borrow crosses entry.
+    pub(crate) unsafe fn activate(ctx: *mut TaskCtx) {
+        if unsafe { (*ctx).run_ref().deferred_ordered.is_none() } {
+            return;
+        }
+        let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+        let admission = unsafe { (*ctx).run().deferred_ordered.take().unwrap() };
+        // Return the root's unused fuel chunk before changing its budget owner.
+        // Ordered initializes from the same held memory and remaining fuel.
+        let worker = unsafe { (*ctx).worker_ptr() };
+        unsafe {
+            (*ctx).switch_out();
+            admission.install(ctx);
+            TaskCtx::switch_in(ctx, worker);
+        }
+    }
+
+    /// Install after topology, budgets and the run's mode are configured.
+    /// A sole root can defer this until its first Tasks projection. Width one
+    /// uses the same saved-frame dispatcher as wider Ordered runs.
     ///
     /// # Safety
-    /// Admission's fresh root, before any code, with topology installed.
+    /// The sole root, with topology installed and no Tasks objects yet.
     /// Production qualification must cover every reachable runtime boundary
     /// and every service's alias, lifetime, physical-save and stop contract.
     pub(crate) unsafe fn install(self, ctx: *mut TaskCtx) {
         assert!(!unsafe { (*ctx).run_ref().free_mode });
         assert!(unsafe { crate::pool::wide((*ctx).run_ref()) });
         unsafe {
-            crate::pool::free::enable(ctx);
+            if !crate::pool::free::enabled((*ctx).run_ref()) {
+                crate::pool::free::enable(ctx);
+            }
             super::engine::enable(ctx, self.policy);
         }
     }
@@ -63,6 +85,91 @@ mod tests {
             ..Default::default()
         });
         run
+    }
+
+    fn defer(ctx: *mut TaskCtx, fail_capture: bool) {
+        let run = run("tasks.cooperative@1").validated().unwrap();
+        let admission = Admission::prepare(Some(&run)).unwrap().unwrap();
+        unsafe {
+            let mut pending = crate::managed_cores::Pending::new(Placement {
+                cores: Cores::Fixed(1),
+                ..Default::default()
+            });
+            pending.fail_capture = fail_capture;
+            (*ctx).run().deferred_capacity = Some(pending);
+            (*ctx).run().deferred_ordered = Some(admission);
+        }
+    }
+
+    #[test]
+    fn a_scalar_run_keeps_its_result_when_capacity_files_are_unreadable() {
+        for fail_capture in [false, true] {
+            let mut run = crate::host::BodyRun::new(1, false);
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| defer(ctx, fail_capture),
+                |ctx| unsafe {
+                    let block = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        0,
+                        8,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(block).cast::<u64>().write(42);
+                    assert_eq!(crate::alloc::payload(block).cast::<u64>().read(), 42);
+                    crate::release::hirsel_rt_v2_free(ctx, block);
+                    Admission::activate(ctx);
+                    assert!(super::super::engine::on(ctx));
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+        }
+    }
+
+    #[test]
+    fn the_first_pool_claim_stops_on_unreadable_capacity_before_its_effect() {
+        let mut run = crate::host::BodyRun::new(1, false);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| defer(ctx, true),
+            |ctx| unsafe {
+                Admission::activate(ctx);
+                crate::managed_cores::admit_capacity(ctx);
+                panic!("a pool claim ran after capacity admission failed");
+            },
+        );
+        assert_eq!(outcome.ended, Err(crate::stop::Stop::Requested));
+        assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn first_tasks_admission_preserves_existing_memory_charges_and_owns_later_release() {
+        let mut run = crate::host::BodyRun::new(1, false);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                defer(ctx, false);
+                (*ctx).set_budgets(Some(12345), Some(1 << 20));
+            },
+            |ctx| unsafe {
+                let block =
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 0, 128, 8, crate::alloc::DOMAIN_HEAP, 0);
+                let held = (*ctx).heap_ref().meter.held();
+                Admission::activate(ctx);
+                crate::managed_cores::admit_capacity(ctx);
+                assert!(super::super::engine::on(ctx));
+                assert_eq!((*ctx).heap_ref().meter.held(), held);
+                assert_eq!((*ctx).run_ref().fuel.remaining(), 12345);
+                crate::release::hirsel_rt_v2_free(ctx, block);
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
     }
 
     #[test]

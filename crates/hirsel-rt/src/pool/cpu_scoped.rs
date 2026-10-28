@@ -730,15 +730,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
                 if let Some(cause) = crate::tasks::canceled(ctx) {
                     return 16 + cause;
                 }
-                if width > grant.max_workers
-                    || (*ctx).run_ref().capacity.as_ref().map_or_else(
-                        || {
-                            std::thread::available_parallelism()
-                                .is_ok_and(|n| n.get() < width as usize)
-                        },
-                        |capacity| !capacity.permits(width),
-                    )
-                {
+                if width > grant.max_workers {
+                    return 4;
+                }
+                crate::managed_cores::admit_capacity(ctx);
+                if (*ctx).run_ref().capacity.as_ref().map_or_else(
+                    || std::thread::available_parallelism().is_ok_and(|n| n.get() < width as usize),
+                    |capacity| !capacity.permits(width),
+                ) {
                     return 4;
                 }
                 match enter(ctx, width) {

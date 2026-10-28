@@ -268,29 +268,39 @@ struct PermitState {
 }
 
 static PROCESS_PERMITS: std::sync::OnceLock<Arc<Permits>> = std::sync::OnceLock::new();
+static PROCESS_ADMITTED: Mutex<bool> = Mutex::new(false);
 fn process_permits() -> Arc<Permits> {
     Arc::clone(PROCESS_PERMITS.get_or_init(|| {
-        Arc::new(Permits::new(
-            std::thread::available_parallelism()
-                .map_or(1, |n| u32::try_from(n.get()).unwrap_or(u32::MAX)),
-        ))
+        // No filesystem discovery for a sole root. The first physical claim
+        // replaces this single-root grant with its strict snapshot before starting work.
+        Arc::new(Permits::new(1))
     }))
 }
 
-/// Seed the default process grant from the host snapshot admission already read.
-/// An embedding manager's existing grant and every live permit stay untouched.
+/// The first real snapshot seeds the process grant; explicit embedding grants
+/// and the credits of already-admitted runs keep their owner.
 pub(crate) fn init_compute_grant(limits: &hirsel_run_config::managed_cores::HostLimits) {
-    PROCESS_PERMITS.get_or_init(|| {
-        // Rust std sys/thread/unix.rs:175-187,887-890 takes the minimum of
-        // affinity and the floored ancestor quota, with at least one worker.
-        let affinity = limits.admission_affinity.len();
-        let limit = limits
-            .quota
-            .map_or(affinity, |q| affinity.min(q.floor().max(1)));
-        Arc::new(Permits::new(
-            u32::try_from(limit.max(1)).unwrap_or(u32::MAX),
-        ))
-    });
+    let mut admitted = PROCESS_ADMITTED.lock().unwrap();
+    if *admitted {
+        return;
+    }
+    let affinity = limits.admission_affinity.len();
+    let limit = limits
+        .quota
+        .map_or(affinity, |q| affinity.min(q.floor().max(1)));
+    update_compute_grant(u32::try_from(limit.max(1)).unwrap_or(u32::MAX));
+    *admitted = true;
+}
+
+fn ensure_compute_grant() {
+    let mut admitted = PROCESS_ADMITTED.lock().unwrap();
+    if *admitted {
+        return;
+    }
+    let limit = std::thread::available_parallelism()
+        .map_or(1, |n| u32::try_from(n.get()).unwrap_or(u32::MAX));
+    update_compute_grant(limit);
+    *admitted = true;
 }
 
 /// Set the process's compute grant. Only the embedding manager calls this;
@@ -298,6 +308,12 @@ pub(crate) fn init_compute_grant(limits: &hirsel_run_config::managed_cores::Host
 /// All runs, pool callbacks and nested local runner code use this same pool.
 pub fn set_compute_grant(limit: u32) {
     assert!(limit > 0, "a compute grant must be positive");
+    let mut admitted = PROCESS_ADMITTED.lock().unwrap();
+    update_compute_grant(limit);
+    *admitted = true;
+}
+
+fn update_compute_grant(limit: u32) {
     let permits = process_permits();
     {
         let mut state = permits.state.lock().unwrap();
@@ -1383,6 +1399,9 @@ fn home_computes(execs: &Execs) -> bool {
 }
 
 unsafe fn start_with_home(ctx: *mut TaskCtx, width: u32, migrate: bool, home_at_one: bool) {
+    if unsafe { (*ctx).run_ref().deferred_capacity.is_none() } {
+        ensure_compute_grant();
+    }
     // SAFETY: caller contract.
     let run = unsafe { (*ctx).run_ptr() };
     let execs = unsafe { init_execs(ctx) };
@@ -1811,6 +1830,7 @@ pub(crate) unsafe fn home_wake(run: *mut RunShared) -> Option<Arc<dyn Fn() + Sen
 /// A pool slot for an interval: an idle pool thread, a new one, or `None` when all
 /// [`POOL_THREADS`] are busy.
 pub(crate) fn claim(ctx: *mut TaskCtx) -> Option<u16> {
+    ensure_compute_grant();
     if let Some(capacity) = unsafe { (*ctx).run_ref().capacity.as_ref() } {
         capacity.refresh();
     }

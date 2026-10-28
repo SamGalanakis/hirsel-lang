@@ -73,7 +73,7 @@ fn with_current_driver<T>(ctx: *mut TaskCtx, f: impl FnOnce(TaskId, &mut Driver)
 
 /// Opt-in for supported native-boundary tests. General admission is not wired.
 /// # Safety
-/// Admission only, with physical dispatch installed and before root start.
+/// The sole root, with physical dispatch installed and no Tasks objects yet.
 /// The body uses only supported ordered boundaries and explicit dispatch end;
 /// no host or terminal effects. Native task tests
 /// use supported task/receive boundaries and dropless closure environments;

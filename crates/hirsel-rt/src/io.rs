@@ -3281,6 +3281,9 @@ unsafe fn native_print(
 }
 
 unsafe fn native_call(ctx: *mut crate::TaskCtx, request: Request) -> Completion {
+    if matches!(request, Request::Tasks { .. } | Request::TestTasks { .. }) {
+        unsafe { crate::tasks::ordered::admission::Admission::activate(ctx) };
+    }
     #[cfg(feature = "measurement")]
     let _segment =
         crate::tasks::profile::Operation::new(ctx, crate::tasks::profile::request_kind(&request));

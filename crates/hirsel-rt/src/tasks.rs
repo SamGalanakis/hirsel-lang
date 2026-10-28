@@ -3471,6 +3471,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    unsafe { crate::managed_cores::admit_capacity(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_spawn");
     if ordered::engine::on(ctx) {

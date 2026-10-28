@@ -2397,8 +2397,17 @@ pub(crate) unsafe fn execute(
             },
         }
     };
+    // A sole root needs no physical capacity or Ordered objects. Explicit
+    // observers retain their admission snapshot before they can accept requests.
+    let deferred_placement = placement_run
+        .filter(|_| ordered_enabled && replay.is_none() && options.trace_events.is_none())
+        .map(|run| run.record().placement.clone().unwrap_or_default())
+        .filter(|p| p.metrics.is_none() && p.control.is_none());
+    if deferred_placement.is_some() {
+        width = 1;
+    }
     // Replay validates placement syntax but never captures topology or opens a sidecar.
-    let managed = if replay.is_none() {
+    let managed = if replay.is_none() && deferred_placement.is_none() {
         placement_run
             .map(|run| run.record().placement.clone().unwrap_or_default())
             .map(|placement| {
@@ -2587,6 +2596,9 @@ pub(crate) unsafe fn execute(
     let admission_policy = managed
         .as_ref()
         .map(|(_, manager, _, _)| manager.admission_policy());
+    unsafe { &mut *ctx }.run().deferred_capacity = deferred_placement
+        .clone()
+        .map(crate::managed_cores::Pending::new);
     unsafe { &mut *ctx }.run().capacity = managed.map(|(reader, manager, writer, socket)| {
         crate::managed_cores::Service::new(reader, manager, writer, socket, worker_metrics)
     });
@@ -2758,43 +2770,63 @@ pub(crate) unsafe fn execute(
     }
     if let Some(ordered) = ordered {
         // SAFETY: fresh root, after topology/budgets and before root publication.
-        unsafe { ordered.install(ctx) };
+        if deferred_placement.is_some() {
+            unsafe { crate::pool::free::enable(ctx) };
+            unsafe { (*ctx).run().deferred_ordered = Some(ordered) };
+        } else {
+            unsafe { ordered.install(ctx) };
+        }
     }
     // Startup has published real destinations and Running synchronously. Capture
     // once before root entry: no socket round trip or program lifetime race.
-    let admitted_placement = admission_policy.map(|(request, resolved)| {
-        use hirsel_run_config::{CapacityAdmission, CapacityExclusion, RecordedPlacement};
-        let run_control = crate::host::RunControl::from_inner(std::sync::Arc::clone(&control));
-        let (launched, worker_phase) = run_control.worker_snapshot();
-        let (grant, _, _) = crate::pool::compute_permits();
-        let permitted = grant.saturating_sub(crate::pool::lost_compute_permits());
-        let scripted = placement_run.is_some_and(scripted_world);
-        let admission = if scripted || launched == 0 {
-            CapacityAdmission::NotPhysical {
-                requested: request.cores.clone(),
-                worker_phase,
-                reason: if scripted {
-                    CapacityExclusion::ScriptedWorld
-                } else {
-                    CapacityExclusion::ExecutorNotObserved
-                },
+    let admitted_placement = admission_policy
+        .map(|(request, resolved)| {
+            use hirsel_run_config::{CapacityAdmission, CapacityExclusion, RecordedPlacement};
+            let run_control = crate::host::RunControl::from_inner(std::sync::Arc::clone(&control));
+            let (launched, worker_phase) = run_control.worker_snapshot();
+            let (grant, _, _) = crate::pool::compute_permits();
+            let permitted = grant.saturating_sub(crate::pool::lost_compute_permits());
+            let scripted = placement_run.is_some_and(scripted_world);
+            let admission = if scripted || launched == 0 {
+                CapacityAdmission::NotPhysical {
+                    requested: request.cores.clone(),
+                    worker_phase,
+                    reason: if scripted {
+                        CapacityExclusion::ScriptedWorld
+                    } else {
+                        CapacityExclusion::ExecutorNotObserved
+                    },
+                }
+            } else {
+                CapacityAdmission::Physical {
+                    requested: request.cores.clone(),
+                    resolved,
+                    launched: launched.into(),
+                    permitted: permitted.into(),
+                    effective: launched.min(permitted).into(),
+                    worker_phase,
+                }
+            };
+            RecordedPlacement {
+                schema: 1,
+                request,
+                admission,
             }
-        } else {
-            CapacityAdmission::Physical {
-                requested: request.cores.clone(),
-                resolved,
-                launched: launched.into(),
-                permitted: permitted.into(),
-                effective: launched.min(permitted).into(),
-                worker_phase,
-            }
-        };
-        RecordedPlacement {
-            schema: 1,
-            request,
-            admission,
-        }
-    });
+        })
+        .or_else(|| {
+            deferred_placement.map(|request| {
+                use hirsel_run_config::{CapacityAdmission, CapacityExclusion, RecordedPlacement};
+                RecordedPlacement {
+                    schema: 1,
+                    admission: CapacityAdmission::NotPhysical {
+                        requested: request.cores.clone(),
+                        worker_phase: hirsel_run_config::managed_cores::WorkerPhase::Running,
+                        reason: CapacityExclusion::ExecutorNotObserved,
+                    },
+                    request,
+                }
+            })
+        });
     let attach_journal = (|| -> Result<(), String> {
         if let Some((admitted, tape)) = pending_host_journal {
             crate::host_launch::journal_at_admission(

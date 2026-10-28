@@ -353,6 +353,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         }
         version
     };
+    unsafe { crate::managed_cores::admit_capacity(ctx) };
     if super::engine::on(ctx) {
         let _role = unsafe { super::super::role::Guard::new(ctx) };
         // Validate the prefix in every mode, but inspect a certificate only

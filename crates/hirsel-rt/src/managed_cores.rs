@@ -172,6 +172,67 @@ impl ManagedCores {
     }
 }
 
+/// Host discovery belongs to the first physical claim, including a normal
+/// runnable child. Projecting Tasks alone does not claim host capacity.
+pub(crate) struct Pending {
+    placement: Placement,
+    #[cfg(test)]
+    pub(crate) fail_capture: bool,
+}
+impl Pending {
+    pub(crate) fn new(placement: Placement) -> Self {
+        Self {
+            placement,
+            #[cfg(test)]
+            fail_capture: false,
+        }
+    }
+    fn admit(self, control: Arc<crate::stop::Control>) -> Result<Service, String> {
+        #[cfg(test)]
+        if self.fail_capture {
+            return Err("the host capacity files are unreadable".into());
+        }
+        let reader = LinuxLimits::capture().map_err(|e| e.to_string())?;
+        let limits = reader.read().map_err(|e| e.to_string())?;
+        crate::pool::init_compute_grant(&limits);
+        let grant = HostGrant {
+            max_cores: crate::pool::compute_permits().0.into(),
+            cpus: limits.admission_affinity.clone(),
+        };
+        let manager = Arc::new(ManagedCores::admit(
+            self.placement,
+            grant,
+            limits,
+            Duration::ZERO,
+            RunControl::from_inner(control),
+            true,
+        )?);
+        Ok(Service::new(reader, manager, None, None, None))
+    }
+}
+
+/// # Safety
+/// The live task owns the scheduler role at its first physical pool claim.
+pub(crate) unsafe fn admit_capacity(ctx: *mut crate::TaskCtx) {
+    if unsafe { (*ctx).run_ref().deferred_capacity.is_none() } {
+        return;
+    }
+    unsafe { crate::tasks::ordered::admission::Admission::activate(ctx) };
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let pending = unsafe { (*ctx).run().deferred_capacity.take().unwrap() };
+    let control = unsafe { (*ctx).run_ref().control.clone() };
+    match pending.admit(control) {
+        Ok(capacity) => unsafe { (*ctx).run().capacity = Some(capacity) },
+        Err(_) => unsafe {
+            (*ctx)
+                .run_ref()
+                .control
+                .request(crate::stop::Stop::Requested);
+            crate::stop::check(ctx, Err::<(), _>(crate::stop::Stop::Requested));
+        },
+    }
+}
+
 /// The run owns its admission snapshot through the final worker exit. Claims
 /// and settlements refresh it synchronously; diagnostics never read capacity.
 /// Go 1.25 runtime/proc.go:6733-6767 refreshes through its existing sysmon.
