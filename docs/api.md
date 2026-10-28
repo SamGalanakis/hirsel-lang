@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2288 exported definitions; 999 variants.
+2291 exported definitions; 1011 variants.
 
 ## Types and roots
 
@@ -317,6 +317,82 @@ Variant of ClockError.
 <a id="def-core_401_2fCommand"></a>
 
 - `type Command uses {Dir} = { program: Path, args: List[String], dir: Option[Dir], env: Option[List[(String, String)]], own_group: bool }`
+
+<a id="def-core_401_2fCpuPoolError"></a>
+
+- `type CpuPoolError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = InvalidWidth() | NotGranted() | Busy() | WidthUnavailable() | NestedPool() | BatchTooLarge() | WorkerStartFailed() | CapacityLost() | Canceled(CancelCause) | NotSupported() | ResourceLimit() | MapperNotCertified()`
+
+<a id="def-core_401_2fCpuPoolError_23BatchTooLarge"></a>
+
+- `BatchTooLarge() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23Busy"></a>
+
+- `Busy() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23Canceled"></a>
+
+- `Canceled(CancelCause) -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23CapacityLost"></a>
+
+- `CapacityLost() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23InvalidWidth"></a>
+
+- `InvalidWidth() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23MapperNotCertified"></a>
+
+- `MapperNotCertified() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23NestedPool"></a>
+
+- `NestedPool() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23NotGranted"></a>
+
+- `NotGranted() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23NotSupported"></a>
+
+- `NotSupported() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23ResourceLimit"></a>
+
+- `ResourceLimit() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23WidthUnavailable"></a>
+
+- `WidthUnavailable() -> CpuPoolError`
+
+Variant of CpuPoolError.
+
+<a id="def-core_401_2fCpuPoolError_23WorkerStartFailed"></a>
+
+- `WorkerStartFailed() -> CpuPoolError`
+
+Variant of CpuPoolError.
 
 <a id="def-core_401_2fDeadline"></a>
 
@@ -3967,6 +4043,30 @@ trimmed; every pair needs `=`, a token name and a cookie-octet value, which
 may be enclosed in double quotes (removed). Errors return no pairs.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/cookie/CookieError`](#def-std_401_2fcookie_2fCookieError)
+
+
+## cpu
+
+<a id="def-std_401_2fcpu_2fPoolError"></a>
+
+- `pub type cpu.PoolError = CpuPoolError`
+
+Errors returned by core cpu.map_scoped. The operation runs preparation once
+and maps at most 2 * width owned jobs on exactly 1, 4, 8 or 16 fresh workers.
+Call the operation directly with locally visible callbacks. Both callbacks
+are closed, sendable and authority-free. Workers join before
+return; results preserve input order. Native replay starts no workers.
+Ordered admission retains the run's ordinary compute capacity as well as
+the W workers when other tasks are unfinished.
+Ordered requires a CpuWorker certificate for a non-allocating scalar mapper.
+Allocating mappers and graphs outside that certificate return
+MapperNotCertified before preparation runs.
+
+References: [`core@1/CpuPoolError`](#def-core_401_2fCpuPoolError)
+
+<a id="def-core_401_2fcpu_2fmap_5fscoped"></a>
+
+- `fn cpu.map_scoped[J: sendable + inert, R: sendable + inert](tasks: Tasks, width: u32, take prepare: sendable once fn() -> List[J] uses {}, take map: sendable fn(take job: J) -> R uses {}) -> Result[List[R], CpuPoolError]`
 
 
 ## crc32
