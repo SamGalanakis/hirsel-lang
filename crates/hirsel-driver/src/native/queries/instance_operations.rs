@@ -120,7 +120,10 @@ impl OperationDeclarations for InstanceOperations<'_> {
                             .inputs
                             .iter()
                             .any(|input| &input.ty == source)
-                })
+                }) || expected
+                    .events()
+                    .iter()
+                    .any(|event| &event.root_type == source)
             })
         {
             return self.declarations.seal_descriptor(source, table, target);
