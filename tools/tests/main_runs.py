@@ -754,6 +754,17 @@ class Reds(unittest.TestCase):
 
 
 class InfraDiagnostics(unittest.TestCase):
+    def test_compiler_source_text_is_not_an_infrastructure_diagnostic(self):
+        sys.path.insert(0, str(ROOT / 'tools/buck2'))
+        from run_failures import infra_reason
+        source = (', sources: SourceMap { files: [SourceFile { '
+                  'text: "timeout 20; connection refused; memory limit 2G reached" }] }')
+        failure = 'Query { error: Diagnostics([OWN-2]), phase: None' + source
+        self.assertIsNone(infra_reason(101, failure))
+        self.assertEqual(infra_reason(101, 'timed out after 30 s' + source), 'timeout')
+        self.assertEqual(infra_reason(101, failure + '\nchild timed out after 30 s'), 'timeout')
+        self.assertEqual(infra_reason(71, failure), 'memory limit (exit 71)')
+
     def test_exit_and_diagnostic_conventions(self):
         sys.path.insert(0, str(ROOT / 'tools/buck2'))
         from run_failures import infra_reason

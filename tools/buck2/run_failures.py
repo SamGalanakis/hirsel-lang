@@ -29,6 +29,8 @@ DIAGNOSTICS = (
 def infra_reason(exit_code=0, details='', *, timed_out=False):
     """Return a short infra reason, or None for an ordinary code failure."""
     details = re.sub(r'\x1b\[[0-9;]*m', '', details)
+    # Query's Debug source map contains program text, including timeout literals.
+    details = re.sub(r', sources: SourceMap \{[^\n]*', '', details)
     embedded = re.search(r'\b(?:exit(?:ed)?(?: with)?(?: status| code)?|return code)[:= ]+(-?\d+)\b', details, re.I)
     if not exit_code and embedded:
         exit_code = int(embedded[1])
