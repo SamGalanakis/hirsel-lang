@@ -206,6 +206,17 @@ fn staged_acceptance_checks_all_reads_and_admits_the_installed_copy() {
             *program.engine.item_signature(&path).unwrap().value,
             expected
         );
+        assert!(program.replace_source(&source,
+            "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n+n}\npub fn main(){}\n".into()).unwrap());
+        program.parse_sources().unwrap();
+        let error = program
+            .engine
+            .accept_front_staged(&output, budget.reserve(64 << 10).unwrap())
+            .unwrap_err();
+        assert!(
+            format!("{error:?}").contains("changed staged declaration read"),
+            "{error:?}"
+        );
         runtime.shutdown();
         drop(runtime);
         drop(output);
