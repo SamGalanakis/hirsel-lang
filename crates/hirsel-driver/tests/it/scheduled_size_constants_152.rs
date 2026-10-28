@@ -20,7 +20,7 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
                         ..Default::default()
                     })
                     .with_owned_engines()
-                    .load_program(&manifest)
+                    .load_check_package(&manifest)
                     .unwrap();
                 let definitions = program.engine.front_source_roots();
                 let scaled = definitions
