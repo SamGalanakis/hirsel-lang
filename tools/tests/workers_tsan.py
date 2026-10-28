@@ -14,7 +14,13 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'workers-tsan'
 
 
 class NativeQualification(unittest.TestCase):
-    def run_gate(self, width, stderr, status=0):
+    def run_gate(self, width, stderr, status=0, controls=True):
+        if controls:
+            stderr += "".join(
+                f"MUTANT {policy} {backend} W{width}: exit 66, emitted mapper race\n"
+                f"PRODUCTION {policy} {backend} W{width}: exit 0, no race, values checked\n"
+                for policy in ["tasks.free@1", "tasks.cooperative@1"]
+                for backend in ["llvm", "cranelift"])
         result = subprocess.CompletedProcess([], status, '4 passed\n', stderr)
         output = io.StringIO()
         with patch.dict(os.environ, {'HIRSEL_NATIVE_CPU_HARNESS': 'unused-harness'}), \
@@ -44,6 +50,9 @@ class NativeQualification(unittest.TestCase):
                 self.assertEqual(self.run_gate(width, ''.join(rows)), 0)
                 self.assertNotEqual(self.run_gate(width, rows[0] * 4), 0)
                 self.assertNotEqual(self.run_gate(width, ''.join(rows[:-1])), 0)
+
+    def test_full_width_witnesses_without_double_claim_detection_are_not_qualification(self):
+        self.assertNotEqual(self.run_gate(4, ''.join(self.witnesses(4)), controls=False), 0)
 
     def test_sanitizer_failure_status_is_preserved_even_with_witnesses(self):
         self.assertEqual(self.run_gate(8, ''.join(self.witnesses(8)), 66), 66)

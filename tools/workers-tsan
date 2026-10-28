@@ -22,6 +22,8 @@ if "HIRSEL_NATIVE_CPU_HARNESS" in os.environ:
     args, libtest = parser.parse_known_args()
     root = Path.cwd()
     binary = (root / os.environ["HIRSEL_NATIVE_CPU_HARNESS"]).resolve()
+    # Each fixture checks a double-claimed mapper and then the same executable
+    # with exclusive claims, retaining its value and physical-overlap checks.
     name = "native_tsan_"
     result = subprocess.run([binary, name, "--nocapture", "--test-threads=1", *libtest],
                             cwd=root / "crates/hirsel-cli", timeout=180,
@@ -47,6 +49,9 @@ if "HIRSEL_NATIVE_CPU_HARNESS" in os.environ:
         if missing:
             raise SystemExit("native CPU TSan full-width P not qualified; "
                              "exclusive CPU witnesses missing for " + ", ".join(missing))
+        for marker in [": exit 66, emitted mapper race", ": exit 0, no race, values checked"]:
+            if result.stderr.count(marker) != 4:
+                raise SystemExit("native CPU TSan harness lacks four completed cells: " + marker)
     raise SystemExit(result.returncode)
 
 if "HIRSEL_WORKERS_TSAN" in os.environ:

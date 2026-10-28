@@ -17,6 +17,39 @@ fn checked(output: std::process::Output) -> std::process::Output {
     );
     output
 }
+#[cfg(feature = "native-tsan")]
+fn emitted_mapper_race(executable: &std::path::Path, stderr: &str) {
+    let mut mapper_pcs = 0;
+    for line in stderr
+        .lines()
+        .filter(|line| line.trim_start().starts_with("#0 "))
+    {
+        let Some((_, suffix)) = line.split_once("+0x") else {
+            continue;
+        };
+        let offset: String = suffix
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit())
+            .collect();
+        let output = checked(
+            Command::new("llvm-addr2line")
+                .args(["-f", "-e"])
+                .arg(executable)
+                .arg(format!("0x{offset}"))
+                .output()
+                .unwrap(),
+        );
+        let symbol = String::from_utf8(output.stdout).unwrap();
+        if symbol.starts_with("_H1") && symbol.contains("cpu__physical") {
+            eprintln!("emitted mapper PC +0x{offset}: {}", symbol.trim());
+            mapper_pcs += 1;
+        }
+    }
+    assert!(
+        mapper_pcs >= 2,
+        "both conflicting accesses must name emitted mapper PCs\n{stderr}"
+    );
+}
 fn overlap(text: &str, width: usize, exclusive: &BTreeSet<usize>) -> bool {
     let mut events = vec![];
     let mut present = BTreeMap::new();
@@ -149,14 +182,16 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
             }
         }
         #[cfg(feature = "native-tsan")]
-        if std::env::var_os("HIRSEL_TSAN_CAMPAIGN_MUTANT").is_some() {
+        {
             command.env("HIRSEL_TSAN_DOUBLE_CLAIM", "1");
             let output = command.output().unwrap();
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!("MUTANT {provider} {backend} W{width}\n{stderr}");
             assert_eq!(output.status.code(), Some(66), "{output:?}");
             assert!(stderr.contains("ThreadSanitizer: data race"), "{stderr}");
-            continue;
+            emitted_mapper_race(&executable, &stderr);
+            eprintln!("MUTANT {provider} {backend} W{width}: exit 66, emitted mapper race");
+            command.env_remove("HIRSEL_TSAN_DOUBLE_CLAIM");
         }
         // Place this test's fresh workers on distinct admitted CPUs. Affinity
         // alone does not establish that the job holds those CPUs exclusively.
@@ -215,7 +250,11 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
         let output = child.wait_with_output().unwrap();
         let after = physical_host_snapshot(std::process::id(), &cpus);
         let retired = fs::read_to_string(root.join("probe.txt.threads")).unwrap_or_default();
-        checked(output);
+        let output = checked(output);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("ThreadSanitizer:"), "{stderr}");
+        #[cfg(feature = "native-tsan")]
+        eprintln!("PRODUCTION {provider} {backend} W{width}: exit 0, no race, values checked");
         if !exclusive.is_empty() {
             assert_eq!(
                 exclusive_cpus(&cpus),

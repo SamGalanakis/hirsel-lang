@@ -590,7 +590,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                     (*native).physical.points_left = 1024;
                     (*native).physical.reason = 0;
                     sp = (*native).physical.saved_sp;
-                    #[cfg(feature = "tsan")]
+                    #[cfg(all(feature = "tsan", target_arch = "x86_64"))]
                     crate::pool::free::double_claim::mapper(ctx, sp);
                     continue;
                 }
