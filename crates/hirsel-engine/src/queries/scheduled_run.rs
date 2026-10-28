@@ -1289,6 +1289,7 @@ impl QueryEngine {
         let source_paths = self.source_paths();
         let mut paths: BTreeSet<_> = source_paths.iter().cloned().collect();
         paths.extend(self.native_builtin_signatures().into_keys());
+        paths.extend(self.staged_constants.keys().cloned());
         let mut inputs = BTreeMap::new();
         let mut views = Vec::new();
         let required = FrontRunQueries::input_bytes(&paths.iter().cloned().collect::<Vec<_>>())

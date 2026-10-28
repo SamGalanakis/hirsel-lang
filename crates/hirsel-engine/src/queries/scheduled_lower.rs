@@ -11,6 +11,7 @@ mod inputs;
 mod inspection;
 mod reads;
 mod registration;
+mod staged;
 mod stored;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
@@ -352,6 +353,7 @@ impl FrontLowerOutput {
 }
 pub struct FrontLowerQueries {
     inputs: Inputs,
+    staged: staged::Staged,
     paths: BTreeMap<(u32, ContentHash), DefId>,
     /// Implementation hashes of the opaque types a lowered body can read the
     /// private representation of: its LayoutBody inputs.
@@ -557,13 +559,15 @@ impl FrontLowerQueries {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let mut weight = crate::NativeMetadataWeight::default();
         weight.tree::<DefPath, Materialized>(outcomes.len());
-        for (path, input) in &self.inputs {
-            let Some((_, outcome, _)) = outcomes.get(&(FRONT_EVALUATE_KIND, input.evaluate.0))
-            else {
+        for path in self.inputs.keys().cloned().chain(self.staged.instances()) {
+            let Some(id) = self.evaluate_query(&path) else {
+                continue;
+            };
+            let Some((_, outcome, _)) = outcomes.get(&(id.kind, id.address.0)) else {
                 continue;
             };
             if let Ok(Value::Constant(value)) = &outcome.result {
-                weight.path(path);
+                weight.path(&path);
                 weight.add(
                     value
                         .root_clone_bytes()
@@ -648,11 +652,13 @@ impl FrontLowerQueries {
         path: &DefPath,
         arguments: &[u64],
     ) -> Result<MaterializedRef, QueryError> {
-        if !arguments.is_empty() {
-            return Err(QueryError::NotImplemented);
-        }
+        let selected = if arguments.is_empty() {
+            path.clone()
+        } else {
+            hirsel_tir::constant_instance_path(path, arguments)
+        };
         let id = self
-            .evaluate_query(path)
+            .evaluate_query(&selected)
             .ok_or(QueryError::NotImplemented)?;
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let selected = outcomes
@@ -676,6 +682,8 @@ impl FrontLowerQueries {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         self.inputs
             .keys()
+            .cloned()
+            .chain(self.staged.instances())
             .filter(|path| {
                 self.evaluate_query(path).is_some_and(|id| {
                     outcomes
@@ -685,7 +693,6 @@ impl FrontLowerQueries {
                         })
                 })
             })
-            .cloned()
             .collect()
     }
     pub fn settled_instance(
@@ -858,7 +865,11 @@ impl FrontLowerQueries {
         self.id(path, FRONT_EVALUATE_KIND)
     }
     fn id(&self, path: &DefPath, kind: u32) -> Option<QueryId> {
-        let input = self.inputs.get(path)?;
+        let Some(input) = self.inputs.get(path) else {
+            return (kind == FRONT_EVALUATE_KIND)
+                .then(|| self.staged.selected(path))
+                .flatten();
+        };
         let key = if kind == FRONT_LOWER_KIND {
             &input.lower
         } else {
@@ -873,6 +884,11 @@ impl FrontLowerQueries {
         self.paths
             .get(&(id.kind, id.address.0))
             .map(|path| path.path().clone())
+            .or_else(|| {
+                self.staged
+                    .selection(id)
+                    .map(|selection| selection.owner.path().clone())
+            })
     }
     pub fn factory(self: &Arc<Self>) -> Arc<dyn LocalQueryFactory> {
         Arc::new(Factory(self.clone()))
@@ -969,7 +985,10 @@ impl FrontLowerQueries {
         let _read_scope = self.store.read_scope();
         let _publication = self.store.publication_scope();
         let input = &self.inputs[&path];
-        let key = if id.kind == FRONT_LOWER_KIND {
+        let selection = self.staged.selection(id);
+        let key = if let Some(selection) = &selection {
+            &selection.key
+        } else if id.kind == FRONT_LOWER_KIND {
             &input.lower
         } else {
             &input.evaluate
@@ -1039,7 +1058,8 @@ impl FrontLowerQueries {
         let mut result = if source.framed && source.depth.borrow().limit() == 0 {
             Err(source.overflow(self.inputs[&path].site))
         } else {
-            self.compute(id.kind, &path, &mut source).await
+            self.compute(id.kind, &path, selection.as_ref(), &mut source)
+                .await
         };
         // A missing dependency outcome is a scheduler/transport refusal, not
         // a typed body error. Preserve its exact identity through all clones
@@ -1212,6 +1232,7 @@ impl FrontLowerQueries {
         &self,
         kind: u32,
         path: &DefPath,
+        selection: Option<&staged::Selection>,
         source: &mut Source,
     ) -> Result<Value, QueryError> {
         let front = self.front.query(path).ok_or(QueryError::NotImplemented)?;
@@ -1290,6 +1311,48 @@ impl FrontLowerQueries {
             })
             .await?
         };
+        if let Some(selection) = selection {
+            let declaration = &self.staged.declarations[&selection.declaration];
+            source.record(
+                ReadKey::Signature(selection.declaration),
+                memos::signature_value(Some(declaration.signature.fingerprint)),
+            );
+            let expression = declaration.expression;
+            let hirsel_syntax::ExprKind::Comptime(child) =
+                analyzed.value.typed.syntax.tree.expressions[expression.0 as usize].kind
+            else {
+                return Err(QueryError::NotImplemented);
+            };
+            let ty = analyzed
+                .value
+                .typed
+                .checked
+                .expressions
+                .iter()
+                .find(|row| row.expression == expression)
+                .ok_or(QueryError::NotImplemented)?
+                .ty;
+            let sizes = declaration
+                .inputs
+                .iter()
+                .copied()
+                .zip(selection.arguments.iter().copied())
+                .collect();
+            let value = evaluate(
+                source.clone(),
+                analyzed,
+                staged,
+                signature,
+                expression,
+                child,
+                ty,
+                constants.clone(),
+                sizes,
+            )
+            .await?
+            .result?;
+            return Ok(Value::Constant(Box::new(Constants::new(value, constants))));
+        }
         if kind == FRONT_EVALUATE_KIND {
             let ItemKind::Const {
                 value: expression, ..
@@ -1330,6 +1393,7 @@ impl FrontLowerQueries {
                     expression,
                     ty,
                     constants.clone(),
+                    vec![],
                 )
                 .await?
                 .result?
@@ -1561,6 +1625,15 @@ impl Source {
             .owner
             .id(path, kind)
             .ok_or(QueryError::NotImplemented)?;
+        self.selected_value(id, path, kind, site).await
+    }
+    async fn selected_value(
+        &self,
+        id: QueryId,
+        path: &DefPath,
+        kind: u32,
+        site: Span,
+    ) -> Result<Value, QueryError> {
         let selected = self.reads.read_consuming(id).await;
         let outcome = self
             .owner
@@ -1662,8 +1735,35 @@ impl s1::AsyncDependencySource for Source {
         if arguments.is_empty() {
             return s1::AsyncDependencySource::constant(self, path).await;
         }
+        let result = async {
+            let id = self.owner.staged_query(path, arguments)?;
+            let declaration = self
+                .owner
+                .staged
+                .declarations
+                .get(&DefId::intern(path))
+                .ok_or(QueryError::NotImplemented)?;
+            let owner = declaration.owner.clone();
+            let site = self.owner.inputs[&owner].site;
+            let Value::Constant(value) = self
+                .selected_value(id, &owner, FRONT_EVALUATE_KIND, site)
+                .await?
+            else {
+                return Err(QueryError::NotImplemented);
+            };
+            value
+                .decoded(
+                    &self.owner.records,
+                    &self.owner.anchors,
+                    &*self.owner.store,
+                    self.owner.weight.scratch,
+                )
+                .map(|(value, _)| Arc::new(value))
+                .ok_or(QueryError::NotImplemented)
+        }
+        .await;
         s1::DependencyProduct {
-            result: Err(QueryError::NotImplemented),
+            result,
             reads: Reads::empty(),
         }
     }
@@ -1701,6 +1801,7 @@ impl crate::dictionaries::DeclarationSource for Source {
             input.child,
             input.ty,
             input.constants.to_vec(),
+            input.sizes.to_vec(),
         )
         .await?
         .result
@@ -1747,6 +1848,7 @@ impl PreparingSource for Values {
                 input.child,
                 input.ty,
                 input.constants.to_vec(),
+                input.sizes.to_vec(),
             )));
         }
         self.advance()
@@ -1782,6 +1884,7 @@ async fn evaluate(
     child: hirsel_syntax::ExprId,
     ty: hirsel_types::TypeId,
     constants: Vec<(hirsel_syntax::ExprId, Materialized)>,
+    sizes: Vec<(hirsel_types::SizeParameterRef, u64)>,
 ) -> Result<s1::DependencyProduct<Materialized>, QueryError> {
     let owner = source.owner.clone();
     let site = analyzed.value.typed.syntax.tree.expressions[expression.0 as usize]
@@ -1797,7 +1900,7 @@ async fn evaluate(
         child,
         ty,
         constants: &constants,
-        sizes: &[],
+        sizes: &sizes,
     }
     .lower(owner.snapshot.types(), &owner.memo, &*owner.lowering)?;
     let admission =
@@ -1946,6 +2049,13 @@ impl QueryEngine {
             let mut retention = retention.lock().unwrap_or_else(|e| e.into_inner());
             *retention = retention.checked_sub(layout_bytes).ok_or_else(refusal)?;
         }
+        let staged = staged::Staged::new(&self.staged_constants);
+        {
+            let mut remaining = retention.lock().unwrap_or_else(|error| error.into_inner());
+            *remaining = remaining
+                .checked_sub(staged.retained_bytes())
+                .ok_or_else(refusal)?;
+        }
         let runtime = self.comptime_runtime_types()?;
         let paths = inputs
             .iter()
@@ -1959,6 +2069,7 @@ impl QueryEngine {
             .collect();
         Ok(Arc::new(FrontLowerQueries {
             inputs,
+            staged,
             paths,
             layouts,
             front,
