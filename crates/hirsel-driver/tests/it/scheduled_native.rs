@@ -1,5 +1,9 @@
 use hirsel_driver::*;
-use hirsel_engine::{runtime::*, store::MemStore, *};
+use hirsel_engine::{
+    runtime::*,
+    store::{MemStore, ResultStore},
+    *,
+};
 use std::{collections::BTreeSet, sync::Arc};
 
 #[test]
@@ -130,6 +134,73 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 "reader metadata inspection performs no producer work"
             );
             runtime.shutdown();
+            drop(runtime);
+            let main_output = outputs
+                .iter()
+                .find(|o| o.product.source.definition == program.entry)
+                .unwrap();
+            let payload = store
+                .get_content(main_output.product.product.unwrap().record)
+                .unwrap()
+                .len() as u64;
+            // Reuse settled producers, but give a fresh native owner exactly
+            // one payload's allowance. A byte less must refuse publication.
+            for (available, accepts) in [(payload - 1, false), (payload, true)] {
+                let inputs = program
+                    .engine
+                    .front_native_definition_inputs(&definitions, 16 << 20)
+                    .unwrap();
+                let grant = inputs.input_bytes() + available;
+                let bounded = program
+                    .engine
+                    .front_native_definition_queries_with_inputs(
+                        front.clone(),
+                        lower.clone(),
+                        inputs,
+                        weight,
+                        budget.reserve(grant).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                let mut bounded_runtime = AdmittedRuntime::new(
+                    hirsel_intern::jobs::Jobs::new(jobs),
+                    budget.reserve(512 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+                bounded_runtime
+                    .register(FRONT_BODY_KIND, front.factory())
+                    .unwrap();
+                bounded_runtime
+                    .register_local(FRONT_LOWER_KIND, lower.factory())
+                    .unwrap();
+                bounded_runtime
+                    .register_local(FRONT_EVALUATE_KIND, lower.factory())
+                    .unwrap();
+                bounded_runtime
+                    .register(FRONT_NATIVE_DEFINITION_KIND, bounded.factory())
+                    .unwrap();
+                let request = bounded_runtime.request(&[bounded.query(&program.entry).unwrap()]);
+                let result = bounded_runtime.wait(request);
+                if accepts {
+                    let product = result.expect("one payload fits exactly")[0];
+                    assert_eq!(
+                        store.get_content(product.record).unwrap().len() as u64,
+                        payload
+                    );
+                    assert_eq!(
+                        bounded.outcome(product).unwrap().product.source.definition,
+                        program.entry
+                    );
+                } else {
+                    assert_eq!(
+                        result.unwrap_err(),
+                        errors.resource,
+                        "oversized payload remains refused"
+                    );
+                }
+                bounded_runtime.shutdown();
+            }
             drop(program);
             let main = reader
                 .read(definitions.iter().find(|p| p.0.name == "main").unwrap())

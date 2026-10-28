@@ -423,9 +423,9 @@ impl Task {
             if bytes.len() as u64 > owner.weight.scratch {
                 return Err(owner.errors.resource);
             }
-            let charge = (bytes.len() as u64)
-                .checked_mul(2)
-                .ok_or(owner.errors.resource)?;
+            // Encoding is transient scratch. The retained source rows share
+            // their producers' ownership; charge this durable payload once.
+            let charge = bytes.len() as u64;
             let mut remaining = owner.remaining.lock().unwrap_or_else(|e| e.into_inner());
             *remaining = remaining.checked_sub(charge).ok_or(owner.errors.resource)?;
             drop(remaining);
