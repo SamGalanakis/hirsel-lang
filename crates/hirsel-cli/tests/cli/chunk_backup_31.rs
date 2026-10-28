@@ -170,10 +170,10 @@ fn scripted(boundaries: bool) {
         let path = package(&root);
         seal_tools(&root);
         let cases = cases(&root, boundaries);
-        let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
-        check_program(&mut loaded);
+        let prepared = hirsel_driver::request_tir(&path, hirsel_engine::Verify::On, None)
+            .unwrap_or_else(|e| panic!("{e}"));
         let run = RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -204,21 +204,13 @@ fn scripted(boundaries: bool) {
                 .filter(|name| selected_engine(name))
             {
                 eprintln!("CHUNK_BACKUP_31_STARTED {id} {engine} steps={steps}");
-                let result = if engine == "reference" {
-                    hirsel_engine::run_observed_snapshot_bounded(
-                        &mut loaded.engine,
-                        &run,
-                        world.clone(),
-                        steps,
-                    )
-                } else {
-                    hirsel_engine::run_observed_checked_bounded(
-                        &mut loaded.engine,
-                        &run,
-                        world.clone(),
-                        steps,
-                    )
-                }
+                let result = hirsel_driver::testing::observe_tir(
+                    &prepared,
+                    &run,
+                    world.clone(),
+                    hirsel_interp::Limits { steps: Some(steps), ..Default::default() },
+                    engine == "checked-h",
+                )
                 .unwrap_or_else(|e| panic!("{id}/{engine}: {e}"));
                 fs::write(
                     root.join(format!("{id}-{engine}-outcome")),
@@ -331,21 +323,13 @@ fn scripted(boundaries: bool) {
                     inputs: events,
                     ..run.clone()
                 };
-                let replayed = if engine == "reference" {
-                    hirsel_engine::run_observed_snapshot_bounded(
-                        &mut loaded.engine,
-                        &replay_run,
-                        world.clone(),
-                        steps,
-                    )
-                } else {
-                    hirsel_engine::run_observed_checked_bounded(
-                        &mut loaded.engine,
-                        &replay_run,
-                        world.clone(),
-                        steps,
-                    )
-                }
+                let replayed = hirsel_driver::testing::observe_tir(
+                    &prepared,
+                    &replay_run,
+                    world.clone(),
+                    hirsel_interp::Limits { steps: Some(steps), ..Default::default() },
+                    engine == "checked-h",
+                )
                 .unwrap();
                 assert_eq!(
                     replayed.observation.as_ref(),
@@ -960,10 +944,9 @@ fn chunk_backup_31_fragmentation_and_reset_real_splitter() {
             .push(serde_json::json!({"path":"fragment.hir","module":[]}));
         fs::write(&path, config.to_string()).unwrap();
         seal_tools(&root);
-        let mut loaded = hirsel_driver::load_program(&path).unwrap();
-        check_program(&mut loaded);
+        let prepared = hirsel_driver::request_tir(&path, hirsel_engine::Verify::On, None).unwrap();
         let run = RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -971,21 +954,13 @@ fn chunk_backup_31_fragmentation_and_reset_real_splitter() {
             .into_iter()
             .filter(|name| selected_engine(name))
         {
-            let result = if engine == "reference" {
-                hirsel_engine::run_observed_snapshot_bounded(
-                    &mut loaded.engine,
-                    &run,
-                    SimulationConfig::default(),
-                    STEPS,
-                )
-            } else {
-                hirsel_engine::run_observed_checked_bounded(
-                    &mut loaded.engine,
-                    &run,
-                    SimulationConfig::default(),
-                    STEPS,
-                )
-            }
+            let result = hirsel_driver::testing::observe_tir(
+                &prepared,
+                &run,
+                SimulationConfig::default(),
+                hirsel_interp::Limits { steps: Some(STEPS), ..Default::default() },
+                engine == "checked-h",
+            )
             .unwrap();
             fs::write(
                 root.join(format!("{engine}-outcome")),
