@@ -5,6 +5,7 @@ use super::*;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CpuMapperGraph {
     pub growth: BTreeMap<(ContentHash, usize), CpuGrowth>,
+    pub regional: BTreeMap<(ContentHash, usize), CpuRegional>,
     pub graph: ScalarGraph,
     pub helpers: ContentHash,
     pub spines: BTreeMap<ContentHash, Spine>,
@@ -24,6 +25,16 @@ pub struct CpuGrowth {
     pub layout: LayoutId,
     pub element: LayoutId,
     pub size: u64,
+    pub align: u32,
+}
+
+/// Headerless storage in the exact compiler-local region, with its ordinary
+/// descriptor, cleanup policy and alignment independently reconstructed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CpuRegional {
+    pub construct: ConstructId,
+    pub region: RegionInstanceId,
+    pub layout: LayoutId,
     pub align: u32,
 }
 
@@ -56,6 +67,7 @@ pub fn cpu_mapper_graph(
         helpers,
         spines: BTreeMap::new(),
         growth: BTreeMap::new(),
+        regional: BTreeMap::new(),
         allocations: BTreeMap::new(),
         cleanup: BTreeSet::new(),
     };
@@ -102,6 +114,9 @@ pub fn cpu_mapper_graph(
                 }
                 Action::Grow(recipe) => {
                     out.growth.insert((id, index), recipe);
+                }
+                Action::Regional(recipe) => {
+                    out.regional.insert((id, index), recipe);
                 }
                 Action::Cleanup => {
                     out.cleanup.insert((id, index));
@@ -183,6 +198,7 @@ pub fn validate_cpu_mapper_graph(
         return false;
     }
     let mut growth = BTreeMap::new();
+    let mut regional = BTreeMap::new();
     let mut allocations = BTreeMap::new();
     let mut cleanup = BTreeSet::new();
     let mut instructions = 0usize;
@@ -208,6 +224,9 @@ pub fn validate_cpu_mapper_graph(
                 }
                 Some(Action::Grow(recipe)) => {
                     growth.insert((*id, index), recipe);
+                }
+                Some(Action::Regional(recipe)) => {
+                    regional.insert((*id, index), recipe);
                 }
                 Some(Action::Cleanup) => {
                     cleanup.insert((*id, index));
@@ -270,7 +289,8 @@ pub fn validate_cpu_mapper_graph(
             !leaves.contains(id)
         });
     }
-    growth == proposal.growth
+    regional == proposal.regional
+        && growth == proposal.growth
         && allocations == proposal.allocations
         && cleanup == proposal.cleanup
         && proposal.spines.len() == graph.bodies.len()
@@ -298,13 +318,14 @@ fn identity(
             proposal.helpers.0.as_slice(),
             &[u8::from(fuel)],
             format!(
-                "{:?}{:?}{:?}{:?}{:?}{:?}",
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
                 proposal.graph.root,
                 proposal.graph.bodies,
                 proposal.allocations,
                 proposal.growth,
                 proposal.cleanup,
-                proposal.spines
+                proposal.spines,
+                proposal.regional
             )
             .as_bytes(),
         ],
@@ -363,14 +384,31 @@ fn body_custody(u: &LirUnit<Ready>, table: &LayoutTable) -> bool {
     };
     if u.values.iter().enumerate().any(|(index, value)| {
         let ty = &u.types[value.ty.index()];
-        if local_callable(ty) {
+        if ty.repr == ValueRepr::RegionMark {
+            u.instructions
+                .iter()
+                .filter(|inst| {
+                    matches!(inst, Inst::RegionEnter { result, region }
+                    if result.index() == index
+                        && u.tables.regions.get(region.index()).is_some_and(|r| !r.seal_demand))
+                })
+                .count()
+                != 1
+        } else if ty.repr == ValueRepr::Uncounted {
+            !cpu_owned_layout(table, ty.layout)
+                || !table.layout(ty.layout).is_some_and(|layout| {
+                    layout.scan.is_empty() && layout.drop.is_empty() && layout.finalizer.is_none()
+                })
+        } else if local_callable(ty) {
             super::plan::known_code(u, ValueId(index as u32), &[], false).is_none()
         } else {
             !owned(ty)
         }
     }) || u.slots.iter().any(|slot| {
         let ty = &u.types[slot.ty.index()];
-        !owned(ty) && !local_callable(ty)
+        !owned(ty)
+            && !local_callable(ty)
+            && !(ty.repr == ValueRepr::Uncounted && cpu_owned_layout(table, ty.layout))
     }) {
         return false;
     }
@@ -441,6 +479,7 @@ enum Action {
     Private,
     Allocate(ConstructId),
     Grow(CpuGrowth),
+    Regional(CpuRegional),
     Cleanup,
 }
 
@@ -499,8 +538,7 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
             let SizeSpec::Fixed(size) = record.size else {
                 return None;
             };
-            // Holder-bearing detach and regional storage need separate custody.
-            if !scalar_image(table, element) {
+            if !cpu_owned_layout(table, element) {
                 return None;
             }
             Action::Grow(CpuGrowth {
@@ -513,13 +551,35 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
             })
         }
         Inst::SeqSetLen { address, .. } if !mutable_capture(u, *address) => Action::Private,
-        Inst::Dup { .. } | Inst::Release { .. } | Inst::Share { .. } => Action::Cleanup,
+        Inst::Dup { .. }
+        | Inst::Release { .. }
+        | Inst::Share { .. }
+        | Inst::RegionEnter { .. }
+        | Inst::RegionExit { .. } => Action::Cleanup,
         Inst::Construct {
             result, construct, ..
         } => {
             let ty = &u.types[u.values[result.index()].ty.index()];
             let site = &u.tables.constructs[construct.index()];
-            if matches!(ty.repr, ValueRepr::Block) {
+            if let Some(Placement::Fixed(StorageOwner::LocalRegion(region))) = site.placement {
+                let layout = table.layout(site.layout)?;
+                if ty.repr != ValueRepr::Uncounted
+                    || !cpu_owned_layout(table, site.layout)
+                    || !layout.scan.is_empty()
+                    || !layout.drop.is_empty()
+                    || layout.finalizer.is_some()
+                    || layout.kind == LayoutKind::Flat
+                    || u.tables.regions.get(region.index())?.seal_demand
+                {
+                    return None;
+                }
+                Action::Regional(CpuRegional {
+                    construct: *construct,
+                    region,
+                    layout: site.layout,
+                    align: layout.align,
+                })
+            } else if matches!(ty.repr, ValueRepr::Block) {
                 if !matches!(
                     site.placement,
                     Some(Placement::Fixed(StorageOwner::Heap(_)))

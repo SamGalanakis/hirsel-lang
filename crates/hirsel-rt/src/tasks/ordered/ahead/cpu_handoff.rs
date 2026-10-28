@@ -14,6 +14,8 @@ pub const SUMMARY_WITHDRAWN: u32 = 3;
 pub const GROW_BLOCK: u32 = 0;
 pub const GROW_SEQUENCE: u32 = 1;
 pub const ALLOC_REGION: u32 = 2;
+/// Headerless compiler-local storage, with the ordinary non-geometric segment charge.
+pub const ALLOC_RAW_REGION: u32 = 3;
 pub const STACK_BYTES: u64 = 80;
 
 /// The value and retained-block table remain owned by the saved mapper until

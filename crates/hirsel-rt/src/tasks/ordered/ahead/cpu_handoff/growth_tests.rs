@@ -334,6 +334,16 @@ fn shared_flat_sequence_growth_keeps_other_holders_and_retries_once() {
 }
 
 fn run_region(refuse: bool, diagnostic: bool, tracked: bool, growth: Option<u64>) {
+    run_region_storage(refuse, diagnostic, tracked, growth, false);
+}
+
+fn run_region_storage(
+    refuse: bool,
+    diagnostic: bool,
+    tracked: bool,
+    growth: Option<u64>,
+    raw: bool,
+) {
     let grant = hirsel_run_schema::CpuGrant {
         provider: "cpu.scoped@1".into(),
         max_workers: 4,
@@ -386,7 +396,7 @@ fn run_region(refuse: bool, diagnostic: bool, tracked: bool, growth: Option<u64>
             super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_enter((*ctx).ahead_physical);
             let mut request = Growth {
                 version: VERSION,
-                kind: ALLOC_REGION,
+                kind: if raw { ALLOC_RAW_REGION } else { ALLOC_REGION },
                 ordinal: 0,
                 block: std::ptr::null_mut(),
                 region,
@@ -441,15 +451,25 @@ fn run_region(refuse: bool, diagnostic: bool, tracked: bool, growth: Option<u64>
             }
             let block = request.block;
             assert!(!block.is_null());
-            assert_eq!(alloc::payload(block).addr() % 64, 0);
-            assert_eq!(
-                (*block).count,
-                if tracked {
-                    crate::COUNT_ARENA_UNIQUE
-                } else {
-                    crate::COUNT_IMMORTAL
-                }
-            );
+            let storage = if raw {
+                block.cast::<u8>()
+            } else {
+                alloc::payload(block)
+            };
+            assert_eq!(storage.addr() % 64, 0);
+            std::ptr::write_bytes(storage, 0x79, 64);
+            assert_eq!(*storage.add(63), 0x79);
+            if !raw {
+                assert_eq!(alloc::payload(block).addr() % 64, 0);
+                assert_eq!(
+                    (*block).count,
+                    if tracked {
+                        crate::COUNT_ARENA_UNIQUE
+                    } else {
+                        crate::COUNT_IMMORTAL
+                    }
+                );
+            }
             let task = engine::current(ctx);
             let owner = engine::with_driver(ctx, |d| {
                 d.cpu_batch.as_ref().unwrap().block_owner(task).unwrap()
@@ -460,14 +480,16 @@ fn run_region(refuse: bool, diagnostic: bool, tracked: bool, growth: Option<u64>
                 .unwrap()
                 .retain(owner, &[block])
                 .unwrap();
-            assert_eq!(retained.len(), 1);
-            assert!(!ledger.blocks.lock().unwrap().region_owned(
-                crate::pool::cpu_scoped::ledger::blocks::Owner {
-                    task: owner.task + (1 << 32),
-                    ..owner
-                },
-                region.addr()
-            ));
+            assert_eq!(retained.len(), usize::from(!raw));
+            assert!(
+                raw || !ledger.blocks.lock().unwrap().region_owned(
+                    crate::pool::cpu_scoped::ledger::blocks::Owner {
+                        task: owner.task + (1 << 32),
+                        ..owner
+                    },
+                    region.addr()
+                )
+            );
             crate::tasks::role::release(ctx);
             crate::stop::set_running(ctx);
             crate::fiber::switch(&raw mut native.physical.idle_sp, native.physical.saved_sp);
@@ -681,6 +703,15 @@ fn saved_tracked_growth_moves_holders_charges_once_and_revokes_every_generation_
             for extent in [256, 65184, 65536] {
                 run_region(refuse, diagnostic, true, Some(extent));
             }
+        }
+    }
+}
+
+#[test]
+fn saved_raw_region_preserves_headerless_storage_across_backing_refusal() {
+    for diagnostic in [false, true] {
+        for refuse in [false, true] {
+            run_region_storage(refuse, diagnostic, false, None, true);
         }
     }
 }

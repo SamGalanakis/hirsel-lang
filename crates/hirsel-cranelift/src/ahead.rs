@@ -464,11 +464,20 @@ impl FnEmitter<'_, '_, '_> {
         let pending = self.b.ins().iconst(types::I32, 0);
         let bytes = self.u64c(summary.bytes);
         let descriptor = self.descriptor_value(summary.layout)?;
-        let count = self.b.ins().iconst(types::I32, i64::from(summary.retained));
-        let retained = if summary.retained {
-            image.ptr
-        } else {
+        let count = self
+            .b
+            .ins()
+            .iconst(types::I32, i64::from(summary.retained_count));
+        let retained = if summary.retained_count == 0 {
             self.u64c(0)
+        } else {
+            let (table, _) = self.stack_bytes(u64::from(summary.retained_count) * 8, 8);
+            let zero = self.u64c(0);
+            for i in 0..summary.retained_count {
+                self.store_at(zero, table, u64::from(i) * 8);
+            }
+            self.cpu_retained(image.ptr, &summary.owners, table, &mut 0)?;
+            table
         };
         for (offset, value) in [
             (0, version),
@@ -562,5 +571,139 @@ impl FnEmitter<'_, '_, '_> {
         let grown = self.load_ty(types::I64, record, 16);
         self.store_at(grown, place.ptr, 0);
         Ok(true)
+    }
+}
+
+impl FnEmitter<'_, '_, '_> {
+    fn cpu_retained(
+        &mut self,
+        base: Value,
+        scan: &[hirsel_lir::layout_types::ScanStep],
+        table: Value,
+        cursor: &mut u64,
+    ) -> Emitted {
+        use hirsel_lir::layout_types::ScanStep;
+        for step in scan {
+            match step {
+                ScanStep::Counted { offset } | ScanStep::SliceOwner { offset } => {
+                    let root = self.load_ty(types::I64, base, *offset);
+                    self.store_at(root, table, *cursor * 8);
+                    *cursor += 1;
+                }
+                ScanStep::Inline { offset, layout } => {
+                    let child = self.offset(base, *offset);
+                    let scan = self.layout(*layout)?.scan.clone();
+                    self.cpu_retained(child, &scan, table, cursor)?;
+                }
+                ScanStep::Repeat {
+                    offset,
+                    count,
+                    stride,
+                    element,
+                } => {
+                    let scan = self.layout(*element)?.scan.clone();
+                    for i in 0..*count {
+                        let child = self.offset(base, offset + i * stride);
+                        self.cpu_retained(child, &scan, table, cursor)?;
+                    }
+                }
+                ScanStep::ActiveVariant {
+                    tag_offset,
+                    form,
+                    variants,
+                } => {
+                    let active = self.load_tag(base, *tag_offset, *form);
+                    let active = self.b.ins().uextend(types::I64, active);
+                    let done = self.b.create_block();
+                    let mut switch = cranelift_frontend::Switch::new();
+                    let mut arms = Vec::new();
+                    for (variant, steps) in variants {
+                        let arm = self.b.create_block();
+                        switch.set_entry(u128::from(*variant), arm);
+                        arms.push((arm, steps));
+                    }
+                    switch.emit(&mut self.b, active, done);
+                    for (arm, steps) in arms {
+                        self.b.switch_to_block(arm);
+                        self.cpu_retained(base, steps, table, cursor)?;
+                        self.b.ins().jump(done, &[]);
+                    }
+                    self.b.switch_to_block(done);
+                }
+                _ => return self.invalid("uncertified CPU retained root"),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FnEmitter<'_, '_, '_> {
+    pub(crate) fn cpu_region(
+        &mut self,
+        region: Value,
+        layout: hirsel_lir::layout_types::LayoutId,
+        extent: Value,
+        align: u32,
+    ) -> Emitted<Option<Value>> {
+        if !self.em.inputs.unit().alternate {
+            return Ok(None);
+        }
+        let Some(plan) = self.em.inputs.unit().ahead else {
+            return Ok(None);
+        };
+        let Some(recipe) = plan.cpu_regional(self.unit.header.instance, self.instruction_index)
+        else {
+            return Ok(None);
+        };
+        if recipe.layout != layout || recipe.align != align {
+            return self.invalid("CPU regional layout mismatch");
+        }
+        let Some(offset) =
+            plan.cpu_ordinal(self.unit.header.instance, self.em.inputs.unit().layouts)
+        else {
+            return self.invalid("ambiguous CPU regional ordinal");
+        };
+        let Some(state) = self.ahead_state else {
+            return self.invalid("CPU region without physical state");
+        };
+        let environment = self.load_ty(
+            types::I64,
+            state,
+            hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET,
+        );
+        let ordinal = self.load_ty(types::I64, environment, offset);
+        let (record, _) = self.stack_bytes(88, 8);
+        let version = self.b.ins().iconst(types::I32, 1);
+        let kind = self.b.ins().iconst(types::I32, 3);
+        let zero32 = self.b.ins().iconst(types::I32, 0);
+        let zero = self.u64c(0);
+        let descriptor = self.descriptor_value(layout)?;
+        let align = self.u64c(u64::from(align));
+        for (offset, value) in [
+            (0, version),
+            (4, kind),
+            (8, ordinal),
+            (16, zero),
+            (24, region),
+            (32, descriptor),
+            (36, zero32),
+            (40, extent),
+            (48, align),
+            (56, zero),
+            (64, zero),
+            (72, zero),
+            (80, zero),
+        ] {
+            self.store_at(value, record, offset);
+        }
+        self.ahead_flush();
+        let status = self.rt1(
+            hirsel_lir::runtime_abi::RuntimeEntry::CpuAheadGrow,
+            &[state, record],
+        )?;
+        self.ahead_reload();
+        let refused = self.b.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
+        self.b.ins().trapnz(refused, crate::function::TRAP);
+        Ok(Some(self.load_ty(types::I64, record, 16)))
     }
 }

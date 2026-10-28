@@ -3,6 +3,7 @@ use super::*;
 use crate::alloc;
 
 pub(in crate::tasks::ordered::ahead) enum Plan {
+    RawRegion(crate::region::cpu_ahead::RawPlan),
     Heap(HeapPlan),
     Region {
         allocation: crate::region::cpu_ahead::Plan,
@@ -143,6 +144,67 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
     let pointer = unsafe { (*native).growth };
     if unsafe { pointer.cast::<u32>().read() } != VERSION {
         unsafe { finish(native, std::ptr::null_mut(), NOT_CERTIFIED) };
+        return Ok(true);
+    }
+    if unsafe { (*native).growth_plan.is_none() && (*pointer).kind == ALLOC_RAW_REGION } {
+        let request = unsafe { &*pointer };
+        let task = super::super::super::engine::current(ctx);
+        let owner = super::super::super::engine::with_driver(ctx, |d| {
+            d.cpu_batch
+                .as_ref()
+                .and_then(|batch| batch.block_owner(task))
+        });
+        let certified = owner.is_some_and(|owner| {
+            owner.ordinal == request.ordinal
+                && request.block.is_null()
+                && request.flags == 0
+                && unsafe { (*ctx).heap_ref().meter.cpu.get() }.is_none_or(|ledger| {
+                    ledger
+                        .blocks
+                        .lock()
+                        .unwrap()
+                        .region_owned(owner, request.region.addr())
+                })
+        });
+        let plan = certified
+            .then(|| unsafe {
+                crate::region::cpu_ahead::raw_plan(
+                    ctx,
+                    request.region,
+                    request.extent,
+                    request.align,
+                )
+            })
+            .flatten();
+        let Some(plan) = plan else {
+            unsafe { finish(native, std::ptr::null_mut(), NOT_CERTIFIED) };
+            return Ok(true);
+        };
+        unsafe {
+            (*native)
+                .allocation
+                .begin(request.index, request.extent, request.align);
+            (*native).growth_plan = Some(Plan::RawRegion(plan));
+        }
+    }
+    if let Some(Plan::RawRegion(plan)) = unsafe { (*native).growth_plan.as_ref() } {
+        if !unsafe { (*native).allocation.admit(ctx, plan.charge())? } {
+            return Ok(false);
+        }
+        if !super::super::cpu_withdrawal::acknowledged(ctx) {
+            return Ok(false);
+        }
+        let Ok(storage) = (unsafe { plan.allocate(ctx) }) else {
+            super::super::cpu_withdrawal::request(ctx);
+            return Ok(false);
+        };
+        super::super::cpu_withdrawal::release(ctx);
+        // SAFETY: storage is a raw output, never registered or read as Header.
+        // Only this success replaces the borrowed record's null output word.
+        unsafe {
+            (*native).allocation.complete();
+            finish(native, storage.cast(), ACCEPTED);
+        }
         return Ok(true);
     }
     if unsafe { (*native).growth_plan.is_none() && (*pointer).kind == ALLOC_REGION } {

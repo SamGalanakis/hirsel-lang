@@ -330,11 +330,11 @@ fn cpu_allocating_mapper_graph_binds_heap_handoffs_cleanup_and_both_final_frames
         let source = SOURCE.replace("job + 7u64", "{ let xs = [job]; xs[0] + 7u64 }");
         let regional = ready(&source);
         assert!(
-            !native::ahead_plan(&regional)
+            native::ahead_plan(&regional)
                 .roots
                 .values()
                 .any(|root| root.cpu.is_some()),
-            "a region allocation still needs its own handoff"
+            "the local region has its checked saved handoff"
         );
         let program = ready_with_regions(&source, false);
         let plan = native::ahead_plan(&program);
@@ -809,9 +809,12 @@ fn cpu_saved_summary_checks_live_result_ordinal_and_retained_owner_on_both_emitt
         let program = ready_with_regions(&nested, false);
         let plan = native::ahead_plan(&program);
         assert!(
-            plan.refusals
+            plan.roots
                 .values()
-                .any(|reason| reason == "CPU summary needs a complete retained-owner recipe"),
+                .any(|root| root.cpu.as_ref().is_some_and(|cpu| cpu
+                    .summary
+                    .as_ref()
+                    .is_some_and(|summary| summary.retained_count == 1))),
             "{:?}",
             plan.refusals
         );
@@ -1052,13 +1055,14 @@ fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
                     mapper.helpers.0.as_slice(),
                     &[u8::from(program.fuel)],
                     format!(
-                        "{:?}{:?}{:?}{:?}{:?}{:?}",
+                        "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
                         mapper.graph.root,
                         mapper.graph.bodies,
                         mapper.allocations,
                         mapper.growth,
                         mapper.cleanup,
-                        mapper.spines
+                        mapper.spines,
+                        mapper.regional
                     )
                     .as_bytes(),
                 ],
@@ -1157,4 +1161,271 @@ fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
             .unwrap();
         }
     });
+}
+
+#[test]
+fn cpu_saved_retained_recipes_cover_multiple_owners_and_active_arms() {
+    with_compiler_stack(|| {
+        for (result, body, count) in [
+            (
+                "(unique List[u64], unique List[u64])",
+                "([job], [job + 1u64])",
+                2,
+            ),
+            (
+                "Result[unique List[u64], unique List[u64]]",
+                "if job == 1u64 { Ok([job]) } else { Error([job + 1u64]) }",
+                2,
+            ),
+        ] {
+            let source = SOURCE.replace(
+                "fn(take job: u64) -> u64 uses {} { job + 7u64 }",
+                &format!("fn(take job: u64) -> {result} uses {{}} {{ {body} }}"),
+            ).replace("match outcome {\n    Ok(rows) => failure.check(rows == [8u64, 9u64, 10u64, 11u64], Bounds()),\n    Error(_) => (),\n  }", "let _ = take outcome");
+            let program = ready_with_regions(&source, false);
+            let plan = native::ahead_plan(&program);
+            let (&id, cpu) = plan
+                .roots
+                .iter()
+                .find_map(|(id, r)| {
+                    r.cpu
+                        .as_ref()
+                        .filter(|c| c.mapper.is_some())
+                        .map(|c| (id, c))
+                })
+                .unwrap_or_else(|| panic!("{result}: {:?}", plan.refusals));
+            let summary = cpu.summary.as_ref().unwrap();
+            assert_eq!(summary.retained_count, count, "{result}");
+            assert!(!summary.owners.is_empty());
+            let all: Vec<_> = program.units.iter().collect();
+            let mut accepted = Vec::new();
+            for kind in 0..2 {
+                let mut bad = plan.clone();
+                let summary = bad
+                    .roots
+                    .get_mut(&id)
+                    .unwrap()
+                    .cpu
+                    .as_mut()
+                    .unwrap()
+                    .summary
+                    .as_mut()
+                    .unwrap();
+                if kind == 0 {
+                    summary.owners.clear();
+                } else {
+                    summary.retained_count -= 1;
+                }
+                if hirsel_lir::ahead::validate_cpu_workers(
+                    &all,
+                    &program.table,
+                    &program.target,
+                    &bad,
+                    program.fuel,
+                ) {
+                    accepted.push(kind);
+                }
+            }
+            assert!(
+                accepted.is_empty(),
+                "accepted retained recipe kinds {accepted:?}"
+            );
+            assert!(program.units.iter().any(|unit| {
+                unit.unit().tables.calls.iter().enumerate().any(|(i, _)| {
+                    plan.cpu_certified_start(unit.unit(), hirsel_lir::ir::CallId(i as u32))
+                        == Some(id)
+                })
+            }));
+            for missing in 0..2 {
+                let mut incomplete = plan.clone();
+                let cpu = incomplete.roots.get_mut(&id).unwrap().cpu.as_mut().unwrap();
+                if missing == 0 {
+                    cpu.roots = None;
+                } else {
+                    cpu.summary = None;
+                }
+                assert!(program.units.iter().all(|unit| {
+                    unit.unit().tables.calls.iter().enumerate().all(|(i, _)| {
+                        incomplete
+                            .cpu_certified_start(unit.unit(), hirsel_lir::ir::CallId(i as u32))
+                            .is_none()
+                    })
+                }));
+            }
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+                let objects = native::emit_backend_objects(
+                    &program,
+                    backend,
+                    hirsel_lir::emission::OptLevel::Default,
+                    native::Partition::Whole,
+                    false,
+                    None,
+                )
+                .unwrap();
+                native::check_ahead_objects(&program, &objects).unwrap();
+                assert!(
+                    native::continuation::ahead_certificates(&program, &objects)
+                        .iter()
+                        .any(|c| c.root == id)
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn cpu_saved_regional_recipe_is_reconstructed_before_emission() {
+    with_compiler_stack(|| {
+        let source = SOURCE.replace("job + 7u64", "{ let xs = [job]; xs[0] + 7u64 }");
+        let program = ready(&source);
+        let plan = native::ahead_plan(&program);
+        let (&id, mapper) = plan
+            .roots
+            .iter()
+            .find_map(|(id, r)| {
+                r.cpu
+                    .as_ref()?
+                    .mapper
+                    .as_ref()
+                    .filter(|m| !m.regional.is_empty())
+                    .map(|m| (id, m))
+            })
+            .unwrap_or_else(|| panic!("{:?}", plan.refusals));
+        let (&key, _) = mapper.regional.iter().next().unwrap();
+        let all: Vec<_> = program.units.iter().collect();
+        let mut accepted = Vec::new();
+        for kind in 0..5 {
+            let mut bad = plan.clone();
+            let mapper = bad
+                .roots
+                .get_mut(&id)
+                .unwrap()
+                .cpu
+                .as_mut()
+                .unwrap()
+                .mapper
+                .as_mut()
+                .unwrap();
+            let recipe = mapper.regional.get_mut(&key).unwrap();
+            match kind {
+                0 => recipe.region = hirsel_lir::ir::RegionInstanceId(u32::MAX),
+                1 => recipe.construct = hirsel_lir::ir::ConstructId(u32::MAX),
+                2 => recipe.layout = hirsel_lir::layout_types::LayoutId(u32::MAX),
+                3 => recipe.align *= 2,
+                _ => mapper.regional.clear(),
+            }
+            refresh_cpu_mapper_identity(&program, mapper);
+            if hirsel_lir::ahead::validate_cpu_workers(
+                &all,
+                &program.table,
+                &program.target,
+                &bad,
+                program.fuel,
+            ) {
+                accepted.push(kind);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "accepted regional recipe kinds {accepted:?}"
+        );
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let objects = native::emit_backend_objects(
+                &program,
+                backend,
+                hirsel_lir::emission::OptLevel::Default,
+                native::Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+            native::check_ahead_objects(&program, &objects).unwrap();
+            assert!(objects.iter().any(|o| {
+                o.imports
+                    .iter()
+                    .any(|s| s.name == "hirsel_rt_v2_cpu_ahead_grow")
+            }));
+            assert!(
+                native::continuation::ahead_certificates(&program, &objects)
+                    .iter()
+                    .any(|c| c.root == id)
+            );
+        }
+    });
+}
+
+#[test]
+fn cpu_saved_holder_growth_uses_the_owned_element_recipe() {
+    with_compiler_stack(|| {
+        let source = SOURCE
+            .replace("fn() -> List[u64] uses {} { [1u64, 2u64, 3u64, 4u64] }", "fn() -> List[unique List[List[u64]]] uses {} { [[[1u64]], [[2u64]], [[3u64]], [[4u64]]] }")
+            .replace("fn(take job: u64) -> u64 uses {} { job + 7u64 }", "fn(take job: unique List[List[u64]]) -> unique List[List[u64]] uses {} { let mut out = take job; list.reserve(mut out, 128u64); take out }")
+            .replace("[8u64, 9u64, 10u64, 11u64]", "[[[1u64]], [[2u64]], [[3u64]], [[4u64]]]");
+        let program = ready_with_regions(&source, false);
+        let plan = native::ahead_plan(&program);
+        let (&id, mapper) = plan
+            .roots
+            .iter()
+            .find_map(|(id, r)| {
+                r.cpu
+                    .as_ref()?
+                    .mapper
+                    .as_ref()
+                    .filter(|m| !m.growth.is_empty())
+                    .map(|m| (id, m))
+            })
+            .unwrap_or_else(|| panic!("{:?}", plan.refusals));
+        let recipe = mapper.growth.values().next().unwrap();
+        assert!(!hirsel_lir::ahead::scalar_image(
+            &program.table,
+            recipe.element
+        ));
+        assert!(hirsel_lir::ahead::cpu_owned_layout(
+            &program.table,
+            recipe.element
+        ));
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let objects = native::emit_backend_objects(
+                &program,
+                backend,
+                hirsel_lir::emission::OptLevel::Default,
+                native::Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+            native::check_ahead_objects(&program, &objects).unwrap();
+            assert!(
+                native::continuation::ahead_certificates(&program, &objects)
+                    .iter()
+                    .any(|c| c.root == id)
+            );
+        }
+    });
+}
+
+fn refresh_cpu_mapper_identity(
+    program: &native::ReadyProgram,
+    mapper: &mut hirsel_lir::ahead::CpuMapperGraph,
+) {
+    mapper.graph.identity = hirsel_syntax::ContentHash::of_parts(
+        "hirsel.ahead.cpu-mapper.v1",
+        [
+            program.table.digest().0.as_slice(),
+            program.target.digest().0.as_slice(),
+            mapper.helpers.0.as_slice(),
+            &[u8::from(program.fuel)],
+            format!(
+                "{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
+                mapper.graph.root,
+                mapper.graph.bodies,
+                mapper.allocations,
+                mapper.growth,
+                mapper.cleanup,
+                mapper.spines,
+                mapper.regional
+            )
+            .as_bytes(),
+        ],
+    );
 }

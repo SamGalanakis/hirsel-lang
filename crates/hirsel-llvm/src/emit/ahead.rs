@@ -264,6 +264,24 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let record = self
             .prologue
             .alloca(self.module.array_type(self.module.int_type(8), 48), 8);
+        let retained = if summary.retained_count == 0 {
+            self.module.const_zero(self.module.ptr_type())
+        } else {
+            let table = self.prologue.alloca(
+                self.module
+                    .array_type(self.module.ptr_type(), u64::from(summary.retained_count)),
+                8,
+            );
+            for i in 0..summary.retained_count {
+                self.builder.store(
+                    self.module.const_zero(self.module.ptr_type()),
+                    self.builder.offset(table, self.const_u64(u64::from(i) * 8)),
+                    8,
+                );
+            }
+            self.cpu_retained(image, &summary.owners, table, &mut 0)?;
+            table
+        };
         let i32t = self.module.int_type(32);
         for (offset, value, align) in [
             (0, self.module.const_int(i32t, 1), 4),
@@ -274,20 +292,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             (32, self.descriptor(summary.layout)?, 4),
             (
                 36,
-                self.module.const_int(i32t, u128::from(summary.retained)),
+                self.module
+                    .const_int(i32t, u128::from(summary.retained_count)),
                 4,
             ),
-            // A retained Block/Box is a single pointer image. Its payload has
-            // no child references, as independently checked by the CPU plan.
-            (
-                40,
-                if summary.retained {
-                    image.ptr
-                } else {
-                    self.module.const_zero(self.module.ptr_type())
-                },
-                8,
-            ),
+            (40, retained, 8),
         ] {
             self.builder.store(
                 value,
@@ -410,5 +419,173 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.store(untracked, state.untracked, 1);
         }
         Ok(true)
+    }
+}
+
+impl<'m, 'a> FnEmitter<'m, 'a> {
+    fn cpu_retained(
+        &mut self,
+        place: Place<'m>,
+        scan: &[ScanStep],
+        table: Value<'m>,
+        cursor: &mut u64,
+    ) -> Emitted {
+        for step in scan {
+            match step {
+                ScanStep::Counted { offset } | ScanStep::SliceOwner { offset } => {
+                    let root = self.builder.load(
+                        self.module.ptr_type(),
+                        self.builder.offset(place.ptr, self.const_u64(*offset)),
+                        place.align.min(8).min(low_bit(*offset)),
+                    );
+                    self.builder.store(
+                        root,
+                        self.builder.offset(table, self.const_u64(*cursor * 8)),
+                        8,
+                    );
+                    *cursor += 1;
+                }
+                ScanStep::Inline { offset, layout } => {
+                    let child = self.field_place(place, *offset, *layout, false)?;
+                    let scan = self.layout(*layout)?.scan.clone();
+                    self.cpu_retained(child, &scan, table, cursor)?;
+                }
+                ScanStep::Repeat {
+                    offset,
+                    count,
+                    stride,
+                    element,
+                } => {
+                    let scan = self.layout(*element)?.scan.clone();
+                    for i in 0..*count {
+                        let child =
+                            self.field_place(place, offset + i * stride, *element, false)?;
+                        self.cpu_retained(child, &scan, table, cursor)?;
+                    }
+                }
+                ScanStep::ActiveVariant {
+                    tag_offset,
+                    form,
+                    variants,
+                } => {
+                    let active = self.tag_at(place, *tag_offset, *form, false);
+                    let done = self.module.append_block(self.function);
+                    let here = self.builder.current();
+                    let mut cases = Vec::new();
+                    for (variant, steps) in variants {
+                        let arm = self.module.append_block(self.function);
+                        self.builder.position(arm);
+                        self.cpu_retained(place, steps, table, cursor)?;
+                        self.builder.br(done);
+                        cases.push((
+                            self.module
+                                .const_int(self.module.int_type(32), u128::from(*variant)),
+                            arm,
+                        ));
+                    }
+                    self.builder.position(here);
+                    self.builder.switch(active, done, &cases);
+                    self.builder.position(done);
+                }
+                _ => return self.invalid("uncertified CPU retained root"),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'m, 'a> FnEmitter<'m, 'a> {
+    pub(super) fn cpu_region(
+        &mut self,
+        region: Value<'m>,
+        layout: LayoutId,
+        extent: Value<'m>,
+        align: u32,
+    ) -> Emitted<Option<Value<'m>>> {
+        if !self.inputs.alternate {
+            return Ok(None);
+        }
+        let index = self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1;
+        let Some(plan) = self.inputs.ahead else {
+            return Ok(None);
+        };
+        let Some(recipe) = plan.cpu_regional(self.unit.header.instance, index) else {
+            return Ok(None);
+        };
+        if recipe.layout != layout || recipe.align != align {
+            return self.invalid("CPU regional layout mismatch");
+        }
+        let ordinal_offset = plan
+            .cpu_ordinal(self.unit.header.instance, self.inputs.layouts)
+            .ok_or_else(|| CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "ambiguous CPU regional ordinal".into(),
+            })?;
+        let state = self.ahead_state.ok_or_else(|| CodegenError::Invalid {
+            definition: self.definition().clone(),
+            what: "CPU region without physical state".into(),
+        })?;
+        let environment = self.builder.load(
+            self.module.ptr_type(),
+            self.builder.offset(
+                state,
+                self.const_u64(hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET),
+            ),
+            8,
+        );
+        let ordinal = self.load_u64(
+            self.builder
+                .offset(environment, self.const_u64(ordinal_offset)),
+        );
+        let record = self
+            .prologue
+            .alloca(self.module.array_type(self.module.int_type(8), 88), 8);
+        let i32t = self.module.int_type(32);
+        for (offset, value, alignment) in [
+            (0, self.module.const_int(i32t, 1), 4),
+            (4, self.module.const_int(i32t, 3), 4),
+            (8, ordinal, 8),
+            (16, self.module.const_zero(self.module.ptr_type()), 8),
+            (24, region, 8),
+            (32, self.descriptor(layout)?, 4),
+            (36, self.module.const_zero(i32t), 4),
+            (40, extent, 8),
+            (48, self.const_u64(u64::from(align)), 8),
+            (56, self.const_u64(0), 8),
+            (64, self.const_u64(0), 8),
+            (72, self.const_u64(0), 8),
+            (80, self.const_u64(0), 8),
+        ] {
+            self.builder.store(
+                value,
+                self.builder.offset(record, self.const_u64(offset)),
+                alignment,
+            );
+        }
+        self.ahead_flush();
+        let helper = self.runtime(RuntimeEntry::CpuAheadGrow)?;
+        let status = self.builder.call(helper, &[state, record]);
+        self.ahead_reload();
+        let accepted = self.builder.icmp(
+            IntPredicate::Eq,
+            status,
+            self.module.const_zero(self.module.int_type(8)),
+        );
+        let next = self.module.append_block(self.function);
+        let invalid = self.module.append_block(self.function);
+        self.builder.cond_br(accepted, next, invalid);
+        self.builder.position(invalid);
+        let trap = self
+            .module
+            .intrinsic("llvm.trap", &[])
+            .or_else(|error| self.invalid(error))?;
+        self.builder.call(trap, &[]);
+        self.builder.unreachable();
+        self.builder.position(next);
+        Ok(Some(self.builder.load(
+            self.module.ptr_type(),
+            self.builder.offset(record, self.const_u64(16)),
+            8,
+        )))
     }
 }

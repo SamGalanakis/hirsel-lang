@@ -89,26 +89,44 @@ pub struct CpuSummary {
     pub bytes: u64,
     pub ordinal: SlotId,
     pub retained: bool,
+    pub owners: Vec<crate::layout_types::ScanStep>,
+    pub retained_count: u32,
 }
 
-fn summary_layout(table: &LayoutTable, id: LayoutId) -> Option<(u64, bool)> {
+fn summary_layout(
+    table: &LayoutTable,
+    id: LayoutId,
+) -> Option<(u64, Vec<crate::layout_types::ScanStep>, u32)> {
     let layout = table.layout(id)?;
     let SizeSpec::Fixed(bytes) = layout.size else {
         return None;
     };
-    if bytes > MAX_IMAGE_BYTES || layout.align > 16 {
+    if bytes > MAX_IMAGE_BYTES || layout.align > 16 || !cpu_owned_layout(table, id) {
         return None;
     }
-    let retained = match layout.kind {
-        LayoutKind::Block { payload } | LayoutKind::Box { payload }
-            if table.layout(payload)?.scan.is_empty() =>
-        {
-            true
-        }
-        _ if scalar_image(table, id) => false,
-        _ => return None,
-    };
-    Some((bytes, retained))
+    let owners = layout.scan.clone();
+    let count = retained_count(table, &owners)?;
+    (count <= 1024).then_some((bytes, owners, count))
+}
+
+fn retained_count(table: &LayoutTable, scan: &[crate::layout_types::ScanStep]) -> Option<u32> {
+    use crate::layout_types::ScanStep;
+    scan.iter().try_fold(0u32, |total, step| {
+        let count = match step {
+            ScanStep::Counted { .. } | ScanStep::SliceOwner { .. } => 1,
+            ScanStep::Inline { layout, .. } => retained_count(table, &table.layout(*layout)?.scan)?,
+            ScanStep::Repeat { count, element, .. } => u32::try_from(*count)
+                .ok()?
+                .checked_mul(retained_count(table, &table.layout(*element)?.scan)?)?,
+            ScanStep::ActiveVariant { variants, .. } => {
+                variants.iter().try_fold(0u32, |n, (_, steps)| {
+                    n.checked_add(retained_count(table, steps)?)
+                })?
+            }
+            _ => return None,
+        };
+        total.checked_add(count)
+    })
 }
 
 impl AheadPlan {
@@ -153,6 +171,18 @@ impl AheadPlan {
     /// The private start selector carries no new source operation or ABI field.
     /// Emitters compare the actual mapper code against this checked recipe.
     pub fn cpu_start(&self, unit: &LirUnit<Ready>, call: CallId) -> Option<ContentHash> {
+        let root = self.cpu_certified_start(unit, call)?;
+        self.roots[&root]
+            .cpu
+            .as_ref()?
+            .mapper
+            .is_none()
+            .then_some(root)
+    }
+
+    /// Select complete compiler evidence, including allocating graphs. Joint
+    /// runtime qualification still controls the executable cpu_start entry.
+    pub fn cpu_certified_start(&self, unit: &LirUnit<Ready>, call: CallId) -> Option<ContentHash> {
         if !unit.header.definition.is_core("cpu.map_scoped") {
             return None;
         }
@@ -182,9 +212,7 @@ impl AheadPlan {
         }
         self.roots.iter().find_map(|(id, root)| {
             let cpu = root.cpu.as_ref()?;
-            // Allocating graphs remain behind the typed refusal until the
-            // runtime implements summary custody, withdrawal and replay.
-            (cpu.mapper.is_none()
+            ((cpu.mapper.is_none() || (cpu.roots.is_some() && cpu.summary.is_some()))
                 && cpu.binding.map == unit.header.instance
                 && cpu.binding.map_digest == unit.digest())
             .then_some(*id)
@@ -227,7 +255,9 @@ pub fn validate_cpu_workers(
             return false;
         }
         let expected_summary = if cpu.mapper.is_some() {
-            let Some((bytes, retained)) = summary_layout(table, protocol.result_layout) else {
+            let Some((bytes, owners, retained_count)) =
+                summary_layout(table, protocol.result_layout)
+            else {
                 return false;
             };
             let Some(value) = worker.unit().tables.calls[protocol.mapper.index()].result else {
@@ -239,7 +269,9 @@ pub fn validate_cpu_workers(
                 layout: protocol.result_layout,
                 bytes,
                 ordinal: protocol.ordinal,
-                retained,
+                retained: retained_count != 0,
+                owners,
+                retained_count,
             })
         } else {
             None
@@ -322,6 +354,11 @@ pub fn validate_cpu_workers(
                     return false;
                 }
             }
+            for &(id, _) in mapper.regional.keys() {
+                if plan.cpu_ordinal(id, table).is_none() {
+                    return false;
+                }
+            }
             mapper.graph.clone()
         } else {
             let Ok(graph) =
@@ -393,6 +430,7 @@ pub fn validate_cpu_workers(
                     .allocations
                     .keys()
                     .chain(mapper.growth.keys())
+                    .chain(mapper.regional.keys())
                     .map(|(id, _)| *id),
             );
         }
@@ -555,7 +593,7 @@ pub(super) fn propose(
         return Err(no("oversize CPU worker graph"));
     }
     let summary = if mapper.is_some() {
-        let (bytes, retained) = summary_layout(table, protocol.result_layout)
+        let (bytes, owners, retained_count) = summary_layout(table, protocol.result_layout)
             .ok_or_else(|| no("CPU summary needs a complete retained-owner recipe"))?;
         Some(CpuSummary {
             call: protocol.mapper,
@@ -563,7 +601,9 @@ pub(super) fn propose(
             layout: protocol.result_layout,
             bytes,
             ordinal: protocol.ordinal,
-            retained,
+            retained: retained_count != 0,
+            owners,
+            retained_count,
         })
     } else {
         None

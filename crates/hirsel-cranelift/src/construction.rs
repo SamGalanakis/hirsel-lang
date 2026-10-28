@@ -952,6 +952,15 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         failure: FailureId,
     ) -> Emitted<Place> {
         let record = self.layout(layout)?;
+        if let Some(storage) = self.cpu_region(mark, layout, extent, record.align)? {
+            return Ok(Place {
+                ptr: storage,
+                layout,
+                align: record.align,
+                block: None,
+                columns: None,
+            });
+        }
         let (flat, align) = (record.kind == LayoutKind::Flat, record.align);
         let offset = if flat {
             match align_up(IMMORTAL_PREFIX_BYTES, u64::from(align.max(8))) {

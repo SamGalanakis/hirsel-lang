@@ -45,7 +45,9 @@ impl RootPlan {
         if self.cpu.as_ref().is_some_and(|cpu| {
             cpu.summary.is_some()
                 || cpu.mapper.as_ref().is_some_and(|mapper| {
-                    !mapper.allocations.is_empty() || !mapper.growth.is_empty()
+                    !mapper.allocations.is_empty()
+                        || !mapper.growth.is_empty()
+                        || !mapper.regional.is_empty()
                 })
         }) {
             ordinary.max(80)
@@ -309,8 +311,9 @@ impl AheadPlan {
                 mapper
                     .growth
                     .keys()
-                    .any(|&(body, instruction)| {
-                        plan.cpu_growth(body, instruction, table).is_none()
+                    .chain(mapper.regional.keys())
+                    .any(|&(body, _)| {
+                        plan.cpu_ordinal(body, table).is_none()
                             || plan.roots.values().any(|other| {
                                 other.cpu.is_none() && other.graph.bodies.contains_key(&body)
                             })
@@ -953,6 +956,35 @@ impl AheadPlan {
             found = Some((recipe, offset));
         }
         found
+    }
+    pub fn cpu_ordinal(&self, id: ContentHash, table: &LayoutTable) -> Option<u64> {
+        let mut found = None;
+        for cpu in self
+            .roots
+            .values()
+            .filter_map(|r| r.cpu.as_ref())
+            .filter(|cpu| {
+                cpu.mapper
+                    .as_ref()
+                    .is_some_and(|m| m.graph.bodies.contains_key(&id))
+            })
+        {
+            let wrapper = table.layout(cpu.binding.worker.environment)?;
+            let offset = crate::layout::payload_offset(wrapper.align)
+                .ok()?
+                .checked_add(wrapper.fields.get(4)?.offset)?;
+            if found.is_some_and(|old| old != offset) {
+                return None;
+            }
+            found = Some(offset);
+        }
+        found
+    }
+    pub fn cpu_regional(&self, id: ContentHash, instruction: usize) -> Option<&CpuRegional> {
+        self.roots
+            .values()
+            .filter_map(|r| r.cpu.as_ref()?.mapper.as_ref())
+            .find_map(|m| m.regional.get(&(id, instruction)))
     }
     pub fn cpu_allocation(&self, id: ContentHash, instruction: usize) -> bool {
         self.roots
