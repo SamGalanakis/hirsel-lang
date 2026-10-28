@@ -130,7 +130,7 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
     let role = registry
         .get(&hirsel_syntax::DefPath::core("Unsafe"))
         .unwrap();
-    assert_eq!(role.metadata.roles, nominal_roles());
+    assert_eq!(*role.metadata.roles, nominal_roles());
     for (path, _) in intrinsic_roles() {
         assert!(registry.get(&path).is_some());
     }

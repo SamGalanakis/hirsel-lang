@@ -1629,10 +1629,12 @@ mod tests {
         assert!(attempt(&MissingHeap(&current)).is_none());
         for field in ["arena", "operation"] {
             let mut changed = current.clone();
-            let role = std::sync::Arc::make_mut(&mut changed.get_mut(path("0provider")).unwrap().metadata.roles)
-                .heap
-                .as_mut()
-                .unwrap();
+            let role = std::sync::Arc::make_mut(
+                &mut changed.get_mut(path("0provider")).unwrap().metadata.roles,
+            )
+            .heap
+            .as_mut()
+            .unwrap();
             if field == "arena" {
                 role.arena = path("DifferentArena");
             } else {

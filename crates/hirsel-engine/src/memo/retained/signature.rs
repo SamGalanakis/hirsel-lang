@@ -55,23 +55,41 @@ mod tests {
                 result_type: Some(hirsel_syntax::DefPath::core(&"Result".repeat(64))),
                 ..Default::default()
             });
-            let headers = std::array::from_fn::<_, 4, _>(|_| Arc::new(Signature {
-                definition: owner,
-                metadata: SignatureMetadata { roles: roles.clone(), ..Default::default() },
-                kind: SignatureKind::Const { ty: TypeId::DANGLING, generics: vec![] },
-                fingerprint: Default::default(),
-            }));
+            let headers = std::array::from_fn::<_, 4, _>(|_| {
+                Arc::new(Signature {
+                    definition: owner,
+                    metadata: SignatureMetadata {
+                        roles: roles.clone(),
+                        ..Default::default()
+                    },
+                    kind: SignatureKind::Const {
+                        ty: TypeId::DANGLING,
+                        generics: vec![],
+                    },
+                    fingerprint: Default::default(),
+                })
+            });
             let (bound, inspection) = crate::test_alloc::measured_independent(|| {
                 let mut names = super::super::NameAllocations::<64>::default();
-                let mut weight = Weight { count_shared_repeats: true, source_names: Some(&mut names), ..Default::default() };
-                for header in &headers { signature_payload(&mut weight, header); }
+                let mut weight = Weight {
+                    count_shared_repeats: true,
+                    source_names: Some(&mut names),
+                    ..Default::default()
+                };
+                for header in &headers {
+                    signature_payload(&mut weight, header);
+                }
                 weight.bytes
             });
             assert_eq!(inspection.allocations, 0);
             assert!(bound < headers.iter().map(retained_signature_payload_bytes).sum());
             (headers, bound)
         });
-        assert!(allocations.live as u64 <= bound, "{} > {bound}", allocations.live);
+        assert!(
+            allocations.live as u64 <= bound,
+            "{} > {bound}",
+            allocations.live
+        );
         let (_, released) = crate::test_alloc::measured(|| drop(headers));
         assert_eq!(-released.live, allocations.live);
     }
