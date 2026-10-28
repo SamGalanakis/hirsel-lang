@@ -239,7 +239,7 @@ impl StorageTask {
         let reads = Arc::new(reads.finish().map_err(|_| owner.errors.protocol)?);
         let bytes = owner
             .records
-            .encode(&owner.anchors, &(path, &result, &*reads))
+            .encode(&*owner.anchors, &(path, &result, &*reads))
             .ok_or(owner.errors.resource)?;
         if bytes.len() as u64 > owner.weight.retained {
             return Err(owner.errors.resource);
@@ -308,7 +308,6 @@ impl QueryEngine {
             inputs.insert(address, input.definition);
         }
         let source = front.stage_source();
-        let store = front.store.clone();
         Ok(Arc::new(FrontStorageQueries {
             front,
             inputs,

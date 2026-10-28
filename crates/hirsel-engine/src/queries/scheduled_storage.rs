@@ -113,7 +113,7 @@ impl FrontStorageGraphQueries {
         self.executions.load(Relaxed)
     }
     fn fail(&self, error: QueryError) -> Reference {
-        let Some(bytes) = self.records.encode(&self.anchors, &error) else {
+        let Some(bytes) = self.records.encode(&*self.anchors, &error) else {
             return self.errors.resource;
         };
         if bytes.len() as u64 > self.output_budget {
@@ -443,7 +443,7 @@ impl Task {
                 current.body += 1;
                 current.node = 0;
             }
-            let bytes = owner.records.encode(&owner.anchors, &self.bodies);
+            let bytes = owner.records.encode(&*owner.anchors, &self.bodies);
             if bytes.is_none_or(|bytes| bytes.len() as u64 > owner.output_budget) {
                 return Poll::Ready(Err(owner.errors.resource));
             }
@@ -517,7 +517,7 @@ impl Task {
             .map_err(|_| invalid("storage source reads disagree"))?;
         let bytes = owner
             .records
-            .encode(&owner.anchors, &(&profiles, &diagnostics, &reads))
+            .encode(&*owner.anchors, &(&profiles, &diagnostics, &reads))
             .ok_or(QueryError::NotImplemented)?;
         if bytes.len() as u64 > owner.output_budget {
             return Err(invalid("storage graph output exceeds admission"));
