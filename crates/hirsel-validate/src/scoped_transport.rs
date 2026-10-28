@@ -132,6 +132,27 @@ fn entry_contracts(t: &TypeInterner, ty: hirsel_types::TypeId) -> Option<Vec<Vec
     Some(out)
 }
 
+// A private summary does not supply the nested callable contract erased by a
+// generic declaration. Inspect its original graph before any substitution.
+fn original_data_shape(t: &TypeInterner, ty: hirsel_types::TypeId) -> bool {
+    let mut pending = vec![ty];
+    let mut seen = HashSet::default();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        let Some(row) = t.get(ty) else { return false };
+        if matches!(
+            &row.kind,
+            TypeKind::Error | TypeKind::Function(_) | TypeKind::Parameter(_)
+        ) {
+            return false;
+        }
+        pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
+    }
+    true
+}
+
 pub(super) fn check(
     definition: &Definition,
     t: &TypeInterner,
@@ -536,7 +557,11 @@ pub(super) fn check(
                         let data_helper = matches!(
                             a.value.usage,
                             hirsel_types::UseKind::Borrow | hirsel_types::UseKind::Copy
-                        ) && matches!(callee, Callee::Definition { path, .. }
+                        ) && function.as_ref().is_some_and(|f| {
+                            f.parameters.get(a.parameter.0 as usize).is_some_and(|p| {
+                                p.passing == PassingMode::Borrow && original_data_shape(t, p.ty)
+                            })
+                        }) && matches!(callee, Callee::Definition { path, .. }
                                 if signatures.get(DefId::intern(path)).is_some_and(|s|
                                     s.metadata.inferred_unique.nonretaining.contains(&a.parameter)));
                         let allowed = data_observer
@@ -578,6 +603,73 @@ mod tests {
     use super::*;
     use crate::support::*;
     use hirsel_types::{SignatureKind, TypeKind, UseKind};
+
+    fn helper_call(actual: TypeKind, declared: TypeKind, nonretaining: bool) -> Vec<Violation> {
+        let mut f = Fixture::unit();
+        let argument = f.slot(actual, Storage::Parameter);
+        f.body().parameters = vec![LocalId(argument)];
+        f.body().scoped_parameters = vec![ScopedParameter {
+            parameter: 0,
+            fields: vec![],
+        }];
+        let mut signature = function_signature(
+            "helper",
+            vec![(PassingMode::Borrow, declared)],
+            TypeKind::Tuple(vec![].into()),
+        );
+        if nonretaining {
+            signature.metadata.inferred_unique.nonretaining = vec![hirsel_types::ParamId(0)];
+        }
+        f.signatures.insert(signature.definition, signature);
+        f.body().blocks[0].terminator = Terminator::Call {
+            callee: Callee::Definition {
+                path: path("helper"),
+                arguments: vec![],
+            },
+            arguments: vec![CallArgument {
+                parameter: hirsel_types::ParamId(0),
+                value: operand(argument, UseKind::Borrow),
+            }],
+            returns: None,
+            on_failure: CleanupId(0),
+        };
+        check(
+            &f.definition,
+            interner(),
+            &Reader::new(interner(), &f.signatures),
+        )
+    }
+
+    #[test]
+    fn data_helper_needs_an_original_data_contract() {
+        let bytes = TypeKind::Primitive(hirsel_types::Primitive::Bytes);
+        assert!(helper_call(bytes.clone(), bytes.clone(), true).is_empty());
+        assert!(!helper_call(bytes.clone(), bytes.clone(), false).is_empty());
+        let generic = TypeKind::Parameter(hirsel_types::TypeParameterRef::bound(
+            hirsel_types::TypeParamId(0),
+        ));
+        let SignatureKind::Function(callback) =
+            function_signature("callback", vec![], TypeKind::Tuple(vec![].into())).kind
+        else {
+            unreachable!()
+        };
+        let callable = TypeKind::Function(callback);
+        for actual in [bytes, callable.clone()] {
+            let errors = helper_call(actual, generic.clone(), true);
+            assert!(
+                errors.iter().any(|v| matches!(
+                    v.kind,
+                    ViolationKind::TypeMismatch {
+                        entity: "scoped may-retain source call"
+                    }
+                )),
+                "{errors:?}"
+            );
+        }
+        let actual = TypeKind::Tuple(vec![interner().intern(ty(callable))].into());
+        let declared = TypeKind::Tuple(vec![interner().intern(ty(generic))].into());
+        assert!(!helper_call(actual, declared, true).is_empty());
+    }
 
     fn capture(scoped: bool, context: CaptureContext) -> Vec<Violation> {
         let mut f = Fixture::unit();

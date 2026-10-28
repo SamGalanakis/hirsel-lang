@@ -506,6 +506,12 @@ fn nonretention_133_is_transitive_and_refuses_return_capture_and_recursive_assum
         let source = r#"
 type Bits { value: u64 }
 fn leaf_bits(x: Bits) -> u64 { x.value }
+fn bump(xs:List[u32],i:u64,y:u32)->u32 {xs[i]+y}
+fn ensured(xs:List[u32],i:u64,y:u32)->u32 ensures result>=y {xs[i]+y}
+fn required(xs:List[u32],i:u64,y:u32)->u32 requires i<2u64 {xs[i]+y}
+fn returned_list(xs:List[u32])->List[u32] in xs {copy xs}
+fn generic_discard[T](x:T) {}
+fn generic_tuple_discard[T](x:(T,)) {}
 fn relay_bits(x: Bits) -> u64 { leaf_bits(x) }
 fn leaf(xs: Bytes) -> u8 { xs[0] }
 fn relay(xs: Bytes) -> u8 { leaf(xs) }
@@ -528,6 +534,12 @@ pub fn main() -> u8 { 0u8 }
             .unwrap();
         for (name, expected) in [
             ("leaf_bits", true),
+            ("bump", true),
+            ("ensured", false),
+            ("required", false),
+            ("returned_list", false),
+            ("generic_discard", false),
+            ("generic_tuple_discard", false),
             ("relay_bits", true),
             ("leaf", true),
             ("relay", true),
@@ -561,6 +573,11 @@ pub fn main() -> u8 { 0u8 }
         relay.0.name = "relay_bits".into();
         // Plain nominal arguments are copied into a declared Borrow entry.
         engine.lower_to_tir(&relay).unwrap();
+        for name in ["bump", "ensured", "required", "returned_list"] {
+            let mut path = entry_path(&context);
+            path.0.name = name.into();
+            engine.lower_to_tir(&path).unwrap();
+        }
         let mut restored =
             QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
         let file = restored

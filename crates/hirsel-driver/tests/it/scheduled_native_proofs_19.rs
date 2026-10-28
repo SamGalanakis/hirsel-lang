@@ -278,6 +278,8 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
             native::queries::INSTANCE_KIND,
             native::queries::instance_tasks::INSTANCE_INPUT_KIND,
             native::queries::instance_tasks::DISCOVERY_KIND,
+            native::queries::instance_tasks::CALLABLE_GRAPH_KIND,
+            native::queries::instance::CALLABLE_VALUE_KIND,
         ] {
             runtime.register(kind, factory.clone()).unwrap();
         }

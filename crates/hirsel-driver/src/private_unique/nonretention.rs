@@ -49,11 +49,16 @@ pub(super) fn infer(
             let hirsel_types::SignatureKind::Function(f) = &header.kind else {
                 continue;
             };
+            // The expression proof does not cover generated requires/ensures
+            // calls. Their data parameters have no nonretaining entry contract.
+            if !f.contracts.is_empty() {
+                continue;
+            }
             let mut next = (**header).clone();
             for (i, parameter) in f.parameters.iter().enumerate() {
                 let parameter_id = ParamId(i as u32);
                 if parameter.passing != PassingMode::Borrow
-                    || matches!(&types.row(parameter.ty).kind, TypeKind::Function(_))
+                    || !concrete_data_parameter(types, parameter.ty)
                     || matches!(&types.row(parameter.ty).kind, TypeKind::Primitive(p) if !matches!(p, hirsel_types::Primitive::Bytes | hirsel_types::Primitive::String))
                     || matches!(&types.row(parameter.ty).kind, TypeKind::Tuple(fields) if fields.is_empty())
                     || next
@@ -105,6 +110,29 @@ pub(super) fn infer(
         }
         headers.extend(additions);
     }
+}
+
+// A physical specialization must not invent an entry contract for a callable
+// hidden by a source generic. Concrete resource/opaque shapes remain eligible.
+fn concrete_data_parameter(types: &hirsel_types::TypeInterner, ty: TypeId) -> bool {
+    let mut pending = vec![ty];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        let Some(row) = types.get(ty) else {
+            return false;
+        };
+        if matches!(
+            &row.kind,
+            TypeKind::Error | TypeKind::Function(_) | TypeKind::Parameter(_)
+        ) {
+            return false;
+        }
+        pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
+    }
+    true
 }
 
 struct Proof<'a> {
