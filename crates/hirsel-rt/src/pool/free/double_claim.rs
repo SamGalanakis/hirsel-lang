@@ -10,11 +10,15 @@ struct State {
     ctx: usize,
     stolen: bool,
     sp: usize,
+    ordinary: bool,
+    claimed: bool,
 }
 static STATE: Mutex<State> = Mutex::new(State {
     ctx: 0,
     stolen: false,
     sp: 0,
+    ordinary: false,
+    claimed: false,
 });
 static READY: Condvar = Condvar::new();
 static ENTER: Barrier = Barrier::new(2);
@@ -32,7 +36,7 @@ pub(super) unsafe fn dispatch(queued: &Queued<Image>) {
         return;
     }
     let ctx = unsafe { (*queued.tsan_unclaimed()).ctx };
-    if !unsafe { crate::tasks::ordered::ahead::native::tsan_cpu_mapper(ctx) } {
+    if !unsafe { super::super::cpu_scoped::tsan_job(ctx) } {
         return;
     }
     let mut state = STATE.lock().unwrap();
@@ -42,7 +46,7 @@ pub(super) unsafe fn dispatch(queued: &Queued<Image>) {
         state.ctx = ctx as usize;
         return;
     }
-    if state.stolen {
+    if state.stolen || state.ctx == ctx as usize {
         return;
     }
     state.stolen = true;
@@ -78,4 +82,62 @@ pub(crate) unsafe fn mapper(ctx: *mut TaskCtx, sp: *mut u8) {
     READY.notify_one();
     drop(state);
     ENTER.wait();
+}
+
+#[repr(C)]
+pub(crate) struct Switch {
+    save: *mut *mut u8,
+    to: *mut u8,
+}
+
+/// Prepare the ordinary scalar save after a successful canonical CPU claim.
+/// # Safety
+/// The running context owns this worker. The naked caller must tail-jump to
+/// fiber_switch after refill returns, without retaining any Rust frame.
+pub(crate) unsafe extern "C" fn ordinary_prepare(ctx: *mut TaskCtx) -> Switch {
+    let none = Switch {
+        save: std::ptr::null_mut(),
+        to: std::ptr::null_mut(),
+    };
+    if !enabled() {
+        return none;
+    }
+    let mut state = STATE.lock().unwrap();
+    if state.ctx != ctx as usize || !state.claimed || state.sp != 0 || state.ordinary {
+        return none;
+    }
+    state.ordinary = true;
+    Switch {
+        save: unsafe { &raw mut (*ctx).task_sp },
+        to: unsafe { (*super::super::own_exec()).idle.get() },
+    }
+}
+
+/// Resume the ordinary save without publishing a wake or relinquishing Running.
+/// # Safety
+/// The dispatcher is on idle and still exclusively owns this context's image.
+pub(super) unsafe fn ordinary_saved(ctx: *mut TaskCtx) -> Option<*mut u8> {
+    if !enabled() {
+        return None;
+    }
+    {
+        let state = STATE.lock().unwrap();
+        if state.ctx != ctx as usize || !state.ordinary || state.sp != 0 {
+            return None;
+        }
+    }
+    let sp = unsafe { (*ctx).task_sp };
+    unsafe { mapper(ctx, sp) };
+    Some(sp)
+}
+
+/// # Safety
+/// The current CPU worker has just successfully claimed its canonical job.
+pub(crate) unsafe fn claimed(ctx: *mut TaskCtx) {
+    if enabled() {
+        let mut state = STATE.lock().unwrap();
+        if state.ctx == ctx as usize {
+            state.claimed = true;
+        }
+    }
 }

@@ -408,12 +408,6 @@ pub(crate) fn resumable(ctx: *mut TaskCtx) -> bool {
     !p.is_null() && unsafe { (*p).continued || (*p).resume.is_some() } && !super::private(ctx)
 }
 
-#[cfg(all(feature = "tsan", target_arch = "x86_64"))]
-pub(crate) unsafe fn tsan_cpu_mapper(ctx: *mut TaskCtx) -> bool {
-    let native = unsafe { (*ctx).ahead_physical }.cast::<Native>();
-    !native.is_null() && unsafe { (*native).cpu }
-}
-
 /// The dispatcher owns Running and its permit for this entire call. No
 /// physical save is published until the normal idle callback acknowledges it.
 /// # Safety

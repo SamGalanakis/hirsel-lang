@@ -295,7 +295,7 @@ pub(crate) fn exceeded(kind: BudgetKind) -> ! {
 ///
 /// # Safety
 /// `ctx` is the running context.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(all(feature = "tsan", target_arch = "x86_64")), unsafe(no_mangle))]
 pub unsafe extern "C" fn hirsel_rt_v2_fuel_refill(ctx: *mut TaskCtx) {
     unsafe { crate::pool::cpu_scoped::probe::checkpoint(ctx) };
     if crate::tasks::ordered::ahead::private(ctx) {
@@ -305,6 +305,23 @@ pub unsafe extern "C" fn hirsel_rt_v2_fuel_refill(ctx: *mut TaskCtx) {
     }
     let result = unsafe { refill(ctx) };
     unsafe { crate::stop::check(ctx, result) };
+}
+
+// A duplicate resumes after the refill's Rust frames, at the emitted caller.
+#[cfg(all(feature = "tsan", target_arch = "x86_64"))]
+#[unsafe(naked)]
+#[unsafe(export_name = "hirsel_rt_v2_fuel_refill")]
+unsafe extern "C" fn tsan_fuel_refill(_ctx: *mut TaskCtx) {
+    core::arch::naked_asm!(
+        "push rdi", "call {refill}", "pop rdi",
+        "sub rsp, 8", "call {prepare}", "add rsp, 8",
+        "test rax, rax", "jz 2f",
+        "mov rdi, rax", "mov rsi, rdx", "jmp {switch}",
+        "2:", "ret",
+        refill = sym hirsel_rt_v2_fuel_refill,
+        prepare = sym crate::pool::free::double_claim::ordinary_prepare,
+        switch = sym crate::fiber::fiber_switch,
+    );
 }
 
 /// Charge deterministic primitive work even when the caller omitted loop fuel checks.

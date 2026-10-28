@@ -1262,7 +1262,20 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
         if !(*ctx).ahead_physical.is_null() {
             crate::tasks::ordered::ahead::native::run(ctx, exec, sp);
         } else {
+            #[cfg(not(all(feature = "tsan", target_arch = "x86_64")))]
             fiber::switch(exec.idle.as_ptr(), sp);
+            #[cfg(all(feature = "tsan", target_arch = "x86_64"))]
+            {
+                let mut sp = sp;
+                loop {
+                    fiber::switch(exec.idle.as_ptr(), sp);
+                    if let Some(saved) = double_claim::ordinary_saved(ctx) {
+                        sp = saved;
+                        continue;
+                    }
+                    break;
+                }
+            }
         }
     }
 }

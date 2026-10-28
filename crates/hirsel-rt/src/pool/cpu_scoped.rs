@@ -665,8 +665,20 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
             value,
         );
     }
+    #[cfg(all(feature = "tsan", target_arch = "x86_64"))]
+    if action == 3 && value == 0 {
+        unsafe { super::free::double_claim::claimed(ctx) };
+    }
     unsafe { out.write(value) };
     crate::STATUS_OK
+}
+
+#[cfg(all(feature = "tsan", target_arch = "x86_64"))]
+pub(super) unsafe fn tsan_job(ctx: *mut TaskCtx) -> bool {
+    let execs = super::execs(ctx);
+    let slot = execs.scoped.lock().unwrap();
+    slot.as_ref()
+        .is_some_and(|workers| workers.caller_task != unsafe { (*ctx).task_id })
 }
 
 #[cfg(test)]
