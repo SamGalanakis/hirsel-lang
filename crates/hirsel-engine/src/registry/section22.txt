@@ -163,7 +163,7 @@ fn cpu.map_scoped[J: sendable + inert, R: sendable + inert](tasks: Tasks, width:
 // jobs and results contain no capabilities, resources, synchronization handles,
 // pointers or opaque function values. Immutable Shared reads and thaw are allowed.
 // Free requires io.cpu cpu.scoped@1, width 1/4/8/16 and at most 2*width jobs.
-// Preparation runs on worker 0 after all fresh workers are ready. All workers
+// Preparation runs on worker 0; mapper workers start for the prepared jobs. All workers
 // join before results return in input order; language failures retain FAIL-2.
 // InvalidWidth, NotGranted, Busy, WidthUnavailable, NestedPool, BatchTooLarge,
 // WorkerStartFailed, CapacityLost, Canceled, NotSupported and ResourceLimit

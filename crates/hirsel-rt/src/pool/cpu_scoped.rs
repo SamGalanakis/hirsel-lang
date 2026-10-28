@@ -161,6 +161,7 @@ impl Drop for Assigned {
 pub(super) struct Workers {
     execs: Vec<Arc<Exec>>,
     threads: Vec<std::thread::JoinHandle<()>>,
+    pending: Vec<Option<Assigned>>,
     cursor: usize,
     caller: Option<Owner>,
     controllers: Option<Controllers>,
@@ -179,6 +180,7 @@ impl Workers {
 
     fn join(&mut self) {
         self.request_exit();
+        self.pending.clear();
         for thread in self.threads.drain(..) {
             thread
                 .join()
@@ -187,16 +189,90 @@ impl Workers {
     }
 }
 
-/// Start exactly the reserved width, acknowledging every worker before return.
-/// As in Rayon's explicit pool startup, a failed prefix is joined before refusal.
+/// Reserve every destination before preparation, but start a native thread
+/// only when it has work. Go 1.25 runtime/proc.go:5144-5157 publishes runnable
+/// work before wakep, which starts an idle processor at :3203-3242.
+/// Hirsel keeps all W credits and backing reserved until the scoped drain.
 /// # Safety
 /// The caller holds the scheduler role for this live run, before publishing
-/// any scoped frame. No user code runs on these workers until it is addressed.
+/// any scoped frame. Worker zero runs preparation; mappers keep their owners.
 pub(super) unsafe fn start(
     run: *mut RunShared,
     reservation: Reservation,
 ) -> Result<Vec<super::Owner>, Refusal> {
     unsafe { start_at(run, reservation, None) }
+}
+
+impl Workers {
+    fn start_pending(
+        &mut self,
+        run: *mut RunShared,
+        indices: impl IntoIterator<Item = usize>,
+        fail_at: Option<u32>,
+    ) -> Result<(), Refusal> {
+        let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+        let (ready, acknowledgments) = std::sync::mpsc::sync_channel(self.execs.len());
+        let mut started = 0;
+        for index in indices {
+            let Some(assigned) = self.pending[index].take() else {
+                continue;
+            };
+            let exec = &self.execs[index];
+            execs.holders.count.fetch_add(1, Ordering::AcqRel);
+            let thread = if fail_at == Some(index as u32) {
+                drop(assigned);
+                Err(std::io::Error::other("injected CPU worker startup failure"))
+            } else {
+                std::thread::Builder::new()
+                    .name(format!("hirsel-cpu-{index}"))
+                    .stack_size(2 * 1024 * 1024)
+                    .spawn({
+                        let (run, exec, holders, ready) = (
+                            RunPtr(run),
+                            Arc::clone(exec),
+                            Arc::clone(&execs.holders),
+                            ready.clone(),
+                        );
+                        move || {
+                            super::worker_main_reserved(
+                                run,
+                                exec,
+                                holders,
+                                Some(assigned),
+                                Some(ready),
+                            )
+                        }
+                    })
+            };
+            let Ok(thread) = thread else {
+                execs.holders.count.fetch_sub(1, Ordering::AcqRel);
+                return Err(Refusal::WorkerStartFailed);
+            };
+            self.threads.push(thread);
+            started += 1;
+        }
+        drop(ready);
+        for _ in 0..started {
+            acknowledgments
+                .recv()
+                .expect("started scoped worker acknowledgement");
+        }
+        Ok(())
+    }
+    fn start_jobs(
+        &mut self,
+        run: *mut RunShared,
+        count: u64,
+        fail_at: Option<u32>,
+    ) -> Result<(), Refusal> {
+        let width = self.execs.len();
+        let cursor = self.cursor;
+        self.start_pending(
+            run,
+            (0..count.min(width as u64) as usize).map(|i| (cursor + i) % width),
+            fail_at,
+        )
+    }
 }
 
 unsafe fn start_at(
@@ -218,11 +294,10 @@ unsafe fn start_at(
         Some(ledger) => Some(ledger.topology(width).ok_or(Refusal::ResourceLimit)?),
         None => None,
     };
-    let (ready, acknowledgments) = std::sync::mpsc::sync_channel(width as usize);
     let mut workers = Workers {
         execs: Vec::with_capacity(width as usize),
         threads: Vec::with_capacity(width as usize),
-        // The caller remains on worker zero while it publishes children.
+        pending: Vec::with_capacity(width as usize),
         cursor: usize::from(!unsafe { (*run).free_mode }),
         caller: None,
         controllers: None,
@@ -232,8 +307,6 @@ unsafe fn start_at(
         caller_task: u32::MAX,
     };
     for index in 0..width {
-        // Sequential attachment is role-owned, like grow(). No scoped task
-        // has been published, so the new worker cannot touch this heap yet.
         let worker = unsafe { Worker::create_scoped(run) };
         let exec = Exec::new(Kind::Scoped(index as u16), worker, false);
         if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
@@ -252,49 +325,20 @@ unsafe fn start_at(
             .lock()
             .unwrap()
             .push(Arc::downgrade(&exec));
-        execs.holders.count.fetch_add(1, Ordering::AcqRel);
-        let thread = if fail_at == Some(index) {
-            drop(assigned);
-            Err(std::io::Error::other("injected CPU worker startup failure"))
-        } else {
-            std::thread::Builder::new()
-                .name(format!("hirsel-cpu-{index}"))
-                .stack_size(2 * 1024 * 1024)
-                .spawn({
-                    let (run, exec, holders, ready) = (
-                        RunPtr(run),
-                        Arc::clone(&exec),
-                        Arc::clone(&execs.holders),
-                        ready.clone(),
-                    );
-                    move || {
-                        super::worker_main_reserved(run, exec, holders, Some(assigned), Some(ready))
-                    }
-                })
-        };
-        let Ok(thread) = thread else {
-            execs.holders.count.fetch_sub(1, Ordering::AcqRel);
-            unsafe { Worker::retire(worker) };
-            if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
-                probe.event("retire", workers.domain, Arc::as_ptr(&exec) as usize, 0);
-            }
-            workers.join();
-            for exec in &workers.execs {
-                unsafe { Worker::retire(exec.worker.replace(std::ptr::null_mut())) };
-                if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
-                    probe.event("retire", workers.domain, Arc::as_ptr(exec) as usize, 0);
-                }
-            }
-            return Err(Refusal::WorkerStartFailed);
-        };
         workers.execs.push(exec);
-        workers.threads.push(thread);
+        workers.pending.push(Some(assigned));
     }
-    drop(ready);
-    for _ in 0..width {
-        acknowledgments
-            .recv()
-            .expect("started scoped worker acknowledgement");
+    // Fault injection also exercises rollback of every eagerly started prefix.
+    let count = if fail_at.is_some() { width as usize } else { 1 };
+    if let Err(error) = workers.start_pending(run, 0..count, fail_at) {
+        workers.join();
+        for exec in &workers.execs {
+            unsafe { Worker::retire(exec.worker.replace(std::ptr::null_mut())) };
+            if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+                probe.event("retire", workers.domain, Arc::as_ptr(exec) as usize, 0);
+            }
+        }
+        return Err(error);
     }
     let owners = workers
         .execs
@@ -486,6 +530,11 @@ pub(crate) fn next_owner(ctx: *mut TaskCtx) -> Owner {
     let workers = slot.as_mut().expect("live CPU batch");
     let index = workers.cursor % workers.execs.len();
     workers.cursor += 1;
+    // Direct runtime fixtures can publish without the typed bounded-batch
+    // action. Production has already started precisely these owners there.
+    workers
+        .start_pending(unsafe { (*ctx).run_ptr() }, [index], None)
+        .unwrap_or_else(|_| crate::environmental("a scoped CPU worker could not start"));
     Owner::Compute(Arc::as_ptr(&workers.execs[index]).expose_provenance())
 }
 
@@ -654,6 +703,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
                     8
                 } else if let Some(cause) = crate::tasks::canceled(ctx) {
                     16 + cause
+                } else if action == 2 {
+                    let execs = super::execs(ctx);
+                    let mut slot = execs.scoped.lock().unwrap();
+                    match slot
+                        .as_mut()
+                        .unwrap()
+                        .start_jobs((*ctx).run_ptr(), count, None)
+                    {
+                        Ok(()) => 0,
+                        Err(Refusal::WorkerStartFailed) => 7,
+                        Err(_) => unreachable!(),
+                    }
                 } else {
                     0
                 }
@@ -818,6 +879,23 @@ mod tests {
                     assert!(workers(execs).is_empty());
                 }
             }
+            // A failure after preparation rolls back the started prefix and
+            // every dormant credit before this run can admit another batch.
+            let permits = Arc::new(Permits::new(4));
+            let owners = start(run, permits.try_reserve(4).unwrap()).unwrap();
+            let deferred =
+                execs
+                    .scoped
+                    .lock()
+                    .unwrap()
+                    .as_mut()
+                    .unwrap()
+                    .start_jobs(run, 4, Some(2));
+            assert_eq!(deferred, Err(Refusal::WorkerStartFailed));
+            drop(owners);
+            finish(run);
+            assert_eq!(permits.available(), 4);
+            assert!(workers(execs).is_empty());
             assert_eq!(execs.holders.count.load(Ordering::Acquire), 1);
             crate::context::hirsel_rt_v2_ctx_destroy(ctx);
         }
