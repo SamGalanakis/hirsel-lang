@@ -164,6 +164,7 @@ impl Inference {
     }
     fn compute(&self) -> Result<Facts, QueryError> {
         let worker = parallel::Worker {
+            owners: (*self.citations.owners).clone(),
             types: &self.types,
             memo: &self.memo,
             snapshot: &self.snapshot,
@@ -709,7 +710,7 @@ impl QueryEngine {
                     let context = Arc::new(crate::snapshot::OwnedSourceContext {
                         unique_failures: BTreeMap::new(),
                         sources: self.sources.clone(),
-                        items: Arc::new(self.items.clone()),
+                        items: Arc::new((*self.items).clone()),
                         declarations: self.declarations.observations(),
                         catalog: self.catalog.clone(),
                         owners: Arc::new(crate::NativeRecordContext::capture(self)),

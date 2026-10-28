@@ -39,12 +39,12 @@ fn captured_anchor_bindings_match_scalar_selection_with_duplicate_and_generated_
     engine.sources.add("unowned.hir", "".into()).unwrap();
     let captured = NativeRecordContext::capture(&engine);
     for (anchor, _, _) in engine.sources.anchors() {
-        let owner = engine.record_anchor_owner(anchor);
+        let owner = scalar_owner(&engine, anchor);
         assert_eq!(captured.record_owner(anchor), owner);
         if let Some((owner, occurrence)) = owner {
             assert_eq!(
                 captured.record_source_anchor(&owner, occurrence),
-                engine.record_anchor(&owner, occurrence)
+                scalar_anchor(&engine, &owner, occurrence)
             );
         }
     }
@@ -232,4 +232,235 @@ fn generated_source_owner_is_independent_of_codec_identity_and_selector_position
         other.decode::<Row>(&changed, &bytes).is_none(),
         "a declaration association cannot admit a different generated text"
     );
+}
+
+fn scalar_owner(engine: &QueryEngine, anchor: Anchor) -> Option<(DefPath, u32)> {
+    super::super::persistent::artifact_anchor_owner(
+        &engine.items,
+        &engine.sources,
+        &engine.generated,
+        anchor,
+    )
+    .or_else(|| {
+        engine
+            .catalog
+            .bindings()
+            .find_map(|(site, owner)| (site == anchor).then_some(owner))
+    })
+}
+
+fn scalar_anchor(engine: &QueryEngine, path: &DefPath, occurrence: u32) -> Option<Anchor> {
+    engine
+        .items
+        .get(path)
+        .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
+        .map(|item| item.anchor)
+        .or_else(|| engine.catalog.anchor(path, occurrence))
+        .or_else(|| {
+            let (_, generated) = engine.generated.iter().find(|(owner, source)| {
+                super::super::persistent::generated_codec_owner(owner, &source.text) == *path
+            })?;
+            engine.sources.anchors().find_map(|(anchor, file, base)| {
+                (file == generated.file && base == occurrence).then_some(anchor)
+            })
+        })
+        .or_else(|| {
+            engine.sources.anchors().find_map(|(anchor, _, _)| {
+                (scalar_owner(engine, anchor) == Some((path.clone(), occurrence))).then_some(anchor)
+            })
+        })
+}
+
+fn assert_scalar_bindings(engine: &QueryEngine) {
+    let captured = NativeRecordContext::capture(engine);
+    for (anchor, _, _) in engine.sources.anchors() {
+        let owner = scalar_owner(engine, anchor);
+        assert_eq!(captured.record_owner(anchor), owner);
+        if let Some((path, occurrence)) = owner {
+            assert_eq!(
+                captured.record_source_anchor(&path, occurrence),
+                scalar_anchor(engine, &path, occurrence)
+            );
+        }
+    }
+    for (path, items) in &engine.items {
+        for item in items {
+            assert_eq!(
+                captured.record_source_anchor(path, item.occurrence),
+                scalar_anchor(engine, path, item.occurrence)
+            );
+        }
+    }
+    assert!(captured.record_owner(Anchor::fresh()).is_none());
+    assert!(
+        captured
+            .record_source_anchor(&DefPath::core("foreign-owner"), 0)
+            .is_none()
+    );
+}
+
+#[test]
+fn ownership_product_tracks_removal_reordering_relocation_and_parse_eviction() {
+    let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
+    let context = crate::default_context();
+    let index = |engine: &mut QueryEngine, name: &str, text: &str| {
+        let file = engine.sources.add(name, text.into()).unwrap();
+        let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
+        let mut parsed = hirsel_parser::parse(file, tokens, &context, &mut engine.sources);
+        assert!(parsed.diagnostics.is_empty());
+        engine.index(&mut parsed.syntax, &context).unwrap();
+        engine.parsed.clear();
+        assert_scalar_bindings(engine);
+    };
+    index(
+        &mut engine,
+        "a.hir",
+        "fn same()->u8{1u8}\nfn same()->u8{2u8}\nfn gone()->u8{3u8}",
+    );
+    let old = engine.source_records();
+    let gone = engine
+        .items
+        .iter()
+        .find(|(p, _)| p.0.name == "gone")
+        .unwrap()
+        .1[0]
+        .anchor;
+    index(
+        &mut engine,
+        "a.hir",
+        "fn same()->u8{2u8}\nfn same()->u8{1u8}",
+    );
+    assert!(engine.record_anchor_owner(gone).is_none());
+    assert!(old.record_owner(gone).is_some());
+    index(&mut engine, "a.hir", "");
+    index(
+        &mut engine,
+        "b.hir",
+        "fn same()->u8{2u8}\nfn same()->u8{1u8}",
+    );
+    let first = engine.source_records();
+    let second = engine.source_records();
+    assert!(Arc::ptr_eq(&first.bindings, &second.bindings));
+    let bindings = Arc::downgrade(&first.bindings);
+    drop(first);
+    drop(second);
+    index(&mut engine, "b.hir", "fn same()->u8{4u8}");
+    assert!(
+        bindings.upgrade().is_none(),
+        "retired products are released after their last worker"
+    );
+    assert!(old.record_owner(gone).is_some());
+}
+
+#[test]
+fn ownership_projection_is_charged_and_generated_changes_retire_both_directions() {
+    let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
+    for name in ["a", "b", "c"] {
+        let file = engine.sources.add(name, "fn()->u8{1u8}".into()).unwrap();
+        engine.generated.insert(
+            DefPath::core(name),
+            crate::queries::generation::GeneratedSource {
+                file,
+                text: "fn()->u8{1u8}".into(),
+                site: Default::default(),
+            },
+        );
+    }
+    assert_scalar_bindings(&engine);
+    let old = engine.source_records();
+    let file = engine.sources.add("extra", "fn()->u8{2u8}".into()).unwrap();
+    let anchor = engine.sources.item_anchor(file, 0);
+    assert!(engine.record_anchor_owner(anchor).is_none());
+    engine.generated.insert(
+        DefPath::core("a"),
+        crate::queries::generation::GeneratedSource {
+            file,
+            text: "fn()->u8{2u8}".into(),
+            site: Default::default(),
+        },
+    );
+    assert_scalar_bindings(&engine);
+    let current = engine.source_records();
+    for (owner, occurrence) in old
+        .bindings
+        .owners
+        .values()
+        .filter(|(owner, _)| owner.0.name.starts_with("$generated-source:a:"))
+    {
+        assert!(current.record_source_anchor(owner, *occurrence).is_none());
+    }
+    let bound = current.input_bytes().unwrap();
+    assert!(bound > size_of::<NativeRecordContext>() as u64);
+    engine.generated.clear();
+    let (next, allocated) = crate::test_alloc::measured_independent(|| engine.source_records());
+    assert!(allocated.live as u64 <= next.input_bytes().unwrap());
+    assert!(next.bindings.owners.is_empty());
+    assert!(current.record_owner(anchor).is_some());
+}
+
+#[test]
+fn ownership_charge_covers_populated_maps_and_releases_the_last_generation() {
+    let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
+    let text = (0..64)
+        .map(|i| format!("fn owner_with_a_long_name_{i}()->u64{{{i}u64}}\n"))
+        .collect();
+    let file = engine.sources.add("charged.hir", text).unwrap();
+    let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
+    let context = crate::default_context();
+    let mut parsed = hirsel_parser::parse(file, tokens, &context, &mut engine.sources);
+    assert!(parsed.diagnostics.is_empty());
+    engine.index(&mut parsed.syntax, &context).unwrap();
+    for path in engine.items.keys() {
+        DefId::intern(path);
+    }
+    let (owners, allocated) = crate::test_alloc::measured_independent(|| engine.source_records());
+    assert_eq!(owners.bindings.owners.len(), 64);
+    assert!(allocated.live > 0);
+    assert!(allocated.live as u64 <= owners.input_bytes().unwrap());
+    let old = Arc::downgrade(&owners.bindings);
+    engine.items.clear();
+    assert!(engine.source_records().bindings.owners.is_empty());
+    assert!(old.upgrade().is_some());
+    drop(owners);
+    assert!(old.upgrade().is_none());
+}
+
+#[test]
+fn a_foreign_source_map_cannot_restore_unplaced_declaration_anchors() {
+    let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
+    let file = engine
+        .sources
+        .add("current.hir", "pub fn main()->u64{7u64}".into())
+        .unwrap();
+    let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
+    let context = crate::default_context();
+    let mut parsed = hirsel_parser::parse(file, tokens, &context, &mut engine.sources);
+    assert!(parsed.diagnostics.is_empty());
+    engine.index(&mut parsed.syntax, &context).unwrap();
+    let syntax = &parsed.syntax.items[0];
+    let path = syntax.item.definition.clone();
+    let anchor = syntax.anchor;
+    let records = NativeRecords::new(
+        engine.types().clone(),
+        Arc::new(crate::store::MemStore::default()),
+    );
+    let ty = engine.types().intern(hirsel_types::Type::unit());
+    let bytes = records
+        .encode(
+            &engine,
+            &Row {
+                origin: hirsel_span::Span::new(anchor, 0, 4).unwrap(),
+                ty,
+            },
+        )
+        .unwrap();
+    let mut foreign = hirsel_span::SourceMap::default();
+    foreign
+        .add("foreign.hir", "pub fn other()->u64{9u64}".into())
+        .unwrap();
+    engine.sources = foreign;
+    let current = engine.source_records();
+    assert!(current.record_owner(anchor).is_none());
+    assert!(current.record_source_anchor(&path, 0).is_none());
+    assert!(records.decode::<Row>(&current, &bytes).is_none());
 }

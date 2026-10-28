@@ -246,6 +246,7 @@ pub struct SourceMap {
     owned_files: usize,
     /// Each placed anchor's file and base offset in it.
     anchors: std::sync::Arc<BTreeMap<Anchor, (FileId, u32)>>,
+    placement_revision: u64,
     owner: Option<RetainedSourceOwner>,
 }
 impl std::fmt::Debug for SourceMap {
@@ -442,8 +443,18 @@ impl SourceMap {
     pub fn file_anchor(&self, f: FileId) -> Anchor {
         self.file(f).map_or(Anchor(0), |file| file.anchor)
     }
+    /// Identity of this immutable anchor placement generation. Clones share it
+    /// until either map changes, including when branches make equal edits.
+    pub fn placement_revision(&self) -> u64 {
+        self.placement_revision
+    }
+    fn changed_placements(&mut self) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        self.placement_revision = NEXT.fetch_add(1, Ordering::Relaxed);
+    }
     /// A new anchor at byte `base` of `f`, for one top-level item occurrence.
     pub fn item_anchor(&mut self, f: FileId, base: u32) -> Anchor {
+        self.changed_placements();
         let anchor = Anchor::fresh();
         std::sync::Arc::make_mut(&mut self.anchors).insert(anchor, (f, base));
         anchor
@@ -451,6 +462,7 @@ impl SourceMap {
     /// Place `a` at byte `base` of `f`: every span relative to it moves with
     /// it. The anchor may come from another map holding the same text.
     pub fn move_anchor(&mut self, a: Anchor, f: FileId, base: u32) {
+        self.changed_placements();
         std::sync::Arc::make_mut(&mut self.anchors).insert(a, (f, base));
     }
     /// The file and base an anchor stands at in this map.

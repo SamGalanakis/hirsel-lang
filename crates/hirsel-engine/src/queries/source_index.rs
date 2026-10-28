@@ -609,6 +609,9 @@ impl SourceIndexState {
         // Pure structural memoization is disposable; no previous body phase
         // or interpreter is installed into the fresh source engine.
         engine.catalog = catalog.restore();
+        engine
+            .catalog
+            .bind_ownership(engine.source_ownership.clone());
         engine.snapshot_epoch = snapshot_epoch;
         engine.snapshot_inputs_revision = snapshot_inputs_revision;
         Ok(())

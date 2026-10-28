@@ -29,33 +29,128 @@ impl NativeRecordSource for QueryEngine {
 /// Immutable source bindings for native workers, captured through the engine's
 /// sole existing owner/anchor selection. Contains no QueryEngine, Definition or
 /// signature collection. Unknown source generations remain unrepresentable.
+#[derive(Clone)]
 pub struct NativeRecordContext {
     types: Arc<hirsel_types::TypeInterner>,
+    bindings: Arc<SourceBindings>,
+}
+struct SourceBindings {
     owners: BTreeMap<Anchor, (DefPath, u32)>,
     anchors: BTreeMap<(DefPath, u32), Anchor>,
     source_definitions: BTreeMap<Anchor, DefId>,
 }
+/// Recomputable projections of current source products, never semantic read
+/// observations. Mutating a source table drops this one product; detached
+/// workers retain their immutable generation through NativeRecordContext.
+#[derive(Default)]
+pub(crate) struct SourceOwnership(std::sync::Mutex<Option<(u64, NativeRecordContext)>>);
+impl SourceOwnership {
+    fn changed(&self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+}
+/// Source tables invalidate their own ownership projection on mutable access.
+/// This also covers removals and rollback, without a separate host change log.
+#[derive(Clone)]
+pub(crate) struct SourceTable<K, V> {
+    values: BTreeMap<K, V>,
+    ownership: Arc<SourceOwnership>,
+}
+impl<K, V> Default for SourceTable<K, V> {
+    fn default() -> Self {
+        Self::new(Default::default())
+    }
+}
+impl<K, V> SourceTable<K, V> {
+    pub(super) fn new(ownership: Arc<SourceOwnership>) -> Self {
+        Self {
+            values: BTreeMap::new(),
+            ownership,
+        }
+    }
+    pub(super) fn bind(&mut self, ownership: Arc<SourceOwnership>) {
+        ownership.changed();
+        self.ownership = ownership;
+    }
+}
+impl<K, V> std::ops::Deref for SourceTable<K, V> {
+    type Target = BTreeMap<K, V>;
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+impl<K, V> std::ops::DerefMut for SourceTable<K, V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ownership.changed();
+        &mut self.values
+    }
+}
+impl<K, V> IntoIterator for SourceTable<K, V> {
+    type Item = (K, V);
+    type IntoIter = std::collections::btree_map::IntoIter<K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.into_iter()
+    }
+}
+impl<'a, K, V> IntoIterator for &'a SourceTable<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = std::collections::btree_map::Iter<'a, K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter()
+    }
+}
+impl<K: Ord, V> FromIterator<(K, V)> for SourceTable<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        Self {
+            values: iter.into_iter().collect(),
+            ownership: Default::default(),
+        }
+    }
+}
+impl QueryEngine {
+    pub(crate) fn source_records(&self) -> NativeRecordContext {
+        let mut current = self
+            .source_ownership
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some((placement, context)) = &*current
+            && *placement == self.sources.placement_revision()
+            && Arc::ptr_eq(&context.types, self.types())
+        {
+            return context.clone();
+        }
+        let context = NativeRecordContext::build(self);
+        *current = Some((self.sources.placement_revision(), context.clone()));
+        context
+    }
+}
 impl NativeRecordContext {
     pub(crate) fn input_bytes(&self) -> Option<u64> {
-        let slot = (std::mem::size_of::<(Anchor, (DefPath, u32))>()
-            + std::mem::size_of::<((DefPath, u32), Anchor)>()
-            + std::mem::size_of::<(Anchor, DefId)>()
-            + 18 * std::mem::size_of::<usize>()) as u64;
-        (self.owners.len() as u64)
-            .checked_mul(slot)?
-            .checked_add(std::mem::size_of::<Self>() as u64)
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(size_of::<Self>() + size_of::<SourceBindings>() + 4 * size_of::<usize>());
+        weight.map(&self.bindings.owners, |w, _, (path, _)| w.path(path));
+        weight.map(&self.bindings.anchors, |w, (path, _), _| w.path(path));
+        weight.tree::<Anchor, DefId>(self.bindings.source_definitions.len());
+        Some(weight.bytes())
     }
 
     /// The declaration owning this current source generation. A generated
     /// codec owner is content-bound and can differ from this declaration;
     /// selector ordinals are neither codec occurrences nor source bases.
     pub fn source_definition(&self, anchor: Anchor) -> Option<&DefPath> {
-        self.source_definitions.get(&anchor).map(|id| id.path())
+        self.bindings
+            .source_definitions
+            .get(&anchor)
+            .map(|id| id.path())
     }
 
     pub fn capture(engine: &QueryEngine) -> Self {
+        engine.source_records()
+    }
+
+    fn build(engine: &QueryEngine) -> Self {
         let mut owners = BTreeMap::new();
-        let mut anchors = BTreeMap::new();
         let mut source_definitions = BTreeMap::new();
         // Scalar owner selection takes the first item in DefPath/occurrence
         // order. Index that same selection once, instead of scanning every
@@ -67,6 +162,29 @@ impl NativeRecordContext {
                         .entry(item.anchor)
                         .or_insert_with(|| (path.clone(), item.occurrence));
                 }
+            }
+        }
+        let catalog_owners: BTreeMap<_, _> =
+            engine
+                .catalog
+                .bindings()
+                .fold(BTreeMap::new(), |mut owners, (anchor, owner)| {
+                    owners.entry(anchor).or_insert(owner);
+                    owners
+                });
+        let mut ordinary_anchors = BTreeMap::new();
+        for (path, items) in &engine.items {
+            for item in items {
+                if engine.sources.anchor(item.anchor).is_some() {
+                    ordinary_anchors
+                        .entry((path.clone(), item.occurrence))
+                        .or_insert(item.anchor);
+                }
+            }
+        }
+        for (anchor, owner) in engine.catalog.bindings() {
+            if engine.sources.anchor(anchor).is_some() {
+                ordinary_anchors.entry(owner).or_insert(anchor);
             }
         }
         let mut generated = BTreeMap::new();
@@ -99,6 +217,10 @@ impl NativeRecordContext {
                     .or_insert(anchor);
             }
         }
+        let mut anchors = ordinary_anchors;
+        for (owner, anchor) in &current_anchors {
+            anchors.entry(owner.clone()).or_insert(*anchor);
+        }
         let mut seen = std::collections::BTreeSet::new();
         for (_, file, _) in engine.sources.anchors() {
             if generated.contains_key(&file) || !seen.insert(file) {
@@ -116,19 +238,10 @@ impl NativeRecordContext {
                 generated
                     .get(&file)
                     .map(|(path, _)| (path.clone(), base))
-                    .or_else(|| engine.catalog.owner(anchor))
+                    .or_else(|| catalog_owners.get(&anchor).cloned())
             });
             if let Some(owner) = owner {
-                anchors.entry(owner.clone()).or_insert_with(|| {
-                    engine
-                        .items
-                        .get(&owner.0)
-                        .and_then(|items| items.iter().find(|item| item.occurrence == owner.1))
-                        .map(|item| item.anchor)
-                        .or_else(|| engine.catalog.anchor(&owner.0, owner.1))
-                        .or_else(|| current_anchors.get(&owner).copied())
-                        .unwrap_or(anchor)
-                });
+                anchors.entry(owner.clone()).or_insert(anchor);
                 let declaration = generated
                     .get(&file)
                     .map(|(_, declaration)| *declaration)
@@ -139,9 +252,11 @@ impl NativeRecordContext {
         }
         Self {
             types: engine.types().clone(),
-            owners,
-            anchors,
-            source_definitions,
+            bindings: Arc::new(SourceBindings {
+                owners,
+                anchors,
+                source_definitions,
+            }),
         }
     }
 }
@@ -150,10 +265,13 @@ impl NativeRecordSource for NativeRecordContext {
         &self.types
     }
     fn record_owner(&self, anchor: Anchor) -> Option<(DefPath, u32)> {
-        self.owners.get(&anchor).cloned()
+        self.bindings.owners.get(&anchor).cloned()
     }
     fn record_source_anchor(&self, owner: &DefPath, occurrence: u32) -> Option<Anchor> {
-        self.anchors.get(&(owner.clone(), occurrence)).copied()
+        self.bindings
+            .anchors
+            .get(&(owner.clone(), occurrence))
+            .copied()
     }
 }
 

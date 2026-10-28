@@ -170,7 +170,7 @@ struct Candidate {
 #[derive(Default)]
 pub(crate) struct Catalog {
     files: BTreeMap<FileId, FileContext>,
-    candidates: BTreeMap<DefPath, Vec<Candidate>>,
+    candidates: super::native_records::SourceTable<DefPath, Vec<Candidate>>,
     facts_cache:
         std::sync::RwLock<BTreeMap<hirsel_syntax::LexicalOwner, (ContentHash, SourceFacts)>>,
 }
@@ -203,6 +203,26 @@ impl Clone for Catalog {
     }
 }
 impl Catalog {
+    pub(super) fn with_ownership(ownership: Arc<super::native_records::SourceOwnership>) -> Self {
+        let mut catalog = Self::default();
+        catalog.bind_ownership(ownership);
+        catalog
+    }
+    pub(super) fn bind_ownership(
+        &mut self,
+        ownership: Arc<super::native_records::SourceOwnership>,
+    ) {
+        self.candidates.bind(ownership);
+    }
+    pub(super) fn bindings(
+        &self,
+    ) -> impl Iterator<Item = (hirsel_span::Anchor, (DefPath, u32))> + '_ {
+        self.candidates.iter().flat_map(|(path, rows)| {
+            rows.iter()
+                .map(move |row| (row.head.name.anchor, (path.clone(), row.occurrence)))
+        })
+    }
+
     pub(super) fn retained_payload_bytes(&self) -> u64 {
         self.payload_bytes(true, false)
     }
@@ -492,14 +512,6 @@ impl Catalog {
                 .name
                 .anchor,
         )
-    }
-    pub(super) fn owner(&self, anchor: hirsel_span::Anchor) -> Option<(DefPath, u32)> {
-        self.candidates.iter().find_map(|(path, candidates)| {
-            candidates
-                .iter()
-                .find(|c| c.head.name.anchor == anchor)
-                .map(|c| (path.clone(), c.occurrence))
-        })
     }
     pub(crate) fn body(&self, path: &DefPath) -> Option<ContentHash> {
         Some(self.candidates.get(path)?.first()?.head.body)

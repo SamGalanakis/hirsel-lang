@@ -428,7 +428,9 @@ fn checks(
     trial.types = engine.types.clone();
     trial.memo = engine.memo.clone();
     trial.items = engine.items.clone();
+    trial.items.bind(trial.source_ownership.clone());
     trial.catalog = engine.catalog.clone();
+    trial.catalog.bind_ownership(trial.source_ownership.clone());
     trial.declarations = engine.declarations.clone();
     trial.builtins = engine.builtins.clone();
     trial.package_manifests = engine.package_manifests.clone();

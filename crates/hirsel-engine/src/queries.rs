@@ -236,14 +236,15 @@ pub struct QueryEngine {
     pub(crate) staged_constants: BTreeMap<DefPath, crate::comptime::StagedConstant>,
     pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
     /// Generated function bodies (CT-5), by declaration.
-    generated: BTreeMap<DefPath, GeneratedSource>,
+    generated: native_records::SourceTable<DefPath, GeneratedSource>,
     /// Selected instances of generic generated declarations (CT-5).
     pub(crate) instance_bodies: hirsel_tir::InstanceBodies,
     pub sources: SourceMap,
     pub environment: QueryEnvironment,
     pub adapters: PhaseAdapters,
     /// Each definition's candidates in occurrence order.
-    pub(crate) items: BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    pub(crate) items: native_records::SourceTable<DefPath, Vec<Arc<ItemSyntax>>>,
+    source_ownership: Arc<native_records::SourceOwnership>,
     /// The items the last index dropped, which the next can adopt.
     detached: Vec<Arc<ItemSyntax>>,
     parsed: BTreeMap<FileId, ParsedFile>,
@@ -609,6 +610,7 @@ impl QueryEngine {
     ) -> Self {
         let registry = crate::registry::BuiltinRegistry::shared();
         environment.builtin_signatures_hash = registry.revision();
+        let source_ownership = Arc::new(native_records::SourceOwnership::default());
         Self {
             work: crate::WorkStats::default(),
             store_adoptions: 0,
@@ -632,12 +634,12 @@ impl QueryEngine {
             materialization_environment: None,
             staged_constants: BTreeMap::new(),
             staged_values: BTreeMap::new(),
-            generated: BTreeMap::new(),
+            generated: native_records::SourceTable::new(source_ownership.clone()),
             instance_bodies: hirsel_tir::InstanceBodies::default(),
             sources: SourceMap::default(),
             environment,
             adapters,
-            items: BTreeMap::new(),
+            items: native_records::SourceTable::new(source_ownership.clone()),
             detached: vec![],
             parsed: BTreeMap::new(),
             registry,
@@ -692,7 +694,8 @@ impl QueryEngine {
             scalar_lower_calls: Default::default(),
             scalar_validation_runs: Default::default(),
             s1_lower_work: Default::default(),
-            catalog: Default::default(),
+            catalog: catalog::Catalog::with_ownership(source_ownership.clone()),
+            source_ownership,
             unavailable: None,
             last_phase: None,
             closure_assertions: cfg!(debug_assertions),

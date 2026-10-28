@@ -103,7 +103,6 @@ impl RootOutcome {
 pub(crate) struct FrozenSource<'a> {
     pub(crate) inputs: TaskInputs,
     pub(crate) items: &'a BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
-    pub(crate) generated: &'a BTreeMap<DefPath, generation::GeneratedSource>,
     pub(crate) signatures: &'a Table<hirsel_types::SignatureRef>,
     pub(crate) modes: &'a Table<AnalyzedBody>,
     pub(crate) checked: &'a Table<TypedBody>,
@@ -127,6 +126,7 @@ pub(crate) struct FrozenSource<'a> {
     pub(crate) mode_phase: Option<&'a dyn ModesPhase>,
     pub(crate) completed: Mutex<Vec<(parallel::CompactCompleted, ContentHash, Reads)>>,
     records: Option<Arc<persistent::TypeRecords>>,
+    owners: crate::NativeRecordContext,
     store: Option<Arc<dyn crate::store::ResultStore>>,
     lower_products: Mutex<BTreeMap<DefPath, persistent::CapturedLower>>,
 }
@@ -204,12 +204,8 @@ impl TirSource for FrozenSource<'_> {
         &self.inputs
     }
     fn anchor_owner(&self, anchor: hirsel_span::Anchor) -> Option<(DefPath, u32)> {
-        super::super::persistent::artifact_anchor_owner(
-            self.items,
-            &self.inputs.sources,
-            self.generated,
-            anchor,
-        )
+        use crate::NativeRecordSource;
+        self.owners.record_owner(anchor)
     }
     fn implementation(&self, path: &DefPath) -> Option<ContentHash> {
         self.items
@@ -394,6 +390,7 @@ impl TirSource for FrozenSource<'_> {
             text: self.text(path).unwrap_or_default(),
         };
         let context = parallel::Worker {
+            owners: self.owners.clone(),
             types: self.inputs.snapshot.types(),
             memo: &self.inputs.memo,
             snapshot: &self.inputs.snapshot,
@@ -666,7 +663,9 @@ impl QueryEngine {
         let snapshot = self.signature_inputs();
         let declarations = self.frozen_declarations();
         let environment = self.environment_value();
+        let owners = self.source_records();
         Ok(FrozenSource {
+            owners,
             inputs: TaskInputs {
                 snapshot,
                 memo: self.memo.clone(),
@@ -678,7 +677,6 @@ impl QueryEngine {
                 lower_budget,
             },
             items: &self.items,
-            generated: &self.generated,
             signatures: &self.signatures,
             modes: &self.modes,
             checked: &self.checked,

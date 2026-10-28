@@ -633,13 +633,7 @@ impl PublicationRecord {
                 .is_some_and(|checked| summary(&checked.summary, owner, shape))
     }
 }
-pub(super) fn canonical_bytes<T: Serialize>(
-    types: Arc<hirsel_types::TypeInterner>,
-    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
-    record: &T,
-) -> Option<Vec<u8>> {
-    hirsel_product_codec::canonical_bytes(types, record, |anchor| anchor_owner(items, anchor))
-}
+#[cfg(test)]
 pub(crate) fn anchor_owner(
     items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     anchor: Anchor,
@@ -654,6 +648,7 @@ pub(crate) fn anchor_owner(
 /// V identities include every span, including generated literal bodies. The
 /// source map supplies the placed base; the local generation table supplies
 /// its owner and exact text. This does not admit producer-supplied anchors.
+#[cfg(test)]
 pub(crate) fn artifact_anchor_owner(
     items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     sources: &SourceMap,
@@ -1307,42 +1302,12 @@ impl QueryEngine {
     /// generated owner includes its exact text hash; arbitrary persisted ids
     /// cannot name an anchor in another source generation.
     pub(crate) fn record_anchor_owner(&self, anchor: Anchor) -> Option<(DefPath, u32)> {
-        self.sources
-            .anchor(anchor)
-            .and_then(|(file, _)| self.parsed.get(&file))
-            .and_then(|(_, _, parsed)| parsed.as_ref().ok())
-            .and_then(|parsed| parsed.value.items.iter().find(|item| item.anchor == anchor))
-            .and_then(|parsed| {
-                self.items
-                    .get(&parsed.item.definition)?
-                    .iter()
-                    .find(|item| item.anchor == anchor && item.occurrence == parsed.occurrence)
-            })
-            .map(|item| (item.item.definition.clone(), item.occurrence))
-            .or_else(|| artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor))
-            .or_else(|| self.catalog.owner(anchor))
+        use crate::NativeRecordSource;
+        self.source_records().record_owner(anchor)
     }
     pub(crate) fn record_anchor(&self, path: &DefPath, occurrence: u32) -> Option<Anchor> {
-        self.items
-            .get(path)
-            .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
-            .map(|item| item.anchor)
-            .or_else(|| self.catalog.anchor(path, occurrence))
-            .or_else(|| {
-                let (_, source) = self
-                    .generated
-                    .iter()
-                    .find(|(owner, source)| generated_codec_owner(owner, &source.text) == *path)?;
-                self.sources.anchors().find_map(|(anchor, file, base)| {
-                    (file == source.file && base == occurrence).then_some(anchor)
-                })
-            })
-            .or_else(|| {
-                self.sources.anchors().find_map(|(anchor, _, _)| {
-                    (self.record_anchor_owner(anchor) == Some((path.clone(), occurrence)))
-                        .then_some(anchor)
-                })
-            })
+        use crate::NativeRecordSource;
+        self.source_records().record_source_anchor(path, occurrence)
     }
     pub(super) fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
         let records = self.type_records()?;
@@ -1384,24 +1349,7 @@ impl QueryEngine {
         cache.execution_revalidated(
             subject,
             self.types.clone(),
-            |path, occurrence| {
-                self.items
-                    .get(path)
-                    .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
-                    .map(|item| item.anchor)
-                    .or_else(|| self.catalog.anchor(path, occurrence))
-                    .or_else(|| {
-                        self.sources.anchors().find_map(|(anchor, _, _)| {
-                            (artifact_anchor_owner(
-                                &self.items,
-                                &self.sources,
-                                &self.generated,
-                                anchor,
-                            ) == Some((path.clone(), occurrence)))
-                            .then_some(anchor)
-                        })
-                    })
-            },
+            |path, occurrence| self.record_anchor(path, occurrence),
             &*snapshot,
         )
     }

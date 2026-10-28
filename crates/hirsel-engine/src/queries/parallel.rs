@@ -211,6 +211,7 @@ impl memos::ReadSource for FrozenReadSource<'_> {
 /// Only immutable phase handles and inputs cross the worker boundary. In
 /// particular this has neither QueryEngine nor an interpreter behind a lock.
 pub(crate) struct Worker<'a> {
+    pub(crate) owners: crate::NativeRecordContext,
     pub(crate) types: &'a hirsel_types::TypeInterner,
     pub(crate) memo: &'a hirsel_types::TypeMemo,
     pub(crate) snapshot: &'a SignatureSnapshot,
@@ -998,6 +999,7 @@ impl QueryEngine {
         let completed = {
             let citations = self.citation_source();
             let worker = Worker {
+                owners: self.source_records(),
                 types: &self.types,
                 memo: &self.memo,
                 snapshot: &snapshot,
@@ -1340,6 +1342,7 @@ mod frozen_task_tests {
                 let candidates = engine.candidates_value(&path);
                 let citations = engine.citation_source();
                 let worker = Worker {
+                    owners: engine.source_records(),
                     types: &engine.types,
                     memo: &engine.memo,
                     snapshot: &snapshot,
@@ -1404,6 +1407,7 @@ mod frozen_task_tests {
             let candidates = engine.candidates_value(&path);
             let citations = engine.citation_source();
             let worker = Worker {
+                owners: engine.source_records(),
                 types: &engine.types,
                 memo: &engine.memo,
                 snapshot: &snapshot,

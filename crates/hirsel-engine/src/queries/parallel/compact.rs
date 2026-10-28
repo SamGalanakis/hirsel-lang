@@ -266,10 +266,7 @@ impl CompactCompleted {
                 persistent::capture_mode(
                     records,
                     types,
-                    |anchor| {
-                        persistent::anchor_owner(worker.items, anchor)
-                            .or_else(|| worker.citations.record_owner(anchor))
-                    },
+                    |anchor| crate::NativeRecordSource::record_owner(&worker.owners, anchor),
                     &result,
                     checked_output
                         .as_ref()

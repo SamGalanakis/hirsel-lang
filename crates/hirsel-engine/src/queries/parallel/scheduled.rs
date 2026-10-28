@@ -880,6 +880,7 @@ impl FrontBodyQueries {
     }
     fn worker(&self) -> Worker<'_> {
         Worker {
+            owners: (*self.citations.owners).clone(),
             types: &self.types,
             memo: &self.memo,
             snapshot: &self.snapshot,
