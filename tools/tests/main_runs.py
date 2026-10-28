@@ -431,6 +431,19 @@ class Tiers(unittest.TestCase):
         self.assertNotIn('//:', command)
         self.assertTrue(any('attrfilter(labels, gate' in q and '_hirsel_precheck' in q for q in queries))
 
+    def test_workspace_test_inventory_excludes_build_only_fixtures(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        queries = []
+        def query(command, **kwargs):
+            queries.append(command[-1])
+            return subprocess.CompletedProcess(command, 0, '', '')
+        with patch.dict(os.environ), patch('subprocess.run', side_effect=query):
+            tool['stages'](lambda *args, **kwargs: None, 'full')
+        test_queries = [q for q in queries if q.startswith(('(kind(', 'kind('))]
+        self.assertEqual(len(test_queries), 2)
+        for expression in test_queries:
+            self.assertIn('- attrfilter(labels, fixture, //...)', expression)
+
     def test_fast_runs_only_the_quick_stages_and_full_runs_them_too(self):
         tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
         named = {}

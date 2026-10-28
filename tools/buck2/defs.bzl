@@ -956,6 +956,7 @@ def hirsel_deadline_replay_matrix(name, data, runtime_archives, products):
         _rust_test(
             name = fixture,
             fixture_output = True,
+            labels = ["fixture"],
             extra_env = {"HIRSEL_REPLAY_BACKEND": backend},
             args = ["--ignored", "--exact", "ordered_deadline_liveness_55::fixture", "--nocapture"],
             **common
