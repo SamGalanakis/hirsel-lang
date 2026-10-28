@@ -317,7 +317,13 @@ impl GraphMeter {
                     .map(|(key, _)| key)
                     .filter(|key| !clean.contains(key)),
             );
-            touched.extend(self.lower.memo_keys());
+            let clean_lower = self.lower.clean_memos();
+            touched.extend(
+                self.lower
+                    .memo_keys()
+                    .into_iter()
+                    .filter(|key| !clean_lower.contains(key)),
+            );
             work.touched_memos = touched.into_iter().collect();
         }
         work.store_adoptions = work

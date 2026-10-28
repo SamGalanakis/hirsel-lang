@@ -351,6 +351,8 @@ pub struct FrontLowerQueries {
     store: Arc<dyn ResultStore>,
     outcomes: Mutex<BTreeMap<(u32, ContentHash), (Reference, Box<Outcome>, u64)>>,
     carry: Mutex<Option<Arc<LowerCarry>>>,
+    carry_changes: Mutex<Option<Arc<carry::CarryChanges>>>,
+    clean_memos: Mutex<BTreeSet<crate::memo::MemoKey>>,
     work: Mutex<BTreeMap<DefPath, FrontLowerWork>>,
     weight: MemoryWeight,
     max_reads: usize,
@@ -385,6 +387,14 @@ impl FrontLowerQueries {
         self._allowance.bytes() - *self.retention.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Outcomes adopted through an unchanged subscription generation, without
+    /// inspecting the carried memo's individual reads.
+    pub fn clean_memos(&self) -> BTreeSet<crate::memo::MemoKey> {
+        self.clean_memos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
     /// Settled memo identities for work accounting. No read archive or body
     /// is decoded merely to count the producer work this graph demanded.
     pub fn memo_keys(&self) -> Vec<crate::memo::MemoKey> {
@@ -1912,6 +1922,8 @@ impl QueryEngine {
             store,
             outcomes: Mutex::new(BTreeMap::new()),
             carry: Mutex::new(None),
+            carry_changes: Mutex::new(None),
+            clean_memos: Mutex::new(BTreeSet::new()),
             work: Mutex::new(BTreeMap::new()),
             weight,
             max_reads,

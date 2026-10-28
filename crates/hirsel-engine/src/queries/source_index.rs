@@ -10,6 +10,7 @@ pub struct SourceIndexState {
     builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
     syntax_keys: BTreeMap<(DefPath, QueryKind), ContentHash>,
     signatures: Table<hirsel_types::SignatureRef>,
+    specialization_dependencies: BTreeMap<DefId, parallel::SpecializationDependencies>,
     private_summary_reads: BTreeMap<DefId, Arc<Reads>>,
     private_summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
     private_unique_failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
@@ -129,6 +130,12 @@ impl QueryEngine {
             &mut weight,
             self.signatures.capacity(),
         );
+        weight.map(&self.specialization_dependencies, |w, _, entry| {
+            let mut reads = crate::memo::retained::Weight::default();
+            reads.reads(&entry.reads);
+            w.add(reads.bytes.try_into().unwrap_or(usize::MAX));
+            w.vec(&entry.paths, |w, path| w.path(path));
+        });
         hash::<DefId, hirsel_types::UniqueSummary>(&mut weight, self.private_summaries.capacity());
         for summary in self.private_summaries.values() {
             weight.flat_vec(&summary.preserves_unique);
@@ -396,6 +403,7 @@ impl QueryEngine {
                 .filter(|((_, kind), _)| *kind == QueryKind::Signature)
                 .collect(),
             signatures,
+            specialization_dependencies: std::mem::take(&mut self.specialization_dependencies),
             private_summary_reads: std::mem::take(&mut self.private_summary_reads),
             private_summaries: std::mem::take(&mut self.private_summaries),
             private_unique_failures: std::mem::take(&mut self.private_unique_failures),
@@ -449,6 +457,7 @@ impl SourceIndexState {
             builtins,
             syntax_keys,
             signatures,
+            specialization_dependencies,
             private_summary_reads,
             private_summaries,
             private_unique_failures,
@@ -473,6 +482,7 @@ impl SourceIndexState {
         engine.builtins = builtins;
         engine.syntax_keys = syntax_keys;
         engine.signatures = signatures;
+        engine.specialization_dependencies = specialization_dependencies;
         engine.private_summary_reads = private_summary_reads;
         engine.private_summaries = private_summaries;
         engine.private_unique_failures = private_unique_failures;

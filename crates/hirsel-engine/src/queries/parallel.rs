@@ -9,6 +9,7 @@ mod compact;
 mod scheduled;
 pub(crate) use compact::CompactCompleted;
 use compact::{FrontResult, WorkerCompleted};
+pub(in crate::queries) use scheduled::SpecializationDependencies;
 pub use scheduled::{
     FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCarry,
     FrontCheckedOutput, FrontInputFootprint, FrontStorageOutput, FrontStorageQueries,

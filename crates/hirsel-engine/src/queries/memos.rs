@@ -460,7 +460,7 @@ impl QueryEngine {
             .map(|e| e.namespace)
     }
 
-    fn observed_signature(&self, id: DefId) -> Option<hirsel_types::SignatureRef> {
+    pub(super) fn observed_signature(&self, id: DefId) -> Option<hirsel_types::SignatureRef> {
         let (environment, limits, inputs) = self.environment_seen.as_ref()?;
         if environment != &self.environment
             || *limits != self.comptime_limits
@@ -776,6 +776,7 @@ impl QueryEngine {
                 }
                 None => {
                     self.inputs.remove(&id);
+                    self.specialization_dependencies.remove(&id);
                     let keys: Vec<MemoKey> = self.graph.memos_of(id).copied().collect();
                     for key in keys {
                         self.forget(&key);

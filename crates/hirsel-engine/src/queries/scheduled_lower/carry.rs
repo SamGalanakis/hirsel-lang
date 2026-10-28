@@ -15,6 +15,8 @@ struct Retained {
     constant_selection_bytes: u64,
 }
 struct Row {
+    generation: u64,
+    owner: DefId,
     text: ContentHash,
     reads: Reads,
     descriptor: Arc<[u8]>,
@@ -30,6 +32,17 @@ struct Row {
 struct Rows {
     entries: BTreeMap<(u32, ContentHash), Row>,
     used: u64,
+    generation: u64,
+    subscriptions: BTreeSet<(ReadKey, DefId, ContentHash, (u32, ContentHash))>,
+}
+pub(super) struct CarryChanges {
+    clean: BTreeMap<(u32, ContentHash), u64>,
+}
+fn index_bytes(entries: usize, subscriptions: usize) -> u64 {
+    let mut weight = crate::NativeMetadataWeight::default();
+    weight.tree::<(u32, ContentHash), Row>(entries);
+    weight.tree::<(ReadKey, DefId, ContentHash, (u32, ContentHash)), ()>(subscriptions);
+    weight.bytes()
 }
 /// Optional host-owned carry, independently bounded from ordinary storage.
 pub struct LowerCarry {
@@ -51,7 +64,9 @@ impl LowerCarry {
         }))
     }
     pub fn retained_bytes(&self) -> u64 {
-        self.rows.lock().unwrap_or_else(|e| e.into_inner()).used
+        let rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        rows.used
+            .saturating_add(index_bytes(rows.entries.len(), rows.subscriptions.len()))
     }
     pub fn len(&self) -> usize {
         self.rows
@@ -63,7 +78,7 @@ impl LowerCarry {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    fn remember(&self, key: (u32, ContentHash), row: Row) {
+    fn remember(&self, key: (u32, ContentHash), mut row: Row) {
         let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
         let old = rows.entries.get(&key).map_or(0, |r| r.charge);
         let Some(used) = rows
@@ -73,8 +88,31 @@ impl LowerCarry {
         else {
             return;
         };
-        if used > self.allowance.bytes() {
+        let old_reads = rows.entries.get(&key).map_or(0, |old| old.reads.len());
+        let Some(subscriptions) = rows
+            .subscriptions
+            .len()
+            .checked_sub(old_reads)
+            .and_then(|count| count.checked_add(row.reads.len()))
+        else {
             return;
+        };
+        let entries = rows.entries.len() + usize::from(!rows.entries.contains_key(&key));
+        if used.saturating_add(index_bytes(entries, subscriptions)) > self.allowance.bytes() {
+            return;
+        }
+        let Some(generation) = rows.generation.checked_add(1) else {
+            return;
+        };
+        if let Some(old) = rows.entries.remove(&key) {
+            for (read, value) in old.reads.iter() {
+                rows.subscriptions.remove(&(*read, old.owner, *value, key));
+            }
+        }
+        row.generation = generation;
+        rows.generation = generation;
+        for (read, value) in row.reads.iter() {
+            rows.subscriptions.insert((*read, row.owner, *value, key));
         }
         rows.entries.insert(key, row);
         rows.used = used;
@@ -94,6 +132,41 @@ impl FrontLowerQueries {
         {
             return Err(carry);
         }
+        let rows = carry.rows.lock().unwrap_or_else(|e| e.into_inner());
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(size_of::<CarryChanges>() + 2 * size_of::<usize>());
+        weight.tree::<(u32, ContentHash), u64>(rows.entries.len());
+        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(remaining) = retention.checked_sub(weight.bytes()) {
+            *retention = remaining;
+            drop(retention);
+            let mut clean: BTreeMap<_, _> = rows
+                .entries
+                .iter()
+                .map(|(key, row)| (*key, row.generation))
+                .collect();
+            let mut previous = None;
+            for (read, owner, value, key) in &rows.subscriptions {
+                let current = match previous {
+                    Some((last_read, last_owner, observed))
+                        if last_read == *read && last_owner == *owner =>
+                    {
+                        observed
+                    }
+                    _ => {
+                        let observed = self.observe(owner.path(), read);
+                        previous = Some((*read, *owner, observed));
+                        observed
+                    }
+                };
+                if current != Some(*value) {
+                    clean.remove(key);
+                }
+            }
+            *self.carry_changes.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(Arc::new(CarryChanges { clean }));
+        }
+        drop(rows);
         *slot = Some(carry);
         Ok(())
     }
@@ -149,7 +222,7 @@ impl FrontLowerQueries {
         let mut weight = crate::NativeMetadataWeight::default();
         // At most one full internal node per row bounds every BTree split.
         weight.tree::<(u32, ContentHash), Row>(0);
-        weight.add(size_of::<Row>() + descriptor.len());
+        weight.add(descriptor.len());
         for (_, bytes) in outcome.reads.allocations() {
             weight.add(bytes);
         }
@@ -206,9 +279,14 @@ impl FrontLowerQueries {
                 .map(|bytes| (hirsel_product_codec::TypeRecords::DOMAIN, bytes)),
         );
         let charge = weight.bytes();
+        let Some(owner) = self.paths.get(&(id.kind, id.address.0)).copied() else {
+            return;
+        };
         carry.remember(
             (id.kind, id.address.0),
             Row {
+                generation: 0,
+                owner,
                 text: key.1,
                 reads: outcome.reads.clone(),
                 descriptor: descriptor.into(),
@@ -235,12 +313,21 @@ impl FrontLowerQueries {
         let carry = self.carry()?;
         let rows = carry.rows.lock().unwrap_or_else(|e| e.into_inner());
         let row = rows.entries.get(&(id.kind, id.address.0))?;
+        let clean = self
+            .carry_changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|changes| {
+                changes.clean.get(&(id.kind, id.address.0)) == Some(&row.generation)
+            });
         if row.text != key.1
             || row.descriptor.len() as u64 > self.weight.scratch
-            || row
-                .reads
-                .first_changed(|read| self.observe(path, read))
-                .is_some()
+            || (!clean
+                && row
+                    .reads
+                    .first_changed(|read| self.observe(path, read))
+                    .is_some())
         {
             return None;
         }
@@ -300,7 +387,7 @@ impl FrontLowerQueries {
         } else {
             CONSTANT_DESCRIPTOR
         };
-        Some(self.publish(
+        let result = self.publish(
             id,
             key,
             domain,
@@ -315,6 +402,20 @@ impl FrontLowerQueries {
                 execution_subject: persistent::evaluation_subject(key, &descriptor),
             },
             false,
-        ))
+        );
+        if clean && result.is_ok() {
+            self.clean_memos
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(crate::memo::MemoKey::new(
+                    if id.kind == FRONT_LOWER_KIND {
+                        QueryKind::Lower
+                    } else {
+                        QueryKind::Evaluate
+                    },
+                    DefId::intern(path),
+                ));
+        }
+        Some(result)
     }
 }

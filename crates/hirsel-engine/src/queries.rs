@@ -252,6 +252,7 @@ pub struct QueryEngine {
     syntax_keys: BTreeMap<(DefPath, QueryKind), ContentHash>,
     signatures: Table<hirsel_types::SignatureRef>,
     resolutions: Table<Resolution>,
+    specialization_dependencies: BTreeMap<DefId, parallel::SpecializationDependencies>,
     checked: Table<TypedBody>,
     modes: Table<AnalyzedBody>,
     lowered: Table<hirsel_tir::DefinitionRef>,
@@ -383,6 +384,10 @@ impl Drop for QueryEngine {
             take(&mut self.checked_summaries),
         );
         released("engine: resolutions", take(&mut self.resolutions));
+        released(
+            "engine: specialization dependencies",
+            take(&mut self.specialization_dependencies),
+        );
         released("engine: signatures", take(&mut self.signatures));
         released("engine: memo graph", take(&mut self.graph));
         released(
@@ -640,6 +645,7 @@ impl QueryEngine {
             syntax_keys: BTreeMap::new(),
             signatures: Default::default(),
             resolutions: Default::default(),
+            specialization_dependencies: Default::default(),
             checked: Default::default(),
             modes: Default::default(),
             lowered: Default::default(),
@@ -1983,8 +1989,10 @@ impl QueryEngine {
         let view = match self.registry.get(d) {
             Some(signature) => Ok(signature.clone()),
             None if self.declared(path) => self
-                .item_signature(path)
-                .and_then(|public| self.body_signature(&path.0.package, public.value))
+                .observed_signature(d)
+                .map(Ok)
+                .unwrap_or_else(|| self.item_signature(path).map(|public| public.value))
+                .and_then(|public| self.body_signature(&path.0.package, public))
                 .map(|(view, _)| view),
             None => return ContentHash::default(),
         };

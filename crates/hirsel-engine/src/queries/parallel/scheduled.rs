@@ -1291,7 +1291,51 @@ impl BodyTask {
         })
     }
 }
+pub(in crate::queries) struct SpecializationDependencies {
+    pub(in crate::queries) text: ContentHash,
+    pub(in crate::queries) reads: Arc<Reads>,
+    pub(in crate::queries) paths: Vec<DefPath>,
+}
 impl QueryEngine {
+    fn specialization_dependencies(&mut self, definition: &DefPath) -> Option<Vec<DefPath>> {
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Resolve).ok()?;
+        if let Some(kept) = self.specialization_dependencies.remove(&id) {
+            let valid = kept.text == text
+                && kept
+                    .reads
+                    .first_changed(|read| self.observe(definition, read))
+                    .is_none();
+            let paths = valid.then(|| kept.paths.clone());
+            self.specialization_dependencies.insert(id, kept);
+            if paths.is_some() {
+                return paths;
+            }
+        }
+        let output = self.resolve_query(definition).ok()?;
+        let paths: Vec<_> = output
+            .value
+            .dependencies
+            .iter()
+            .filter(|path| hirsel_types::specialization_parts(path).is_some())
+            .cloned()
+            .collect();
+        if !has_errors(&output.diagnostics)
+            && let Some(entry) = self.resolutions.get(&id)
+            && entry.consistent
+            && !self.graph.is_dirty(&entry.memo.key)
+        {
+            self.specialization_dependencies.insert(
+                id,
+                SpecializationDependencies {
+                    text,
+                    reads: Arc::new(entry.reads().flat_copy()),
+                    paths: paths.clone(),
+                },
+            );
+        }
+        Some(paths)
+    }
     /// The accepted registration view of closed `with` clauses (GEN-6): every
     /// specialization a selected body names, and those its own body closes,
     /// is installed before the immutable signature snapshot is captured, and
@@ -1302,21 +1346,23 @@ impl QueryEngine {
         let mut pending = definitions.to_vec();
         let mut seen = std::collections::BTreeSet::new();
         while let Some(definition) = pending.pop() {
-            if !seen.insert(definition.clone())
-                || !self
-                    .snapshot(&definition)
-                    .is_ok_and(|syntax| crate::families::closes(&syntax))
-            {
+            if !seen.insert(definition.clone()) {
                 continue;
             }
-            let Ok(resolution) = self.resolve_query(&definition) else {
+            if !self
+                .snapshot(&definition)
+                .is_ok_and(|syntax| crate::families::closes(&syntax))
+            {
+                self.specialization_dependencies
+                    .remove(&DefId::intern(&definition));
+                continue;
+            }
+            let Some(dependencies) = self.specialization_dependencies(&definition) else {
                 continue;
             };
-            for dependency in &resolution.value.dependencies {
-                if hirsel_types::specialization_parts(dependency).is_some()
-                    && self.materialize(dependency).is_ok()
-                {
-                    pending.push(dependency.clone());
+            for dependency in dependencies {
+                if self.materialize(&dependency).is_ok() {
+                    pending.push(dependency);
                 }
             }
         }
