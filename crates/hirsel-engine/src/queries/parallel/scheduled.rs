@@ -157,8 +157,8 @@ struct Input {
 /// publish declarations, fuel or a later source root's diagnostics.
 pub struct FrontBodyQueries {
     inputs: BTreeMap<Key, Input>,
-    by_definition: BTreeMap<DefId, Key>,
-    body_demands: BTreeMap<Key, Key>,
+    by_definition: Box<[(DefId, Key)]>,
+    body_demands: Box<[(Key, Key)]>,
     types: Arc<hirsel_types::TypeInterner>,
     memo: Arc<hirsel_types::TypeMemo>,
     snapshot: Arc<SignatureSnapshot>,
@@ -307,18 +307,16 @@ impl FrontBodyQueries {
     /// metadata consumes the remaining allowance only on demand. Archive bytes
     /// belong to the selected provider, not to these reference-only rows.
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
-        let mut indexes = crate::NativeMetadataWeight::default();
-        indexes.tree::<DefId, Key>(definitions.len());
-        indexes.tree::<Key, Key>(definitions.len());
         (definitions.len() as u64)
             .checked_mul(
                 (std::mem::size_of::<Input>()
                     + std::mem::size_of::<FrontOutcome>()
                     + 8 * std::mem::size_of::<crate::memo::MemoKey>()
-                    + 32 * std::mem::size_of::<usize>()) as u64,
+                    + 32 * std::mem::size_of::<usize>()
+                    + std::mem::size_of::<(DefId, Key)>()
+                    + std::mem::size_of::<(Key, Key)>()) as u64,
             )?
-            .checked_add(std::mem::size_of::<Self>() as u64)?
-            .checked_add(indexes.bytes())
+            .checked_add(std::mem::size_of::<Self>() as u64)
     }
     fn retain(
         &self,
@@ -650,7 +648,7 @@ impl FrontBodyQueries {
     }
 
     pub fn query(&self, definition: &DefPath) -> Option<QueryId> {
-        let address = *self.by_definition.get(&DefId::get(definition)?)?;
+        let address = *index_value(&self.by_definition, &DefId::get(definition)?)?;
         Some(QueryId {
             kind: FRONT_BODY_KIND,
             address: hirsel_artifact_store::Address(address),
@@ -757,7 +755,7 @@ impl FrontBodyQueries {
         path: &DefPath,
     ) -> Option<&Arc<AcceptedFrontRegistration>> {
         self.inputs
-            .get(self.by_definition.get(&DefId::get(path)?)?)?
+            .get(index_value(&self.by_definition, &DefId::get(path)?)?)?
             .registration
             .as_ref()
     }
@@ -815,6 +813,13 @@ impl FrontBodyQueries {
         }
     }
 }
+// The address maps are frozen at capture. Sorted slices keep their exact
+// lookup keys without retaining insertion capacity or B-tree nodes.
+fn index_value<'a, K: Ord, V>(rows: &'a [(K, V)], key: &K) -> Option<&'a V> {
+    let at = rows.binary_search_by(|(candidate, _)| candidate.cmp(key)).ok()?;
+    Some(&rows[at].1)
+}
+
 struct Factory(Arc<FrontBodyQueries>);
 impl QueryFactory for Factory {
     fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
@@ -824,10 +829,7 @@ impl QueryFactory for Factory {
         let (key, input, materialize) = if let Some(input) = self.0.inputs.get(&query.address.0) {
             (query.address.0, input, false)
         } else {
-            let key = *self
-                .0
-                .body_demands
-                .get(&query.address.0)
+            let key = *index_value(&self.0.body_demands, &query.address.0)
                 .ok_or(self.0.errors.protocol)?;
             (key, &self.0.inputs[&key], true)
         };
@@ -1611,11 +1613,12 @@ impl QueryEngine {
                 )
             })
             .collect();
-        let by_definition = inputs
+        let mut by_definition = inputs
             .iter()
             .map(|(&key, input)| (input.definition, key))
-            .collect();
-        let body_demands = inputs
+            .collect::<Vec<_>>();
+        by_definition.sort_unstable_by_key(|&(definition, _)| definition);
+        let mut body_demands = inputs
             .keys()
             .map(|&key| {
                 (
@@ -1623,11 +1626,12 @@ impl QueryEngine {
                     key,
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
+        body_demands.sort_unstable_by_key(|&(demand, _)| demand);
         Ok(Arc::new(FrontBodyQueries {
             inputs,
-            by_definition,
-            body_demands,
+            by_definition: by_definition.into_boxed_slice(),
+            body_demands: body_demands.into_boxed_slice(),
             types: self.types.clone(),
             memo: self.memo.clone(),
             snapshot,
