@@ -167,7 +167,7 @@ impl OwnershipCompilation {
         let snapshot_bytes = Arc::get_mut(&mut snapshot)
             .unwrap()
             .retained_dispatch_bytes();
-        let mut native = NativeTasks::new(snapshot, self.weight)?;
+        let mut native = NativeTasks::for_ownership(snapshot, self.weight)?;
         let dispatch_bytes = Arc::get_mut(&mut native).unwrap().retained_dispatch_bytes();
         let mut copied = hirsel_engine::NativeMetadataWeight::default();
         copied.add(size_of::<Self>() + 2 * size_of::<usize>());

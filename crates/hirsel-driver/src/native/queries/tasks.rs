@@ -254,6 +254,20 @@ impl NativeTasks {
             ready_transformations: AtomicU64::new(0),
         }))
     }
+    /// Ownership diagnostics install the existing InstanceTasks and ArenaTasks
+    /// factories. Their settled descriptors remain in the snapshot; retaining
+    /// a second set of producer requests here serves no diagnostic dependency.
+    pub(super) fn for_ownership(
+        snapshot: Arc<NativeSnapshot>,
+        weight: MemoryWeight,
+    ) -> Result<Arc<Self>, String> {
+        let mut tasks = Self::new(snapshot, weight)?;
+        Arc::get_mut(&mut tasks)
+            .expect("native dispatch is private during construction")
+            .requests
+            .retain(|_, request| matches!(request.work, Work::Ready(_)));
+        Ok(tasks)
+    }
     pub(super) fn ownership_reads(
         &self,
         owner: &InstanceAddress,
