@@ -33,7 +33,8 @@ fn dispatch_hands_claimed_frames_to_their_own_activations() {
         let caller = if *service == "tasks::ordered::engine::ahead_allocation" {
             let allocation = "tasks::ordered::ahead::cpu_allocation::serve";
             assert!(graph.directly_calls(native, allocation));
-            allocation
+            assert!(graph.directly_calls(allocation, "Request::admit"));
+            "Request::admit"
         } else {
             native
         };

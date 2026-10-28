@@ -125,7 +125,7 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bo
         "CPU allocation follows a canonical claim"
     );
     assert!(unsafe { (*native).cpu && (*native).cpu_phase == 2 });
-    let request = unsafe { &mut (*native).allocation };
+    let request: &mut Request = unsafe { &mut (*native).allocation };
     assert!(request.pending());
     crate::alloc::check_request(request.extent, request.align);
     let bytes = unsafe {

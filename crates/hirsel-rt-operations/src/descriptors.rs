@@ -704,6 +704,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_cpu_ahead_enter", Local),
     entry("hirsel_rt_v2_cpu_ahead_alloc", Local),
     entry("hirsel_rt_v2_cpu_ahead_publish", Local),
+    entry("hirsel_rt_v2_cpu_publish", Physical),
     entry("hirsel_rt_v2_cpu_ahead_grow", Local),
     entry("hirsel_rt_v2_host_active", Local),
     entry("hirsel_rt_v2_host_defer", Local),

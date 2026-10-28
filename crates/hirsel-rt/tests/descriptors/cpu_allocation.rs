@@ -8,7 +8,9 @@ fn idle_cpu_allocation_keeps_budget_settlement_and_heap_work_outside_the_task_st
     let serve = "tasks::ordered::ahead::cpu_allocation::serve";
     let allocation = "tasks::ordered::engine::ahead_allocation";
     assert!(IDLE_BUDGET_SERVICES.contains(&allocation));
-    for callee in [allocation, "alloc::cpu_preflight", "alloc::alloc_prepared"] {
+    assert!(graph.directly_calls(serve, "Request::admit"));
+    assert!(graph.directly_calls("Request::admit", allocation));
+    for callee in ["alloc::cpu_preflight", "alloc::alloc_prepared"] {
         assert!(graph.directly_calls(serve, callee), "{callee}");
     }
     assert_eq!(
