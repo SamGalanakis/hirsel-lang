@@ -558,13 +558,12 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
             crate::pool::cpu_scoped::probe::resume(ctx);
             loop {
                 crate::fiber::switch(&raw mut (*native).physical.idle_sp, sp);
-                // A scalar CPU quantum owns no shared state. Keep the same
+                // A scalar private or CPU quantum owns no shared state. Keep the same
                 // 1024-point checkpoint and every stop/save/fuel/barrier test,
                 // without taking the scheduler role for a quota-only return.
-                if (*native).cpu
-                    && (*native).cpu_phase == 2
+                if (((*native).cpu && (*native).cpu_phase == 2 && !private(ctx))
+                    || (!(*native).cpu && private(ctx) && (*native).host.root.is_null()))
                     && (*native).physical.reason == 1
-                    && !private(ctx)
                     && (*run).control.stopped().is_none()
                     && !(*ctx)
                         .ahead
