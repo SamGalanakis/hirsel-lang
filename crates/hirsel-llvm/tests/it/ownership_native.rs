@@ -244,6 +244,7 @@ fn metadata(program: &support::programs::Program) -> Units {
                 marker.id.0,
                 Box::new(Metadata {
                     empty_environment: false,
+                    task_result: None,
                     optional_carrier: false,
                     channel: None,
                     action: marker.kind,

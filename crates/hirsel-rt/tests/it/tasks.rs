@@ -566,6 +566,7 @@ fn ownership_runtime_child_paths_survive_yields_and_slot_reuse() {
                         action: if id == 0 { 0 } else { 2 },
                         channel: None,
                         empty_environment: false,
+                        task_result: None,
                         optional_carrier: false,
                         callee: None,
                         cleanup: None,
