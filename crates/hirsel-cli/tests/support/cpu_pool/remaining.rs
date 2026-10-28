@@ -174,6 +174,17 @@ fn ordered_remaining(name: &str, template: &str, status: i32) {
             assert!(!claims.is_empty(), "{events}");
         } else {
             let samples = fs::read_to_string(&probe).unwrap();
+            let lifecycle = fs::read_to_string(probe.with_extension("probe.lifecycle")).unwrap();
+            let boundaries = fs::read_to_string(probe.with_extension("probe.boundaries")).unwrap();
+            let failed_domain: u64 = lifecycle
+                .lines()
+                .find(|line| line.starts_with("start "))
+                .expect("the failed batch must start a CPU domain")
+                .split_whitespace()
+                .nth(1)
+                .unwrap()
+                .parse()
+                .unwrap();
             let intervals: Vec<Vec<u64>> = samples
                 .lines()
                 .map(|line| {
@@ -183,16 +194,37 @@ fn ordered_remaining(name: &str, template: &str, status: i32) {
                         .collect()
                 })
                 .collect();
-            let older: Vec<_> = intervals.iter().filter(|fields| fields[1] == 1).collect();
-            let younger = intervals.iter().find(|fields| fields[1] == 2).unwrap();
-            assert!(older.len() > 8, "{samples}");
+            let older = intervals
+                .iter()
+                .filter(|fields| fields[0] == failed_domain && fields[1] == 1)
+                .count();
+            assert!(older > 8, "{samples}");
+            let boundaries: Vec<Vec<u64>> = boundaries
+                .lines()
+                .map(|line| {
+                    line.split_whitespace()
+                        .skip(1)
+                        .map(|x| x.parse().unwrap())
+                        .collect()
+                })
+                .filter(|fields: &Vec<u64>| fields[0] == failed_domain && fields[2] & 4 != 0)
+                .collect();
+            let older = boundaries
+                .iter()
+                .position(|fields| fields[1] == 1)
+                .expect("job 0 must reach its checked failure boundary");
+            let younger = boundaries
+                .iter()
+                .position(|fields| fields[1] == 2)
+                .expect("job 1 must reach its checked failure boundary in the failed batch");
+            // CONC-1 gives host scheduling no startup bound. A rejected on-CPU
+            // sample is no failure event; observe the actual alternate handoffs.
             assert!(
-                younger[4] < older[7][3],
-                "job 1 must reach its checked failure while job 0 is still computing: {samples}"
+                younger < older,
+                "job 1 must reach its checked failure boundary before job 0: {boundaries:?}"
             );
             eprintln!(
-                "{backend} reversed FAIL-2: job 1 failure available at {}, job 0 still computing at {}; reported job 0; reentry succeeded",
-                younger[4], older[7][3]
+                "{backend} reversed FAIL-2: job 1 boundary {younger} before job 0 boundary {older}; reported job 0; reentry succeeded"
             );
         }
         let replayed = root.join("replay.events");
@@ -233,6 +265,11 @@ fn ordered_remaining(name: &str, template: &str, status: i32) {
             semantic_observation(&replay_observation)
         );
         assert!(fs::read(&replay_probe).unwrap().is_empty());
+        assert!(
+            fs::read(replay_probe.with_extension("probe.boundaries"))
+                .unwrap()
+                .is_empty()
+        );
         eprintln!("{backend} {name}: live == replay, cleanup completed");
     }
 }

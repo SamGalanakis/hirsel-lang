@@ -1,4 +1,4 @@
-//! Diagnostic on-CPU intervals for CPU-batch acceptance. No semantic input.
+//! Diagnostic CPU intervals and operation-boundary events. No semantic input.
 use crate::TaskCtx;
 use std::io::Write;
 use std::sync::{
@@ -9,6 +9,7 @@ use std::sync::{
 pub(crate) struct Probe {
     output: std::fs::File,
     lifecycle: Mutex<std::fs::File>,
+    boundaries: Mutex<std::fs::File>,
     controls: Mutex<std::fs::File>,
     threads: Mutex<std::fs::File>,
     rejected_output: std::fs::File,
@@ -31,6 +32,8 @@ impl Probe {
     pub(crate) fn open(path: &std::path::Path) -> std::io::Result<Self> {
         let mut lifecycle = path.as_os_str().to_os_string();
         lifecycle.push(".lifecycle");
+        let mut boundaries = path.as_os_str().to_os_string();
+        boundaries.push(".boundaries");
         let mut controls = path.as_os_str().to_os_string();
         controls.push(".control");
         let mut rejected = path.as_os_str().to_os_string();
@@ -40,6 +43,7 @@ impl Probe {
         Ok(Self {
             output: std::fs::File::create(path)?,
             lifecycle: Mutex::new(std::fs::File::create(lifecycle)?),
+            boundaries: Mutex::new(std::fs::File::create(boundaries)?),
             controls: Mutex::new(std::fs::File::create(controls)?),
             threads: Mutex::new(std::fs::File::create(threads)?),
             rejected_output: std::fs::File::create(rejected)?,
@@ -199,6 +203,24 @@ pub(crate) unsafe fn checkpoint(ctx: *mut TaskCtx) {
             }
         }
         (*ctx).cpu_sample = Some(Sample::now(start.domain, start.worker));
+    }
+}
+/// Record a CPU alternate's operation handoff even when its on-CPU interval
+/// was rejected after a host context switch. File order is physical order only.
+pub(crate) unsafe fn boundary(ctx: *mut TaskCtx, reason: u32) {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        if let Some(sample) = (*ctx).cpu_sample
+            && let Some(probe) = (*ctx).run_ref().cpu_probe.as_ref()
+        {
+            writeln!(
+                probe.boundaries.lock().unwrap(),
+                "boundary {} {} {reason}",
+                sample.domain,
+                sample.worker
+            )
+            .expect("CPU boundary probe write");
+        }
     }
 }
 /// Restart on the current physical owner, excluding time saved on idle.

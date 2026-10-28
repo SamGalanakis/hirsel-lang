@@ -590,6 +590,9 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                 }
                 break;
             }
+            if (*native).cpu && (*native).physical.reason & 4 != 0 {
+                crate::pool::cpu_scoped::probe::boundary(ctx, (*native).physical.reason);
+            }
             crate::pool::cpu_scoped::probe::checkpoint(ctx);
             exec.idle.set((*native).physical.idle_sp);
             crate::stop::set_running(std::ptr::null_mut());
