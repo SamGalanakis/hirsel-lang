@@ -339,6 +339,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         })?;
         let place = self.place(recipe.address)?;
         let old = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+        let kept = self
+            .sequence_state_at(place)
+            .map(|state| self.grown_facts(state, old));
         let environment = self.builder.load(
             self.module.ptr_type(),
             self.builder.offset(
@@ -402,6 +405,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             8,
         );
         self.store(Shape::Scalar(ScalarKind::Pointer), grown, place);
+        if let (Some(state), Some((unique, untracked))) = (self.sequence_state_at(place), kept) {
+            self.builder.store(unique, state.unique, 1);
+            self.builder.store(untracked, state.untracked, 1);
+        }
         Ok(true)
     }
 }
