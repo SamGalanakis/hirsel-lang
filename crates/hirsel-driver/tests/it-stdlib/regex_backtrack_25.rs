@@ -47,23 +47,24 @@ fn engines_for_budget(backend: Option<native::Backend>, entries: &[&str], steps:
                     "{entry} {backend:?}: {outcome:?}"
                 );
             } else {
-                let mut loaded = load_program(&path).unwrap();
-                loaded.check_for_execution().unwrap();
-                loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
-                    limits: hirsel_interp::Limits {
-                        steps: Some(steps),
-                        ..Default::default()
-                    },
+                let prepared = request_tir(&path, Verify::On, None).unwrap();
+                let limits = hirsel_interp::Limits {
+                    steps: Some(steps),
                     ..Default::default()
-                }));
+                };
                 let config = RunConfiguration {
-                    entry: loaded.entry.clone(),
+                    entry: prepared.entry.clone(),
                     hash_seed: 0,
                     inputs: vec![],
                 };
-                let plain =
-                    run_observed_snapshot(&mut loaded.engine, &config, SimulationConfig::default())
-                        .unwrap();
+                let plain = testing::observe_tir(
+                    &prepared,
+                    &config,
+                    SimulationConfig::default(),
+                    limits,
+                    false,
+                )
+                .unwrap();
                 assert!(
                     matches!(
                         plain.outcome,
@@ -72,9 +73,14 @@ fn engines_for_budget(backend: Option<native::Backend>, entries: &[&str], steps:
                     "{entry}: {:?}",
                     plain.outcome
                 );
-                let checked =
-                    run_observed_checked(&mut loaded.engine, &config, SimulationConfig::default())
-                        .unwrap();
+                let checked = testing::observe_tir(
+                    &prepared,
+                    &config,
+                    SimulationConfig::default(),
+                    limits,
+                    true,
+                )
+                .unwrap();
                 assert!(
                     matches!(
                         checked.outcome,

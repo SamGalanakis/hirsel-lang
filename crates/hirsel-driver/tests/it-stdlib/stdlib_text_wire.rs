@@ -260,6 +260,7 @@ fn uuid_v7_reads_the_wall_clock() {
     with_compiler_stack(|| {
         let path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/uuid-v7-clock.hir");
+        let prepared = request_tir(&path, Verify::On, None).unwrap();
         for (wall, expected) in [
             (
                 1_645_557_742_123_456_789i64,
@@ -271,16 +272,22 @@ fn uuid_v7_reads_the_wall_clock() {
             let mut simulation = SimulationConfig::default();
             simulation.grants.insert("WallClock".into());
             simulation.wall = wall;
-            let mut stdout = Vec::new();
-            let outcome = run_path_with_step_budget(
-                &path,
+            let execution = testing::observe_tir(
+                &prepared,
+                &RunConfiguration {
+                    entry: prepared.entry.clone(),
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
                 simulation,
-                None,
-                hirsel_engine::Verify::On,
-                &mut stdout,
-                &mut Vec::new(),
+                hirsel_interp::Limits {
+                    steps: None,
+                    ..Default::default()
+                },
+                false,
             )
             .unwrap();
+            let outcome = execution.outcome.unwrap();
             assert!(
                 matches!(
                     outcome,
@@ -288,7 +295,11 @@ fn uuid_v7_reads_the_wall_clock() {
                 ),
                 "{outcome:?}"
             );
-            assert_eq!(String::from_utf8(stdout).unwrap(), expected, "wall {wall}");
+            assert_eq!(
+                String::from_utf8(execution.observation.unwrap().output).unwrap(),
+                expected,
+                "wall {wall}"
+            );
         }
     });
 }
