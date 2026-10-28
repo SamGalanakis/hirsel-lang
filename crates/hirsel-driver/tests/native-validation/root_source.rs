@@ -225,17 +225,11 @@ fn immutable_constructor_refuses_missing_lower_and_cross_wired_source_facts() {
         assert!(NativeLinkSource::from_settled(fixture.facts(), &fixture.lower).is_err());
         fixture.roots.foreign_links.pop();
         let old = fixture.declarations[&path].source.implementation_revision;
-        fixture
-            .declarations
-            .get_mut(&path)
-            .unwrap()
+        Arc::make_mut(fixture.declarations.get_mut(&path).unwrap())
             .source
             .implementation_revision = hirsel_syntax::ContentHash::of_bytes(b"stale source");
         assert!(NativeLinkSource::from_settled(fixture.facts(), &fixture.lower).is_err());
-        fixture
-            .declarations
-            .get_mut(&path)
-            .unwrap()
+        Arc::make_mut(fixture.declarations.get_mut(&path).unwrap())
             .source
             .implementation_revision = old;
         let anchors = fixture.anchors.get_mut(&path).unwrap();
