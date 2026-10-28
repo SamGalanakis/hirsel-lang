@@ -225,6 +225,9 @@ pub(super) struct GraphMeter {
     _source: Arc<MemoryReservation>,
 }
 impl GraphMeter {
+    pub fn source_owner(&self) -> Arc<MemoryReservation> {
+        self._source.clone()
+    }
     /// Current/S0 counters and flush temporaries have a fixed, known namespace.
     /// Bound their actual tree/path layout under the existing source partition.
     pub fn input_bytes(definitions: &[DefPath], memos: usize) -> Option<u64> {

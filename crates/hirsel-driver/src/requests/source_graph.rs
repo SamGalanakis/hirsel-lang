@@ -172,6 +172,12 @@ struct SourceProducts {
 }
 
 impl GraphProducts for SourceProducts {
+    fn check_source_owner(&self) -> Option<Arc<dyn Send + Sync>> {
+        // CheckOutput owns diagnostics and contains no producer handles.
+        // Its source map keeps the original source/header grant, allowing the
+        // idle front, Lower and Check producers to release their own grants.
+        Some(self.meter.source_owner())
+    }
     fn accepts(&self, operation: &CompileOperation) -> bool {
         if self.declaration_export {
             return matches!(operation, CompileOperation::DataAbi) && self.native_sources.is_some();

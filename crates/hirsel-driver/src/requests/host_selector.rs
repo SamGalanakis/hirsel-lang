@@ -158,6 +158,9 @@ impl LoadingAdmission {
 /// Implemented only by installed compiler producer views. Public requests
 /// carry no tasks, materializer callbacks or compiler/verifier capabilities.
 pub(super) trait GraphProducts: Send + Sync {
+    fn check_source_owner(&self) -> Option<Arc<dyn Send + Sync>> {
+        None
+    }
     fn accepts(&self, _operation: &CompileOperation) -> bool {
         true
     }
@@ -411,9 +414,17 @@ impl GraphSelections {
                 read_scope,
                 materialize: Arc::new(move |products| {
                     let completed = (output.materialize)(products)?;
-                    let owner: Arc<dyn Send + Sync> = Arc::new(OutputOwner {
-                        _products: ready_graph.products.clone(),
-                    });
+                    let owner: Arc<dyn Send + Sync> =
+                        if matches!(completed.result, CompileResult::Check(_)) {
+                            ready_graph.products.check_source_owner()
+                        } else {
+                            None
+                        }
+                        .unwrap_or_else(|| {
+                            Arc::new(OutputOwner {
+                                _products: ready_graph.products.clone(),
+                            })
+                        });
                     Ok(Arc::new(
                         CompileOutput::new(
                             completed.entry.clone(),
