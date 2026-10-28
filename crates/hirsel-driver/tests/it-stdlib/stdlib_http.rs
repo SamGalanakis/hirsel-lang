@@ -8,22 +8,21 @@ fn execute_source(source: &str) {
     with_compiler_stack(|| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/std_source/main.hir");
-        let mut program =
-            load_program_source(&path, Some(source)).unwrap_or_else(|e| panic!("{}", details(&e)));
-        program
-            .check_for_execution()
+        let prepared = crate::source_std::tir(&path, Some(source), None)
             .unwrap_or_else(|e| panic!("{}", details(&e)));
         for (checked, seed) in [(false, 0), (true, 0), (false, 1)] {
             let config = RunConfiguration {
-                entry: program.entry.clone(),
+                entry: prepared.entry.clone(),
                 hash_seed: seed,
                 inputs: vec![],
             };
-            let result = if checked {
-                run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
-            } else {
-                run_observed_snapshot(&mut program.engine, &config, SimulationConfig::default())
-            }
+            let result = testing::observe_tir(
+                &prepared,
+                &config,
+                SimulationConfig::default(),
+                InterpreterAdapter::default().limits,
+                checked,
+            )
             .unwrap();
             assert!(
                 matches!(
@@ -467,32 +466,27 @@ impl hirsel_interp::OperationsAdapter for HttpClockProgress {
 }
 
 fn http_progress_events(
-    program: &mut LoadedProgram,
+    prepared: &hirsel_driver::requests::TirExecution,
     run: &RunConfiguration,
     config: SimulationConfig,
     ticks: u64,
 ) -> Vec<hirsel_tir::CapabilityEvent> {
-    let signature =
-        hirsel_types::SignatureProvider::signature(&mut program.engine, (&run.entry).into())
-            .unwrap();
-    let runtime = program.engine.runtime_types().unwrap();
-    let sources = program.engine.sources.clone();
     let mut library = hirsel_interp::library::Library::new(run, config).unwrap();
     let arguments = library
-        .entry_arguments(program.engine.types(), &signature)
+        .entry_arguments(&prepared.runtime.types, &prepared.signature)
         .unwrap();
     let mut operations = HttpClockProgress {
         library,
         ticks_per_read: ticks,
     };
     let execution = hirsel_interp::run_with_runtime(
-        &mut program.engine,
-        &sources,
+        &mut prepared.provider(),
+        &prepared.sources,
         run,
         arguments,
         hirsel_interp::Limits::default(),
         &mut operations,
-        &runtime,
+        &prepared.runtime,
     )
     .unwrap();
     assert!(
@@ -539,10 +533,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
 "#;
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../conformance/SEM/SEM-1-http-wire-run.hir");
-        let mut program =
-            load_program_source(&path, Some(source)).unwrap_or_else(|e| panic!("{}", details(&e)));
-        program
-            .check_for_execution()
+        let prepared = crate::source_std::tir(&path, Some(source), None)
             .unwrap_or_else(|e| panic!("{}", details(&e)));
         for (fragments, ticks) in [
             (vec![b"GET / HTTP/1.1\r\nHost:".to_vec()], 0u64),
@@ -586,19 +577,21 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
                 .unwrap(),
             );
             let run = RunConfiguration {
-                entry: program.entry.clone(),
+                entry: prepared.entry.clone(),
                 hash_seed: 0,
                 inputs: vec![],
             };
-            let events = http_progress_events(&mut program, &run, config.clone(), ticks);
+            let events = http_progress_events(&prepared, &run, config.clone(), ticks);
             if ticks == 0 {
-                let replay = run_observed_snapshot(
-                    &mut program.engine,
+                let replay = testing::observe_tir(
+                    &prepared,
                     &RunConfiguration {
                         inputs: events,
                         ..run
                     },
                     config,
+                    hirsel_interp::Limits::default(),
+                    false,
                 )
                 .unwrap();
                 assert!(
@@ -613,7 +606,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
                 // Simulation inputs validate the provider's responses, so replay the
                 // advancing-clock provider as well as the scripted socket world.
                 let replay = http_progress_events(
-                    &mut program,
+                    &prepared,
                     &RunConfiguration {
                         inputs: events.clone(),
                         ..run
@@ -816,26 +809,23 @@ fn http2_250_concurrent_streams_and_refusals_agree_on_all_engines() {
     with_compiler_stack(|| {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/http2-stream-limit.hir");
-        let mut program = load_program_source(&fixture, None).unwrap();
-        program.check_for_execution().unwrap();
-        program.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
-            limits: hirsel_interp::Limits {
-                steps: Some(12_000_000),
-                ..Default::default()
-            },
-            ..Default::default()
-        }));
+        let prepared = crate::source_std::tir(&fixture, None, None).unwrap();
         let config = RunConfiguration {
-            entry: program.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
         for checked in [false, true] {
-            let observed = if checked {
-                run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
-            } else {
-                run_observed_snapshot(&mut program.engine, &config, SimulationConfig::default())
-            }
+            let observed = testing::observe_tir(
+                &prepared,
+                &config,
+                SimulationConfig::default(),
+                hirsel_interp::Limits {
+                    steps: Some(12_000_000),
+                    ..Default::default()
+                },
+                checked,
+            )
             .unwrap();
             assert!(
                 matches!(
@@ -846,6 +836,8 @@ fn http2_250_concurrent_streams_and_refusals_agree_on_all_engines() {
                 observed.outcome
             );
         }
+        // Release the completed interpreter graph before admitting a native graph.
+        drop(prepared);
         for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
