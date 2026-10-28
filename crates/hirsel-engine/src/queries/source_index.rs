@@ -49,11 +49,31 @@ fn hash<K, V>(weight: &mut crate::NativeMetadataWeight, capacity: usize) {
     }
 }
 impl QueryEngine {
+    fn source_types(&self) -> Result<hirsel_types::TypeProjection, QueryError> {
+        let (encoded, roots) = hirsel_types::with_table_collection(|| {
+            bincode::serialize_into(std::io::sink(), &self.builtins)?;
+            for entry in self.signatures.values() {
+                bincode::serialize_into(std::io::sink(), &entry.memo.value)?;
+                if let Some(owner) = &entry.products.representation {
+                    bincode::serialize_into(std::io::sink(), &owner.representation.declaration)?;
+                    bincode::serialize_into(std::io::sink(), &owner.view.get())?;
+                }
+            }
+            Ok::<(), bincode::Error>(())
+        });
+        encoded.map_err(|_| invalid())?;
+        Ok(self.types.project_reachable(roots))
+    }
+
     /// Inspect the complete source-only carry representation. This performs no
     /// source/provider access or query. Shared core TypeBase data remains with
     /// the original process owner; custom bases refuse until independently owned.
     /// Unfinished transactions and generated namespaces refuse this S0 slice.
     pub fn source_index_bytes(&self) -> Result<u64, QueryError> {
+        self.source_index_bytes_with_types(self.source_types()?.retained_bytes())
+    }
+
+    fn source_index_bytes_with_types(&self, type_bytes: u64) -> Result<u64, QueryError> {
         if !self.s1.is_empty()
             || !self.active.is_empty()
             || !self.signature_stack.is_empty()
@@ -169,7 +189,7 @@ impl QueryEngine {
                     .source_carry_bytes(&self.items, &self.indexed_sources),
             )
             .ok_or_else(invalid)?
-            .checked_add(self.types.retained_local_bytes())
+            .checked_add(type_bytes)
             .ok_or_else(invalid)?
             .checked_add(self.graph.retained_bytes().ok_or_else(invalid)?)
             .ok_or_else(invalid)?
@@ -224,7 +244,7 @@ impl QueryEngine {
                 self.declarations.source_carry_bytes(),
                 self.catalog
                     .source_carry_bytes(&self.items, &self.indexed_sources),
-                self.types.retained_local_bytes(),
+                type_bytes,
                 self.graph.retained_bytes().ok_or_else(invalid)?,
             );
         }
@@ -238,7 +258,8 @@ impl QueryEngine {
         mut self,
         allowance: MemoryReservation,
     ) -> Result<SourceIndexState, QueryError> {
-        let required = self.source_index_bytes()?;
+        let types = self.source_types()?;
+        let required = self.source_index_bytes_with_types(types.retained_bytes())?;
         if allowance.bytes() < required {
             return Err(invalid());
         }
@@ -321,7 +342,7 @@ impl QueryEngine {
             vanished: std::mem::take(&mut self.vanished),
             declarations: std::mem::take(&mut self.declarations).into_source_carry(),
             package_manifests: std::mem::take(&mut self.package_manifests),
-            types: self.types.clone(),
+            types: types.into_interner(),
             catalog,
             compiler: self.store_identity,
             snapshot_epoch: self.snapshot_epoch,
