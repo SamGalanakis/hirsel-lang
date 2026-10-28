@@ -1032,6 +1032,37 @@ fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
                     growth.insert((key.0, usize::MAX), recipe);
                 }
             }
+            // Recompute the producer's identity. Rejection must come from
+            // reconstruction of the actual Ready body, not a stale digest.
+            let mapper = forged
+                .roots
+                .get_mut(&id)
+                .unwrap()
+                .cpu
+                .as_mut()
+                .unwrap()
+                .mapper
+                .as_mut()
+                .unwrap();
+            mapper.graph.identity = hirsel_syntax::ContentHash::of_parts(
+                "hirsel.ahead.cpu-mapper.v1",
+                [
+                    program.table.digest().0.as_slice(),
+                    program.target.digest().0.as_slice(),
+                    mapper.helpers.0.as_slice(),
+                    &[u8::from(program.fuel)],
+                    format!(
+                        "{:?}{:?}{:?}{:?}{:?}{:?}",
+                        mapper.graph.root,
+                        mapper.graph.bodies,
+                        mapper.allocations,
+                        mapper.growth,
+                        mapper.cleanup,
+                        mapper.spines
+                    )
+                    .as_bytes(),
+                ],
+            );
             assert!(
                 !hirsel_lir::ahead::validate_cpu_workers(
                     &all,
@@ -1054,6 +1085,16 @@ fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
             )
             .unwrap();
             native::check_ahead_objects(&program, &objects).unwrap();
+            let evidence = objects.iter().find_map(|o| o.ahead.as_ref()).unwrap();
+            let frames: std::collections::BTreeMap<_, _> =
+                evidence.frames.iter().copied().collect();
+            assert_eq!(root.graph.bodies.len(), 3, "worker -> mapper -> reserve");
+            let expected = 16 + 80 + root.graph.bodies.keys().map(|id| frames[id]).sum::<u64>();
+            assert!(
+                evidence.bounds.contains(&(id, expected)),
+                "{backend:?}: {:?}",
+                evidence.bounds
+            );
             assert!(
                 objects.iter().any(|o| o
                     .imports
