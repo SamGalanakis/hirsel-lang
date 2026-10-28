@@ -62,28 +62,6 @@ fn failed_representation_edit_withholds_other_file_lower_obligations_like_cold()
         };
         assert_eq!(render(&actual_check), render(expected_check));
         assert_eq!(actual_check.completion, expected_check.completion);
-        if actual.canonical != expected.canonical {
-            let a = actual.canonical.as_deref().unwrap();
-            let b = expected.canonical.as_deref().unwrap();
-            let offset = a
-                .bytes()
-                .zip(b.bytes())
-                .position(|(a, b)| a != b)
-                .unwrap_or(a.len().min(b.len()));
-            for (name, text) in [("warm", a), ("cold", b)] {
-                eprintln!(
-                    "{name} at {offset}: {:?}",
-                    String::from_utf8_lossy(
-                        &text.as_bytes()[offset.saturating_sub(90)..text.len().min(offset + 900)]
-                    )
-                );
-            }
-            eprintln!(
-                "read owners warm {:?} cold {:?}",
-                actual.reads.keys().collect::<Vec<_>>(),
-                expected.reads.keys().collect::<Vec<_>>()
-            );
-        }
         assert!(
             actual.canonical == expected.canonical,
             "canonical lengths {:?}/{:?}",

@@ -25,10 +25,6 @@ pub(crate) struct SourceGrowth {
     unavailable: Option<Option<crate::QueryKind>>,
 }
 impl SourceGrowth {
-    pub(crate) fn required(&self) -> impl Iterator<Item = DefId> + '_ {
-        self.roots.iter().copied()
-    }
-
     pub(crate) fn changed(&mut self, definition: DefId, present: bool) {
         if present {
             self.roots.insert(definition);
