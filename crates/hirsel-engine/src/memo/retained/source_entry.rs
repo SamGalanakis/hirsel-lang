@@ -200,7 +200,9 @@ fn signature_entry_bytes(
         source_names: names,
         ..Default::default()
     };
-    weight.add(arc_bytes(entry));
+    if !head {
+        weight.add(arc_bytes(entry));
+    }
     if compact_reads {
         weight.add(arc_bytes(&*entry.memo.reads));
         weight.add(entry.reads().flat_backing_bytes()?);
@@ -212,14 +214,21 @@ fn signature_entry_bytes(
         // The exact typed read receipt is authoritative. A carried head drops
         // the normalizer's duplicate resolver/path observations, retaining only
         // an operational refusal and the empty resolver Arc's allocation.
-        weight.add(arc_bytes(&*entry.detail.resolver));
         if let Some(failure) = &entry.detail.operational_failure {
             weight.failure(failure);
         }
     } else {
         weight.detail(&entry.detail);
     }
-    weight.flat_vec(&entry.covered);
+    if !head
+        || !entry
+            .memo
+            .value
+            .as_ref()
+            .is_ok_and(|output| output.dependencies == entry.covered)
+    {
+        weight.flat_vec(&entry.covered);
+    }
     if let Some(depth) = &entry.depth {
         weight.add(size_of_val(&*depth.first));
     }

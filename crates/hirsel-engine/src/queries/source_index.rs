@@ -9,7 +9,7 @@ pub struct SourceIndexState {
     indexed_sources: BTreeMap<FileId, (FileContext, QueryEnvironment)>,
     builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
     syntax_keys: BTreeMap<(DefPath, QueryKind), ContentHash>,
-    signatures: Table<hirsel_types::SignatureRef>,
+    signatures: Vec<(DefId, SourceHeader)>,
     specialization_dependencies: BTreeMap<DefId, parallel::SpecializationDependencies>,
     private_summary_reads: BTreeMap<DefId, Arc<Reads>>,
     private_summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
@@ -31,6 +31,59 @@ pub struct SourceIndexState {
     // The SourceMap also owns this token, including its detached output clones.
     allowance: Arc<MemoryReservation>,
 }
+pub(crate) struct SourceHeader {
+    memo: crate::memo::Memo<QueryOutput<hirsel_types::SignatureRef>>,
+    products: Arc<PhaseProducts>,
+    failure: Option<hirsel_types::OperationalFailure>,
+    covered: Option<Vec<SignatureDependency>>,
+    depth: Option<crate::memo::DepthEvidence<Span>>,
+    acceptance: Option<hirsel_validate::ExecutionReceipt>,
+    selections: Vec<crate::comptime::Selection>,
+    consistent: bool,
+}
+impl SourceHeader {
+    fn capture(entry: Arc<Entry<hirsel_types::SignatureRef>>) -> Self {
+        let same_coverage = entry
+            .memo
+            .value
+            .as_ref()
+            .is_ok_and(|output| output.dependencies == entry.covered);
+        Self {
+            memo: entry.memo.clone(),
+            products: entry.products.clone(),
+            failure: entry.detail.operational_failure.clone(),
+            covered: (!same_coverage).then(|| entry.covered.clone()),
+            depth: entry.depth.clone(),
+            acceptance: entry.acceptance.clone(),
+            selections: entry.selections.clone(),
+            consistent: entry.consistent,
+        }
+    }
+    fn restore(self) -> Arc<Entry<hirsel_types::SignatureRef>> {
+        let covered = self.covered.unwrap_or_else(|| {
+            self.memo
+                .value
+                .as_ref()
+                .map(|output| output.dependencies.clone())
+                .unwrap_or_default()
+        });
+        Arc::new(Entry {
+            memo: self.memo,
+            products: self.products,
+            detail: DependencyReads {
+                operational_failure: self.failure,
+                ..Default::default()
+            },
+            covered,
+            depth: self.depth,
+            acceptance: self.acceptance,
+            selections: self.selections,
+            consistent: self.consistent,
+            verification: Default::default(),
+        })
+    }
+}
+
 fn invalid() -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
         operation: "source index carry".into(),
@@ -126,9 +179,10 @@ impl QueryEngine {
         weight.add(
             size_of::<SourceIndexState>() + 4 * size_of::<usize>() + size_of::<MemoryReservation>(),
         );
-        hash::<DefId, Arc<Entry<hirsel_types::SignatureRef>>>(
-            &mut weight,
-            self.signatures.capacity(),
+        weight.add(
+            self.signatures
+                .len()
+                .saturating_mul(size_of::<(DefId, SourceHeader)>()),
         );
         weight.map(&self.specialization_dependencies, |w, _, entry| {
             let mut reads = crate::memo::retained::Weight::default();
@@ -392,6 +446,10 @@ impl QueryEngine {
                 .filter(|entry| entry.memo.key == *key)
                 .map(|entry| &entry.memo.reads)
         });
+        let signatures = signatures
+            .into_iter()
+            .map(|(id, entry)| (id, SourceHeader::capture(entry)))
+            .collect();
         let allowance = Arc::new(allowance);
         let sources = std::mem::take(&mut self.sources).replace_owner(allowance.clone());
         let state = SourceIndexState {
@@ -481,7 +539,10 @@ impl SourceIndexState {
         engine.indexed_sources = indexed_sources;
         engine.builtins = builtins;
         engine.syntax_keys = syntax_keys;
-        engine.signatures = signatures;
+        engine.signatures = signatures
+            .into_iter()
+            .map(|(id, header)| (id, header.restore()))
+            .collect();
         engine.specialization_dependencies = specialization_dependencies;
         engine.private_summary_reads = private_summary_reads;
         engine.private_summaries = private_summaries;
