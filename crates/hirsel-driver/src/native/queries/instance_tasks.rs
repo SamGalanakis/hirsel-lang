@@ -552,22 +552,12 @@ impl QueryFactory for InstanceTaskFactory {
             let index = match id.kind {
                 INSTANCE_KIND => &registry.entries,
                 INSTANCE_INPUT_KIND => &registry.inputs,
-                _ => {
-                    return Err(self.tasks.failure(&format!(
-                        "native instance factory received unsupported kind 0x{:08x}",
-                        id.kind
-                    )));
-                }
+                _ => return Err(self.tasks.fallback),
             };
-            index.get(&id.address.0).cloned().ok_or_else(|| {
-                let referring = registry.entries.values().find_map(|entry| {
-                    entry.output.get()?.dependencies.iter().find(|key| key.address(id.kind) == id.address)
-                        .map(|key| format!("{} body {} required by {} body {}", key.instance.definition(), key.instance.body(), entry.key.instance.definition(), entry.key.instance.body()))
-                });
-                self.tasks.failure(&format!(
-                    "native instance factory has no registered query {id:?}; reference {referring:?}"
-                ))
-            })?
+            index
+                .get(&id.address.0)
+                .cloned()
+                .ok_or(self.tasks.fallback)?
         };
         Ok(Box::new(InstanceTask {
             tasks: self.tasks.clone(),
