@@ -1752,20 +1752,6 @@ impl Checker<'_> {
         let result = declared_receipt_evidence(self.t, result).expect("declared call result");
         let result = self.mut_content_placement(result, &f, &ordered);
         let result = self.renew_result_brands(declared_result, result);
-        let result = if let Some(path) = &definition
-            && hirsel_types::unique_summary::same_module(path, self.signature.definition.path())
-            && let Some(signature) = self.read(DefId::intern(path))
-        {
-            hirsel_types::unique_summary::result_evidence(
-                self.t,
-                result,
-                &signature.metadata.inferred_unique.results,
-                &signature.metadata.roles,
-                &mut |id| self.read(id),
-            )
-        } else {
-            result
-        };
         self.set_ty(e, result);
         if obligation_valid && task_obligation(self.t, result) {
             self.pending_tasks.insert(e, span);

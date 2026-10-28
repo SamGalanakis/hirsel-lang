@@ -641,6 +641,62 @@ impl Checker<'_> {
         if !different {
             return true;
         }
+        let actual = if view {
+            let mut expression = self
+                .receiving
+                .as_ref()
+                .and_then(|receiving| receiving.value)
+                .or_else(|| {
+                    self.out
+                        .body
+                        .expressions
+                        .iter()
+                        .find(|row| self.span(row.expression) == span)
+                        .map(|row| row.expression)
+                });
+            let mut direct = None;
+            while let Some(value) = expression.take() {
+                match &self.tree.expressions[value.0 as usize].kind {
+                    ExprKind::Block { tail, .. } | ExprKind::Return(tail) => expression = *tail,
+                    ExprKind::Unary {
+                        op: UnaryOp::Take,
+                        value,
+                    } => expression = Some(*value),
+                    ExprKind::Call { .. } => {
+                        direct = self
+                            .out
+                            .body
+                            .calls
+                            .iter()
+                            .find(|call| call.expression == value)
+                            .and_then(|call| match &call.target {
+                                CallTarget::Definition(path) => Some(path.clone()),
+                                _ => None,
+                            });
+                    }
+                    _ => (),
+                }
+            }
+            if let Some(path) = direct
+                && hirsel_types::unique_summary::same_module(
+                    &path,
+                    self.signature.definition.path(),
+                )
+                && let Some(signature) = self.read(DefId::intern(&path))
+            {
+                hirsel_types::unique_summary::result_evidence(
+                    self.t,
+                    actual,
+                    &signature.metadata.inferred_unique.results,
+                    &signature.metadata.roles,
+                    &mut |id| self.read(id),
+                )
+            } else {
+                actual
+            }
+        } else {
+            actual
+        };
         let valid = self.proof(false, |memo| memo.nested_uniqueness(expected, actual, view));
         if !valid && !self.nested_element_diagnostic(actual, expected, span) {
             let value = self.received_span(span);
