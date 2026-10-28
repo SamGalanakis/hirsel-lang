@@ -600,7 +600,15 @@ impl NativeLinkSource {
                 .map(|(entry, run)| (entry, run.launch_bytes())),
             &self.test_entries,
             self.call_launch.as_ref().map(|(entry, kind)| match kind {
-                super::link::LaunchKind::Call { roots, decoder } => (entry, roots, decoder),
+                super::link::LaunchKind::Call { roots, decoder } => (
+                    entry,
+                    roots
+                        .iter()
+                        .copied()
+                        .map(super::link::root_index)
+                        .collect::<Vec<_>>(),
+                    decoder,
+                ),
                 _ => unreachable!("only a checked Call has an explicit decoder"),
             }),
         ))
