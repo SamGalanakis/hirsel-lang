@@ -893,6 +893,37 @@ impl AheadPlan {
                     .find_map(|mapper| mapper.spines.get(&id))
             })
     }
+    /// The ordinal is read from the original worker capture, including in a
+    /// private helper. Conflicting capture offsets cannot share an alternate.
+    pub fn cpu_growth(
+        &self,
+        id: ContentHash,
+        instruction: usize,
+        table: &LayoutTable,
+    ) -> Option<(&CpuGrowth, u64)> {
+        let mut found = None;
+        for cpu in self.roots.values().filter_map(|root| root.cpu.as_ref()) {
+            let Some(recipe) = cpu
+                .mapper
+                .as_ref()
+                .and_then(|m| m.growth.get(&(id, instruction)))
+            else {
+                continue;
+            };
+            let wrapper = table.layout(cpu.binding.worker.environment)?;
+            let offset = crate::layout::payload_offset(wrapper.align)
+                .ok()?
+                .checked_add(wrapper.fields.get(4)?.offset)?;
+            if found
+                .as_ref()
+                .is_some_and(|previous| *previous != (recipe, offset))
+            {
+                return None;
+            }
+            found = Some((recipe, offset));
+        }
+        found
+    }
     pub fn cpu_allocation(&self, id: ContentHash, instruction: usize) -> bool {
         self.roots
             .values()

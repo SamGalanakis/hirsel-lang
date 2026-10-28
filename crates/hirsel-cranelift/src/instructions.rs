@@ -943,6 +943,9 @@ impl FnEmitter<'_, '_, '_> {
     }
 
     fn seq_reserve(&mut self, address: AddressId, capacity: ValueId) -> Emitted {
+        if self.cpu_reserve()? {
+            return Ok(());
+        }
         let place = self.place(address)?;
         if let Some(payload) = self.layout_payload(place.layout)?
             && let LayoutKind::SoaColumns { element } = self.layout(payload)?.kind

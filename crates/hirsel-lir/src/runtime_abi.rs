@@ -13,6 +13,9 @@ use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
 pub const ABI_VERSION: u32 = 94;
+/// Original CPU worker capture in the runtime's fixed native record prefix.
+/// The runtime asserts this existing offset; no Rust service frame is read.
+pub const AHEAD_WORKER_ENVIRONMENT_OFFSET: u64 = 40;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;

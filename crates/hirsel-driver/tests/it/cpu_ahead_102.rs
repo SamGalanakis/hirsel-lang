@@ -960,3 +960,113 @@ fn cpu_save_roots_check_inputs_mapper_locals_results_and_parent_frames() {
         }
     });
 }
+
+#[test]
+fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
+    with_compiler_stack(|| {
+        let source = SOURCE
+            .replace("fn() -> List[u64] uses {} { [1u64, 2u64, 3u64, 4u64] }",
+                "fn() -> List[unique List[u64]] uses {} { [[1u64], [2u64], [3u64], [4u64]] }")
+            .replace("fn(take job: u64) -> u64 uses {} { job + 7u64 }",
+                "fn(take job: unique List[u64]) -> unique List[u64] uses {} { let mut out = take job; list.reserve(mut out, 128u64); take out }")
+            .replace("[8u64, 9u64, 10u64, 11u64]", "[[1u64], [2u64], [3u64], [4u64]]");
+        let program = ready_with_regions(&source, false);
+        let plan = native::ahead_plan(&program);
+        let (&id, root) = plan
+            .roots
+            .iter()
+            .find(|(_, r)| {
+                r.cpu
+                    .as_ref()
+                    .and_then(|c| c.mapper.as_ref())
+                    .is_some_and(|m| !m.growth.is_empty())
+            })
+            .unwrap_or_else(|| panic!("{:?}", plan.refusals));
+        let mapper = root.cpu.as_ref().unwrap().mapper.as_ref().unwrap();
+        let (&key, recipe) = mapper.growth.iter().next().unwrap();
+        assert_eq!(recipe.size, 8);
+        assert_eq!(recipe.align, 8);
+        let (_, offset) = plan.cpu_growth(key.0, key.1, &program.table).unwrap();
+        let wrapper = program
+            .table
+            .layout(root.cpu.as_ref().unwrap().binding.worker.environment)
+            .unwrap();
+        assert_eq!(
+            offset,
+            hirsel_lir::layout::payload_offset(wrapper.align).unwrap() + wrapper.fields[4].offset
+        );
+        let all: Vec<_> = program.units.iter().collect();
+        assert!(hirsel_lir::ahead::validate_cpu_workers(
+            &all,
+            &program.table,
+            &program.target,
+            &plan,
+            program.fuel
+        ));
+        for field in 0..8 {
+            let mut forged = plan.clone();
+            let growth = &mut forged
+                .roots
+                .get_mut(&id)
+                .unwrap()
+                .cpu
+                .as_mut()
+                .unwrap()
+                .mapper
+                .as_mut()
+                .unwrap()
+                .growth;
+            let recipe = growth.get_mut(&key).unwrap();
+            match field {
+                0 => recipe.address = hirsel_lir::ir::AddressId(u32::MAX),
+                1 => recipe.capacity = hirsel_lir::ir::ValueId(u32::MAX),
+                2 => recipe.layout = recipe.element,
+                3 => recipe.element = recipe.layout,
+                4 => recipe.size += 1,
+                5 => recipe.align *= 2,
+                6 => {
+                    growth.clear();
+                }
+                _ => {
+                    let recipe = growth.remove(&key).unwrap();
+                    growth.insert((key.0, usize::MAX), recipe);
+                }
+            }
+            assert!(
+                !hirsel_lir::ahead::validate_cpu_workers(
+                    &all,
+                    &program.table,
+                    &program.target,
+                    &forged,
+                    program.fuel
+                ),
+                "forged growth {field}"
+            );
+        }
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let objects = native::emit_backend_objects(
+                &program,
+                backend,
+                hirsel_lir::emission::OptLevel::Default,
+                native::Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+            native::check_ahead_objects(&program, &objects).unwrap();
+            assert!(
+                objects.iter().any(|o| o
+                    .imports
+                    .iter()
+                    .any(|s| s.name == "hirsel_rt_v2_cpu_ahead_grow")),
+                "{backend:?}"
+            );
+            assert!(
+                native::continuation::ahead_certificates(&program, &objects)
+                    .iter()
+                    .any(|c| c.root == id),
+                "{backend:?}"
+            );
+        }
+    });
+}

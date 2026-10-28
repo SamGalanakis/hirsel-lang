@@ -317,6 +317,11 @@ pub fn validate_cpu_workers(
             {
                 return false;
             }
+            for (&(id, index), recipe) in &mapper.growth {
+                if plan.cpu_growth(id, index, table).map(|(actual, _)| actual) != Some(recipe) {
+                    return false;
+                }
+            }
             mapper.graph.clone()
         } else {
             let Ok(graph) =
@@ -383,7 +388,13 @@ pub fn validate_cpu_workers(
         .collect();
     for root in plan.roots.values().filter_map(|root| root.cpu.as_ref()) {
         if let Some(mapper) = &root.mapper {
-            cpu_only.extend(mapper.allocations.keys().map(|(id, _)| *id));
+            cpu_only.extend(
+                mapper
+                    .allocations
+                    .keys()
+                    .chain(mapper.growth.keys())
+                    .map(|(id, _)| *id),
+            );
         }
     }
     loop {

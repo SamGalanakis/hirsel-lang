@@ -1165,6 +1165,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Inst::SeqReserve {
                 address, capacity, ..
             } => {
+                if self.cpu_reserve()? {
+                    return Ok(());
+                }
                 let place = self.place(address)?;
                 if let Some(payload) = self.layout_payload(place.layout)?
                     && let LayoutKind::SoaColumns { element } = self.layout(payload)?.kind

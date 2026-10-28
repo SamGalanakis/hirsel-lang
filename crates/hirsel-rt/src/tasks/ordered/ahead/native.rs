@@ -615,3 +615,14 @@ pub(crate) unsafe extern "C" fn start(_ctx: *mut u8, _native: *mut u8) -> ! {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod cpu_environment_contract {
+    #[test]
+    fn compiler_reads_the_original_worker_environment() {
+        assert_eq!(
+            std::mem::offset_of!(super::Native, environment) as u64,
+            hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET
+        );
+    }
+}

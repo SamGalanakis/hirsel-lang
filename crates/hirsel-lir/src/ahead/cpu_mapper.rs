@@ -4,6 +4,7 @@ use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CpuMapperGraph {
+    pub growth: BTreeMap<(ContentHash, usize), CpuGrowth>,
     pub graph: ScalarGraph,
     pub helpers: ContentHash,
     pub spines: BTreeMap<ContentHash, Spine>,
@@ -12,6 +13,18 @@ pub struct CpuMapperGraph {
     /// Ownership operations require canonical cleanup until summary retirement
     /// and withdrawal can retain their exact saved frames.
     pub cleanup: BTreeSet<(ContentHash, usize)>,
+}
+
+/// A saved flat-sequence reservation. Strict C proves the mutable place and
+/// live old owner; the checker reconstructs the element arithmetic separately.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CpuGrowth {
+    pub address: AddressId,
+    pub capacity: ValueId,
+    pub layout: LayoutId,
+    pub element: LayoutId,
+    pub size: u64,
+    pub align: u32,
 }
 
 /// Produce the bounded, nonrecursive Ready graph. The separate checker below
@@ -42,6 +55,7 @@ pub fn cpu_mapper_graph(
         },
         helpers,
         spines: BTreeMap::new(),
+        growth: BTreeMap::new(),
         allocations: BTreeMap::new(),
         cleanup: BTreeSet::new(),
     };
@@ -85,6 +99,9 @@ pub fn cpu_mapper_graph(
                 Action::Private => {}
                 Action::Allocate(construct) => {
                     out.allocations.insert((id, index), construct);
+                }
+                Action::Grow(recipe) => {
+                    out.growth.insert((id, index), recipe);
                 }
                 Action::Cleanup => {
                     out.cleanup.insert((id, index));
@@ -165,6 +182,7 @@ pub fn validate_cpu_mapper_graph(
     if by_id.len() != units.len() {
         return false;
     }
+    let mut growth = BTreeMap::new();
     let mut allocations = BTreeMap::new();
     let mut cleanup = BTreeSet::new();
     let mut instructions = 0usize;
@@ -187,6 +205,9 @@ pub fn validate_cpu_mapper_graph(
                 Some(Action::Private) => {}
                 Some(Action::Allocate(construct)) => {
                     allocations.insert((*id, index), construct);
+                }
+                Some(Action::Grow(recipe)) => {
+                    growth.insert((*id, index), recipe);
                 }
                 Some(Action::Cleanup) => {
                     cleanup.insert((*id, index));
@@ -249,7 +270,8 @@ pub fn validate_cpu_mapper_graph(
             !leaves.contains(id)
         });
     }
-    allocations == proposal.allocations
+    growth == proposal.growth
+        && allocations == proposal.allocations
         && cleanup == proposal.cleanup
         && proposal.spines.len() == graph.bodies.len()
 }
@@ -276,10 +298,11 @@ fn identity(
             proposal.helpers.0.as_slice(),
             &[u8::from(fuel)],
             format!(
-                "{:?}{:?}{:?}{:?}{:?}",
+                "{:?}{:?}{:?}{:?}{:?}{:?}",
                 proposal.graph.root,
                 proposal.graph.bodies,
                 proposal.allocations,
+                proposal.growth,
                 proposal.cleanup,
                 proposal.spines
             )
@@ -361,6 +384,8 @@ fn body_custody(u: &LirUnit<Ready>, table: &LayoutTable) -> bool {
         let write = match inst {
             Inst::Store { address, .. }
             | Inst::Replace { address, .. }
+            | Inst::SeqReserve { address, .. }
+            | Inst::SeqSetLen { address, .. }
             | Inst::BeginLoan {
                 address,
                 mutable: true,
@@ -415,6 +440,7 @@ fn direct_call(
 enum Action {
     Private,
     Allocate(ConstructId),
+    Grow(CpuGrowth),
     Cleanup,
 }
 
@@ -456,6 +482,37 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
             mode: ConvertMode::Widen | ConvertMode::Truncate | ConvertMode::TryNarrow,
             ..
         } => Action::Private,
+        Inst::SeqReserve {
+            address, capacity, ..
+        } => {
+            if mutable_capture(u, *address) {
+                return None;
+            }
+            let layout = u.types[u.addresses.get(address.index())?.ty.index()].layout;
+            let LayoutKind::Block { payload } = table.layout(layout)?.kind else {
+                return None;
+            };
+            let LayoutKind::Sequence { element } = table.layout(payload)?.kind else {
+                return None;
+            };
+            let record = table.layout(element)?;
+            let SizeSpec::Fixed(size) = record.size else {
+                return None;
+            };
+            // Holder-bearing detach and regional storage need separate custody.
+            if !scalar_image(table, element) {
+                return None;
+            }
+            Action::Grow(CpuGrowth {
+                address: *address,
+                capacity: *capacity,
+                layout,
+                element,
+                size,
+                align: record.align,
+            })
+        }
+        Inst::SeqSetLen { address, .. } if !mutable_capture(u, *address) => Action::Private,
         Inst::Dup { .. } | Inst::Release { .. } | Inst::Share { .. } => Action::Cleanup,
         Inst::Construct {
             result, construct, ..

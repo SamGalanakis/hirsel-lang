@@ -493,3 +493,74 @@ impl FnEmitter<'_, '_, '_> {
         Ok(())
     }
 }
+
+impl FnEmitter<'_, '_, '_> {
+    pub(crate) fn cpu_reserve(&mut self) -> Emitted<bool> {
+        if !self.em.inputs.unit().alternate {
+            return Ok(false);
+        }
+        let Some((recipe, ordinal_offset)) = self
+            .em
+            .inputs
+            .unit()
+            .ahead
+            .and_then(|p| {
+                p.cpu_growth(
+                    self.unit.header.instance,
+                    self.instruction_index,
+                    self.em.inputs.unit().layouts,
+                )
+            })
+            .map(|(recipe, offset)| (recipe.clone(), offset))
+        else {
+            return Ok(false);
+        };
+        let Some(state) = self.ahead_state else {
+            return self.invalid("CPU growth without its physical state");
+        };
+        let place = self.place(recipe.address)?;
+        let old = self.load_ptr(place.ptr);
+        let environment = self.load_ty(
+            types::I64,
+            state,
+            hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET as i32,
+        );
+        let ordinal = self.load_ty(types::I64, environment, ordinal_offset as i32);
+        let (record, _) = self.stack_bytes(88, 8);
+        let version = self.b.ins().iconst(types::I32, 1);
+        let zero32 = self.b.ins().iconst(types::I32, 0);
+        let zero = self.u64c(0);
+        let descriptor = self.descriptor_value(recipe.layout)?;
+        let size = self.u64c(recipe.size);
+        let align = self.u64c(u64::from(recipe.align));
+        let capacity = self.get1(recipe.capacity)?;
+        for (offset, value) in [
+            (0, version),
+            (4, version),
+            (8, ordinal),
+            (16, old),
+            (24, zero),
+            (32, descriptor),
+            (36, zero32),
+            (40, zero),
+            (48, zero),
+            (56, zero),
+            (64, size),
+            (72, align),
+            (80, capacity),
+        ] {
+            self.store_at(value, record, offset);
+        }
+        self.ahead_flush();
+        let status = self.rt1(
+            hirsel_lir::runtime_abi::RuntimeEntry::CpuAheadGrow,
+            &[state, record],
+        )?;
+        self.ahead_reload();
+        let refused = self.b.ins().icmp_imm(IntCC::NotEqual, status, 0);
+        self.b.ins().trapnz(refused, crate::function::TRAP);
+        let grown = self.load_ty(types::I64, record, 16);
+        self.store_at(grown, place.ptr, 0);
+        Ok(true)
+    }
+}

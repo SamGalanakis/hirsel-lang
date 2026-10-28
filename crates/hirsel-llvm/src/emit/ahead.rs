@@ -318,3 +318,90 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(())
     }
 }
+
+impl<'m, 'a> FnEmitter<'m, 'a> {
+    pub(super) fn cpu_reserve(&mut self) -> Emitted<bool> {
+        if !self.inputs.alternate {
+            return Ok(false);
+        }
+        let index = self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1;
+        let Some((recipe, ordinal_offset)) = self
+            .inputs
+            .ahead
+            .and_then(|p| p.cpu_growth(self.unit.header.instance, index, self.inputs.layouts))
+            .map(|(recipe, offset)| (recipe.clone(), offset))
+        else {
+            return Ok(false);
+        };
+        let state = self.ahead_state.ok_or_else(|| CodegenError::Invalid {
+            definition: self.definition().clone(),
+            what: "CPU growth without its physical state".into(),
+        })?;
+        let place = self.place(recipe.address)?;
+        let old = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+        let environment = self.builder.load(
+            self.module.ptr_type(),
+            self.builder.offset(
+                state,
+                self.const_u64(hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET),
+            ),
+            8,
+        );
+        let ordinal = self.load_u64(
+            self.builder
+                .offset(environment, self.const_u64(ordinal_offset)),
+        );
+        let record = self
+            .prologue
+            .alloca(self.module.array_type(self.module.int_type(8), 88), 8);
+        let i32t = self.module.int_type(32);
+        for (offset, value, align) in [
+            (0, self.module.const_int(i32t, 1), 4),
+            (4, self.module.const_int(i32t, 1), 4),
+            (8, ordinal, 8),
+            (16, old, 8),
+            (24, self.module.const_zero(self.module.ptr_type()), 8),
+            (32, self.descriptor(recipe.layout)?, 4),
+            (36, self.module.const_zero(i32t), 4),
+            (40, self.const_u64(0), 8),
+            (48, self.const_u64(0), 8),
+            (56, self.const_u64(0), 8),
+            (64, self.const_u64(recipe.size), 8),
+            (72, self.const_u64(u64::from(recipe.align)), 8),
+            (80, self.get(recipe.capacity)?, 8),
+        ] {
+            self.builder.store(
+                value,
+                self.builder.offset(record, self.const_u64(offset)),
+                align,
+            );
+        }
+        self.ahead_flush();
+        let helper = self.runtime(RuntimeEntry::CpuAheadGrow)?;
+        let status = self.builder.call(helper, &[state, record]);
+        self.ahead_reload();
+        let accepted = self.builder.icmp(
+            IntPredicate::Eq,
+            status,
+            self.module.const_zero(self.module.int_type(8)),
+        );
+        let next = self.module.append_block(self.function);
+        let invalid = self.module.append_block(self.function);
+        self.builder.cond_br(accepted, next, invalid);
+        self.builder.position(invalid);
+        let trap = self
+            .module
+            .intrinsic("llvm.trap", &[])
+            .or_else(|error| self.invalid(error))?;
+        self.builder.call(trap, &[]);
+        self.builder.unreachable();
+        self.builder.position(next);
+        let grown = self.builder.load(
+            self.module.ptr_type(),
+            self.builder.offset(record, self.const_u64(16)),
+            8,
+        );
+        self.store(Shape::Scalar(ScalarKind::Pointer), grown, place);
+        Ok(true)
+    }
+}
