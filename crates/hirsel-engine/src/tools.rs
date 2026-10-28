@@ -274,23 +274,26 @@ pub(crate) fn association_diagnostics(
                 end,
             };
             let (types, memo) = (engine.types.clone(), engine.memo.clone());
-            let result = engine
-                .item_signature(&item.definition)
-                .and_then(|signature| {
-                    if kind == 0 {
-                        phases.validate_format(&types, &memo, &signature.value, span, engine)
-                    } else if kind == 1 {
-                        phases.validate_serializable_check(
-                            &types,
-                            &memo,
-                            &signature.value,
-                            span,
-                            engine,
-                        )
-                    } else {
-                        phases.validate_loop_source(&types, &memo, &signature.value, span, engine)
-                    }
-                });
+            let mut provider = engine.association_signature_provider();
+            let result = hirsel_types::SignatureProvider::signature(
+                &mut provider,
+                hirsel_syntax::DefId::intern(&item.definition),
+            )
+            .and_then(|signature| {
+                if kind == 0 {
+                    phases.validate_format(&types, &memo, &signature, span, &mut provider)
+                } else if kind == 1 {
+                    phases.validate_serializable_check(
+                        &types,
+                        &memo,
+                        &signature,
+                        span,
+                        &mut provider,
+                    )
+                } else {
+                    phases.validate_loop_source(&types, &memo, &signature, span, &mut provider)
+                }
+            });
             match result {
                 Ok(()) => (),
                 Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),

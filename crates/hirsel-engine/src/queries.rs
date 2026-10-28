@@ -895,14 +895,27 @@ impl QueryEngine {
         self.signature_query_id(DefId::intern(definition))
     }
 
+    fn current_private_summary_failure(&self) -> Option<&QueryError> {
+        if self.private_summary_active {
+            return None;
+        }
+        self.private_summary_failure
+            .as_ref()
+            .filter(|(revision, _)| *revision == self.graph.revision())
+            .map(|(_, error)| error)
+    }
+
+    /// Association preflight always validates current declarations, but can
+    /// read their unmarked source heads without demanding signature queries.
+    pub(crate) fn association_signature_provider(&mut self) -> impl SignatureProvider + '_ {
+        AssociationSignatures(self)
+    }
+
     fn signature_query_id(
         &mut self,
         id: DefId,
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
-        if !self.private_summary_active
-            && let Some((revision, error)) = &self.private_summary_failure
-            && *revision == self.graph.revision()
-        {
+        if let Some(error) = self.current_private_summary_failure() {
             return Err(error.clone());
         }
         // Indexing marks each changed header/candidate and its subscribers.
@@ -2381,6 +2394,26 @@ impl DefinitionQueries for QueryEngine {
         let released = self.release_batch_front(definition);
         self.retain_lowering(DefId::intern(definition));
         result.and_then(|output| released.map(|()| output))
+    }
+}
+struct AssociationSignatures<'a>(&'a mut QueryEngine);
+impl SignatureProvider for AssociationSignatures<'_> {
+    fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        if let Some(error) = self.0.current_private_summary_failure() {
+            return Err(error.clone());
+        }
+        self.0.note_environment();
+        self.0
+            .observed_signature(definition)
+            .map(Ok)
+            .unwrap_or_else(|| SignatureProvider::signature(self.0, definition))
+    }
+    fn lookup(
+        &mut self,
+        context: &FileContext,
+        path: &hirsel_syntax::Path,
+    ) -> hirsel_types::LookupOutput {
+        SignatureProvider::lookup(self.0, context, path)
     }
 }
 impl SignatureProvider for QueryEngine {
