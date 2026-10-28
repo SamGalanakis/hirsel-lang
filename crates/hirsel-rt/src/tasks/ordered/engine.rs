@@ -1424,7 +1424,7 @@ pub(super) mod tests {
             Arc,
             atomic::{AtomicU64, Ordering},
         };
-        for width in [2, 4, 8] {
+        for width in [1, 2, 4, 8] {
             for warm in [false, true] {
                 let layout = image_layout(16);
                 let layouts = [&layout as *const crate::Layout];
@@ -1496,6 +1496,45 @@ pub(super) mod tests {
                 );
                 assert_eq!(allocated.load(Ordering::Relaxed), if warm { 3 } else { 1 });
             }
+        }
+    }
+
+    #[test]
+    fn serial_leases_refill_and_stop_before_the_first_uncovered_allocation() {
+        use std::sync::{Arc, Mutex};
+        for limit in [65_535, 65_536, 65_537, 131_072] {
+            let accepted = Arc::new(Mutex::new(Vec::new()));
+            let seen = accepted.clone();
+            let mut run = crate::host::BodyRun::new(1, true);
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    (*ctx).set_budgets(None, Some(limit));
+                    enable(ctx, Policy::admit(&Default::default(), Some(limit)));
+                },
+                move |ctx| unsafe {
+                    loop {
+                        // Each 10,000-byte request charges three 4 KiB granules.
+                        crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            0,
+                            10_000,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        seen.lock().unwrap().push(12_288u64);
+                    }
+                },
+            );
+            assert_eq!(
+                outcome.ended,
+                Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Memory))
+            );
+            assert_eq!(
+                *accepted.lock().unwrap(),
+                vec![12_288; (limit / 12_288) as usize]
+            );
         }
     }
 
@@ -2493,13 +2532,11 @@ fn lease_cpu_allocation(ctx: *mut TaskCtx, bytes: u64) -> bool {
         if driver.budgets.fuel || !driver.memory || !driver.head_ready(task) {
             return false;
         }
-        let Some(limit) = driver
+        let limit = driver
             .cpu_batch
             .as_ref()
             .and_then(|batch| batch.limit(task))
-        else {
-            return false;
-        };
+            .unwrap_or(u64::MAX);
         let budgets = driver.budgets;
         let freed = unsafe { (*ctx).ordered_freed.replace(0) };
         if freed != 0 {
