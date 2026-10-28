@@ -68,7 +68,11 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
                     .engine
                     .accept_front_staged(&output, budget.reserve(64 << 10).unwrap())
                     .unwrap();
-                let hidden = output.declarations().unwrap().next().unwrap().0.clone();
+                let declarations: Vec<_> = output
+                    .declarations()
+                    .unwrap()
+                    .map(|(path, _)| path.clone())
+                    .collect();
                 runtime.shutdown();
                 drop(runtime);
                 drop(output);
@@ -131,9 +135,24 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
                         hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(expected))
                     );
                 }
+                let generic = lower.settled_definition(scaled).unwrap();
+                let hidden = generic
+                    .bodies
+                    .iter()
+                    .flat_map(|body| &body.rvalues)
+                    .find_map(|value| match value {
+                        hirsel_tir::Rvalue::ReadConstant {
+                            definition,
+                            arguments,
+                        } if !arguments.is_empty() => Some(definition.clone()),
+                        _ => None,
+                    })
+                    .expect("the original generic body retains its staged size read");
+                assert!(declarations.contains(&hidden));
                 assert_eq!(
                     lower.settled_constant(&hidden, &[2]).unwrap().root.kind,
-                    hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4))
+                    hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)),
+                    "jobs={jobs} warm={warm} selected={hidden}"
                 );
                 assert_eq!(
                     lower.settled_constant(&hidden, &[4]).unwrap().root.kind,
