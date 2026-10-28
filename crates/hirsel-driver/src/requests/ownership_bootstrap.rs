@@ -98,7 +98,12 @@ impl OutputAllowance {
             .unwrap_or_else(|error| error.into_inner());
         *available = available
             .checked_sub(bytes)
-            .ok_or("ownership output metadata exceeds original admission")?;
+            .ok_or_else(|| {
+                format!(
+                    "ownership output metadata exceeds original admission: {bytes} bytes requested, {} available",
+                    *available
+                )
+            })?;
         Ok(OutputReservation {
             owner: self.clone(),
             bytes,
