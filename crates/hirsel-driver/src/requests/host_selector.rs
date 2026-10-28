@@ -668,8 +668,14 @@ mod tests {
     }
     #[test]
     fn shared_graph_budget_evicts_idle_views_but_refuses_to_overcommit_live_leases() {
-        struct Empty;
+        struct Empty {
+            source: Arc<MemoryReservation>,
+            _producer: MemoryReservation,
+        }
         impl GraphProducts for Empty {
+            fn check_source_owner(&self) -> Option<Arc<dyn Send + Sync>> {
+                Some(self.source.clone())
+            }
             fn select(
                 &self,
                 _: &CompileOperation,
@@ -717,7 +723,7 @@ mod tests {
             },
         };
         let bytes = hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + 4096;
-        let budget = ProcessBudget::new(bytes);
+        let budget = ProcessBudget::new(bytes + 3);
         let mut first = GraphSelections::new(&budget);
         let mut second = GraphSelections::new(&budget);
         assert!(Arc::ptr_eq(&first.retention, &second.retention));
@@ -725,12 +731,12 @@ mod tests {
             let admission = owner.admit(
                 RequestLimits {
                     runtime_bytes: bytes,
-                    snapshot_bytes: 0,
+                    snapshot_bytes: 2,
                     transport_bytes: 0,
                 },
                 SnapshotPlan {
-                    source: 0,
-                    front: 0,
+                    source: 1,
+                    front: 1,
                     lower: 0,
                     check: 0,
                     growth: 0,
@@ -759,7 +765,10 @@ mod tests {
                 path: request.path.clone(),
                 inputs: request.inputs.clone(),
                 runtime: Arc::new(Mutex::new(runtime)),
-                products: Arc::new(Empty),
+                products: Arc::new(Empty {
+                    source: Arc::new(admission.source),
+                    _producer: admission.front,
+                }),
             }))
         };
         let active = first
@@ -776,16 +785,28 @@ mod tests {
                 .select(&request, |owner, _| create(owner, &request))
                 .is_err()
         );
-        assert_eq!(budget.reserved(), bytes);
+        assert_eq!(budget.reserved(), bytes + 2);
+        let completed = (active.output.materialize)(&[]).unwrap();
+        let CompileResult::Check(checked) = &completed.result else {
+            unreachable!()
+        };
+        let detached_sources = checked.sources.clone();
+        drop(completed);
         drop(equal);
         drop(active);
         let replacement = second
             .select(&request, |owner, _| create(owner, &request))
             .unwrap();
-        assert_eq!(budget.reserved(), bytes);
+        assert_eq!(budget.reserved(), bytes + 3);
         drop(replacement);
         drop(first);
         drop(second);
+        assert_eq!(
+            budget.reserved(),
+            1,
+            "detached source retains its original grant"
+        );
+        drop(detached_sources);
         assert_eq!(budget.reserved(), 0);
     }
 
