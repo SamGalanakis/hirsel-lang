@@ -256,12 +256,10 @@ fn reference_checked_baselines(
     path: &Path,
     part: usize,
 ) -> (BTreeMap<String, Vec<u8>>, Vec<String>) {
-    let mut loaded = hirsel_driver::load_program(path).unwrap();
-    loaded
-        .check_for_execution()
+    let prepared = hirsel_driver::request_tir(path, hirsel_engine::Verify::On, None)
         .unwrap_or_else(|e| panic!("{e}"));
     let run = RunConfiguration {
-        entry: loaded.entry.clone(),
+        entry: prepared.entry.clone(),
         hash_seed: 0,
         inputs: vec![],
     };
@@ -295,21 +293,16 @@ fn reference_checked_baselines(
                 continue;
             }
             eprintln!("SPECTRAL_STARTED {id} {engine}");
-            let execution = if checked {
-                hirsel_engine::run_observed_checked_bounded(
-                    &mut loaded.engine,
-                    &run,
-                    SimulationConfig::from(&world),
-                    1_000_000,
-                )
-            } else {
-                hirsel_engine::run_observed_snapshot_bounded(
-                    &mut loaded.engine,
-                    &run,
-                    SimulationConfig::from(&world),
-                    1_000_000,
-                )
-            }
+            let execution = hirsel_driver::testing::observe_tir(
+                &prepared,
+                &run,
+                SimulationConfig::from(&world),
+                hirsel_interp::Limits {
+                    steps: Some(1_000_000),
+                    ..Default::default()
+                },
+                checked,
+            )
             .unwrap();
             let mut receipt = json!({"id":id,"engine":engine,"selected":true,"started":true,"completed":false,"passed":false});
             receipt["outcome"] = json!(format!("{:?}", execution.outcome));
