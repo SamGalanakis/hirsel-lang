@@ -208,7 +208,10 @@ fn scripted(boundaries: bool) {
                     &prepared,
                     &run,
                     world.clone(),
-                    hirsel_interp::Limits { steps: Some(steps), ..Default::default() },
+                    hirsel_interp::Limits {
+                        steps: Some(steps),
+                        ..Default::default()
+                    },
                     engine == "checked-h",
                 )
                 .unwrap_or_else(|e| panic!("{id}/{engine}: {e}"));
@@ -327,7 +330,10 @@ fn scripted(boundaries: bool) {
                     &prepared,
                     &replay_run,
                     world.clone(),
-                    hirsel_interp::Limits { steps: Some(steps), ..Default::default() },
+                    hirsel_interp::Limits {
+                        steps: Some(steps),
+                        ..Default::default()
+                    },
                     engine == "checked-h",
                 )
                 .unwrap();
@@ -958,7 +964,10 @@ fn chunk_backup_31_fragmentation_and_reset_real_splitter() {
                 &prepared,
                 &run,
                 SimulationConfig::default(),
-                hirsel_interp::Limits { steps: Some(STEPS), ..Default::default() },
+                hirsel_interp::Limits {
+                    steps: Some(STEPS),
+                    ..Default::default()
+                },
                 engine == "checked-h",
             )
             .unwrap();
