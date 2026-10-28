@@ -96,6 +96,15 @@ impl FrontCarry {
         };
         let entries = rows.entries.len() + usize::from(!rows.entries.contains_key(&key));
         if used.saturating_add(index_bytes(entries, subscriptions)) > self.allowance.bytes() {
+            if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
+                eprintln!(
+                    "front carry refuses {owner:?} rows={} required={} allowance={} facts={}",
+                    rows.entries.len(),
+                    used.saturating_add(index_bytes(entries, subscriptions)),
+                    self.allowance.bytes(),
+                    bytes.len()
+                );
+            }
             return;
         }
         let Some(generation) = rows.generation.checked_add(1) else {
@@ -136,7 +145,6 @@ fn index_bytes(entries: usize, subscriptions: usize) -> u64 {
     weight.bytes()
 }
 
-#[derive(serde::Serialize)]
 struct FactsRef<'a> {
     summary: Option<Arc<PublishedSummary>>,
     checked: &'a CheckedProduct,
@@ -146,7 +154,8 @@ struct FactsRef<'a> {
     lowering: &'a Option<lowering::LoweringUse>,
     table_keys: Option<&'a Arc<crate::table_keys::TableKeyUse>>,
 }
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize)]
+#[serde(try_from = "PackedFacts")]
 pub(super) struct Facts {
     summary: Option<Arc<PublishedSummary>>,
     checked: CheckedProduct,
@@ -155,6 +164,118 @@ pub(super) struct Facts {
     diagnostic_phases: Vec<(Diagnostic, String)>,
     lowering: Option<lowering::LoweringUse>,
     table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
+}
+// A published summary and its checked product often hold the same proof.
+// Preserve it once on the wire, keeping the summary's independent exact reads.
+#[derive(serde::Serialize)]
+enum PackedSummaryRef<'a> {
+    Checked {
+        definition: DefId,
+        text: ContentHash,
+        reads: &'a Arc<Reads>,
+    },
+    Owned(&'a Arc<PublishedSummary>),
+}
+#[derive(serde::Deserialize)]
+enum PackedSummary {
+    Checked {
+        definition: DefId,
+        text: ContentHash,
+        reads: Arc<Reads>,
+    },
+    Owned(Arc<PublishedSummary>),
+}
+#[derive(serde::Serialize)]
+struct PackedFactsRef<'a> {
+    summary: Option<PackedSummaryRef<'a>>,
+    checked: &'a CheckedProduct,
+    dead_arms: &'a Option<crate::tools::DeadArmUse>,
+    diagnostics: &'a Vec<Diagnostic>,
+    diagnostic_phases: &'a Vec<(Diagnostic, String)>,
+    lowering: &'a Option<lowering::LoweringUse>,
+    table_keys: Option<&'a Arc<crate::table_keys::TableKeyUse>>,
+}
+#[derive(serde::Deserialize)]
+struct PackedFacts {
+    summary: Option<PackedSummary>,
+    checked: CheckedProduct,
+    dead_arms: Option<crate::tools::DeadArmUse>,
+    diagnostics: Vec<Diagnostic>,
+    diagnostic_phases: Vec<(Diagnostic, String)>,
+    lowering: Option<lowering::LoweringUse>,
+    table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
+}
+impl serde::Serialize for FactsRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        PackedFactsRef {
+            summary: self.summary.as_ref().map(|summary| {
+                if FrontSummary::shareable(summary, self.checked, &summary.reads) {
+                    PackedSummaryRef::Checked {
+                        definition: summary.definition,
+                        text: summary.text,
+                        reads: &summary.reads,
+                    }
+                } else {
+                    PackedSummaryRef::Owned(summary)
+                }
+            }),
+            checked: self.checked,
+            dead_arms: self.dead_arms,
+            diagnostics: self.diagnostics,
+            diagnostic_phases: self.diagnostic_phases,
+            lowering: self.lowering,
+            table_keys: self.table_keys,
+        }
+        .serialize(serializer)
+    }
+}
+impl serde::Serialize for Facts {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        FactsRef {
+            summary: self.summary.clone(),
+            checked: &self.checked,
+            dead_arms: &self.dead_arms,
+            diagnostics: &self.diagnostics,
+            diagnostic_phases: &self.diagnostic_phases,
+            lowering: &self.lowering,
+            table_keys: self.table_keys.as_ref(),
+        }
+        .serialize(serializer)
+    }
+}
+impl TryFrom<PackedFacts> for Facts {
+    type Error = &'static str;
+    fn try_from(facts: PackedFacts) -> Result<Self, Self::Error> {
+        let summary = match facts.summary {
+            None => None,
+            Some(PackedSummary::Owned(summary)) => Some(summary),
+            Some(PackedSummary::Checked {
+                definition,
+                text,
+                reads,
+            }) => {
+                let (checked, _) = facts.checked.as_ref().ok_or("missing checked summary")?;
+                Some(Arc::new(PublishedSummary {
+                    definition,
+                    text,
+                    reads,
+                    storage: None,
+                    summary: checked.summary.clone(),
+                    growth: checked.growth.clone(),
+                    checked: Some(checked.clone()),
+                }))
+            }
+        };
+        Ok(Self {
+            summary,
+            checked: facts.checked,
+            dead_arms: facts.dead_arms,
+            diagnostics: facts.diagnostics,
+            diagnostic_phases: facts.diagnostic_phases,
+            lowering: facts.lowering,
+            table_keys: facts.table_keys,
+        })
+    }
 }
 impl FactsRef<'_> {
     fn bytes(&self, decoded: bool) -> u64 {
@@ -643,6 +764,26 @@ mod tests {
     }
 
     #[test]
+    fn packed_checked_summary_requires_the_checked_proof_it_references() {
+        let reads = Arc::new(Reads::empty());
+        let missing = PackedFactsRef {
+            summary: Some(PackedSummaryRef::Checked {
+                definition: DefId::intern(&DefPath::core("missing-proof")),
+                text: Default::default(),
+                reads: &reads,
+            }),
+            checked: &None,
+            dead_arms: &None,
+            diagnostics: &vec![],
+            diagnostic_phases: &vec![],
+            lowering: &None,
+            table_keys: None,
+        };
+        let bytes = bincode::serialize(&missing).unwrap();
+        assert!(bincode::deserialize::<Facts>(&bytes).is_err());
+    }
+
+    #[test]
     fn carry_codec_layout_covers_independent_reads_diagnostics_and_summary_decode_peaks() {
         crate::with_compiler_stack(|| {
             for width in [1, 4, 16, 64] {
@@ -741,6 +882,18 @@ mod tests {
                 );
                 assert_eq!(decoded.diagnostics[0].primary.anchor, relocated);
                 assert_eq!(decoded.summary.as_ref().unwrap().reads.len(), width);
+                assert_eq!(
+                    decoded.summary.as_ref().unwrap().summary,
+                    facts.summary.as_ref().unwrap().summary
+                );
+                assert_eq!(
+                    decoded.summary.as_ref().unwrap().growth,
+                    facts.summary.as_ref().unwrap().growth
+                );
+                assert_eq!(
+                    decoded.checked.as_ref().unwrap().1,
+                    facts.checked.as_ref().unwrap().1
+                );
             }
         });
     }
