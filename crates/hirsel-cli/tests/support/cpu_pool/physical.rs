@@ -200,12 +200,12 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        while child.try_wait().unwrap().is_none() {
-            threads.capture(child.id());
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        // The observer shares these exact CPUs. Sleep until exit instead of
+        // preempting a worker every 20 ms inside its switch-free interval.
+        let output = child.wait_with_output().unwrap();
         let after = physical_host_snapshot(std::process::id(), &cpus);
-        checked(child.wait_with_output().unwrap());
+        let retired = fs::read_to_string(root.join("probe.txt.threads")).unwrap_or_default();
+        checked(output);
         if !exclusive.is_empty() {
             assert_eq!(
                 exclusive_cpus(&cpus),
@@ -216,13 +216,13 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
         assert_eq!(
             pinned.len(),
             width,
-            "all fresh workers must receive the exact admitted placement\n{before}\n{after}\n{threads:?}"
+            "all fresh workers must receive the exact admitted placement\n{before}\n{after}\n{threads:?}\n{retired}"
         );
         let samples = fs::read_to_string(&probe).unwrap();
         let rejected = fs::read_to_string(root.join("probe.txt.rejected")).unwrap();
         assert!(
             overlap(&samples, width, &exclusive),
-            "no switch-free CPU overlap at W={width}, exclusive={exclusive:?}\n{before}\n{after}\n{threads:?}\n{samples}\n{rejected}"
+            "no switch-free CPU overlap at W={width}, exclusive={exclusive:?}\n{before}\n{after}\n{threads:?}\n{retired}\n{samples}\n{rejected}"
         );
         if exclusive.len() == width || width == 1 {
             eprintln!(

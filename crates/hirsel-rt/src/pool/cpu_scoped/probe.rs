@@ -10,6 +10,7 @@ pub(crate) struct Probe {
     output: std::fs::File,
     lifecycle: Mutex<std::fs::File>,
     controls: Mutex<std::fs::File>,
+    threads: Mutex<std::fs::File>,
     rejected_output: std::fs::File,
     rejected: [Mutex<Vec<(Sample, Sample)>>; 16],
     jitter: u64,
@@ -34,10 +35,13 @@ impl Probe {
         controls.push(".control");
         let mut rejected = path.as_os_str().to_os_string();
         rejected.push(".rejected");
+        let mut threads = path.as_os_str().to_os_string();
+        threads.push(".threads");
         Ok(Self {
             output: std::fs::File::create(path)?,
             lifecycle: Mutex::new(std::fs::File::create(lifecycle)?),
             controls: Mutex::new(std::fs::File::create(controls)?),
+            threads: Mutex::new(std::fs::File::create(threads)?),
             rejected_output: std::fs::File::create(rejected)?,
             rejected: std::array::from_fn(|_| Mutex::new(Vec::new())),
             jitter: std::env::var("HIRSEL_RT_CPU_JITTER")
@@ -88,10 +92,21 @@ pub(crate) unsafe fn worker(
     exec: &super::super::Exec,
     kind: &str,
 ) {
-    if matches!(exec.kind, super::super::Kind::Scoped(_))
+    if let super::super::Kind::Scoped(worker) = exec.kind
         && let Some(probe) = unsafe { (*run).cpu_probe.as_ref() }
     {
         probe.event(kind, 0, exec as *const _ as usize, 0);
+        if kind == "exit" {
+            // Read on the retiring worker, after its measured work. An
+            // external polling thread would preempt one of the exact CPUs.
+            let mut snapshot = format!("worker {worker}\n");
+            for name in ["comm", "sched", "schedstat", "status"] {
+                if let Ok(text) = std::fs::read_to_string(format!("/proc/thread-self/{name}")) {
+                    snapshot.push_str(&format!("{name}: {text}\n"));
+                }
+            }
+            write!(probe.threads.lock().unwrap(), "{snapshot}").expect("CPU thread probe write");
+        }
     }
 }
 #[cfg(target_os = "linux")]
