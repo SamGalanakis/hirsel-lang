@@ -3350,6 +3350,22 @@ fn compound_drop_fixture_with_layout(
 ) {
     use hirsel_lir::layout_types::{CopyRecipe, DropStep};
     let mut t = Lir::<Rc>::new(&[(Passing::Take, container)], None);
+    if child == l::OPT {
+        let carrier = &mut t.table.layouts[child.0 as usize];
+        carrier.tag.as_mut().unwrap().variants[1].fields[0].layout = l::RES;
+        carrier.copy = CopyRecipe::NotCopyable;
+        carrier.drop = vec![DropStep::ActiveVariant {
+            tag_offset: 0,
+            form: hirsel_lir::layout_types::TagForm::Ordinal,
+            variants: vec![(
+                1,
+                vec![DropStep::Child {
+                    offset: 8,
+                    layout: l::RES,
+                }],
+            )],
+        }];
+    }
     if container == l::OPT {
         let carrier = &mut t.table.layouts[container.0 as usize];
         carrier.tag.as_mut().unwrap().variants[1].fields[0].layout = child;
@@ -3366,13 +3382,18 @@ fn compound_drop_fixture_with_layout(
             )],
         }];
     } else {
+        let child_drop = t.table.layouts[child.0 as usize].drop.clone();
         let pair = &mut t.table.layouts[container.0 as usize];
+        if child == l::OPT {
+            pair.size = hirsel_lir::layout_types::SizeSpec::Fixed(32);
+            pair.fields[1].offset = 16;
+        }
         pair.fields[0].layout = child;
         pair.fields[1].layout = child;
         pair.copy = CopyRecipe::NotCopyable;
         pair.drop = vec![
             DropStep::Child {
-                offset: 8,
+                offset: if child == l::OPT { 16 } else { 8 },
                 layout: child,
             },
             DropStep::Child {
@@ -3380,6 +3401,16 @@ fn compound_drop_fixture_with_layout(
                 layout: child,
             },
         ];
+        if child == l::OPT {
+            pair.drop = [16, 0]
+                .into_iter()
+                .flat_map(|offset| {
+                    child_drop
+                        .iter()
+                        .map(move |step| hirsel_lir::layout::shift_drop(step, offset))
+                })
+                .collect();
+        }
         if parent {
             pair.kind = hirsel_lir::layout_types::LayoutKind::Resource;
             pair.finalizer = Some(hirsel_lir::layout_types::FinalizerRef {
@@ -5979,5 +6010,95 @@ fn ownership_runtime_mutable_binding_proves_the_actual_without_granting_custody(
         )
         .unwrap_err(),
         Error::MissingMarker(MarkerId(0))
+    );
+}
+
+#[test]
+fn ownership_trace_projected_variant_cut_proves_completion_flags_from_all_incoming_values() {
+    let (after, output, _, _, _) = compound_drop_fixture_with_children(false, false, l::OPT);
+    assert_eq!(output.observations.len(), 1);
+    let checked = check(after.unit(), &output).unwrap();
+    assert!(
+        !checked
+            .commits(after.unit(), MarkerId(0))
+            .unwrap()
+            .is_empty()
+    );
+    let mut forged = after.into_raw();
+    let Point::CompoundDrop {
+        block: entry,
+        normal,
+        ..
+    } = output.observations[0].point
+    else {
+        unreachable!()
+    };
+    let mut pending = vec![entry];
+    let mut reachable = std::collections::BTreeSet::new();
+    while let Some(block) = pending.pop() {
+        if block == normal || !reachable.insert(block) {
+            continue;
+        }
+        for edge in forged.terminators[block.index()].normal_edges(&forged.pools) {
+            pending.push(forged.tables.edges[edge.index()].target);
+        }
+    }
+    // Turning the actual incoming false flag into true makes the trap reachable.
+    // Keeping the same init-flag assertion must not retain the cut's proof.
+    let (block, condition) = forged
+        .terminators
+        .iter()
+        .enumerate()
+        .find_map(|(block, term)| {
+            if !reachable.contains(&BlockId(block as u32)) {
+                return None;
+            }
+            let Terminator::Branch { condition, yes, .. } = term else {
+                return None;
+            };
+            let target = forged.tables.edges[yes.index()].target;
+            matches!(
+                forged.terminators[target.index()],
+                Terminator::InvariantFault { .. }
+            )
+            .then_some((BlockId(block as u32), *condition))
+        })
+        .expect("projected variant completion guard");
+    let parameter = forged.blocks[block.index()]
+        .parameters
+        .get(&forged.pools.values)
+        .unwrap()
+        .iter()
+        .position(|&value| value == condition)
+        .unwrap();
+    let value = forged
+        .tables
+        .edges
+        .iter()
+        .find(|edge| edge.target == block)
+        .unwrap()
+        .arguments
+        .get(&forged.pools.values)
+        .unwrap()[parameter];
+    let constant = forged
+        .instructions
+        .iter()
+        .find_map(|inst| match *inst {
+            Inst::Const { result, constant } if result == value => Some(constant),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        forged.tables.constants[constant.index()].value,
+        ConstantValue::Bool(false)
+    );
+    forged.tables.constants[constant.index()].value = ConstantValue::Bool(true);
+    let stale = Plan {
+        unit: forged.digest(),
+        ..output
+    };
+    assert_eq!(
+        check(&forged, &stale).unwrap_err(),
+        Error::InvalidBinding(MarkerId(0))
     );
 }

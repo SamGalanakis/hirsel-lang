@@ -119,6 +119,75 @@ pub(super) fn selected_addresses<S: Stage>(
     Some(selected)
 }
 
+// A completion flag is a runtime bool, even when every incoming SSA argument
+// is the same constant. Prove that fact from actual definitions and every used
+// edge. InitFlag metadata alone cannot justify excluding a cleanup branch.
+fn constant_branches<S>(unit: &LirUnit<S>) -> Option<BTreeMap<BlockId, EdgeId>> {
+    let mut known = BTreeMap::new();
+    for block in &unit.blocks {
+        for inst in block.instructions.get(&unit.instructions)? {
+            if let Inst::Const { result, constant } = *inst
+                && let ConstantValue::Bool(value) =
+                    unit.tables.constants.get(constant.index())?.value
+            {
+                known.insert(result, value);
+            }
+        }
+    }
+    let mut arguments: BTreeMap<ValueId, Vec<ValueId>> = BTreeMap::new();
+    for edge in check::used_edges(unit) {
+        let edge = unit.tables.edges.get(edge.index())?;
+        let parameters = unit
+            .blocks
+            .get(edge.target.index())?
+            .parameters
+            .get(&unit.pools.values)?;
+        let values = edge.arguments.get(&unit.pools.values)?;
+        if parameters.len() != values.len() {
+            return None;
+        }
+        for (&parameter, &value) in parameters.iter().zip(values) {
+            arguments.entry(parameter).or_default().push(value);
+        }
+    }
+    let mut pending = BTreeMap::new();
+    let mut users: BTreeMap<ValueId, Vec<ValueId>> = BTreeMap::new();
+    for (parameter, values) in arguments {
+        pending.insert(parameter, (values.len(), 3u8));
+        for value in values {
+            users.entry(value).or_default().push(parameter);
+        }
+    }
+    let mut work: std::collections::VecDeque<_> = known.keys().copied().collect();
+    while let Some(value) = work.pop_front() {
+        for &parameter in users.get(&value).into_iter().flatten() {
+            let (remaining, possibilities) = pending.get_mut(&parameter)?;
+            *remaining = remaining.checked_sub(1)?;
+            *possibilities &= if known[&value] { 2 } else { 1 };
+            if *remaining == 0 && *possibilities != 0 {
+                if known.insert(parameter, *possibilities == 2).is_some() {
+                    return None;
+                }
+                work.push_back(parameter);
+            }
+        }
+    }
+    Some(
+        unit.terminators
+            .iter()
+            .enumerate()
+            .filter_map(|(i, term)| {
+                let Terminator::Branch { condition, yes, no } = term else {
+                    return None;
+                };
+                known
+                    .get(condition)
+                    .map(|value| (BlockId(i as u32), if *value { *yes } else { *no }))
+            })
+            .collect(),
+    )
+}
+
 pub(super) fn parts<S: Stage>(
     unit: &LirUnit<S>,
     point: Point,
@@ -173,15 +242,55 @@ pub(super) fn parts<S: Stage>(
         }
         (storage, at)
     } else {
-        let (first, actual) = finalizer::begin(unit, block)?;
-        if actual != anchor
-            || !path(unit, first).is_some_and(|(s, p)| {
-                path(unit, root).is_some_and(|(r, q)| s == r && p.starts_with(&q))
-            })
-        {
+        let code = unit
+            .blocks
+            .get(block.index())?
+            .instructions
+            .get(&unit.instructions)?;
+        let (first, start) = if let Some((first, actual)) = finalizer::begin(unit, block) {
+            if actual != anchor {
+                return None;
+            }
+            (
+                first,
+                code.iter()
+                    .position(|inst| matches!(inst, Inst::FinalizeBegin { .. }))?,
+            )
+        } else {
+            let Terminator::Switch { value, .. } = unit.terminators.get(block.index())? else {
+                return None;
+            };
+            let [
+                Inst::BeginLoan {
+                    loan,
+                    address,
+                    mutable: false,
+                    if_inactive: false,
+                },
+                Inst::Read {
+                    result,
+                    address: read,
+                    mode: ReadMode::Borrow,
+                    ..
+                },
+            ] = code.get(code.len().checked_sub(2)?..)?
+            else {
+                return None;
+            };
+            if result != value
+                || read != address
+                || unit.values.get(value.index())?.holding != Holding::Borrowed(*loan)
+            {
+                return None;
+            }
+            (*address, code.len() - 2)
+        };
+        if !path(unit, first).is_some_and(|(s, p)| {
+            path(unit, root).is_some_and(|(r, q)| s == r && p.starts_with(&q))
+        }) {
             return None;
         }
-        (root, 0)
+        (root, u32::try_from(start).ok()?)
     };
     let (slot, prefix) = path(unit, storage)?;
     // The containing Resource has its own finalizer before its child actions.
@@ -193,6 +302,7 @@ pub(super) fn parts<S: Stage>(
     };
     struct Walk {
         selected: std::collections::BTreeSet<(BlockId, u32)>,
+        branches: BTreeMap<BlockId, EdgeId>,
         state: Vec<u8>,
         parts: Vec<(BlockId, AddressId)>,
         normal: bool,
@@ -204,7 +314,6 @@ pub(super) fn parts<S: Stage>(
         block: BlockId,
         entry: BlockId,
         start: u32,
-        staged: bool,
         normal: BlockId,
         index: u32,
         failure: BlockId,
@@ -234,17 +343,7 @@ pub(super) fn parts<S: Stage>(
         // Preparing an address before the semantic drop enters its first
         // phase can fail into another cleanup action. That action retains its
         // own original marker; it is not a completion of this drop.
-        let offset = if block == entry {
-            let start = if staged {
-                start as usize
-            } else {
-                code.iter()
-                    .position(|inst| matches!(inst, Inst::FinalizeBegin { .. }))?
-            };
-            start
-        } else {
-            0
-        };
+        let offset = if block == entry { start as usize } else { 0 };
         let code = code.get(offset..)?;
         let mut next = Vec::new();
         for (index, instruction) in code.iter().enumerate() {
@@ -339,7 +438,11 @@ pub(super) fn parts<S: Stage>(
                 }
                 return None;
             }
-            next.extend(term.normal_edges(&unit.pools));
+            if let Some(&edge) = walk.branches.get(&block) {
+                next.push(edge);
+            } else {
+                next.extend(term.normal_edges(&unit.pools));
+            }
             for failure in term.failure_edges(&unit.tables) {
                 next.push(unit.tables.failures.get(failure.index())?.cleanup);
             }
@@ -350,7 +453,6 @@ pub(super) fn parts<S: Stage>(
                 unit.tables.edges.get(edge.index())?.target,
                 entry,
                 start,
-                staged,
                 normal,
                 index,
                 failure,
@@ -364,6 +466,7 @@ pub(super) fn parts<S: Stage>(
     }
     let mut walk = Walk {
         selected: selected_addresses(unit)?,
+        branches: constant_branches(unit)?,
         state: vec![0; unit.blocks.len()],
         parts: Vec::new(),
         normal: false,
@@ -374,7 +477,6 @@ pub(super) fn parts<S: Stage>(
         block,
         block,
         start,
-        staged.is_some(),
         normal,
         index,
         failure,
