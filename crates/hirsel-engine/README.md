@@ -41,6 +41,9 @@ previous one's digests and the verdicts whose reads still hold. Reflection and
 V share one lazily identified immutable product for each public/private view;
 reuse binds both the exact signature allocation and its type interner. Failed headers
 are retried: a snapshot is kept only when every signature normalized.
+The checked view tables live in `hirsel-validate`; the engine re-exports them.
+Source validation, retention and publication preserve their sealed environment
+type so V can reuse its clean stamp within the exact immutable snapshot.
 The snapshot's stamp follows declaration rows, explicit module inputs and S1
 signature publication/retirement, including the environment and comptime limits.
 An ordinary function-body edit retains the snapshot and runtime type tables;

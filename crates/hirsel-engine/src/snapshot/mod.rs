@@ -316,12 +316,16 @@ impl SignatureSnapshot {
         Option<hirsel_validate::AcceptedArtifact>,
     ) {
         let views = self.validation_with(&definition.path.path().0.package, signature.clone());
-        let artifact = hirsel_validate::Artifact::new(definition, self.types.clone(), |anchor| {
-            origin
-                .filter(|(expected, _, _)| *expected == anchor)
-                .map(|(_, path, occurrence)| (path.clone(), *occurrence))
-        })
-        .with_overlay(signature);
+        let artifact = hirsel_validate::Artifact::private(
+            definition,
+            self.types.clone(),
+            signature,
+            |anchor| {
+                origin
+                    .filter(|(expected, _, _)| *expected == anchor)
+                    .map(|(_, path, occurrence)| (path.clone(), *occurrence))
+            },
+        );
         let (report, ran, acceptance) = hirsel_validate::validate_with_receipt(
             &artifact,
             &views,
@@ -452,7 +456,7 @@ impl SignatureSnapshot {
         &self.validation_state().validated
     }
     /// The universe V validates `package`'s bodies against.
-    pub fn validation(&self, package: &PackageId) -> &dyn SignatureLookup {
+    pub fn validation(&self, package: &PackageId) -> &dyn hirsel_validate::CheckedEnvironment {
         let state = self.validation_state();
         match state.packages.get(package) {
             Some(views) => views,
@@ -1015,15 +1019,18 @@ mod tests {
         };
         let first = build(signature.clone(), None);
         let reflected = first.representation(d).unwrap().unwrap().1;
-        let product = first.public_views[&d].get().unwrap().input.clone();
+        let product = first.public_views[&d].get().unwrap().identified().clone();
         let state = first.validation_state();
-        assert!(Arc::ptr_eq(&product, &state.views.get(d).unwrap().input));
+        assert!(Arc::ptr_eq(
+            &product,
+            state.views.get(d).unwrap().identified()
+        ));
         assert_eq!(reflected, state.views.get(d).unwrap().digest());
         let next = build(signature.clone(), Some(&first));
         let next_state = next.validation_state();
         assert!(Arc::ptr_eq(
             &product,
-            &next_state.views.get(d).unwrap().input
+            next_state.views.get(d).unwrap().identified()
         ));
 
         let mut changed = (*signature).clone();
@@ -1035,7 +1042,7 @@ mod tests {
         let changed_state = changed.validation_state();
         assert!(!Arc::ptr_eq(
             &product,
-            &changed_state.views.get(d).unwrap().input
+            changed_state.views.get(d).unwrap().identified()
         ));
         assert_ne!(reflected, changed_state.views.get(d).unwrap().digest());
         assert!(!changed_state.views.universe_errors().1.is_empty());

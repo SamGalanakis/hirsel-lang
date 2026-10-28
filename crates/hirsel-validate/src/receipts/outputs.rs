@@ -811,18 +811,23 @@ impl VerifierCache {
     }
     /// V encodes the actual immutable body, rather than accepting a caller's
     /// claimed body reference. The subject is only its query lookup address.
-    pub fn publish_definition(
+    pub fn publish_definition<'a>(
         &self,
         subject: ContentHash,
         definition: &hirsel_tir::DefinitionRef,
         types: Arc<TypeInterner>,
         policy: ContentHash,
-        signatures: &dyn SignatureLookup,
+        signatures: impl Into<crate::SignatureInputs<'a>>,
         evidence: &VerifiedDefinition,
         metadata: &[u8],
     ) -> Option<VerifiedDefinitionOutput> {
         let output = self.definition_output_with_metadata(
-            definition, types, policy, signatures, evidence, metadata,
+            definition,
+            types,
+            policy,
+            signatures.into(),
+            evidence,
+            metadata,
         )?;
         self.publish(
             key(subject, policy),
@@ -843,22 +848,29 @@ impl VerifierCache {
     /// Return V's output for an actual completed validation, without looking up
     /// or publishing an ordinary query. The empty metadata is not a cutoff
     /// receipt: the caller must already have completed its real Lower demand.
-    pub fn definition_output_from_evidence(
+    pub fn definition_output_from_evidence<'a>(
         &self,
         definition: &hirsel_tir::DefinitionRef,
         types: Arc<TypeInterner>,
         policy: ContentHash,
-        signatures: &dyn SignatureLookup,
+        signatures: impl Into<crate::SignatureInputs<'a>>,
         evidence: &VerifiedDefinition,
     ) -> Option<VerifiedDefinitionOutput> {
-        self.definition_output_with_metadata(definition, types, policy, signatures, evidence, &[])
+        self.definition_output_with_metadata(
+            definition,
+            types,
+            policy,
+            signatures.into(),
+            evidence,
+            &[],
+        )
     }
     fn definition_output_with_metadata(
         &self,
         definition: &hirsel_tir::DefinitionRef,
         types: Arc<TypeInterner>,
         policy: ContentHash,
-        signatures: &dyn SignatureLookup,
+        signatures: crate::SignatureInputs<'_>,
         evidence: &VerifiedDefinition,
         metadata: &[u8],
     ) -> Option<VerifiedDefinitionOutput> {
@@ -884,7 +896,11 @@ impl VerifierCache {
             policy,
             reads: evidence.reads.clone().into(),
             metadata: metadata.into(),
-            invocations: Arc::new(SourceInvocations::observe(definition, &types, signatures)?),
+            invocations: Arc::new(SourceInvocations::observe(
+                definition,
+                &types,
+                signatures.lookup(),
+            )?),
         })
     }
     /// The query owner validates prior ordinary dependency outputs, depth,

@@ -70,6 +70,16 @@ receipts: only V publishes successful checks, and reuse requires the current
 independent view digest, policy and every contextual read to agree. Ordinary
 product bytes cannot import successful verdicts.
 
+`ViewTable` and `PackageViews` own immutable checked environments inside V.
+`SignatureInputs` carries either one of these sealed environments or a general
+lookup through the same validation and publication algorithm. `VerifiedDefinition`
+retains a weak clean stamp for one exact environment, alongside its existing weak
+body/type bindings and policy. Repeated consumption in that environment skips
+the read scan. A different environment checks every recorded observation before
+updating the stamp; general lookups always check them. Stamps are never persisted
+and cannot supply local receipt authority. Private artifacts identify the body
+and replacement signature together in one canonicalization.
+
 `Violation` identifies an optional body, block and instruction; a block with no
 instruction identifies its terminator. `ViolationKind` contains compiler-invariant
 errors, **no RuleIds** and no source diagnostic wrapper. Results are deterministic

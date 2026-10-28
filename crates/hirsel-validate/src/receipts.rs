@@ -23,7 +23,7 @@ use std::{
 /// Local evidence for one immutable source Definition, minted only by V.
 /// A weak binding preserves retention limits; copying reads cannot create it.
 /// This capability is deliberately neither serializable nor deserializable.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct VerifiedDefinition {
     definition: Weak<Definition>,
     owner: hirsel_syntax::DefId,
@@ -31,28 +31,69 @@ pub struct VerifiedDefinition {
     policy: ContentHash,
     accepted: Option<AcceptedArtifact>,
     reads: Vec<VRead>,
+    environment: Mutex<Weak<()>>,
+}
+impl Clone for VerifiedDefinition {
+    fn clone(&self) -> Self {
+        Self {
+            definition: self.definition.clone(),
+            owner: self.owner,
+            types: self.types.clone(),
+            policy: self.policy,
+            accepted: self.accepted.clone(),
+            reads: self.reads.clone(),
+            environment: Mutex::new(self.environment.lock().unwrap().clone()),
+        }
+    }
 }
 impl VerifiedDefinition {
-    pub fn holds(
+    pub fn holds<'a>(
         &self,
         definition: &hirsel_tir::DefinitionRef,
         types: &Arc<TypeInterner>,
         policy: ContentHash,
-        signatures: &dyn SignatureLookup,
+        signatures: impl Into<crate::SignatureInputs<'a>>,
     ) -> bool {
         self.definition.ptr_eq(&Arc::downgrade(definition))
             && self.types.ptr_eq(&Arc::downgrade(types))
             && self.environment_holds(policy, signatures)
     }
-    /// A retained query may check its evidence before materializing a body.
-    /// Its ordinary query reads must also still hold before adopting the result.
-    pub fn environment_holds(&self, policy: ContentHash, signatures: &dyn SignatureLookup) -> bool {
-        self.policy == policy
-            && self.types.upgrade().is_some_and(|types| {
-                self.reads
-                    .iter()
-                    .all(|r| crate::input::read_holds_for_types(&types, r, signatures))
-            })
+    /// A clean stamp is scoped to V's exact immutable snapshot. Every new
+    /// snapshot and every general lookup checks the complete observations.
+    pub fn environment_holds<'a>(
+        &self,
+        policy: ContentHash,
+        signatures: impl Into<crate::SignatureInputs<'a>>,
+    ) -> bool {
+        if self.policy != policy {
+            return false;
+        }
+        let signatures = signatures.into();
+        let Some(types) = self.types.upgrade() else {
+            return false;
+        };
+        if let Some(stamp) = signatures.stamp() {
+            if !Arc::ptr_eq(&types, &stamp.types) {
+                return false;
+            }
+            let mut seen = self.environment.lock().unwrap();
+            if seen.ptr_eq(&Arc::downgrade(&stamp.identity)) {
+                return true;
+            }
+            if !self
+                .reads
+                .iter()
+                .all(|r| crate::input::read_holds_for_types(&types, r, signatures.lookup()))
+            {
+                return false;
+            }
+            *seen = Arc::downgrade(&stamp.identity);
+            true
+        } else {
+            self.reads
+                .iter()
+                .all(|r| crate::input::read_holds_for_types(&types, r, signatures.lookup()))
+        }
     }
     pub fn owner(&self) -> hirsel_syntax::DefId {
         self.owner
@@ -69,11 +110,11 @@ impl VerifiedDefinition {
 
 /// The ordinary receipt query, additionally binding local evidence to the
 /// immutable input. Misses run the existing validator exactly once.
-pub fn validate_definition(
+pub fn validate_definition<'a>(
     definition: &hirsel_tir::DefinitionRef,
     types: Arc<TypeInterner>,
     owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
-    signatures: &dyn SignatureLookup,
+    signatures: impl Into<crate::SignatureInputs<'a>>,
     policy: ContentHash,
     cache: Option<&VerifierCache>,
 ) -> (
@@ -82,10 +123,11 @@ pub fn validate_definition(
     Option<AcceptedArtifact>,
     Option<VerifiedDefinition>,
 ) {
+    let signatures = signatures.into();
     let mut reads = vec![];
     let artifact = Artifact::new(definition, types.clone(), owner);
     let (report, ran, accepted) =
-        validate_with_receipt(&artifact, signatures, policy, cache, &mut reads);
+        validate_with_receipt(&artifact, signatures.lookup(), policy, cache, &mut reads);
     let evidence = report.violations.is_empty().then(|| VerifiedDefinition {
         definition: Arc::downgrade(definition),
         owner: definition.path,
@@ -93,6 +135,11 @@ pub fn validate_definition(
         policy,
         accepted: accepted.clone(),
         reads,
+        environment: Mutex::new(
+            signatures
+                .stamp()
+                .map_or_else(Weak::new, |stamp| Arc::downgrade(&stamp.identity)),
+        ),
     });
     (report, ran, accepted, evidence)
 }
@@ -126,35 +173,55 @@ impl<'a> Artifact<'a> {
     pub fn new(
         definition: &'a Definition,
         types: Arc<TypeInterner>,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+    ) -> Self {
+        Self::identify(definition, types, owner, None)
+    }
+    /// Identify a private artifact and its exact replacement signature in one
+    /// pass. The ordinary body identity is not an intermediate product.
+    pub fn private(
+        definition: &'a Definition,
+        types: Arc<TypeInterner>,
+        signature: hirsel_types::SignatureRef,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+    ) -> Self {
+        Self::identify(definition, types, owner, Some(signature))
+    }
+    fn identify(
+        definition: &'a Definition,
+        types: Arc<TypeInterner>,
         mut owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+        overlay: Option<hirsel_types::SignatureRef>,
     ) -> Self {
         let mut owners = std::collections::BTreeMap::new();
-        let identity = hirsel_product_codec::canonical_bytes(types.clone(), definition, |anchor| {
+        let mut bind = |anchor| {
             let value = owner(anchor)?;
             owners.insert(anchor, value.clone());
             Some(value)
-        })
-        .map(|bytes| ContentHash::of_parts("hirsel.validate.artifact.v1", [bytes.as_slice()]));
+        };
+        let (domain, bytes) = if overlay.is_some() {
+            (
+                "hirsel.validate.private-artifact.v2",
+                hirsel_product_codec::canonical_bytes(
+                    types.clone(),
+                    &(definition, &overlay),
+                    &mut bind,
+                ),
+            )
+        } else {
+            (
+                "hirsel.validate.artifact.v1",
+                hirsel_product_codec::canonical_bytes(types.clone(), definition, &mut bind),
+            )
+        };
+        let identity = bytes.map(|bytes| ContentHash::of_parts(domain, [bytes.as_slice()]));
         Self {
             definition,
             types,
             identity,
             owners,
-            overlay: None,
+            overlay,
         }
-    }
-    /// Bind private validation to the exact replacement signature too.
-    pub fn with_overlay(mut self, signature: hirsel_types::SignatureRef) -> Self {
-        self.overlay = Some(signature);
-        self.identity = hirsel_product_codec::canonical_bytes(
-            self.types.clone(),
-            &(self.definition, &self.overlay),
-            |anchor| self.owners.get(&anchor).cloned(),
-        )
-        .map(|bytes| {
-            ContentHash::of_parts("hirsel.validate.private-artifact.v2", [bytes.as_slice()])
-        });
-        self
     }
 }
 
@@ -1777,14 +1844,33 @@ mod tests {
         let directory = Directory::new();
         let cache = VerifierCache::directory(directory.0.clone());
         let signature = std::sync::Arc::new(f.signatures.get(f.definition.path).unwrap().clone());
-        let exact = artifact(&f).with_overlay(signature.clone());
+        let exact = Artifact::private(&f.definition, session(), signature.clone(), |_| {
+            Some((path("main"), 0))
+        });
+        let expected = hirsel_product_codec::canonical_bytes(
+            session(),
+            &(&f.definition, &Some(signature.clone())),
+            |_| Some((path("main"), 0)),
+        )
+        .unwrap();
+        assert_eq!(
+            exact.identity,
+            Some(ContentHash::of_parts(
+                "hirsel.validate.private-artifact.v2",
+                [expected.as_slice()]
+            ))
+        );
         let mut changed = (*signature).clone();
         changed.metadata.visibility = hirsel_syntax::Visibility::Public;
         assert_ne!(
             exact.identity,
-            artifact(&f)
-                .with_overlay(std::sync::Arc::new(changed))
-                .identity
+            Artifact::private(
+                &f.definition,
+                session(),
+                std::sync::Arc::new(changed),
+                |_| Some((path("main"), 0))
+            )
+            .identity
         );
         let policy = ContentHash::default();
         let (_, _, accepted) =

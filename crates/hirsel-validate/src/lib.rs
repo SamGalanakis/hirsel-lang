@@ -43,6 +43,10 @@ mod flow_origins;
 mod generics;
 mod indexed;
 mod input;
+mod views;
+pub use views::{
+    CheckedEnvironment, EnvironmentStamp, PackageViews, SignatureInputs, View, ViewTable,
+};
 mod instances;
 mod invocations;
 pub use invocations::invocation_coverage;
