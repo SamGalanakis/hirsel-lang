@@ -1430,14 +1430,26 @@ impl CandidateWorkspace {
                         .iter()
                         .any(|d| d.severity == hirsel_diag::Severity::Error);
                     let products = if complete {
-                        let mut products = program
-                            .engine
-                            .checked_products(&program.entry)
-                            .map_err(|e| program.error(e))?;
-                        if !w.limits.retain_canonical_export {
-                            products.canonical = None;
+                        match program.engine.checked_products(&program.entry) {
+                            Ok(mut products) => {
+                                if !w.limits.retain_canonical_export {
+                                    products.canonical = None;
+                                }
+                                Some(Arc::new(products))
+                            }
+                            Err(QueryError::NotImplemented) if rejecting => None,
+                            Err(QueryError::Diagnostics(diagnostics)) if rejecting => {
+                                let diagnostics = hirsel_engine::select_diagnostics(
+                                    diagnostics,
+                                    Some(&output.sources),
+                                );
+                                if diagnostics != output.diagnostics {
+                                    return Err(program.error(QueryError::Diagnostics(diagnostics)));
+                                }
+                                None
+                            }
+                            Err(error) => return Err(program.error(error)),
                         }
-                        Some(Arc::new(products))
                     } else {
                         None
                     };

@@ -1185,14 +1185,33 @@ fn candidate_v2_cold_child() {
             .collect();
         let selection = json!({"entry":format!("{:?}",program.entry),
             "sources":program.files.iter().map(|(f,c)|{let file=program.engine.sources.file(*f).unwrap();json!({"logical":file.logical_path(),"package":c.package,"modules":c.modules})}).collect::<Vec<_>>()});
-        program.parse_sources().unwrap();
         let checked = program.check(LoweringPolicy::Comptime).unwrap();
         assert_eq!(checked.completion, hirsel_engine::CheckCompletion::Complete);
-        let products = program.engine.checked_products(&program.entry).unwrap();
+        let rejected = checked
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == hirsel_diag::Severity::Error);
+        let products = match program.engine.checked_products(&program.entry) {
+            Ok(products) => Some(products),
+            Err(hirsel_engine::QueryError::NotImplemented) if rejected => None,
+            Err(hirsel_engine::QueryError::Diagnostics(diagnostics)) if rejected => {
+                let diagnostics =
+                    hirsel_engine::select_diagnostics(diagnostics, Some(&checked.sources));
+                let json = |diagnostics: &[hirsel_diag::Diagnostic]| {
+                    diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.to_json(&checked.sources))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(json(&diagnostics), json(&checked.diagnostics));
+                None
+            }
+            Err(error) => panic!("cold checked products: {error:?}"),
+        };
         normalized(
             json!({"completion":"Complete","verdict":if checked.diagnostics.iter().any(|d|d.severity==hirsel_diag::Severity::Error){"Reject"}else{"Pass"},"failure":null,"packages":packages,"unsafe_ffi":format!("{:?}",checked.unsafe_ffi),"selection":selection,
             "diagnostics":checked.diagnostics.iter().map(|d|d.to_json(&checked.sources)).collect::<Vec<_>>(),"human":checked.diagnostics.iter().map(|d|d.render_human(&checked.sources)).collect::<Vec<_>>(),
-            "canonical":products.canonical,"reads":products.canonical_reads().into_iter().map(|((o,k),v)|json!([o,k,hex(v)])).collect::<Vec<_>>()}),
+            "canonical":products.as_ref().and_then(|products|products.canonical.clone()),"reads":products.as_ref().map(|products|products.canonical_reads().into_iter().map(|((o,k),v)|json!([o,k,hex(v)])).collect::<Vec<_>>())}),
             root,
         )
     });
