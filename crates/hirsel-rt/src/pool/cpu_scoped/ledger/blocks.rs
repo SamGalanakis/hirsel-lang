@@ -17,14 +17,80 @@ pub(crate) struct Block {
     region: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Observed {
+    address: usize,
+    generation: u64,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Blocks {
     generation: u64,
     live: BTreeMap<usize, Block>,
     regions: BTreeMap<usize, Owner>,
+    observed: BTreeMap<usize, Observed>,
 }
 
 impl Blocks {
+    /// A saved ordinal binds every allocation still in its
+    /// custody, including locals in parent helper frames. No payload is read:
+    /// an allocation handoff may have returned an uninitialized block.
+    pub(crate) fn owned(&self, owner: Owner) -> Vec<Block> {
+        self.live
+            .values()
+            .filter(|block| block.owner == owner)
+            .copied()
+            .collect()
+    }
+
+    /// Observe an input allocation without claiming its existing credits.
+    /// Several saved ordinals can observe the same borrowed input generation.
+    pub(crate) fn observe(&mut self, pointer: *mut Header) -> Observed {
+        *self.observed.entry(pointer.addr()).or_insert_with(|| {
+            self.generation = self
+                .generation
+                .checked_add(1)
+                .expect("CPU block generation");
+            Observed {
+                address: pointer.addr(),
+                generation: self.generation,
+            }
+        })
+    }
+
+    /// A mapper can consume an input's container and move its children into
+    /// helper locals. Filter by allocator generations, never by rereading the
+    /// original container after its credit has moved.
+    pub(crate) fn surviving(&self, input: &[Observed]) -> Vec<Observed> {
+        input
+            .iter()
+            .filter(|block| self.observed.get(&block.address) == Some(block))
+            .copied()
+            .collect()
+    }
+
+    pub(crate) fn valid_observed(&self, input: &[Observed]) -> bool {
+        input
+            .iter()
+            .all(|block| self.observed.get(&block.address) == Some(block))
+    }
+
+    pub(crate) fn valid_roots(
+        &self,
+        allocations: &[Block],
+        inputs: &[Observed],
+        roots: &[*mut Header],
+    ) -> bool {
+        allocations
+            .iter()
+            .filter(|block| roots.iter().any(|root| root.addr() == block.address))
+            .all(|block| self.live.get(&block.address) == Some(block))
+            && inputs
+                .iter()
+                .filter(|block| roots.iter().any(|root| root.addr() == block.address))
+                .all(|block| self.observed.get(&block.address) == Some(block))
+    }
+
     /// The checked mapper has exclusive custody of this fresh allocation.
     pub(crate) fn adopt(&mut self, owner: Owner, block: *mut Header) -> Block {
         self.adopt_in(owner, block, 0)
@@ -66,6 +132,7 @@ impl Blocks {
 
     pub(crate) fn release(&mut self, pointer: *mut Header) {
         self.live.remove(&pointer.addr());
+        self.observed.remove(&pointer.addr());
     }
 
     pub(crate) fn release_region(&mut self, region: usize) {

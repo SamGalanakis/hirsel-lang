@@ -336,6 +336,18 @@ pub(crate) fn after_save(
     // The generation is part of the logical identity, even if the runtime
     // later recycles this native row index for a different child.
     let id = super::super::handle(task, s.task(task).generation);
+    let owner = match &s.logical {
+        super::super::Logical::Ordered(driver) => driver
+            .cpu_batch
+            .as_ref()
+            .and_then(|batch| batch.block_owner(id)),
+        _ => unreachable!(),
+    };
+    if !completed && let Some(owner) = owner {
+        // SAFETY: this callback runs on the worker that physically saved the
+        // frame. Bind roots and collect its heap before acknowledging it.
+        unsafe { super::ahead::cpu_roots::save(s.task(task).ctx, owner) };
+    }
     let super::super::Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };

@@ -54,7 +54,7 @@ impl Batch {
         }
     }
 
-    fn claim(&mut self, task: TaskId, width: u32, ordinal: u64) {
+    pub(super) fn claim(&mut self, task: TaskId, width: u32, ordinal: u64) {
         assert_eq!(width, self.width, "claim uses its admitted width");
         let ordinal = usize::try_from(ordinal).expect("bounded CPU ordinal");
         let claim = self

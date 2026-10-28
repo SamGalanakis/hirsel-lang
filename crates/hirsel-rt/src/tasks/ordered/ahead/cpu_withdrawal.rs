@@ -1,11 +1,11 @@
 //! Backing pressure parks exact younger owners through the shared dispatcher.
-//! Saved mappers retain all storage and charges. Reclamation needs a complete
-//! saved-root recipe; a save acknowledgement alone is never proof of liveness.
+//! The actual save binds complete storage custody and collects the saving
+//! worker's unreachable backing before acknowledging the withdrawal.
 use super::super::engine;
 use crate::TaskCtx;
 use crate::ordered::footprint::TaskId;
 use crate::tasks::{Logical, TaskKey, role};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 
 pub(crate) struct Withdrawal {
@@ -13,6 +13,7 @@ pub(crate) struct Withdrawal {
     targets: BTreeSet<TaskId>,
     pending: BTreeSet<TaskId>,
     prefixes: Option<Vec<super::super::cpu::Withdrawn>>,
+    locals: BTreeMap<TaskId, crate::budget::stretch::Stretch>,
 }
 
 impl Withdrawal {
@@ -26,6 +27,7 @@ impl Withdrawal {
             targets,
             pending,
             prefixes: None,
+            locals: BTreeMap::new(),
         }
     }
 
@@ -100,6 +102,11 @@ pub(super) fn acknowledged(ctx: *mut TaskCtx) -> bool {
             return false;
         }
         if withdrawal.prefixes.is_none() {
+            for target in &withdrawal.targets {
+                if let Some(prefix) = driver.stretches.remove(target) {
+                    assert!(withdrawal.locals.insert(*target, prefix).is_none());
+                }
+            }
             withdrawal.prefixes = Some(
                 driver
                     .cpu_batch
@@ -137,6 +144,9 @@ pub(super) fn release(ctx: *mut TaskCtx) {
                 .prefixes
                 .expect("acknowledged withdrawal transfers its prefixes"),
         );
+        for (task, prefix) in withdrawal.locals {
+            assert!(driver.stretches.insert(task, prefix).is_none());
+        }
         for task in withdrawal.targets {
             let row = super::physical(s, TaskKey::from_word(task))
                 .expect("a withdrawn physical owner stays live");

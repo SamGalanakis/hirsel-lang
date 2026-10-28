@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) mod cpu_allocation;
 pub mod cpu_handoff;
+pub(crate) mod cpu_roots;
 pub(crate) mod cpu_withdrawal;
 pub(crate) mod cpu_worker;
 pub(crate) mod host_return;

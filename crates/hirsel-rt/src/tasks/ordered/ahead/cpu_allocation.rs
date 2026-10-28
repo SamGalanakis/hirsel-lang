@@ -18,7 +18,7 @@ pub(super) struct Request {
     index: u32,
     extent: u64,
     align: u64,
-    result: *mut Header,
+    pub(super) result: *mut Header,
 }
 
 impl Request {

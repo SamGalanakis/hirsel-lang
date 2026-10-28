@@ -47,14 +47,14 @@ pub(crate) struct Certificate {
 pub(crate) struct Native {
     pub physical: Physical,
     entry: TaskCode,
-    environment: *mut Header,
+    pub(super) environment: *mut Header,
     operation_site: u64,
     status: u8,
     pub pending_refill: bool,
     ctx: *mut TaskCtx,
     live: *mut u64,
     original_mask: u64,
-    source: *mut Header,
+    pub(super) source: *mut Header,
     pub(super) host: super::host_return::State,
     /// The last admitted host-return segment.
     pub(crate) admitted: Option<crate::continuation::PrivateSave>,
@@ -77,6 +77,8 @@ pub(crate) struct Native {
     pub(super) growth_status: u32,
     pub(super) growth_plan: Option<super::cpu_handoff::growth::Plan>,
     pub(crate) cpu_job: Option<std::sync::Arc<crate::pool::cpu_scoped::probe::Job>>,
+    pub(super) saved_roots: Option<super::cpu_roots::Saved>,
+    pub(super) input_blocks: Vec<crate::pool::cpu_scoped::ledger::blocks::Observed>,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -295,6 +297,13 @@ impl Native {
         let frame = resume
             .as_mut()
             .map_or(std::ptr::null_mut(), |(_, frame)| frame.as_mut_ptr());
+        let input_blocks = if certificate.cpu {
+            // SAFETY: the checked capture is initialized and still exclusively
+            // owned by its launcher; mapper execution has not begun.
+            unsafe { super::cpu_roots::inputs(ctx, [environment, certificate.source]) }
+        } else {
+            Vec::new()
+        };
         Box::new(Self {
             physical: Physical {
                 points_left: if certificate.host.is_null()
@@ -333,6 +342,8 @@ impl Native {
             growth_status: 0,
             growth_plan: None,
             cpu_job: None,
+            saved_roots: None,
+            input_blocks,
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -428,6 +439,17 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
         loop {
             crate::stop::set_running(std::ptr::null_mut());
             super::super::super::role::enter(ctx);
+            if let Some(saved) = (*native).saved_roots.take() {
+                let task = super::super::engine::current(ctx);
+                let owner = super::super::engine::with_driver(ctx, |driver| {
+                    driver
+                        .cpu_batch
+                        .as_ref()
+                        .and_then(|batch| batch.block_owner(task))
+                })
+                .expect("a saved CPU call retains its ordinal");
+                saved.check(ctx, &*native, owner);
+            }
             super::host_return::flush_logical(ctx, native);
             let run = (*ctx).run_ptr();
             let mut pause = (*run).control.stopped().is_some();
