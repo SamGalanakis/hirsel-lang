@@ -56,10 +56,10 @@ pub(super) fn install(
         .map_err(|error| ToolError::Runtime(error.to_string()))?;
     executor
         .register(FRONT_BODY_KIND, front.factory())
-        .map_err(ToolError::Runtime)?;
+        .map_err(|error| ToolError::Runtime(error.to_string()))?;
     executor
         .register(FRONT_STAGE_KIND, stage.factory())
-        .map_err(ToolError::Runtime)?;
+        .map_err(|error| ToolError::Runtime(error.to_string()))?;
     for root in roots {
         let query = stage.query(&root).ok_or_else(|| uninstalled())?;
         let request = executor.request(&[query]);
