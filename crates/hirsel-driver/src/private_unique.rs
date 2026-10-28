@@ -68,6 +68,17 @@ pub(super) fn infer(
                 &mut |id| provider.signature(id).ok(),
             )
             .into_iter()
+            // Plain scalar and unit qualifiers are already inert by MODE-2.
+            // Publishing a body proof for them changes an otherwise identical
+            // declaration when inference first settles, without adding a fact.
+            .filter(|(_, ty)| match &t.row(*ty).kind {
+                hirsel_types::TypeKind::Primitive(primitive) => matches!(
+                    primitive,
+                    hirsel_types::Primitive::String | hirsel_types::Primitive::Bytes
+                ),
+                hirsel_types::TypeKind::Tuple(fields) => !fields.is_empty(),
+                _ => true,
+            })
             .map(|(row, _)| row)
             .collect(),
         };
