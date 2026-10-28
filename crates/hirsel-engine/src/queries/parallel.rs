@@ -49,6 +49,7 @@ pub(crate) struct Task {
     pub(crate) syntax: Arc<ItemSyntax>,
     pub(crate) signature: Result<Arc<QueryOutput<SignatureRef>>, QueryError>,
     pub(crate) signature_reads: Arc<Reads>,
+    pub(crate) checked_prefix: Option<Vec<SignatureDependency>>,
     pub(crate) resolution: Option<Arc<Entry<Resolution>>>,
     pub(crate) checked: Option<Arc<Entry<TypedBody>>>,
     pub(crate) text: ContentHash,
@@ -118,7 +119,6 @@ pub(crate) struct Completed {
     pub(crate) modes: Option<Product<AnalyzedBody>>,
     pub(crate) result: Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
     pub(crate) phase: QueryKind,
-    pub(crate) checked_provider_reads: Option<Vec<SignatureDependency>>,
     signature_reads: Arc<Reads>,
 }
 
@@ -238,7 +238,6 @@ impl Worker<'_> {
             modes: None,
             result: Err(QueryError::NotImplemented),
             phase: QueryKind::Resolve,
-            checked_provider_reads: None,
             signature_reads: task.signature_reads.clone(),
         };
         let owner = DefId::intern(&task.definition);
@@ -271,7 +270,10 @@ impl Worker<'_> {
                     ),
                     None => Err(QueryError::NotImplemented),
                 };
-                resolution_provider_reads = Some(stage.detail.signatures.clone());
+                resolution_provider_reads = task
+                    .checked_prefix
+                    .as_ref()
+                    .map(|_| stage.detail.signatures.clone());
                 stage.complete(result, products);
                 Product::Computed(stage)
             };
@@ -340,14 +342,24 @@ impl Worker<'_> {
                     },
                 );
             }
-            if let Some(mut signatures) = resolution_provider_reads {
+            let exact = resolution_provider_reads.map(|mut signatures| {
+                let mut prefix = task
+                    .checked_prefix
+                    .expect("captured accepted generator prefix");
                 signatures.extend_from_slice(&stage.detail.signatures[initial_signatures..]);
                 if let Ok(output) = &result {
                     signatures.extend_from_slice(&output.dependencies);
                 }
-                done.checked_provider_reads = Some(signatures);
-            }
+                prefix.extend(signatures);
+                prefix
+            });
             stage.complete(result, PhaseProducts::default());
+            if let Some(dependencies) = exact {
+                stage.detail.signatures = dependencies.clone();
+                if let Ok(output) = &mut stage.result {
+                    Arc::make_mut(output).dependencies = dependencies;
+                }
+            }
             Product::Computed(stage)
         };
         done.phase = QueryKind::Check;
@@ -935,6 +947,7 @@ impl QueryEngine {
                 syntax,
                 signature: Err(QueryError::NotImplemented),
                 signature_reads: Arc::new(Reads::empty()),
+                checked_prefix: None,
                 resolution,
                 checked,
                 text,
@@ -1372,6 +1385,7 @@ mod frozen_task_tests {
                     syntax: engine.items[&path][0].clone(),
                     signature: engine.signatures[&id].result(),
                     signature_reads: engine.signatures[&id].memo.reads.clone(),
+                    checked_prefix: None,
                     resolution: partial.then(|| engine.resolutions[&id].clone()),
                     checked: None,
                     text: ContentHash::default(),
@@ -1439,6 +1453,7 @@ mod frozen_task_tests {
                 syntax: engine.items[&path][0].clone(),
                 signature: Err(QueryError::NotImplemented),
                 signature_reads: Arc::new(Reads::from_vec(vec![(key, receipt)]).unwrap()),
+                checked_prefix: None,
                 resolution: None,
                 checked: None,
                 text: ContentHash::default(),

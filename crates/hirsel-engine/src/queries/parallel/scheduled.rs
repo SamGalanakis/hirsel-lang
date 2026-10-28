@@ -1210,21 +1210,15 @@ impl BodyTask {
             signature_reads: queries
                 .signature_reads(input)
                 .map_err(|_| queries.errors.protocol)?,
+            checked_prefix: input
+                .registration
+                .as_ref()
+                .map(|registration| registration.checked_prefix().to_vec()),
             text: input.text,
             resolution: None,
             checked: None,
         });
         if let Some(registration) = &input.registration {
-            if let Some(provider_reads) = done.checked_provider_reads.take()
-                && let Some(Product::Computed(stage)) = &mut done.checked
-            {
-                let mut dependencies = registration.checked_prefix().to_vec();
-                dependencies.extend(provider_reads);
-                stage.detail.signatures = dependencies.clone();
-                if let Ok(output) = &mut stage.result {
-                    Arc::make_mut(output).dependencies = dependencies;
-                }
-            }
             registration.explain(&mut done.result, &queries.citations.sources);
             if let Some(Product::Computed(stage)) = &mut done.resolution {
                 registration.explain(&mut stage.result, &queries.citations.sources);
