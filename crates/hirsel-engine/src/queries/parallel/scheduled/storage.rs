@@ -20,7 +20,6 @@ struct Outcome {
 }
 pub struct FrontStorageQueries {
     front: Arc<FrontBodyQueries>,
-    inputs: BTreeMap<Key, DefId>,
     completed: Mutex<BTreeMap<Key, Outcome>>,
     anchors: Arc<crate::NativeRecordContext>,
     records: crate::NativeRecords,
@@ -37,29 +36,33 @@ pub struct FrontStorageOutput {
     _owner: Arc<FrontStorageQueries>,
 }
 impl FrontStorageQueries {
-    /// Potential recipe address/path slots only; actual recipe demands debit
-    /// their existing output bound from the remainder of this reservation.
-    pub fn input_bytes(front: &FrontBodyQueries) -> Option<u64> {
-        Self::input_bytes_for_definitions(
-            front.inputs.values().map(|input| input.definition.path()),
-        )
+    /// The immutable front already owns the address/definition index. Only
+    /// demanded recipes need a task or a completed output in this owner.
+    pub fn input_bytes(_front: &FrontBodyQueries) -> Option<u64> {
+        Some(std::mem::size_of::<Self>() as u64)
     }
-    /// The same potential recipe inventory before the front owner exists.
+    /// The same shared-index owner before front construction.
     pub fn input_bytes_for_definitions<'a>(
-        definitions: impl IntoIterator<Item = &'a DefPath>,
+        _definitions: impl IntoIterator<Item = &'a DefPath>,
     ) -> Option<u64> {
-        let mut weight = crate::NativeMetadataWeight::default();
-        weight.add(std::mem::size_of::<Self>());
-        weight.tree::<Key, DefId>(definitions.into_iter().count());
-        Some(weight.bytes())
+        Some(std::mem::size_of::<Self>() as u64)
     }
-
+    fn address(input: Key) -> Key {
+        ContentHash::of_parts("hirsel.front.storage.address.v1", [input.0.as_slice()])
+    }
     pub fn query(&self, path: &DefPath) -> Option<QueryId> {
-        self.inputs.iter().find_map(|(&address, selected)| {
-            (path == selected.path()).then_some(QueryId {
-                kind: FRONT_STORAGE_KIND,
-                address: hirsel_artifact_store::Address(address),
-            })
+        let input = self.front.query(path)?;
+        Some(QueryId {
+            kind: FRONT_STORAGE_KIND,
+            address: hirsel_artifact_store::Address(Self::address(input.address.0)),
+        })
+    }
+    fn definition(&self, id: QueryId) -> Option<DefId> {
+        if id.kind != FRONT_STORAGE_KIND {
+            return None;
+        }
+        self.front.inputs.iter().find_map(|(address, input)| {
+            (Self::address(*address) == id.address.0).then_some(input.definition)
         })
     }
     // A composed recipe uses its parent's execution grant. Its retained
@@ -97,9 +100,7 @@ impl FrontStorageQueries {
 struct StorageFactory(Arc<FrontStorageQueries>);
 impl QueryFactory for StorageFactory {
     fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
-        if id.kind != FRONT_STORAGE_KIND || !self.0.inputs.contains_key(&id.address.0) {
-            return Err(self.0.errors.protocol);
-        }
+        let definition = self.0.definition(id).ok_or(self.0.errors.protocol)?;
         let terminal = self
             .0
             .completed
@@ -110,6 +111,7 @@ impl QueryFactory for StorageFactory {
         Ok(Box::new(StorageTask {
             owner: self.0.clone(),
             id,
+            definition,
             admitted: false,
             terminal,
         }))
@@ -118,6 +120,7 @@ impl QueryFactory for StorageFactory {
 struct StorageTask {
     owner: Arc<FrontStorageQueries>,
     id: QueryId,
+    definition: DefId,
     admitted: bool,
     terminal: Option<Result<ProductRef, Reference>>,
 }
@@ -152,10 +155,7 @@ impl QueryTask for StorageTask {
             *retention -= bound;
             self.admitted = true;
         }
-        let Some(path) = self.owner.inputs.get(&self.id.address.0) else {
-            return finish(Err(self.owner.errors.protocol));
-        };
-        let path = path.path();
+        let path = self.definition.path();
         let Some(front) = self.owner.front.query(path) else {
             return finish(Err(self.owner.errors.protocol));
         };
@@ -184,11 +184,7 @@ impl QueryTask for StorageTask {
 impl StorageTask {
     fn run(&self, product: ProductRef) -> Result<ProductRef, Reference> {
         let owner = &self.owner;
-        let path = owner
-            .inputs
-            .get(&self.id.address.0)
-            .ok_or(owner.errors.protocol)?
-            .path();
+        let path = self.definition.path();
         let body = owner
             .front
             .outcome(product.record)
@@ -301,16 +297,9 @@ impl QueryEngine {
         if inventory > allowance.bytes() {
             return Err(QueryError::NotImplemented);
         }
-        let mut inputs = BTreeMap::new();
-        for (address, input) in &front.inputs {
-            let address =
-                ContentHash::of_parts("hirsel.front.storage.address.v1", [address.0.as_slice()]);
-            inputs.insert(address, input.definition);
-        }
         let source = front.stage_source();
         Ok(Arc::new(FrontStorageQueries {
             front,
-            inputs,
             completed: Mutex::new(BTreeMap::new()),
             anchors: source.anchors,
             records: source.records,

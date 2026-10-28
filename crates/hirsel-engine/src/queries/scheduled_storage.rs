@@ -36,7 +36,7 @@ pub struct FrontStorageGraphOutput {
 pub struct FrontStorageGraphQueries {
     query: QueryId,
     definitions: Vec<DefId>,
-    instances: BTreeSet<DefId>,
+    instances: Box<[DefId]>,
     front: Arc<FrontBodyQueries>,
     growth: Arc<FrontGrowthQueries>,
     recipes: Arc<FrontStorageQueries>,
@@ -590,7 +590,8 @@ impl QueryEngine {
             .iter()
             .filter(|p| self.source_facts(p).is_some_and(|f| f.instance_bodied))
             .map(DefId::intern)
-            .collect();
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         let store = self
             .result_store
             .clone()
