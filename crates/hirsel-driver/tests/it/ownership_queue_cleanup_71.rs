@@ -99,6 +99,7 @@ fn receiver_close_retires_two_equal_queued_resources_on_four_engines() {
         r#"
 resource type Token {}
 drop(x) {}
+fn release[T](take value:T) {}
 pub fn main(rt:Io)->Result[(),GrantError] {
  let tasks=io.tasks(rt)?
  let (tx,rx):(Sender[Token],Receiver[Token])=channel.open(tasks)
@@ -124,6 +125,7 @@ fn receiver_close_preserves_the_remaining_fifo_item_after_a_resource_receive() {
         r#"
 resource type Token {}
 drop(x) {}
+fn release[T](take value:T) {}
 pub fn main(rt:Io)->Result[(),GrantError] {
  let tasks=io.tasks(rt)?
  let (tx,rx):(Sender[Token],Receiver[Token])=channel.open(tasks)
@@ -154,6 +156,7 @@ fn receiver_close_distinguishes_equal_resource_fields_at_the_same_physical_offse
         r#"
 resource type Token {}
 drop(x) {}
+fn release[T](take value:T) {}
 pub fn main(rt:Io)->Result[(),GrantError] {
  let tasks=io.tasks(rt)?
  let (tx,rx):(Sender[(Token,Token)],Receiver[(Token,Token)])=channel.open(tasks)
