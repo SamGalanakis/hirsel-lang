@@ -850,11 +850,7 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
             comptime: &Comptime,
             signature: &hirsel_types::Signature,
         ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
-            let output = self.0.lower(t, m, body, comptime, signature);
-            if let Ok(output) = &output {
-                eprintln!("[resident152-staged-probe] lower {}: {:#?}", signature.definition, output.value);
-            }
-            output
+            self.0.lower(t, m, body, comptime, signature)
         }
         fn lower_evaluation(
             &self,
@@ -874,14 +870,8 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
                     "staged demand fell back to caller evaluation"
                 );
             }
-            let output = self.0.lower_evaluation(t, m, body, staged, signature, expression, result, constants);
-            if let Ok(output) = &output {
-                eprintln!("[resident152-staged-probe] evaluation {} expression {:?}: {:#?}", signature.definition, expression, output);
-                for row in output.types.iter() {
-                    eprintln!("[resident152-staged-probe] type {:?}: {:?}", row, t.row(*row));
-                }
-            }
-            output
+            self.0
+                .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
         }
         fn entry_body(&self) -> hirsel_tir::BodyId {
             self.0.entry_body()

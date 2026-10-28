@@ -20,6 +20,7 @@ use hirsel_engine::{
 use hirsel_span::SourceMap;
 use hirsel_syntax::DefPath;
 use std::sync::{Arc, Mutex};
+mod staged;
 
 /// The checked-product receipt of the completed Check root: its captured
 /// headers, and the one grant its staged construction is admitted from.
@@ -1486,9 +1487,27 @@ pub(super) fn install(
     program
         .engine
         .admit_private_inference(loading.lend_runtime());
+    let staged = match staged::install(
+        &mut program,
+        &definitions,
+        registrations,
+        config.jobs,
+        plan.body,
+        plan.snapshots.front,
+        &mut loading,
+        budget,
+        final_limits,
+        store.as_ref(),
+    ) {
+        Ok((installed, limits)) => {
+            final_limits = limits;
+            installed
+        }
+        Err(error) => return Err(loading.failed(error)),
+    };
     // Registration changes the source namespace. Capture every final consumer
     // against the same accepted views, including Run and ownership catalogues.
-    if bootstrap.is_some() {
+    if bootstrap.is_some() || staged {
         footprint = match program.engine.front_input_footprint(&definitions) {
             Ok(footprint) => footprint,
             Err(error) => return Err(loading.failed(program.error(error))),
