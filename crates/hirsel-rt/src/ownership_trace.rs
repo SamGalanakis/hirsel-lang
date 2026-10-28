@@ -11,8 +11,9 @@ use std::sync::{
     Arc, Weak,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
+pub(crate) mod results;
 
-pub const ABI_VERSION: u32 = 101;
+pub const ABI_VERSION: u32 = 102;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 
@@ -95,7 +96,10 @@ impl Observer {
         let rows = Arc::try_unwrap(self.rows)
             .ok()
             .and_then(|rows| rows.into_rows().ok());
-        let complete = rows.is_some() && !self.failed.into_inner();
+        let complete = rows
+            .as_ref()
+            .is_some_and(|rows| !rows.contains(&Row::ObservationLost))
+            && !self.failed.into_inner();
         let rows = rows.unwrap_or_default();
         let log = Log {
             version: VERSION,
@@ -262,6 +266,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_event(
                 (*ctx)
                     .ownership_queue
                     .replace(QueueBinding { frame, marker })
+            }
+            .is_some()
+        {
+            observer.failed.store(true, Ordering::Relaxed);
+        }
+        if matches!(action, 9 | 10)
+            && unsafe {
+                (*ctx).ownership_result.replace(results::Binding {
+                    task: (*ctx).ownership_task,
+                    frame,
+                    marker,
+                })
             }
             .is_some()
         {

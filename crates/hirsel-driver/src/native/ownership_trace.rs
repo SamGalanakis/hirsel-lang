@@ -236,7 +236,14 @@ pub(crate) fn emit_relocated(
                 }))
             };
             let metadata = Box::new(Metadata {
-                task_result: None,
+                task_result: plan.task_result_binding(body, inputs.layouts, marker.id).map_err(failed)?
+                    .map(|binding| Ok::<_, NativeError>(hirsel_run_schema::ownership_trace::native::TaskResultBinding {
+                        direction: match binding.direction {
+                            hirsel_lir::ownership_trace::native::TaskResultDirection::Hold => hirsel_run_schema::ownership_trace::native::TaskResultDirection::Hold,
+                            hirsel_lir::ownership_trace::native::TaskResultDirection::Join => hirsel_run_schema::ownership_trace::native::TaskResultDirection::Join,
+                        },
+                        descriptor: registry.index(binding.layout).ok_or_else(|| failed("task result payload has no linked descriptor"))?,
+                    })).transpose()?,
                 action: marker.kind,
                 channel: plan
                     .channel_binding(body, inputs.layouts, marker.id)

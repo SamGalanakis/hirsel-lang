@@ -364,6 +364,9 @@ pub(super) fn runtime_call<S>(
     let channel = (selection == Selection::Resources)
         .then(|| channel_call(unit, layouts, call))
         .flatten();
+    let task_result = (selection == Selection::Resources)
+        .then(|| task_result_call(unit, layouts, call))
+        .flatten();
     if call.pretransfer_failure.is_some() || call.result.is_some_and(carried) {
         return Err(format!(
             "native ownership tracing: runtime result transport in {}",
@@ -403,6 +406,12 @@ pub(super) fn runtime_call<S>(
                 }
             }
             ArgumentValue::Value(value) => {
+                if task_result.is_some_and(|binding| binding.direction == TaskResultDirection::Hold)
+                    && argument.parameter == 1
+                    && argument.passing == hirsel_core_contract::Passing::Borrow
+                {
+                    continue;
+                }
                 if argument.passing == hirsel_core_contract::Passing::Borrow
                     && channel_none_argument(unit, layouts, call, argument.parameter, value)
                 {
@@ -436,6 +445,16 @@ pub(super) fn runtime_call<S>(
                 ) =>
             {
                 if channel.is_some_and(|call| call.address == address && argument.parameter == 1) {
+                    continue;
+                }
+                if task_result.is_some_and(|binding| {
+                    binding.address == address
+                        && argument.parameter
+                            == match binding.direction {
+                                TaskResultDirection::Hold => 0,
+                                TaskResultDirection::Join => 2,
+                            }
+                }) {
                     continue;
                 }
                 return Err(format!(

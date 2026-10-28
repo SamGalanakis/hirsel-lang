@@ -318,7 +318,8 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
             | Row::CleanupBegin { frame, .. }
             | Row::CleanupDrop { frame, .. }
             | Row::CleanupEnd { frame, .. } => *frame = 2,
-            Row::Task { .. }
+            Row::ObservationLost
+            | Row::Task { .. }
             | Row::TaskPart { .. }
             | Row::Operation { .. }
             | Row::Spawn { .. }

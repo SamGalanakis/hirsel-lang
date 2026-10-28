@@ -20,6 +20,8 @@ const MUTABLE_PARAMETER: u64 = (u32::MAX - 1) as u64;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Row {
+    /// The producer observed an unbound transport. Source execution continues.
+    ObservationLost,
     /// Runtime-owned canonical identity, published before this task can run.
     Task {
         task: u64,
@@ -626,6 +628,7 @@ fn decode(
     let mut results = results::Results::default();
     for &row in &log.rows {
         match row {
+            Row::ObservationLost => return Err(Error::Incomplete),
             Row::Task { task, depth } => {
                 let slot = task as u32;
                 let generation = task >> 32;
@@ -731,7 +734,10 @@ fn decode(
             | Row::QueueCleanupEnd { task, .. }
             | Row::QueueTransfer { task, .. }
             | Row::QueueCanceled { task, .. } => task,
-            Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
+            Row::ObservationLost
+            | Row::Task { .. }
+            | Row::TaskPart { .. }
+            | Row::Operation { .. } => unreachable!(),
         };
         let identity = tasks.get(&task).ok_or(Error::UnsupportedTask(task))?;
         if task != 0 && slots.get(&(task as u32)) != Some(&task) {
@@ -936,7 +942,8 @@ fn decode(
                 )?;
                 intent.commit(&mut tracker, queue, item, status, operation)?;
             }
-            Row::Task { .. }
+            Row::ObservationLost
+            | Row::Task { .. }
             | Row::TaskPart { .. }
             | Row::Operation { .. }
             | Row::Spawn { .. }

@@ -20,7 +20,9 @@ impl Selection {
             // An endpoint stores no inline Resource. Queue contents belong to
             // the runtime object, with separate committed transport checks.
             // This cannot authorize a Resource-bearing runtime argument.
-            if super::runtime_calls::channel_handle(layouts, layout) {
+            if super::runtime_calls::channel_handle(layouts, layout)
+                || super::task_result_payload(layouts, layout).is_some()
+            {
                 continue;
             }
             if record.finalizer.is_some()
@@ -53,6 +55,9 @@ fn remove_channel_obtains(layouts: &LayoutTable, steps: &mut [crate::layout_type
     use crate::layout_types::{HandleKind, ScanStep};
     for step in steps {
         match step {
+            ScanStep::Handle { kind: HandleKind::Task, ty: Some(schema), obtains, .. }
+                if super::task_result_payload(layouts, *schema).is_some_and(|payload| *obtains == Some(payload)) =>
+            { *obtains = None; }
             ScanStep::Handle { kind: HandleKind::Receiver, ty: Some(schema), obtains, .. }
                 if super::runtime_calls::channel_handle(layouts, *schema)
                     && layouts.layout(*schema).is_some_and(|record|

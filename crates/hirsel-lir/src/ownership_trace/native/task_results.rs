@@ -16,6 +16,42 @@ pub struct TaskResultCall {
     pub layout: LayoutId,
 }
 
+pub(super) fn alias<S>(
+    unit: &LirUnit<S>,
+    layouts: &LayoutTable,
+    observation: &Observation,
+) -> Option<TaskResultCall> {
+    (observation.marker.kind == Kind::Alias).then_some(())?;
+    alias_at(
+        unit,
+        layouts,
+        observation.point,
+        observation.marker.token,
+        observation.marker.owner,
+    )
+}
+pub(super) fn alias_at<S>(
+    unit: &LirUnit<S>,
+    layouts: &LayoutTable,
+    point: Point,
+    token: Location,
+    owner: Location,
+) -> Option<TaskResultCall> {
+    let Point::CallEntered(block) = point else {
+        return None;
+    };
+    let Terminator::Call { call, .. } = *unit.terminators.get(block.index())? else {
+        return None;
+    };
+    let binding = task_result_call(unit, layouts, unit.tables.calls.get(call.index())?)?;
+    let parameter = match binding.direction {
+        TaskResultDirection::Hold => 0,
+        TaskResultDirection::Join => 2,
+    };
+    (token == Location::Address(binding.address) && owner == Location::Parameter(parameter))
+        .then_some(binding)
+}
+
 /// Match the self-bound typed task word, not an aggregate containing a task.
 /// Its obtains edge describes runtime custody and supplies no Resource credit.
 pub fn task_result_payload(layouts: &LayoutTable, layout: LayoutId) -> Option<LayoutId> {

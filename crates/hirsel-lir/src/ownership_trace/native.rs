@@ -24,7 +24,7 @@ use runtime_calls::{resource_free_handle, runtime_call};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
-pub const ABI_VERSION: u32 = 101;
+pub const ABI_VERSION: u32 = 102;
 const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
 /// Incoming mutable parameter storage, resolved through an exact call relation.
 pub const MUTABLE_PARAMETER: u32 = u32::MAX - 1;
@@ -183,7 +183,8 @@ impl LeafPlan {
             });
             let channel_alias = kind == Kind::Alias
                 && selection == Selection::Resources
-                && runtime_calls::channel_alias_at(unit, layouts, point, from, to).is_some();
+                && (runtime_calls::channel_alias_at(unit, layouts, point, from, to).is_some()
+                    || task_results::alias_at(unit, layouts, point, from, to).is_some());
             if !leaf(layouts, layout)
                 && !resource_tree
                 && !carrier_move
@@ -241,6 +242,17 @@ impl LeafPlan {
                             Kind::Move => 1,
                             Kind::Drop if carrier_move => 4,
                             Kind::Drop => 2,
+                            Kind::Alias
+                                if task_results::alias(unit, layouts, &observation).is_some() =>
+                            {
+                                match task_results::alias(unit, layouts, &observation)
+                                    .unwrap()
+                                    .direction
+                                {
+                                    TaskResultDirection::Hold => 9,
+                                    TaskResultDirection::Join => 10,
+                                }
+                            }
                             Kind::Alias
                                 if runtime_calls::channel_alias(unit, layouts, &observation)
                                     .is_some() =>
@@ -662,6 +674,21 @@ impl LeafPlan {
                                 Location::Value(value),
                                 Location::Parameter(1),
                                 layout(value),
+                            )?;
+                        }
+                        if selection == Selection::Resources
+                            && let Some(binding) = task_result_call(unit, layouts, call)
+                            && selection.tracks_layout(layouts, binding.layout)
+                        {
+                            push(
+                                Point::CallEntered(b),
+                                Kind::Alias,
+                                Location::Address(binding.address),
+                                Location::Parameter(match binding.direction {
+                                    TaskResultDirection::Hold => 0,
+                                    TaskResultDirection::Join => 2,
+                                }),
+                                binding.layout,
                             )?;
                         }
                         continue;
@@ -1156,6 +1183,15 @@ impl LeafPlan {
                         4
                     }
                     Kind::Drop => 2,
+                    Kind::Alias if task_results::alias(body, layouts, observation).is_some() => {
+                        match task_results::alias(body, layouts, observation)
+                            .unwrap()
+                            .direction
+                        {
+                            TaskResultDirection::Hold => 9,
+                            TaskResultDirection::Join => 10,
+                        }
+                    }
                     Kind::Alias
                         if runtime_calls::channel_alias(body, layouts, observation).is_some() =>
                     {
@@ -1879,8 +1915,43 @@ impl LeafPlan {
                 .iter()
                 .find(|(_, marker)| marker.id == id)
                 .is_some_and(|(_, marker)| {
-                    matches!(marker.kind, 1 | 8) && variants::may_be_empty(layouts, marker.layout)
+                    matches!(marker.kind, 1 | 8 | 9 | 10)
+                        && variants::may_be_empty(layouts, marker.layout)
                 })
+    }
+
+    pub fn task_result_binding(
+        &self,
+        unit: &LirUnit<Ready>,
+        layouts: &LayoutTable,
+        id: MarkerId,
+    ) -> Result<Option<TaskResultCall>, String> {
+        let (_, marker) = self
+            .commits
+            .iter()
+            .find(|(_, marker)| marker.id == id)
+            .ok_or("task result marker has no committed operation")?;
+        if !matches!(marker.kind, 9 | 10) {
+            return Ok(None);
+        }
+        let observation = self
+            .plan
+            .observations
+            .iter()
+            .find(|observation| observation.marker.id == id)
+            .ok_or("task result marker lost its checked alias")?;
+        let binding = task_results::alias(unit, layouts, observation)
+            .ok_or("task result marker has no exact checked intrinsic payload")?;
+        if binding.layout != marker.layout
+            || marker.kind
+                != match binding.direction {
+                    TaskResultDirection::Hold => 9,
+                    TaskResultDirection::Join => 10,
+                }
+        {
+            return Err("task result payload layout or direction differs".into());
+        }
+        Ok(Some(binding))
     }
 
     pub fn channel_binding(

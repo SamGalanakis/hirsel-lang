@@ -639,5 +639,13 @@
     "target": "//:hirsel-cli-test-cpu_pool_16",
     "standalone": true,
     "cpu_overlap": "ordered-16"
+  },
+  "ownership_task_result_71::awaiting_distinct_children_preserves_two_equal_resource_results_on_four_engines": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_result_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }

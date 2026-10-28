@@ -231,6 +231,8 @@ pub struct TaskCtx {
     #[cfg(feature = "ownership-trace")]
     pub(crate) ownership_queue: Option<crate::ownership_trace::QueueBinding>,
     #[cfg(feature = "ownership-trace")]
+    pub(crate) ownership_result: Option<crate::ownership_trace::results::Binding>,
+    #[cfg(feature = "ownership-trace")]
     pub(crate) ownership_queue_cleanup: *mut crate::ownership_trace::QueueCleanupScope,
 }
 
@@ -560,6 +562,8 @@ impl TaskCtx {
             ownership_spawn: None,
             #[cfg(feature = "ownership-trace")]
             ownership_queue: None,
+            #[cfg(feature = "ownership-trace")]
+            ownership_result: None,
             #[cfg(feature = "ownership-trace")]
             ownership_queue_cleanup: std::ptr::null_mut(),
             invocation_sites,

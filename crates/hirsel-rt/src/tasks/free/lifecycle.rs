@@ -198,7 +198,14 @@ pub(crate) unsafe fn join(
             });
             unsafe {
                 deliver(held, slot, size);
-                role::with_held(ctx, |s| cpu_job_event(s.task(child), "transfer"));
+                role::with_held(ctx, |s| {
+                    #[cfg(feature = "ownership-trace")]
+                    {
+                        let parent = s.current;
+                        ownership_result_transferred(s, parent, child);
+                    }
+                    cpu_job_event(s.task(child), "transfer");
+                });
                 hand_off(&mut *ctx, child);
             }
         }

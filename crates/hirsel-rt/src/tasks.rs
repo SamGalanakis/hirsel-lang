@@ -175,6 +175,12 @@ struct Task {
     generation: u32,
     #[cfg(feature = "ownership-trace")]
     ownership_queue: Option<crate::ownership_trace::QueueBinding>,
+    #[cfg(feature = "ownership-trace")]
+    ownership_held_result: Option<crate::ownership_trace::results::Held>,
+    #[cfg(feature = "ownership-trace")]
+    ownership_join_result: Option<crate::ownership_trace::results::Join>,
+    #[cfg(feature = "ownership-trace")]
+    ownership_inline_parent: Option<u32>,
     /// Stable control block, created at the first lease. Holders keep the
     /// slot from reuse; they never reach this row or its context.
     control: Option<registry::TaskLease>,
@@ -999,6 +1005,12 @@ impl Task {
         Task {
             #[cfg(feature = "ownership-trace")]
             ownership_queue: None,
+            #[cfg(feature = "ownership-trace")]
+            ownership_held_result: None,
+            #[cfg(feature = "ownership-trace")]
+            ownership_join_result: None,
+            #[cfg(feature = "ownership-trace")]
+            ownership_inline_parent: None,
             generation,
             control: None,
             cancel_subs: Vec::new(),
@@ -2378,6 +2390,8 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
                         let held = s.task(child).slot.take().unwrap();
                         // SAFETY: the child is in its finish and the awaiter parked, both slots live.
                         deliver(held, slot, size);
+                        #[cfg(feature = "ownership-trace")]
+                        ownership_result_transferred(s, task, child);
                         cpu_job_event(s.task(child), "transfer");
                         true
                     }
@@ -3584,6 +3598,124 @@ unsafe fn spawn_child(
     (index, generation, child)
 }
 
+#[cfg(feature = "ownership-trace")]
+unsafe fn ownership_result_hold(ctx: *mut TaskCtx, descriptor: u32) {
+    // SAFETY: the semantic entry already holds this task's role.
+    if let Some(held) = unsafe { crate::ownership_trace::results::held(ctx, descriptor) } {
+        unsafe {
+            role::with_held(ctx, |s| {
+                let me = s.current;
+                if let Some(previous) = s.task(me).ownership_held_result.replace(held) {
+                    previous.record.lost();
+                }
+            })
+        };
+    }
+}
+#[cfg(feature = "ownership-trace")]
+unsafe fn ownership_result_join(ctx: *mut TaskCtx, child: u64) {
+    // SAFETY: the semantic entry already holds this task's role.
+    if let Some(join) = unsafe { crate::ownership_trace::results::join(ctx, child) } {
+        unsafe {
+            role::with_held(ctx, |s| {
+                let me = s.current;
+                if let Some(previous) = s.task(me).ownership_join_result.replace(join) {
+                    previous.record.lost();
+                }
+            })
+        };
+    }
+}
+#[cfg(feature = "ownership-trace")]
+fn ownership_result_transferred(s: &mut Scheduler, parent: u32, child: u32) {
+    use crate::ownership_trace::results::Binding;
+    use hirsel_run_schema::ownership_trace::native::Row;
+    let source = s.task(child).ownership_held_result.take();
+    let recipient = s.task(parent).ownership_join_result.take();
+    match (source, recipient) {
+        (Some(source), Some(recipient)) => {
+            let Binding {
+                task,
+                frame,
+                marker,
+            } = recipient.record.binding;
+            let from = source.record.binding;
+            if recipient.child != from.task {
+                source.record.lost();
+                return;
+            }
+            source.record.write(Row::TaskResultMoved {
+                task,
+                frame,
+                marker,
+                child: from.task,
+                source_frame: from.frame,
+                source_marker: from.marker,
+                layout: source.layout,
+            });
+        }
+        (Some(source), None) => source.record.lost(),
+        (None, Some(recipient)) => recipient.record.lost(),
+        (None, None) => (),
+    }
+}
+#[cfg(feature = "ownership-trace")]
+unsafe fn ownership_result_finish_returned(ctx: *mut TaskCtx, status: u8) {
+    use crate::ownership_trace::results::Binding;
+    use hirsel_run_schema::ownership_trace::native::Row;
+    if status == crate::STATUS_SUSPENDED {
+        return;
+    }
+    // SAFETY: the ordinary finish returned on its own task; no parked ctx is sampled.
+    let held = unsafe {
+        role::with_held(ctx, |s| {
+            let me = s.current;
+            s.task(me).ownership_held_result.take()
+        })
+    };
+    if let Some(held) = held {
+        let Binding {
+            task,
+            frame,
+            marker,
+        } = held.record.binding;
+        held.record.write(Row::TaskResultDiscarded {
+            task,
+            frame,
+            marker,
+        });
+    }
+}
+#[cfg(feature = "ownership-trace")]
+unsafe fn ownership_result_join_returned(ctx: *mut TaskCtx, status: u8) {
+    use crate::ownership_trace::results::Binding;
+    use hirsel_run_schema::ownership_trace::native::Row;
+    if status == crate::STATUS_SUSPENDED {
+        return;
+    }
+    // SAFETY: the ordinary join returned on its own task under its existing role.
+    let join = unsafe {
+        role::with_held(ctx, |s| {
+            let me = s.current;
+            s.task(me).ownership_join_result.take()
+        })
+    };
+    if let Some(join) = join {
+        let Binding {
+            task,
+            frame,
+            marker,
+        } = join.record.binding;
+        join.record.write(Row::TaskResultUnavailable {
+            task,
+            frame,
+            marker,
+            child: join.child,
+            status: u32::from(status),
+        });
+    }
+}
+
 /// `$intrinsic.TaskFinish[R](mut slot, none, size)`: the running child computed `Some(r)` in
 /// `slot`. A detached child keeps it, to drop; otherwise the child holds it, stopped in this
 /// call, until a join's poll takes it (leaving `none`) and a join or a discard resumes it.
@@ -3604,16 +3736,31 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_finish");
+    #[cfg(feature = "ownership-trace")]
+    unsafe {
+        ownership_result_hold(ctx, descriptor)
+    };
     if ordered::engine::on(ctx) {
-        return unsafe {
+        let status = unsafe {
             crate::stop::check(
                 ctx,
                 ordered::lifecycle::finish(ctx, slot, none, size, descriptor),
             )
         };
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            ownership_result_finish_returned(ctx, status)
+        };
+        return status;
     }
     if free::enabled(ctx) {
-        return unsafe { crate::stop::check(ctx, free::lifecycle::finish(ctx, slot, none, size)) };
+        let status =
+            unsafe { crate::stop::check(ctx, free::lifecycle::finish(ctx, slot, none, size)) };
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            ownership_result_finish_returned(ctx, status)
+        };
+        return status;
     }
     // SAFETY: caller contract.
     let (held, image) = unsafe { Slot::held(slot, none, size) };
@@ -3631,6 +3778,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
         row.ended = true;
         Some((current, row.path.clone()))
     }) else {
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            ownership_result_finish_returned(ctx, STATUS_OK)
+        };
         return STATUS_OK;
     };
     crate::free::end(ctx, &path);
@@ -3647,6 +3798,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     // SAFETY: the context is live; a join or a discard hands control back here.
     unsafe { crate::stop::check(ctx, run_next(&mut *ctx)) };
     crate::free::resume_rest(ctx);
+    #[cfg(feature = "ownership-trace")]
+    unsafe {
+        ownership_result_finish_returned(ctx, STATUS_OK)
+    };
     STATUS_OK
 }
 
@@ -3671,27 +3826,46 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_join");
+    #[cfg(feature = "ownership-trace")]
+    unsafe {
+        ownership_result_join(ctx, task.read())
+    };
     if ordered::engine::on(ctx) {
-        return unsafe {
+        let status = unsafe {
             crate::stop::check(
                 ctx,
                 ordered::lifecycle::join(ctx, scope, task, slot, size, caller_site),
             )
         };
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            ownership_result_join_returned(ctx, status)
+        };
+        return status;
     }
     if free::enabled(ctx) {
-        return unsafe {
+        let status = unsafe {
             crate::stop::check(
                 ctx,
                 free::lifecycle::join(ctx, scope.read(), task.read(), slot, size, caller_site),
             )
         };
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            ownership_result_join_returned(ctx, status)
+        };
+        return status;
     }
     // SAFETY: caller contract.
     let (scope, child) = unsafe { child_handle(ctx, scope.read(), task.read()) };
     crate::free::enter_call(ctx);
     // SAFETY: caller contract.
-    unsafe { join(&mut *ctx, scope, child, slot, size, caller_site) }
+    let status = unsafe { join(&mut *ctx, scope, child, slot, size, caller_site) };
+    #[cfg(feature = "ownership-trace")]
+    unsafe {
+        ownership_result_join_returned(ctx, status)
+    };
+    status
 }
 
 /// Join `child` of `scope`, as [`hirsel_rt_v2_task_join`] does.
@@ -3716,7 +3890,14 @@ unsafe fn join(
             // SAFETY: the child is stopped in its finish, its slot live.
             unsafe {
                 deliver(held, slot, size);
-                role::with_held(ctx, |s| cpu_job_event(s.task(child), "transfer"));
+                role::with_held(ctx, |s| {
+                    #[cfg(feature = "ownership-trace")]
+                    {
+                        let parent = s.current;
+                        ownership_result_transferred(s, parent, child);
+                    }
+                    cpu_job_event(s.task(child), "transfer");
+                });
                 hand_off(ctx, child);
                 crate::free::done(ctx);
                 yield_now(ctx);

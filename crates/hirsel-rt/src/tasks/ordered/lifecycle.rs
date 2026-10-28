@@ -545,6 +545,8 @@ pub(super) unsafe fn call_start(ctx: *mut TaskCtx, child: u32, call: Call) -> St
                     let held = s.task(child).slot.take().expect("a holding result");
                     // SAFETY: the child is saved and this callback owns the caller.
                     unsafe { deliver(held, slot, size) };
+                    #[cfg(feature = "ownership-trace")]
+                    ownership_result_transferred(s, me, child);
                     cpu_job_event(s.task(child), "transfer");
                 }
                 ResultAction::Discard => {

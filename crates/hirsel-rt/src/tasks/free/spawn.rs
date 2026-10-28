@@ -70,6 +70,10 @@ pub(super) unsafe fn run(
             }
             let row = s.task(child);
             row.inline_result = result;
+            #[cfg(feature = "ownership-trace")]
+            {
+                row.ownership_inline_parent = Some(parent);
+            }
             row.inline_running = true;
             row.dispatch = frame;
             let (code, environment, site) = row.code.take().expect("an unstarted fast child");
@@ -107,6 +111,10 @@ pub(super) unsafe fn run(
         let row = s.task(child);
         row.finishing = false;
         row.inline_running = false;
+        #[cfg(feature = "ownership-trace")]
+        {
+            row.ownership_inline_parent = None;
+        }
         row.state = State::Done;
         row.dispatch = None;
     });
@@ -155,12 +163,23 @@ pub(super) unsafe fn finish(
             s.order(me);
         })
     })?;
+    #[cfg(feature = "ownership-trace")]
+    let mut delivered_parent = None;
     unsafe {
         role::with_held(ctx, |s| {
             let row = s.task(me);
             if let Some((out, expected)) = row.inline_result.take() {
                 assert_eq!(expected, size);
                 std::ptr::copy_nonoverlapping(slot, out, size as usize);
+                #[cfg(feature = "ownership-trace")]
+                {
+                    delivered_parent = row.ownership_inline_parent;
+                    if delivered_parent.is_none()
+                        && let Some(held) = &row.ownership_held_result
+                    {
+                        held.record.lost();
+                    }
+                }
             } else {
                 // Only the OP_FREE proof permits this branch: no result finalizer
                 // or root is lost when a scope discards the raw image.
@@ -168,11 +187,19 @@ pub(super) unsafe fn finish(
                 let mut image = vec![0u128; size.div_ceil(16)];
                 std::ptr::copy_nonoverlapping(slot, image.as_mut_ptr().cast(), size);
                 row.inline_value = Some((image, size));
+                #[cfg(feature = "ownership-trace")]
+                if let Some(held) = &row.ownership_held_result {
+                    held.record.lost();
+                }
             }
             cpu_job_event(row, "transfer");
         })
     };
     unsafe { std::ptr::copy_nonoverlapping(none, slot, size as usize) };
+    #[cfg(feature = "ownership-trace")]
+    if let Some(parent) = delivered_parent {
+        unsafe { role::with_held(ctx, |s| ownership_result_transferred(s, parent, me)) };
+    }
     Ok(true)
 }
 
