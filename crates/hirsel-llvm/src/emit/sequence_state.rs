@@ -66,7 +66,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     pub(super) fn root_call(&self, call: &CallSite) -> bool {
         if let Callee::Direct(symbol) = call.callee {
             let symbol = &self.unit.tables.symbols[symbol.index()];
-            let name = symbol_name(&symbol.definition, symbol.instance.as_ref());
+            let name = if self.inputs.alternate
+                && symbol.instance.is_some_and(|id| {
+                    self.inputs
+                        .ahead
+                        .is_some_and(|plan| plan.has_private_edge(self.unit.header.instance, id))
+                }) {
+                hirsel_lir::ahead::alternate_name(&symbol.definition, symbol.instance.unwrap())
+            } else {
+                symbol_name(&symbol.definition, symbol.instance.as_ref())
+            };
             self.manifested
                 .library
                 .contains(&format!("{name}{ROOTS_SUFFIX}"))

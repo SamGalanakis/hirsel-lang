@@ -653,7 +653,16 @@ fn lower<T>(
                 return Err(CodegenError::DuplicateSymbol { name });
             }
             let external = Signature::of(&module, inputs.layouts, abi, &unit.header.definition)?;
-            let signature = if !inputs.alternate && unit.header.origin == UnitOrigin::Library {
+            // These checked sequence bodies inline into both their adapter and
+            // callers. Keep the ordinary root companions on that private path
+            // too, so length and uniqueness survive each loop iteration.
+            let private_roots = inputs.alternate
+                && (unit.header.definition.is_core("list.push")
+                    || unit.header.definition.is_core("list.reserve")
+                    || unit.header.definition.is_core("$native.list_push_spare"));
+            let signature = if unit.header.origin == UnitOrigin::Library
+                && (!inputs.alternate || private_roots)
+            {
                 Signature::of(&module, inputs.layouts, abi, &unit.header.definition)?
                     .with_roots(&module, inputs.layouts)
             } else {
@@ -676,9 +685,7 @@ fn lower<T>(
                 // These helpers have the same checked storage handoffs as
                 // their caller. Inlining preserves every save boundary and
                 // lets the mapper keep its sequence fields in registers.
-                let attribute = if unit.header.definition.is_core("list.push")
-                    || unit.header.definition.is_core("$native.list_push_spare")
-                {
+                let attribute = if private_roots {
                     Attribute::AlwaysInline
                 } else {
                     Attribute::NoInline
@@ -707,6 +714,11 @@ fn lower<T>(
                     &external,
                     inputs.layouts,
                 );
+                if inputs.alternate {
+                    module.add_attribute(entry, AttributeSlot::Function, Attribute::NoRedZone);
+                    module.string_attribute(entry, "disable-tail-calls", "true");
+                    module.string_attribute(entry, "frame-pointer", "all");
+                }
                 if copy {
                     module.make_available_externally(entry);
                     optimizer_only.insert(name.clone());

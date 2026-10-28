@@ -383,6 +383,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         } else {
             None
         };
+        // The idle growth/copy implementation reads the canonical count word.
+        // Root companions may have deferred it since the preceding push.
+        self.flush_lengths(true)?;
         let environment = self.builder.load(
             self.module.ptr_type(),
             self.builder.offset(

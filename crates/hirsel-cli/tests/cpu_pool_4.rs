@@ -164,3 +164,11 @@ fn ordered_empty_list_mapper_agrees_across_four_engines_and_replay() {
 fn ordered_copied_list_mapper_agrees_across_four_engines_and_replay() {
     cpu_fixture_copied_list_four_engine_agreement(4);
 }
+
+#[test]
+fn ordered_deferred_list_growth_and_copy_agree_across_four_engines_and_replay() {
+    cpu_fixture_allocating_four_engine_mapper(
+        4,
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut out = [job]; list.reserve(mut out, 8u64); for i in 0u64..255u64 { list.push(mut out, i) }; list.push(mut out, job + 7u64); list.reserve(mut out, 512u64); let copied = copy out; [copied[0], copied[list.len(copied) - 1u64]] }",
+    );
+}
