@@ -1752,6 +1752,41 @@ impl Checker<'_> {
         let result = declared_receipt_evidence(self.t, result).expect("declared call result");
         let result = self.mut_content_placement(result, &f, &ordered);
         let result = self.renew_result_brands(declared_result, result);
+        let result = if let (Some(path), Some(expected)) = (&definition, expected)
+            && hirsel_types::unique_summary::same_module(path, self.signature.definition.path())
+            && let Some(signature) = self.read(DefId::intern(path))
+        {
+            // Materialize only the private payload facts this receiving value
+            // requires. Unconstrained generic inference keeps its written row.
+            let required = hirsel_types::unique_summary::result_rows(
+                self.t,
+                expected,
+                &signature.metadata.roles,
+                &mut |id| self.read(id),
+            );
+            let facts: Vec<_> = signature
+                .metadata
+                .inferred_unique
+                .results
+                .iter()
+                .copied()
+                .filter(|fact| {
+                    !matches!(fact, hirsel_types::UniqueResultRow::Root)
+                        && required.iter().any(|(row, ty)| {
+                            row == fact && self.t.row(*ty).modes.uniqueness == Uniqueness::Unique
+                        })
+                })
+                .collect();
+            hirsel_types::unique_summary::result_evidence(
+                self.t,
+                result,
+                &facts,
+                &signature.metadata.roles,
+                &mut |id| self.read(id),
+            )
+        } else {
+            result
+        };
         self.set_ty(e, result);
         if obligation_valid && task_obligation(self.t, result) {
             self.pending_tasks.insert(e, span);
