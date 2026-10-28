@@ -3,7 +3,11 @@ use hirsel_engine::{runtime::*, store::ResultStore, *};
 use native::queries::{
     ARENA_CANDIDATES_KIND, ARENA_CHOSEN_KIND, INSTANCE_KIND,
     arena_tasks::{ARENA_GRAPH_KIND, ArenaTaskFactory, ArenaTasks},
-    instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks},
+    instance::CALLABLE_VALUE_KIND,
+    instance_tasks::{
+        CALLABLE_GRAPH_KIND, DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory,
+        InstanceTasks,
+    },
     source_inputs::NativeSourceProvider,
 };
 use std::{
@@ -108,7 +112,13 @@ fn observe(store: Arc<dyn ResultStore>, text: &str, fresh: bool, jobs: usize) ->
         Arc::new(InstanceTaskFactory::new(tasks.clone())),
         trace.clone(),
     ));
-    for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
+    for kind in [
+        INSTANCE_KIND,
+        INSTANCE_INPUT_KIND,
+        DISCOVERY_KIND,
+        CALLABLE_GRAPH_KIND,
+        CALLABLE_VALUE_KIND,
+    ] {
         runtime.register(kind, factory.clone()).unwrap();
     }
     let arenas = ArenaTasks::new(
