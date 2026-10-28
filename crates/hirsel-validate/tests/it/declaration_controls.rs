@@ -18,7 +18,7 @@ fn declaration(
             },
             ..Default::default()
         },
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             generics: vec![],
@@ -39,7 +39,7 @@ fn declaration(
             fact: None,
             captures: None,
             destructor_allocation: Allocation::NoAlloc,
-        }),
+        })),
         fingerprint: ContentHash::default(),
     }
 }

@@ -738,7 +738,7 @@ pub struct SerializableCheck {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum SignatureKind {
     Function(FunctionType),
-    Type(TypeDefinition),
+    Type(Box<TypeDefinition>),
     Const {
         ty: TypeId,
         generics: SharedSlice<GenericParameter>,
@@ -1286,11 +1286,6 @@ pub struct CheckedBody {
     pub expressions: Vec<Elaboration>,
     pub instantiations: Vec<Instantiation>,
     pub closures: Vec<ClosureInfo>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }
 
 /// Query failures distinguish unavailable implementation from language diagnostics (LANG-6).

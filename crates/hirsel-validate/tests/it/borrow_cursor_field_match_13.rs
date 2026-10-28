@@ -46,7 +46,7 @@ fn field_match(foreign: bool) -> Fixture {
         .into(),
     )));
     let mut signature = function_signature("Tree", vec![], TypeKind::Tuple(vec![].into()));
-    signature.kind = SignatureKind::Type(TypeDefinition {
+    signature.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         generics: vec![],
@@ -64,7 +64,7 @@ fn field_match(foreign: bool) -> Fixture {
         fact: None,
         captures: None,
         destructor_allocation: Allocation::NoAlloc,
-    });
+    }));
     f.signatures.insert(id("Tree"), signature);
     let source = f.slot(TypeKind::Box(tree), Storage::Parameter);
     let cursor = f.slot(TypeKind::Box(tree), Storage::Temporary);

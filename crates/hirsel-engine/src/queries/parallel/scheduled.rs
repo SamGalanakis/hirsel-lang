@@ -425,6 +425,13 @@ impl FrontBodyQueries {
         }
     }
     pub(crate) fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
+        self.observe_in(&owner.0.package, read)
+    }
+    fn observe_in(
+        &self,
+        package: &hirsel_syntax::PackageId,
+        read: &ReadKey,
+    ) -> Option<ContentHash> {
         use crate::memo::LookupSource;
         Some(match *read {
             ReadKey::PrivateSummary(id) => memos::private_summary_value(
@@ -521,21 +528,16 @@ impl FrontBodyQueries {
             ReadKey::Environment => self.environment,
             ReadKey::ValidationView(id) => self
                 .snapshot
-                .validation(&owner.0.package)
+                .validation(package)
                 .view(id)
                 .map_or_else(ContentHash::default, |input| input.digest().0),
             ReadKey::ValidationUniverse(package) => {
                 self.snapshot.validation_input_digest(&package.id())
             }
-            ReadKey::UniverseErrors => {
-                self.snapshot
-                    .validation(&owner.0.package)
-                    .universe_errors()
-                    .0
-            }
+            ReadKey::UniverseErrors => self.snapshot.validation(package).universe_errors().0,
             ReadKey::FirstHeap => self
                 .snapshot
-                .validation(&owner.0.package)
+                .validation(package)
                 .first_heap()
                 .map_or_else(ContentHash::default, |(id, _)| id.path().fingerprint()),
             // A front product must not execute a dependency to decide a hit.

@@ -30,12 +30,12 @@ pub(super) fn signatures(types: &Arc<TypeInterner>) -> Vec<Signature> {
     };
     let mut out = vec![b.signature(
         "$intrinsic.Cursor",
-        SignatureKind::Type(cursor.clone()),
+        SignatureKind::Type(Box::new(cursor.clone())),
         true,
     )];
     out.push(Builder::new(types, "T").signature(
         "$intrinsic.ViewCursor",
-        SignatureKind::Type(cursor),
+        SignatureKind::Type(Box::new(cursor)),
         true,
     ));
     for (protocol, generics, source, item) in [
@@ -122,7 +122,11 @@ pub(super) fn signatures(types: &Arc<TypeInterner>) -> Vec<Signature> {
         captures: None,
         destructor_allocation: Allocation::NoAlloc,
     };
-    out.push(b.signature("$intrinsic.OwnedCursor", SignatureKind::Type(owner), true));
+    out.push(b.signature(
+        "$intrinsic.OwnedCursor",
+        SignatureKind::Type(Box::new(owner)),
+        true,
+    ));
     for (protocol, generics, source) in [
         ("ArrayConsume", "T", "Array[T]"),
         ("ListConsume", "T", "List[T]"),
@@ -198,7 +202,7 @@ pub(super) fn signatures(types: &Arc<TypeInterner>) -> Vec<Signature> {
             captures: None,
             destructor_allocation: Allocation::NoAlloc,
         };
-        out.push(b.signature(cursor, SignatureKind::Type(owner), true));
+        out.push(b.signature(cursor, SignatureKind::Type(Box::new(owner)), true));
         for (suffix, parameters, result) in [
             ("len", format!("source: {source}"), "u64".to_owned()),
             (

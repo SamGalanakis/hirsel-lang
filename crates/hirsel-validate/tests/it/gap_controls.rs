@@ -340,7 +340,7 @@ fn finalizer(order: &[u32]) -> Fixture {
         unreachable!()
     };
     let unit = fun.result;
-    signature.kind = SignatureKind::Type(TypeDefinition {
+    signature.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         destructor_allocation: Allocation::NoAlloc,
@@ -363,7 +363,7 @@ fn finalizer(order: &[u32]) -> Fixture {
         drop: Some(path("main")),
         fact: None,
         captures: None,
-    });
+    }));
     f.signatures.insert(id("main"), signature);
     f
 }

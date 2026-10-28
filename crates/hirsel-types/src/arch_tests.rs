@@ -626,7 +626,7 @@ fn instantiation_never_reuses_a_result_across_signature_or_private_shape_edits()
     let view = |representation| {
         let mut declaration = declaration.clone();
         declaration.representation = Some(representation);
-        encoding::owner_view(&public, declaration)
+        encoding::owner_view(&public, *declaration)
     };
     let (old, new) = (view(parameter), view(pair));
     assert_eq!(old.fingerprint, new.fingerprint);

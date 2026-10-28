@@ -386,7 +386,7 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
             definition: id("Grow"),
             metadata: SignatureMetadata::default(),
             fingerprint: ContentHash::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![GenericParameter::Type {
@@ -407,7 +407,7 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
                 fact: None,
                 captures: None,
                 destructor_allocation: Allocation::NoAlloc,
-            }),
+            })),
         },
     );
     let scalar = f
@@ -485,7 +485,7 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
                         definition,
                         metadata: SignatureMetadata::default(),
                         fingerprint: ContentHash::default(),
-                        kind: SignatureKind::Type(TypeDefinition {
+                        kind: SignatureKind::Type(Box::new(TypeDefinition {
                             loop_source: None,
                             format: None,
                             generics: vec![],
@@ -503,7 +503,7 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
                             fact: None,
                             captures: None,
                             destructor_allocation: Allocation::NoAlloc,
-                        }),
+                        })),
                     },
                 );
                 root = f.definition.types.push(ty(TypeKind::Named {

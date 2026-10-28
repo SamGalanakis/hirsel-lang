@@ -451,7 +451,7 @@ fn creation_relay(hidden: bool) -> Fixture {
         Signature {
             definition: id("Relay"),
             metadata: Default::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![GenericParameter::Type {
@@ -477,7 +477,7 @@ fn creation_relay(hidden: bool) -> Fixture {
                 fact: None,
                 captures: None,
                 destructor_allocation: Allocation::NoAlloc,
-            }),
+            })),
             fingerprint: ContentHash::default(),
         },
     );

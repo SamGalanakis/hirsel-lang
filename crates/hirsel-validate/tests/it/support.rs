@@ -457,7 +457,7 @@ pub(crate) fn arena_slot(f: &mut Fixture, storage: Storage) -> u32 {
     };
     let mut arena = function_signature("Arena", vec![], TypeKind::Tuple(vec![].into()));
     arena.metadata.roles = roles.into();
-    arena.kind = SignatureKind::Type(TypeDefinition {
+    arena.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         generics: vec![],
@@ -475,7 +475,7 @@ pub(crate) fn arena_slot(f: &mut Fixture, storage: Storage) -> u32 {
         fact: None,
         captures: None,
         destructor_allocation: Allocation::NoAlloc,
-    });
+    }));
     f.signatures.insert(id("Arena"), arena);
     f.slot(
         TypeKind::Named {
@@ -520,7 +520,7 @@ pub(crate) fn owner_sig(f: &mut Fixture, passing: &[PassingMode]) {
 
 pub(crate) fn capability_signature(name: &str) -> Signature {
     let mut s = function_signature(name, vec![], TypeKind::Tuple(vec![].into()));
-    s.kind = SignatureKind::Type(TypeDefinition {
+    s.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         destructor_allocation: Allocation::NoAlloc,
@@ -538,7 +538,7 @@ pub(crate) fn capability_signature(name: &str) -> Signature {
         drop: None,
         fact: None,
         captures: None,
-    });
+    }));
     s
 }
 

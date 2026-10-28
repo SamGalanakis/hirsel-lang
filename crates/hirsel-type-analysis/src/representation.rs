@@ -261,7 +261,7 @@ mod tests {
             definition: DefId::intern(&path("Wrap")),
             metadata: SignatureMetadata::default(),
             fingerprint: ContentHash::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![],
@@ -284,7 +284,7 @@ mod tests {
                 fact: None,
                 captures: None,
                 destructor_allocation: Allocation::NoAlloc,
-            }),
+            })),
         })
     }
     fn with_unknown_authorities(

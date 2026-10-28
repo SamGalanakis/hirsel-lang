@@ -45,7 +45,7 @@ fn nominal(f: &mut Fixture, name: &str, arity: usize, representation: Option<Typ
     declaration(
         f,
         core(name),
-        SignatureKind::Type(TypeDefinition {
+        SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             generics: (0..arity)
@@ -72,7 +72,7 @@ fn nominal(f: &mut Fixture, name: &str, arity: usize, representation: Option<Typ
             drop: None,
             fact: None,
             captures: None,
-        }),
+        })),
     );
 }
 fn operation(

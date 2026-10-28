@@ -1028,7 +1028,7 @@ mod tests {
         let types = TypeInterner::new(None);
         let mut public = (*constant(&types, "Opaque", hirsel_types::Primitive::U64)).clone();
         public.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
-        public.kind = SignatureKind::Type(TypeDefinition {
+        public.kind = SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             destructor_allocation: Allocation::NoAlloc,
@@ -1046,7 +1046,7 @@ mod tests {
             drop: None,
             fact: None,
             captures: None,
-        });
+        }));
         let mut private = public.clone();
         let SignatureKind::Type(declaration) = &mut private.kind else {
             unreachable!()

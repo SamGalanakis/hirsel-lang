@@ -328,7 +328,7 @@ impl Fixture {
                 definition,
                 metadata: SignatureMetadata::default(),
                 fingerprint: ContentHash([3; 32]),
-                kind: SignatureKind::Type(TypeDefinition {
+                kind: SignatureKind::Type(Box::new(TypeDefinition {
                     loop_source: None,
                     format: None,
                     generics: vec![],
@@ -346,7 +346,7 @@ impl Fixture {
                     fact: None,
                     captures: None,
                     destructor_allocation: Allocation::NoAlloc,
-                }),
+                })),
             }),
         );
         self.ty(TypeKind::Named {

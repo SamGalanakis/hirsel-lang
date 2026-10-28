@@ -106,7 +106,7 @@ fn type_signature(
             ..Default::default()
         },
         fingerprint: ast::ContentHash::of_bytes(name.as_bytes()),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             generics: vec![],
@@ -124,7 +124,7 @@ fn type_signature(
             fact: None,
             captures: None,
             destructor_allocation: Allocation::NoAlloc,
-        }),
+        })),
     }
 }
 pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {

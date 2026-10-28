@@ -84,7 +84,7 @@ impl Fixture {
         self.register(Signature {
             metadata: SignatureMetadata::default(),
             definition: DefId::intern(&path(name)),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![],
@@ -102,7 +102,7 @@ impl Fixture {
                 drop: None,
                 fact: None,
                 captures: None,
-            }),
+            })),
             fingerprint: ContentHash::default(),
         });
     }

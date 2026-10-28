@@ -52,7 +52,7 @@ fn replaced_field() -> (Fixture, u32, u32) {
         definition: id("Record"),
         metadata: Default::default(),
         fingerprint: ContentHash::default(),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             generics: vec![],
@@ -70,7 +70,7 @@ fn replaced_field() -> (Fixture, u32, u32) {
             fact: None,
             captures: None,
             destructor_allocation: Allocation::NoAlloc,
-        }),
+        })),
     };
     f.signatures.insert(id("Record"), declaration);
     let receiver = f.slot(

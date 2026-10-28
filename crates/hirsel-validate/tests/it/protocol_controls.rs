@@ -14,7 +14,7 @@ fn core_option() -> DefPath {
 fn nominal(name: &str) -> Signature {
     let mut s = function_signature(name, vec![], TypeKind::Tuple(vec![].into()));
     let unit = interner().intern(Type::unit());
-    s.kind = SignatureKind::Type(TypeDefinition {
+    s.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         generics: vec![].into(),
@@ -32,7 +32,7 @@ fn nominal(name: &str) -> Signature {
         fact: None,
         captures: None,
         destructor_allocation: Allocation::NoAlloc,
-    });
+    }));
     s
 }
 fn association() -> Fixture {

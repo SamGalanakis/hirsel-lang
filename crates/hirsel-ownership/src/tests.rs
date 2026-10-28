@@ -24,7 +24,7 @@ fn resource_signature() -> Signature {
         definition: DefId::intern(&path("Token")),
         metadata: Default::default(),
         fingerprint: Default::default(),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             destructor_allocation: Allocation::NoAlloc,
@@ -42,7 +42,7 @@ fn resource_signature() -> Signature {
             drop: None,
             fact: None,
             captures: None,
-        }),
+        })),
     }
 }
 #[test]

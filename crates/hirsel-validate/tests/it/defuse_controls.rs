@@ -22,7 +22,7 @@ fn fixture(mutation: Mutation) -> Fixture {
         }]
         .into(),
     )));
-    signature.kind = SignatureKind::Type(TypeDefinition {
+    signature.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         destructor_allocation: Allocation::NoAlloc,
@@ -44,7 +44,7 @@ fn fixture(mutation: Mutation) -> Fixture {
         },
         fact: None,
         captures: None,
-    });
+    }));
     f.signatures.insert(id("Token"), signature);
     let input = f.slot(TypeKind::Primitive(Primitive::U64), Storage::Temporary);
     let parent = f.slot(

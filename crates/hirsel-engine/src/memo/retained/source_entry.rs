@@ -448,7 +448,7 @@ mod tests {
                 let view = Arc::new(Signature {
                     metadata: Default::default(),
                     definition: owner,
-                    kind: SignatureKind::Type(declaration(width, &path)),
+                    kind: SignatureKind::Type(Box::new(declaration(width, &path))),
                     fingerprint: Default::default(),
                 });
                 let record = crate::representation::OwnerRecord {

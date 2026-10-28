@@ -237,25 +237,26 @@ fn encode_signature(
             e.tag("function");
             e.function(f, types)?;
         }
-        SignatureKind::Type(TypeDefinition {
-            loop_source,
-            format,
-            destructor_allocation,
-            generics,
-            representation,
-            bounds,
-            authority,
-            capability,
-            implementation_authority,
-            serializable,
-            serializable_check,
-            layout,
-            distinct,
-            resource,
-            drop,
-            fact,
-            captures,
-        }) => {
+        SignatureKind::Type(definition) => {
+            let TypeDefinition {
+                loop_source,
+                format,
+                destructor_allocation,
+                generics,
+                representation,
+                bounds,
+                authority,
+                capability,
+                implementation_authority,
+                serializable,
+                serializable_check,
+                layout,
+                distinct,
+                resource,
+                drop,
+                fact,
+                captures,
+            } = &**definition;
             let Layout {
                 c,
                 packed,
@@ -399,7 +400,7 @@ pub fn fingerprint(
 /// the public fingerprint; [`sealed`] is its inverse.
 pub fn owner_view(public: &Signature, declaration: TypeDefinition) -> Signature {
     Signature {
-        kind: SignatureKind::Type(declaration),
+        kind: SignatureKind::Type(Box::new(declaration)),
         ..public.clone()
     }
 }

@@ -63,7 +63,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         );
         publish(
             types,
-            b.signature(name, SignatureKind::Type(t), true),
+            b.signature(name, SignatureKind::Type(Box::new(t)), true),
             &mut out,
         );
     }
@@ -95,7 +95,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         }
         publish(
             types,
-            b.signature(name, SignatureKind::Type(t), true),
+            b.signature(name, SignatureKind::Type(Box::new(t)), true),
             &mut out,
         );
     }
@@ -106,7 +106,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
     t.bounds = vec![Bound::Copyable, Bound::Inert, Bound::NoallocDrop];
     publish(
         types,
-        b.signature("Body", SignatureKind::Type(t), true),
+        b.signature("Body", SignatureKind::Type(Box::new(t)), true),
         &mut out,
     );
     // RUN-3: a reference to one top-level definition of callable type `F`. It names the
@@ -122,7 +122,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
     ];
     publish(
         types,
-        b.signature("Entry", SignatureKind::Type(t), true),
+        b.signature("Entry", SignatureKind::Type(Box::new(t)), true),
         &mut out,
     );
     for (name, generic, variants) in [
@@ -405,7 +405,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         serializable_core(name, &mut t);
         publish(
             types,
-            b.signature(name, SignatureKind::Type(t), false),
+            b.signature(name, SignatureKind::Type(Box::new(t)), false),
             &mut out,
         );
     }
@@ -448,7 +448,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         serializable_core(name, &mut t);
         publish(
             types,
-            b.signature(name, SignatureKind::Type(t), false),
+            b.signature(name, SignatureKind::Type(Box::new(t)), false),
             &mut out,
         );
     }
@@ -480,7 +480,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         t.drop = Some(hirsel_syntax::DefPath::core(name));
         publish(
             types,
-            b.signature(name, SignatureKind::Type(t), fields.is_empty()),
+            b.signature(name, SignatureKind::Type(Box::new(t)), fields.is_empty()),
             &mut out,
         );
     }
@@ -500,7 +500,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         t.drop = Some(hirsel_syntax::DefPath::core("Span"));
         publish(
             types,
-            b.signature("Span", SignatureKind::Type(t), true),
+            b.signature("Span", SignatureKind::Type(Box::new(t)), true),
             &mut out,
         );
     }
@@ -529,7 +529,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         t.drop = Some(hirsel_syntax::DefPath::core(name));
         publish(
             types,
-            b.signature(name, SignatureKind::Type(t), true),
+            b.signature(name, SignatureKind::Type(Box::new(t)), true),
             &mut out,
         );
     }
@@ -552,7 +552,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         t.drop = Some(hirsel_syntax::DefPath::core("TaskSet"));
         publish(
             types,
-            b.signature("TaskSet", SignatureKind::Type(t), true),
+            b.signature("TaskSet", SignatureKind::Type(Box::new(t)), true),
             &mut out,
         );
     }
@@ -620,7 +620,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         };
         publish(
             types,
-            b.signature(name, SignatureKind::Type(t), name == "Region"),
+            b.signature(name, SignatureKind::Type(Box::new(t)), name == "Region"),
             &mut out,
         );
     }
@@ -643,7 +643,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         if !matches!(name, "f32" | "f64") {
             t.bounds.push(Bound::Key);
         }
-        let mut s = b.signature(name, SignatureKind::Type(t), false);
+        let mut s = b.signature(name, SignatureKind::Type(Box::new(t)), false);
         s.metadata.alias = true;
         publish(types, s, &mut out);
         if name.starts_with(['u', 'i']) {
@@ -1166,7 +1166,11 @@ fn variant(
         t.bounds = shape_data_bounds();
     }
     serializable_core(name, &mut t);
-    publish(types, b.signature(name, SignatureKind::Type(t), false), out);
+    publish(
+        types,
+        b.signature(name, SignatureKind::Type(Box::new(t)), false),
+        out,
+    );
 }
 /// CT-3 shape data holds only strings and lists of them: structurally
 /// copyable, data, key, inert and noalloc_drop, but neither plain nor sendable.

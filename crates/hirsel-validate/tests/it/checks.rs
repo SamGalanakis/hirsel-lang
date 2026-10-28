@@ -2160,7 +2160,7 @@ fn type_owned_resource_finalizer_borrows_self() {
     } else {
         unreachable!()
     };
-    signature.kind = SignatureKind::Type(TypeDefinition {
+    signature.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         destructor_allocation: Allocation::NoAlloc,
@@ -2178,7 +2178,7 @@ fn type_owned_resource_finalizer_borrows_self() {
         drop: Some(path("main")),
         fact: None,
         captures: None,
-    });
+    }));
     f.signatures.insert(id("main"), signature);
     f.valid();
     f.emit(InstructionKind::Drop {
@@ -2718,7 +2718,7 @@ fn generic_variant_equality_fixture(data_payload: bool) -> Fixture {
     let declaration = Signature {
         definition: id("Choice"),
         metadata: Default::default(),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             generics: vec![GenericParameter::Type {
@@ -2739,7 +2739,7 @@ fn generic_variant_equality_fixture(data_payload: bool) -> Fixture {
             fact: None,
             captures: None,
             destructor_allocation: Allocation::NoAlloc,
-        }),
+        })),
         fingerprint: ContentHash::default(),
     };
     f.signatures.insert(id("Choice"), declaration);
@@ -2954,7 +2954,7 @@ fn nominal_copy_fixture(payload: TypeKind, resource: bool) -> Fixture {
         Signature {
             definition: id("Holder"),
             metadata: Default::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![GenericParameter::Type {
@@ -2975,7 +2975,7 @@ fn nominal_copy_fixture(payload: TypeKind, resource: bool) -> Fixture {
                 fact: None,
                 captures: None,
                 destructor_allocation: Allocation::NoAlloc,
-            }),
+            })),
             fingerprint: ContentHash::default(),
         },
     );
@@ -4961,7 +4961,7 @@ fn erased_capture_results_are_proved_from_actual_parameters() {
         definition: id("Dir"),
         metadata: SignatureMetadata::default(),
         fingerprint: ContentHash::default(),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             generics: vec![],
@@ -4979,7 +4979,7 @@ fn erased_capture_results_are_proved_from_actual_parameters() {
             fact: None,
             captures: None,
             destructor_allocation: Allocation::NoAlloc,
-        }),
+        })),
     };
     f.signatures.insert(id("Dir"), capability);
     let callee = f.signatures.get_mut(&path("callee")).unwrap();
@@ -5040,7 +5040,7 @@ fn heap_allocator_evidence_requires_the_declared_result_and_canonical_arena() {
     };
     let mut arena = function_signature("Arena", vec![], TypeKind::Tuple(vec![].into()));
     arena.metadata.roles = roles.clone().into();
-    arena.kind = SignatureKind::Type(TypeDefinition {
+    arena.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         generics: vec![],
@@ -5058,7 +5058,7 @@ fn heap_allocator_evidence_requires_the_declared_result_and_canonical_arena() {
         fact: None,
         captures: None,
         destructor_allocation: Allocation::NoAlloc,
-    });
+    }));
     f.signatures.insert(id("Arena"), arena);
     let mut row = ty(TypeKind::Named {
         definition: id("Arena"),

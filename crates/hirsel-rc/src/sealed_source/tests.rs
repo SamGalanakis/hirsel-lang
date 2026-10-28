@@ -746,7 +746,7 @@ fn source_nominal_121_classifies_current_representations_and_refuses_missing_dec
             definition: nominal,
             metadata: Default::default(),
             fingerprint: witness_input(3),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 destructor_allocation: Allocation::NoAlloc,
@@ -764,7 +764,7 @@ fn source_nominal_121_classifies_current_representations_and_refuses_missing_dec
                 drop: None,
                 fact: None,
                 captures: None,
-            }),
+            })),
         });
         let expected = source
             .clone()

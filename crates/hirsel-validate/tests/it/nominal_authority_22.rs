@@ -25,7 +25,7 @@ fn declaration(kind: CapabilityKind, owner: bool) -> Signature {
             ..Default::default()
         },
         fingerprint: Default::default(),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             generics: vec![],
             representation: owner.then_some(representation),
             bounds: if kind == CapabilityKind::Global {
@@ -47,7 +47,7 @@ fn declaration(kind: CapabilityKind, owner: bool) -> Signature {
             destructor_allocation: Allocation::NoAlloc,
             loop_source: None,
             format: None,
-        }),
+        })),
     }
 }
 

@@ -228,7 +228,7 @@ pub fn fixture_signatures(
                     };
                     signatures.insert(
                         path.clone(),
-                        snapshot(path.clone(), SignatureKind::Type(declaration)),
+                        snapshot(path.clone(), SignatureKind::Type(Box::new(declaration))),
                     );
                 }
             }
@@ -268,7 +268,7 @@ pub fn fixture_signatures(
                     owner.clone(),
                     snapshot(
                         owner.clone(),
-                        SignatureKind::Type(TypeDefinition {
+                        SignatureKind::Type(Box::new(TypeDefinition {
                             loop_source: None,
                             format: None,
                             destructor_allocation: Allocation::MayAllocate,
@@ -286,7 +286,7 @@ pub fn fixture_signatures(
                             drop: None,
                             fact: None,
                             captures: None,
-                        }),
+                        })),
                     ),
                 );
             }
@@ -363,7 +363,7 @@ pub fn fixture_signatures(
             path.clone(),
             snapshot(
                 path,
-                SignatureKind::Type(TypeDefinition {
+                SignatureKind::Type(Box::new(TypeDefinition {
                     loop_source: None,
                     format: None,
                     destructor_allocation: Allocation::NoAlloc,
@@ -381,7 +381,7 @@ pub fn fixture_signatures(
                     drop: None,
                     fact: None,
                     captures: None,
-                }),
+                })),
             ),
         );
     }
@@ -411,7 +411,7 @@ pub fn fixture_signatures(
         };
         signatures
             .entry(path.clone())
-            .or_insert_with(|| snapshot(path, SignatureKind::Type(declaration)));
+            .or_insert_with(|| snapshot(path, SignatureKind::Type(Box::new(declaration))));
     }
     signatures
 }

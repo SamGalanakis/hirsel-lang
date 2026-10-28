@@ -1332,7 +1332,7 @@ mod flat_tests {
             definition: DefId::intern(&path),
             metadata: SignatureMetadata::default(),
             fingerprint: ContentHash::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 destructor_allocation: Allocation::MayAllocate,
@@ -1353,7 +1353,7 @@ mod flat_tests {
                 drop: None,
                 fact: None,
                 captures: None,
-            }),
+            })),
         });
         let store = std::sync::Arc::clone(&declared);
         let flat = store.intern(row(TypeKind::Named {
@@ -1666,7 +1666,7 @@ mod flat_tests {
                         visibility: hirsel_syntax::Visibility::PublicOpaque,
                         ..Default::default()
                     },
-                    kind: SignatureKind::Type(TypeDefinition {
+                    kind: SignatureKind::Type(Box::new(TypeDefinition {
                         loop_source: None,
                         format: None,
                         destructor_allocation: Allocation::NoAlloc,
@@ -1684,7 +1684,7 @@ mod flat_tests {
                         drop: None,
                         fact: None,
                         captures: None,
-                    }),
+                    })),
                 });
                 let mut lookup = |_| Ok::<_, QueryError>(Some(declaration.clone()));
                 let generics = GenericDeclarations::signature(&[]);

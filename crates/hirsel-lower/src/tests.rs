@@ -592,7 +592,7 @@ fn propagation_role_orders_lower_once_26() {
                     definition: DefId::intern(&path(name)),
                     metadata: Default::default(),
                     fingerprint: ContentHash::default(),
-                    kind: SignatureKind::Type(TypeDefinition {
+                    kind: SignatureKind::Type(Box::new(TypeDefinition {
                         loop_source: None,
                         format: None,
                         destructor_allocation: Allocation::NoAlloc,
@@ -610,7 +610,7 @@ fn propagation_role_orders_lower_once_26() {
                         drop: None,
                         fact: None,
                         captures: None,
-                    }),
+                    })),
                 });
                 f.type_(TypeKind::Named {
                     definition: DefId::intern(&path(name)),

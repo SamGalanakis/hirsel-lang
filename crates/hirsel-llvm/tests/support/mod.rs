@@ -326,7 +326,7 @@ impl Schema {
             metadata: SignatureMetadata::default(),
             definition,
             fingerprint: record.representation_revision,
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 destructor_allocation: Allocation::MayAllocate,
@@ -347,7 +347,7 @@ impl Schema {
                     .map(|(definition, _)| definition.clone()),
                 fact: None,
                 captures: None,
-            }),
+            })),
         }))
     }
 

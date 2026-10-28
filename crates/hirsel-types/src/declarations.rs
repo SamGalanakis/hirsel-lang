@@ -305,7 +305,7 @@ pub(crate) mod tests {
             definition: def("Wrap"),
             metadata: SignatureMetadata::default(),
             fingerprint: ContentHash::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![],
@@ -328,7 +328,7 @@ pub(crate) mod tests {
                 fact: None,
                 captures: None,
                 destructor_allocation: Allocation::NoAlloc,
-            }),
+            })),
         })
     }
     #[test]

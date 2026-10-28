@@ -322,7 +322,7 @@ fn inactive_payload(present: bool) -> Fixture {
         Signature {
             definition: id("Choice"),
             metadata: Default::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![GenericParameter::Type {
@@ -343,7 +343,7 @@ fn inactive_payload(present: bool) -> Fixture {
                 fact: None,
                 captures: None,
                 destructor_allocation: Allocation::NoAlloc,
-            }),
+            })),
             fingerprint: ContentHash::default(),
         },
     );

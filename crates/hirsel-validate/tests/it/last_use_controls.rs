@@ -30,7 +30,7 @@ fn holder(resource: bool) -> Holder {
             }]
             .into(),
         )));
-        signature.kind = SignatureKind::Type(TypeDefinition {
+        signature.kind = SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             destructor_allocation: Allocation::NoAlloc,
@@ -48,7 +48,7 @@ fn holder(resource: bool) -> Holder {
             drop: Some(path("guard_drop")),
             fact: None,
             captures: None,
-        });
+        }));
         f.signatures.insert(id("guard"), signature);
         TypeKind::Named {
             definition: id("guard"),

@@ -460,7 +460,7 @@ mod tests {
             definition: DefId::intern(&path("Row")),
             metadata: SignatureMetadata::default(),
             fingerprint: Default::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![],
@@ -478,7 +478,7 @@ mod tests {
                 fact: None,
                 captures: None,
                 destructor_allocation: Allocation::MayAllocate,
-            }),
+            })),
         }
     }
     fn schema(

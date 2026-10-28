@@ -556,7 +556,7 @@ fn normalize_inner(
             }
             inferred.sort();
             inferred.dedup();
-            SignatureKind::Type(TypeDefinition {
+            SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: n.loop_source(&item.attributes)?,
                 format: n.format(&item.attributes)?,
                 destructor_allocation,
@@ -586,7 +586,7 @@ fn normalize_inner(
                         fields.iter().map(|f| *f as u32).collect()
                     }
                 }),
-            })
+            }))
         }
     };
     n.finish_drop_summaries(&mut kind);
@@ -608,7 +608,7 @@ fn normalize_inner(
                 representation: Some(root),
                 implementation_authority,
                 captures: owner_captures.clone(),
-                ..declaration.clone()
+                ..(**declaration).clone()
             },
         }),
         _ => None,
@@ -702,7 +702,7 @@ fn provisional(
                     ..Default::default()
                 },
                 definition: DefId::intern(&item.definition),
-                kind: SignatureKind::Type(TypeDefinition {
+                kind: SignatureKind::Type(Box::new(TypeDefinition {
                     loop_source: None,
                     format: None,
                     destructor_allocation: Allocation::MayAllocate,
@@ -723,7 +723,7 @@ fn provisional(
                     drop: None,
                     fact: None,
                     captures: None,
-                }),
+                })),
                 fingerprint: ast::ContentHash::default(),
             },
             diagnostics: vec![],
@@ -2871,7 +2871,7 @@ impl Normalizer<'_, '_> {
         std::sync::Arc::new(Signature {
             metadata: SignatureMetadata::default(),
             definition: DefId::intern(&self.own_definition()),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 destructor_allocation: Allocation::MayAllocate,
@@ -2889,7 +2889,7 @@ impl Normalizer<'_, '_> {
                 drop: None,
                 fact: None,
                 captures: None,
-            }),
+            })),
             fingerprint: Default::default(),
         })
     }
@@ -3150,7 +3150,7 @@ impl Normalizer<'_, '_> {
                         && *flavor != ast::TypeFlavor::Distinct,
                     ..Default::default()
                 },
-                kind: SignatureKind::Type(TypeDefinition {
+                kind: SignatureKind::Type(Box::new(TypeDefinition {
                     loop_source: None,
                     format: None,
                     generics: self.generics.clone(),
@@ -3168,7 +3168,7 @@ impl Normalizer<'_, '_> {
                     fact: None,
                     captures: None,
                     destructor_allocation: Allocation::MayAllocate,
-                }),
+                })),
                 fingerprint: Default::default(),
             })))
         })

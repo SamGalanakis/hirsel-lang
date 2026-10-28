@@ -20,7 +20,7 @@ fn opaque_nominal_structural_access_uses_independent_private_owner() {
         definition,
         metadata: Default::default(),
         fingerprint: ContentHash::of_bytes(b"public opaque key"),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             destructor_allocation: Allocation::NoAlloc,
@@ -38,7 +38,7 @@ fn opaque_nominal_structural_access_uses_independent_private_owner() {
             drop: None,
             fact: None,
             captures: None,
-        }),
+        })),
     });
     let record = RepresentationRecord {
         definition: path,

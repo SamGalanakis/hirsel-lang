@@ -29,7 +29,7 @@ fn nominal(name: &str, generics: usize, representation: TypeId) -> SignatureRef 
         definition: definition(name),
         metadata: SignatureMetadata::default(),
         fingerprint: ContentHash::of_bytes(name.as_bytes()),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             destructor_allocation: Allocation::NoAlloc,
@@ -52,7 +52,7 @@ fn nominal(name: &str, generics: usize, representation: TypeId) -> SignatureRef 
             drop: None,
             fact: None,
             captures: None,
-        }),
+        })),
     })
 }
 fn record(t: &TypeInterner, fields: &[(&str, TypeId)]) -> TypeId {

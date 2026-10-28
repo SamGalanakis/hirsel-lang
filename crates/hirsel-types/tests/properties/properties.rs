@@ -379,7 +379,7 @@ impl World {
                     ..SignatureMetadata::default()
                 },
                 fingerprint: Default::default(),
-                kind: SignatureKind::Type(TypeDefinition {
+                kind: SignatureKind::Type(Box::new(TypeDefinition {
                     loop_source: None,
                     format: None,
                     destructor_allocation: Allocation::MayAllocate,
@@ -410,7 +410,7 @@ impl World {
                     drop: None,
                     fact: None,
                     captures: None,
-                }),
+                })),
             });
             world.0.push(Declaration {
                 declared,

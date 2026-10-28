@@ -2635,7 +2635,7 @@ fn constructed_payload_fixture(case: u32, transfer: bool) -> Fixture {
         Signature {
             definition: DefId::intern(&choice),
             metadata: Default::default(),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 generics: vec![],
@@ -2653,7 +2653,7 @@ fn constructed_payload_fixture(case: u32, transfer: bool) -> Fixture {
                 fact: None,
                 captures: None,
                 destructor_allocation: Allocation::NoAlloc,
-            }),
+            })),
             fingerprint: ContentHash::default(),
         },
     );
@@ -9929,7 +9929,7 @@ fn serializable_calls_reprove_nominal_opt_in_from_hand_built_ir() {
                 definition: id("Data"),
                 metadata: SignatureMetadata::default(),
                 fingerprint: ContentHash::default(),
-                kind: SignatureKind::Type(TypeDefinition {
+                kind: SignatureKind::Type(Box::new(TypeDefinition {
                     loop_source: None,
                     format: None,
                     generics: vec![],
@@ -9947,7 +9947,7 @@ fn serializable_calls_reprove_nominal_opt_in_from_hand_built_ir() {
                     fact: None,
                     captures: None,
                     destructor_allocation: Allocation::MayAllocate,
-                }),
+                })),
             },
         );
         if marked {

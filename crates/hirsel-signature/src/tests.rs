@@ -257,7 +257,7 @@ impl Fixture {
                 ..Default::default()
             },
             definition: DefId::intern(&d),
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 destructor_allocation: hirsel_types::Allocation::MayAllocate,
@@ -276,7 +276,7 @@ impl Fixture {
                 drop: None,
                 fact: None,
                 captures: None,
-            }),
+            })),
             fingerprint: ast::ContentHash::of_bytes(n.as_bytes()),
         };
         self.provider.signatures.insert(d.clone(), s);

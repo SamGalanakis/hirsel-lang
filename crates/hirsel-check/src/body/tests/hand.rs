@@ -373,7 +373,7 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
                 .into(),
                 ..Default::default()
             },
-            kind: SignatureKind::Type(TypeDefinition {
+            kind: SignatureKind::Type(Box::new(TypeDefinition {
                 loop_source: None,
                 format: None,
                 destructor_allocation: Allocation::NoAlloc,
@@ -400,7 +400,7 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
                 drop: None,
                 fact: None,
                 captures: None,
-            }),
+            })),
             fingerprint: Default::default(),
         }),
     );
@@ -471,7 +471,7 @@ fn finalizer_consumes_resolver_identity_instead_of_first_local() {
             body: root,
         }),
     };
-    f.signature.kind = SignatureKind::Type(TypeDefinition {
+    f.signature.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         destructor_allocation: Allocation::MayAllocate,
@@ -489,7 +489,7 @@ fn finalizer_consumes_resolver_identity_instead_of_first_local() {
         drop: Some(f.signature.definition.path().clone()),
         fact: None,
         captures: None,
-    });
+    }));
     f.resolution.drop_binding = Some(LocalId(37));
     let (output, _) = f.finish(root);
     assert!(output.checked.diagnostics.is_empty());

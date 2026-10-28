@@ -20,7 +20,7 @@ struct Rows {
     identities: BTreeMap<u32, Key>,
     used: u64,
     generation: u64,
-    subscriptions: BTreeSet<(ReadKey, crate::memo::PackageKey, u32)>,
+    subscriptions: BTreeSet<(ReadKey, DefId, u32)>,
 }
 /// Validated subscription generations for one immutable source view. A later
 /// graph may replace a shared row, but cannot make this view trust that row.
@@ -121,16 +121,11 @@ impl FrontCarry {
         };
         if let Some(old) = rows.entries.remove(&key) {
             for (read, _) in old.reads.iter() {
-                rows.subscriptions.remove(&(
-                    *read,
-                    crate::memo::PackageKey::of(&old.owner.path().0.package),
-                    old.id,
-                ));
+                rows.subscriptions.remove(&(*read, old.owner, old.id));
             }
         }
-        let package = crate::memo::PackageKey::of(&owner.path().0.package);
         for (read, _) in reads.iter() {
-            rows.subscriptions.insert((*read, package, id));
+            rows.subscriptions.insert((*read, owner, id));
         }
         rows.identities.insert(id, key);
         rows.generation = generation;
@@ -158,7 +153,7 @@ fn index_bytes(entries: usize, subscriptions: usize) -> u64 {
     let mut weight = crate::NativeMetadataWeight::default();
     weight.tree::<Key, Row>(entries);
     weight.tree::<u32, Key>(entries);
-    weight.tree::<(ReadKey, crate::memo::PackageKey, u32), ()>(subscriptions);
+    weight.tree::<(ReadKey, DefId, u32), ()>(subscriptions);
     weight.bytes()
 }
 
@@ -189,7 +184,7 @@ enum PackedSummaryRef<'a> {
     Checked {
         definition: DefId,
         text: ContentHash,
-        reads: &'a Arc<Reads>,
+        reads: Option<&'a Arc<Reads>>,
     },
     Owned(&'a Arc<PublishedSummary>),
 }
@@ -198,7 +193,7 @@ enum PackedSummary {
     Checked {
         definition: DefId,
         text: ContentHash,
-        reads: Arc<Reads>,
+        reads: Option<Arc<Reads>>,
     },
     Owned(Arc<PublishedSummary>),
 }
@@ -230,7 +225,15 @@ impl serde::Serialize for FactsRef<'_> {
                     PackedSummaryRef::Checked {
                         definition: summary.definition,
                         text: summary.text,
-                        reads: &summary.reads,
+                        reads: if self
+                            .checked
+                            .as_ref()
+                            .is_some_and(|(_, reads)| reads.as_ref() == summary.reads.as_ref())
+                        {
+                            None
+                        } else {
+                            Some(&summary.reads)
+                        },
                     }
                 } else {
                     PackedSummaryRef::Owned(summary)
@@ -271,7 +274,9 @@ impl TryFrom<PackedFacts> for Facts {
                 text,
                 reads,
             }) => {
-                let (checked, _) = facts.checked.as_ref().ok_or("missing checked summary")?;
+                let (checked, checked_reads) =
+                    facts.checked.as_ref().ok_or("missing checked summary")?;
+                let reads = reads.unwrap_or_else(|| checked_reads.clone());
                 Some(Arc::new(PublishedSummary {
                     definition,
                     text,
@@ -388,7 +393,7 @@ impl FrontBodyQueries {
             // Observe the reverse subscription index without visiting body
             // memos. Only subscribers to changed or unknown inputs are dirty.
             let mut previous = None;
-            for (read, package, id) in &rows.subscriptions {
+            for (read, owner, id) in &rows.subscriptions {
                 let Some((key, row)) = rows
                     .identities
                     .get(id)
@@ -401,13 +406,13 @@ impl FrontBodyQueries {
                 // lookup reads already carry their own module and qualifier.
                 let current = match previous {
                     Some((last_read, last_package, observed))
-                        if last_read == *read && last_package == *package =>
+                        if last_read == *read && last_package == *owner =>
                     {
                         observed
                     }
                     _ => {
-                        let observed = self.observe(row.owner.path(), read);
-                        previous = Some((*read, *package, observed));
+                        let observed = self.observe_in(&owner.path().0.package, read);
+                        previous = Some((*read, *owner, observed));
                         observed
                     }
                 };
@@ -798,7 +803,7 @@ mod tests {
             summary: Some(PackedSummaryRef::Checked {
                 definition: DefId::intern(&DefPath::core("missing-proof")),
                 text: Default::default(),
-                reads: &reads,
+                reads: Some(&reads),
             }),
             checked: &None,
             dead_arms: &None,

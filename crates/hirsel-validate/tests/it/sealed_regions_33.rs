@@ -1050,7 +1050,7 @@ fn sealed_regions_33_read_callback_cannot_escape_a_capture_nested_in_a_record() 
         .into(),
     )));
     let mut envelope = function_signature("Envelope", vec![], TypeKind::Tuple(vec![].into()));
-    envelope.kind = SignatureKind::Type(TypeDefinition {
+    envelope.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         destructor_allocation: Allocation::NoAlloc,
@@ -1068,7 +1068,7 @@ fn sealed_regions_33_read_callback_cannot_escape_a_capture_nested_in_a_record() 
         drop: None,
         fact: None,
         captures: None,
-    });
+    }));
     f.signatures.insert(id("Envelope"), envelope);
     let result_kind = TypeKind::Named {
         definition: id("Envelope"),

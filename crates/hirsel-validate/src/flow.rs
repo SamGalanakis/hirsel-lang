@@ -6977,7 +6977,7 @@ mod nominal_limit_tests {
                     definition: resource,
                     metadata: SignatureMetadata::default(),
                     fingerprint: ContentHash::default(),
-                    kind: SignatureKind::Type(TypeDefinition {
+                    kind: SignatureKind::Type(Box::new(TypeDefinition {
                         loop_source: None,
                         format: None,
                         generics: vec![],
@@ -6995,7 +6995,7 @@ mod nominal_limit_tests {
                         fact: None,
                         captures: None,
                         destructor_allocation: Allocation::MayAllocate,
-                    }),
+                    })),
                 },
             );
             let leaf = f.definition.types.push(ty(TypeKind::Named {
@@ -7020,7 +7020,7 @@ mod nominal_limit_tests {
                         definition: outer,
                         metadata: SignatureMetadata::default(),
                         fingerprint: ContentHash::default(),
-                        kind: SignatureKind::Type(TypeDefinition {
+                        kind: SignatureKind::Type(Box::new(TypeDefinition {
                             loop_source: None,
                             format: None,
                             generics: vec![],
@@ -7038,7 +7038,7 @@ mod nominal_limit_tests {
                             fact: None,
                             captures: None,
                             destructor_allocation: Allocation::NoAlloc,
-                        }),
+                        })),
                     },
                 );
                 root = f.definition.types.push(ty(TypeKind::Named {

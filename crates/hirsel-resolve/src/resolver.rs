@@ -2391,13 +2391,11 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             if external
                 && signature.as_ref().is_some_and(|s| {
                     matches!(
-                        s.kind,
-                        ty::SignatureKind::Type(ty::TypeDefinition {
-                            loop_source: None,
-                            format: None,
-                            representation: None,
-                            ..
-                        })
+                        &s.kind,
+                        ty::SignatureKind::Type(definition)
+                            if definition.loop_source.is_none()
+                                && definition.format.is_none()
+                                && definition.representation.is_none()
                     )
                 })
             {

@@ -891,7 +891,7 @@ fn format_body(aliases: bool, associated: bool) -> Fixture {
     owner_sig(&mut f, &[PassingMode::Borrow, PassingMode::Mut]);
     let mut point = function_signature("Point", vec![], TypeKind::Tuple(vec![].into()));
     let representation = interner().intern(Type::unit());
-    point.kind = SignatureKind::Type(TypeDefinition {
+    point.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: associated.then(|| path("main")),
         generics: vec![].into(),
@@ -909,7 +909,7 @@ fn format_body(aliases: bool, associated: bool) -> Fixture {
         fact: None,
         captures: None,
         destructor_allocation: Allocation::NoAlloc,
-    });
+    }));
     f.signatures.insert(point.definition.clone(), point);
     f
 }
@@ -1189,7 +1189,7 @@ fn token_signature() -> Signature {
         }]
         .into(),
     )));
-    signature.kind = SignatureKind::Type(TypeDefinition {
+    signature.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         destructor_allocation: Allocation::NoAlloc,
@@ -1207,7 +1207,7 @@ fn token_signature() -> Signature {
         drop: Some(path("Token_drop")),
         fact: None,
         captures: None,
-    });
+    }));
     signature
 }
 
@@ -1343,7 +1343,7 @@ fn tagged(thunk: bool) -> Signature {
         ]
         .into(),
     )));
-    tagged.kind = SignatureKind::Type(TypeDefinition {
+    tagged.kind = SignatureKind::Type(Box::new(TypeDefinition {
         loop_source: None,
         format: None,
         generics: vec![GenericParameter::Type {
@@ -1364,7 +1364,7 @@ fn tagged(thunk: bool) -> Signature {
         fact: None,
         captures: None,
         destructor_allocation: Allocation::NoAlloc,
-    });
+    }));
     tagged
 }
 

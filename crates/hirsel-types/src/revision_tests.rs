@@ -1245,7 +1245,7 @@ fn plain_record(types: &TypeInterner) -> (hirsel_syntax::DefPath, SignatureRef) 
         definition: DefId::intern(&path),
         metadata: SignatureMetadata::default(),
         fingerprint: hirsel_syntax::ContentHash::default(),
-        kind: SignatureKind::Type(TypeDefinition {
+        kind: SignatureKind::Type(Box::new(TypeDefinition {
             loop_source: None,
             format: None,
             destructor_allocation: Allocation::MayAllocate,
@@ -1263,7 +1263,7 @@ fn plain_record(types: &TypeInterner) -> (hirsel_syntax::DefPath, SignatureRef) 
             drop: None,
             fact: None,
             captures: None,
-        }),
+        })),
     };
     (path, std::sync::Arc::new(signature))
 }
@@ -1643,7 +1643,7 @@ fn an_owner_view_seals_to_its_public_signature_and_keeps_its_fingerprint() {
     let types = TypeInterner::new(None);
     let mut public = Signature {
         definition: DefId::intern(&path("Hidden")),
-        kind: SignatureKind::Type(declaration(None, None)),
+        kind: SignatureKind::Type(Box::new(declaration(None, None))),
         metadata: SignatureMetadata {
             visibility: hirsel_syntax::Visibility::PublicOpaque,
             ..Default::default()

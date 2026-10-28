@@ -703,7 +703,10 @@ impl Weight<'_> {
                     self.add(foreign.aliasing_contract.capacity());
                 }
             }
-            hirsel_types::SignatureKind::Type(definition) => self.type_definition(definition),
+            hirsel_types::SignatureKind::Type(definition) => {
+                self.add(size_of_val(&**definition));
+                self.type_definition(definition);
+            }
         }
     }
     fn type_definition(&mut self, definition: &hirsel_types::TypeDefinition) {
