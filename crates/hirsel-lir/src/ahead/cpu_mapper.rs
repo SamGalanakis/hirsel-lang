@@ -565,6 +565,7 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
             })
         }
         Inst::SeqSetLen { address, .. } if !mutable_capture(u, *address) => Action::Private,
+        Inst::RegionPublish { .. } => Action::Private,
         Inst::Dup { .. }
         | Inst::Release { .. }
         | Inst::Share { .. }
