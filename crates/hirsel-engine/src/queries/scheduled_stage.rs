@@ -23,6 +23,7 @@ struct Input {
 struct Data {
     result: Result<Vec<StagedRegistration>, QueryError>,
     reads: Arc<Reads>,
+    sites: Vec<Span>,
 }
 type Completed = (Result<ProductRef, Reference>, Arc<Data>);
 /// Clones retain the original source and declaration admission. A declaration
@@ -49,6 +50,7 @@ impl FrontStageOutput {
                 .map_err(|_| QueryError::NotImplemented)?,
         );
         weight.tree::<DefPath, crate::comptime::StagedConstant>(registrations.len());
+        weight.add(size_of::<MemoryReservation>() + 2 * size_of::<usize>());
         Ok(weight.bytes())
     }
     pub fn declarations(&self) -> Result<impl Iterator<Item = (&DefPath, &Signature)>, QueryError> {
@@ -171,12 +173,14 @@ impl FrontStageQueries {
     fn complete(&self, id: QueryId, data: Data) -> Result<ProductRef, Reference> {
         let bytes = self
             .records
-            .encode(&*self.anchors, &(&data.result, &*data.reads))
+            .encode(&*self.anchors, &(&data.result, &*data.reads, &data.sites))
             .ok_or(self.errors.resource)?;
         if bytes.len() as u64 > self.weight.scratch {
             return Err(self.errors.resource);
         }
-        let mut charge = crate::memo::retained_arc_bytes(&data);
+        let mut charge = crate::memo::retained_arc_bytes(&data)
+            .checked_add((data.sites.capacity() * size_of::<Span>()) as u64)
+            .ok_or(self.errors.resource)?;
         charge = charge
             .checked_add(match &data.result {
                 Ok(registrations) => {
@@ -298,17 +302,42 @@ impl QueryTask for Task {
                 front
             }
         };
+        let mut sites = Vec::new();
         let result = front.outcome.result.and_then(|analyzed| {
             if has_errors(&analyzed.diagnostics) {
                 return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
             }
-            self.queries.declarations(&input.owner, &analyzed.value)
+            let declarations = self.queries.declarations(&input.owner, &analyzed.value)?;
+            sites = declarations
+                .iter()
+                .map(|row| {
+                    analyzed.value.typed.syntax.tree.expressions[row.constant.expression.0 as usize]
+                        .origin
+                        .span
+                })
+                .collect();
+            Ok(declarations)
         });
+        let mut reads = ReadsBuilder::new();
+        reads.merge(&front.outcome.reads);
+        for key in [
+            ReadKey::CitedText(DefId::intern(&input.owner)),
+            ReadKey::Signature(DefId::intern(&input.owner)),
+        ] {
+            let Some(hash) = self.queries.front.observe(&input.owner, &key) else {
+                return QueryPoll::Failed(self.queries.errors.protocol);
+            };
+            reads.record(key, hash);
+        }
+        let Ok(reads) = reads.finish() else {
+            return QueryPoll::Failed(self.queries.errors.protocol);
+        };
         let result = self.queries.complete(
             self.id,
             Data {
                 result,
-                reads: front.outcome.reads,
+                reads: Arc::new(reads),
+                sites,
             },
         );
         self.terminal = Some(result);
@@ -431,6 +460,11 @@ impl QueryEngine {
                 message,
             })
         };
+        if !Arc::ptr_eq(&self.types, output.owner.snapshot.types()) {
+            return Err(refused(
+                "staged product belongs to another type interner".into(),
+            ));
+        }
         let registrations = output.data.result.as_ref().map_err(Clone::clone)?;
         if let Some(key) = output
             .reads()
@@ -456,7 +490,32 @@ impl QueryEngine {
             })?;
         // Check all reads and reserve the entire copy before publishing any
         // declaration. Source/view clones keep that copy's original grant.
-        let registrations = registrations.clone();
+        if registrations.len() != output.data.sites.len() {
+            return Err(refused("staged expression sites are incomplete".into()));
+        }
+        let syntax = match output.owner.front.registration(output.owner()) {
+            Some(accepted) => {
+                accepted.validate(self)?;
+                accepted.syntax.clone()
+            }
+            None => self.snapshot(output.owner())?,
+        };
+        let mut registrations = registrations.clone();
+        for (row, site) in registrations.iter_mut().zip(&output.data.sites) {
+            let expression = syntax
+                .tree
+                .expressions
+                .iter()
+                .position(|expression| expression.origin.span == *site)
+                .ok_or_else(|| {
+                    refused("staged expression site no longer belongs to its source".into())
+                })?;
+            row.constant.expression = hirsel_syntax::ExprId(
+                expression
+                    .try_into()
+                    .map_err(|_| refused("staged expression id overflow".into()))?,
+            );
+        }
         self.sources = self.sources.clone().retain_owner(Arc::new(installed));
         for registration in registrations {
             self.install_staged(registration);
