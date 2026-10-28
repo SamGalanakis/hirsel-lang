@@ -866,7 +866,7 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
             if self.1 {
                 assert_eq!(
                     std::thread::current().name(),
-                    Some("hirsel-job"),
+                    Some("hirsel-query"),
                     "staged demand fell back to caller evaluation"
                 );
             }
@@ -876,6 +876,17 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
         fn entry_body(&self) -> hirsel_tir::BodyId {
             self.0.entry_body()
         }
+    }
+    thread_local! {
+        static REQUIRE_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    fn worker_adapters() -> PhaseAdapters {
+        let mut adapters = compiler_adapters();
+        adapters.lowering = Some(Arc::new(WorkerOnly(
+            adapters.lowering.take().unwrap(),
+            REQUIRE_WORKER.with(|required| required.get()),
+        )));
+        adapters
     }
     with_compiler_stack(|| {
         let staged = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,4]=[1,2,3,4];scaled(xs)}\n";
@@ -893,42 +904,66 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
                     })
                     .collect();
                 assert!(expected.iter().all(Result::is_ok), "{expected:?}");
-                let mut adapters = compiler_adapters();
-                adapters.lowering = Some(Arc::new(WorkerOnly(
-                    adapters.lowering.take().unwrap(),
-                    jobs > 1,
-                )));
-                let mut candidate = QueryEngine::new(default_environment(), adapters);
-                let file = candidate
-                    .sources
-                    .add("comptime.hir", source.into())
-                    .unwrap();
-                candidate.parse_file(file, &default_context()).unwrap();
-                assert_eq!(
-                    frontier_text(&mut candidate, paths.clone(), jobs),
-                    expected,
-                    "jobs={jobs}"
+                use hirsel_driver::requests::{CompileOperation, CompileResult, CompilerRequests};
+                let directory = tempfile::tempdir().unwrap();
+                let manifest = directory.path().join("hirsel.json");
+                std::fs::write(directory.path().join("comptime.hir"), source).unwrap();
+                std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"comptime.hir","module":[]}],"dependencies":[]}"#).unwrap();
+                let config = CompileConfig {
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    store: Arc::new(store::DirStore::new(directory.path().join("products"))),
+                    hold_bytes: 0,
+                    ..Default::default()
+                };
+                REQUIRE_WORKER.with(|required| required.set(jobs > 1));
+                let compiler = COMPILER.with_config(config.clone()).with_phase_adapters(
+                    worker_adapters,
+                    hirsel_syntax::ContentHash::of_bytes(b"hirsel.staged-request-worker.v1").0,
                 );
-                assert_eq!(
-                    frontier_text(&mut candidate, paths, jobs),
-                    expected,
-                    "warm jobs={jobs}"
-                );
-                if source == generated {
-                    let scalar = control.check_definition(&path("chosen")).unwrap();
-                    let worker = candidate
-                        .dependency_reads(&path("chosen"), QueryKind::CheckedSummary)
-                        .expect("compact checked summary retains adapter detail");
-                    assert!(
-                        scalar
-                            .dependencies
-                            .iter()
-                            .any(|d| *d.definition.path() == path("make"))
-                    );
-                    assert_eq!(
-                        worker.signatures, scalar.dependencies,
-                        "checked dependencies jobs={jobs}"
-                    );
+                let mut candidate = CompilerRequests::for_host(compiler, config);
+                for warm in [false, true] {
+                    let output = candidate
+                        .execute(&manifest, CompileOperation::Precompute)
+                        .unwrap_or_else(|error| panic!("jobs={jobs} warm={warm}: {error}"));
+                    let CompileResult::Precomputed { sources, .. } = &output.result else {
+                        panic!("expected source precompute");
+                    };
+                    let actual: Vec<Result<String, String>> = paths
+                        .iter()
+                        .map(|path| {
+                            let bound = sources.source_product_bytes(path).unwrap().unwrap();
+                            let budget = hirsel_engine::runtime::ProcessBudget::new(bound);
+                            let products = sources
+                                .source_products(path, budget.reserve(bound).unwrap())
+                                .unwrap()
+                                .unwrap();
+                            let context = hirsel_proof_export::Cx::new(
+                                std::rc::Rc::new(|_| hirsel_proof_export::Location::unknown()),
+                                sources.signatures().types().clone(),
+                            );
+                            Ok(hirsel_codec::to_text_with(products.constant().unwrap(), context).0)
+                        })
+                        .collect();
+                    assert_eq!(actual, expected, "jobs={jobs} warm={warm}");
+                    if source == generated {
+                        let scalar = control.check_definition(&path("chosen")).unwrap();
+                        let bound = sources.dependency_decode_bytes(&path("chosen")).unwrap();
+                        let budget = hirsel_engine::runtime::ProcessBudget::new(bound);
+                        let worker = sources
+                            .dependencies(&path("chosen"), budget.reserve(bound).unwrap())
+                            .unwrap();
+                        assert!(
+                            scalar
+                                .dependencies
+                                .iter()
+                                .any(|d| *d.definition.path() == path("make"))
+                        );
+                        assert_eq!(
+                            worker.dependencies(),
+                            &*scalar.dependencies,
+                            "checked dependencies jobs={jobs} warm={warm}"
+                        );
+                    }
                 }
             }
         }
