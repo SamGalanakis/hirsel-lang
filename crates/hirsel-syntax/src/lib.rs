@@ -1475,6 +1475,7 @@ impl ItemSyntax {
                     match argument {
                         AttributeArgument::LoopSource(s) => span(&mut s.origin.span),
                         AttributeArgument::Format(s) => span(&mut s.origin.span),
+                        AttributeArgument::SerializableCheck(s) => span(&mut s.origin.span),
                         AttributeArgument::StatePromise(s) => span(&mut s.origin.span),
                         _ => (),
                     }
