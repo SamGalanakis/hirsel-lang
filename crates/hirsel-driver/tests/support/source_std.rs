@@ -1,7 +1,7 @@
 // Tests select the same ordinary package graph as applications.
 use hirsel_engine::{
-    CheckCompletion, CheckOutput, CompileConfig, ComptimeLimits, LoadedProgram, LoweringPolicy,
-    QueryEngine, ToolError,
+    CheckCompletion, CheckOutput, CompileConfig, Compiler, ComptimeLimits, LoadedProgram,
+    LoweringPolicy, QueryEngine, ToolError,
     loader_inputs::{CaptureInputs, FrozenInputs, InputLimits},
     store::MemStore,
 };
@@ -78,6 +78,16 @@ fn program_for(
     lowering: LoweringPolicy,
     limits: ComptimeLimits,
 ) -> Result<(LoadedProgram, FrozenInputs), CheckOutput> {
+    let (compiler, inputs, captured) = compiler_for(path, lowering, limits)?;
+    let program = compiler.load_program_inputs(path, &inputs, true).unwrap();
+    Ok((program, captured))
+}
+
+fn compiler_for(
+    path: &Path,
+    lowering: LoweringPolicy,
+    limits: ComptimeLimits,
+) -> Result<(Compiler, FrozenInputs, FrozenInputs), CheckOutput> {
     let capture = CaptureInputs::new(InputLimits {
         bytes: 64 << 20,
         operations: 100_000,
@@ -156,11 +166,7 @@ fn program_for(
         checked.push(Checked { key, store });
     }
     drop(checked);
-    let program = compiler.load_program_inputs(path, &inputs, true).unwrap();
-    // Each caller owns a fresh source map, memo graph and coordinator. Only
-    // content-addressed immutable products cross requests, through the ordinary
-    // engine store. Later lowerings publish there for subsequent callers too.
-    Ok((program, captured))
+    Ok((compiler, inputs, captured))
 }
 
 /// Checked immutable TIR for one exact source overlay and selected function.
@@ -171,18 +177,16 @@ pub fn tir(
     name: Option<&str>,
 ) -> Result<Arc<hirsel_driver::requests::TirExecution>, ToolError> {
     use hirsel_driver::requests::*;
-    let config = hirsel_driver::COMPILER.configuration();
-    let compiler = hirsel_driver::COMPILER
-        .with_owned_engines()
-        .with_config(config.clone());
-    let mut requests = CompilerRequests::for_host(compiler.clone(), config);
-    let (program, inputs) = hirsel_engine::requests::observe_inputs(
-        requests.input_limits(),
-        requests.capture_attempts(),
-        |capture| compiler.load_program_inputs(path, capture, false),
-    )
-    .map_err(|_| ToolError::Runtime("fixture inputs kept changing during discovery".into()))?;
-    let program = program?;
+    let (compiler, _, inputs) =
+        compiler_for(path, LoweringPolicy::Reachable, ComptimeLimits::default()).map_err(
+            |output| ToolError::Query {
+                error: hirsel_types::QueryError::Diagnostics(output.diagnostics),
+                phase: None,
+                sources: output.sources,
+            },
+        )?;
+    let mut requests = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+    let program = compiler.load_program_inputs(path, &inputs, false)?;
     let mut entry = program.entry.clone();
     if let Some(name) = name {
         entry.0.name = name.into();
