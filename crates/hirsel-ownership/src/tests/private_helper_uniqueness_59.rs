@@ -480,3 +480,23 @@ fn private_helper_forwards_declared_unique_result_payload() {
         engine.import_native_input(input).unwrap();
     });
 }
+
+#[test]
+fn private_payload_facts_require_a_proved_same_module_direct_call() {
+    with_compiler_stack(|| {
+        for source in [
+            "pub fn produced(xs: List[u8])->Result[List[u8],()] { Ok(xs) }\nfn execute(xs: List[u8])->Result[List[u8],()] { produced(xs) }\npub fn main(xs: List[u8])->Result[unique List[u8],()] { execute(xs) }\n",
+            "pub fn produced()->Result[unique List[u8],()] { Ok([]) }\nfn execute()->Result[List[u8],()] { produced() }\npub fn main()->Result[unique List[u8],()] { let f: fn()->Result[List[u8],()] = execute; f() }\n",
+        ] {
+            let (_, output) = check(source);
+            assert!(
+                output
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.rule.as_str() == "MODE-2"),
+                "{source}: {:?}",
+                output.diagnostics
+            );
+        }
+    });
+}
