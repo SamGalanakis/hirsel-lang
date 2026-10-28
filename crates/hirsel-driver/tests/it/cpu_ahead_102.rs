@@ -686,7 +686,7 @@ fn cpu_saved_summary_checks_live_result_ordinal_and_retained_owner_on_both_emitt
                 &plan,
                 program.fuel
             ));
-            for field in 0..7 {
+            for field in 0..9 {
                 let mut forged = plan.clone();
                 let cpu = forged.roots.get_mut(&id).unwrap().cpu.as_mut().unwrap();
                 let summary = cpu.summary.as_mut().unwrap();
@@ -697,6 +697,9 @@ fn cpu_saved_summary_checks_live_result_ordinal_and_retained_owner_on_both_emitt
                     3 => summary.bytes += 1,
                     4 => summary.ordinal = cpu.binding.worker.live,
                     5 => summary.retained = !summary.retained,
+                    6 => summary.retained_count += 1,
+                    7 if !summary.owners.is_empty() => summary.owners.clear(),
+                    7 => continue,
                     _ => cpu.summary = None,
                 }
                 assert!(
