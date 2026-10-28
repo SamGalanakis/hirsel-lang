@@ -2,8 +2,9 @@
 use super::*;
 
 // Scheduler handles are carrier identities, not Resource values. A Task with
-// a Resource result is deliberately excluded; channel and unknown handles need
-// their own transport proof even when their immediate scan has no payload.
+// a Resource result is deliberately excluded. Channel endpoints are inert only
+// with a self-bound schema, a plain receive payload and exact close retirement.
+// Unknown endpoints and Resource-bearing receivers still require custody.
 pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> bool {
     use crate::layout_types::{HandleKind, ScanStep};
     let Some(record) = layouts.layout(layout) else {
@@ -15,6 +16,12 @@ pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> b
     {
         return false;
     }
+    let channel = record.fields.is_empty()
+        && record.scan.len() == 1
+        && matches!(
+            record.drop.as_slice(),
+            [crate::layout_types::DropStep::CloseHandle { offset: 0 }]
+        );
     record.scan.iter().all(|step| match step {
         ScanStep::Handle {
             kind: HandleKind::Scope,
@@ -26,6 +33,18 @@ pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> b
             obtains: Some(payload),
             ..
         } => plain(layouts, *payload, 0),
+        ScanStep::Handle {
+            offset: 0,
+            kind: HandleKind::Sender,
+            ty: Some(schema),
+            obtains: None,
+        } => channel && *schema == layout,
+        ScanStep::Handle {
+            offset: 0,
+            kind: HandleKind::Receiver,
+            ty: Some(schema),
+            obtains: Some(payload),
+        } => channel && *schema == layout && plain(layouts, *payload, 0),
         _ => false,
     })
 }
@@ -222,6 +241,68 @@ mod tests {
                 scalars: vec![],
                 unaligned: false,
             },
+        }
+    }
+
+    #[test]
+    fn plain_channel_endpoints_require_their_own_schema_and_exact_retirement() {
+        let mut table = LayoutTable::new(&TargetSpec::x86_64_unknown_linux_gnu());
+        table.layouts = vec![
+            record(LayoutKind::Unit),
+            record(LayoutKind::Resource),
+            record(LayoutKind::Handle),
+        ];
+        let channel = LayoutId(2);
+        for kind in [HandleKind::Sender, HandleKind::Receiver] {
+            for corruption in [
+                "none",
+                "foreign type",
+                "unknown type",
+                "resource",
+                "recursive",
+                "extra scan",
+                "drop",
+            ] {
+                let record = &mut table.layouts[2];
+                record.drop = vec![DropStep::CloseHandle { offset: 0 }];
+                record.scan = vec![ScanStep::Handle {
+                    offset: 0,
+                    kind,
+                    ty: Some(channel),
+                    obtains: (kind == HandleKind::Receiver).then_some(LayoutId(0)),
+                }];
+                match corruption {
+                    "none" => (),
+                    "foreign type" => {
+                        if let ScanStep::Handle { ty, .. } = &mut record.scan[0] {
+                            *ty = Some(LayoutId(0));
+                        }
+                    }
+                    "unknown type" => {
+                        if let ScanStep::Handle { ty, .. } = &mut record.scan[0] {
+                            *ty = None;
+                        }
+                    }
+                    "resource" => {
+                        if let ScanStep::Handle { obtains, .. } = &mut record.scan[0] {
+                            *obtains = Some(LayoutId(1));
+                        }
+                    }
+                    "recursive" => {
+                        if let ScanStep::Handle { obtains, .. } = &mut record.scan[0] {
+                            *obtains = Some(channel);
+                        }
+                    }
+                    "extra scan" => record.scan.push(record.scan[0].clone()),
+                    "drop" => record.drop.clear(),
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    resource_free_handle(&table, channel),
+                    corruption == "none",
+                    "{kind:?}/{corruption}"
+                );
+            }
         }
     }
 

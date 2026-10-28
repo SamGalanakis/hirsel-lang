@@ -130,3 +130,42 @@ pub fn main()->Result[(),u64] {
         2,
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn scalar_channel_traffic_preserves_parent_and_child_resource_lifetimes() {
+    for tasks in ["tasks.cooperative@1", "tasks.free@1"] {
+        super::ownership_owned_call_49::source_calls_granted(
+            r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ let outside=Token()
+ task.scope(tasks,fn(s:Scope) {
+  let (tx,rx):(Sender[u64],Receiver[u64])=channel.open(tasks)
+  let child=task.async(s,fn() {
+   let token=Token()
+   let mut receiver=take rx
+   let first=channel.receive(tasks,mut receiver)
+   let second=channel.receive(tasks,mut receiver)
+   let Some(a)=take first else { failure.check(false,Bounds())
+return }
+   let Some(b)=take second else { failure.check(false,Bounds())
+return }
+   failure.check(a==7u64 && b==9u64,Bounds())
+  })
+  let mut sender=take tx
+  let _=channel.send(tasks,mut sender,7u64)
+  let _=channel.send(tasks,mut sender,9u64)
+  let _=task.await(s,take child)
+ })
+ Ok(())
+}
+"#,
+            2,
+            0,
+            &serde_json::json!({"io":{"tasks":tasks,"dirs":[]}}).to_string(),
+        );
+    }
+}

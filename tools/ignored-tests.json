@@ -547,5 +547,13 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_resource_selection_71::scalar_channel_traffic_preserves_parent_and_child_resource_lifetimes": {
+    "source": "crates/hirsel-driver/tests/it/ownership_resource_selection_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }
