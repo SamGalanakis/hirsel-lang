@@ -109,6 +109,10 @@ impl BodyTask {
         }
         let reads = Arc::new(record.reads);
         let facts = self.decode_facts(&record.facts, &reads)?;
-        self.install_cached_facts(record.body, reads, facts)
+        let completed = self.install_cached_facts(record.body, reads.clone(), facts)?;
+        if completed.is_ok() {
+            self.remember_cached_carry(record.body, reads, record.facts, record.decode_bytes);
+        }
+        Some(completed)
     }
 }

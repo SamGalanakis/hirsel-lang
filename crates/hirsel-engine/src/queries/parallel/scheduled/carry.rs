@@ -334,6 +334,33 @@ impl BodyTask {
             decode_bytes,
         );
     }
+    pub(super) fn remember_cached_carry(
+        &self,
+        reference: Reference,
+        reads: Arc<Reads>,
+        bytes: Vec<u8>,
+        decode_bytes: u64,
+    ) {
+        let queries = &self.queries;
+        let Some(carry) = queries
+            .carry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        let input = &queries.inputs[&self.input];
+        carry.remember(
+            self.input,
+            input.definition,
+            input.key.1,
+            reads,
+            reference,
+            bytes,
+            decode_bytes,
+        );
+    }
     pub(super) fn load_carry(&self) -> Option<Result<ProductRef, Reference>> {
         let queries = &self.queries;
         let carry = queries
