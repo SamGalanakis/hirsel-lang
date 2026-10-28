@@ -15,7 +15,7 @@ enum Transport {
 }
 pub(super) struct HeaderSources {
     by_definition: hirsel_syntax::DefMap<Vec<FileId>>,
-    transport: Transport,
+    transport: std::sync::RwLock<Transport>,
 }
 impl HeaderSources {
     pub(super) fn capture(engine: &QueryEngine, owners: Arc<crate::NativeRecordContext>) -> Self {
@@ -30,38 +30,51 @@ impl HeaderSources {
             }
             by_definition.insert(DefId::intern(path), selected.into_iter().collect());
         }
-        let transport = match engine.result_store.clone().filter(|store| store.enabled()) {
-            Some(store) => {
-                let records = crate::NativeRecords::new(engine.types.clone(), store.clone());
-                let files = files
-                    .into_iter()
-                    .map(|(file, syntaxes)| {
-                        (
-                            file,
-                            syntaxes
-                                .into_iter()
-                                .map(|syntax| {
-                                    records
-                                        .encode(&*owners, &(&syntax, syntax.occurrence))
-                                        .and_then(|bytes| store.put_content(SOURCE_INPUT, &bytes))
-                                })
-                                .collect(),
-                        )
-                    })
-                    .collect();
-                Transport::Stored {
-                    files,
-                    records,
-                    owners,
-                    store,
-                }
-            }
-            None => Transport::Written(files),
-        };
         Self {
             by_definition,
-            transport,
+            transport: std::sync::RwLock::new(Transport::Written(files)),
         }
+    }
+    pub(super) fn archive(
+        &self,
+        types: Arc<hirsel_types::TypeInterner>,
+        owners: Arc<crate::NativeRecordContext>,
+        store: Arc<dyn crate::store::ResultStore>,
+    ) -> Result<(), QueryError> {
+        let mut transport = self.transport.write().unwrap_or_else(|e| e.into_inner());
+        let Transport::Written(written) = &*transport else {
+            return Ok(());
+        };
+        let records = crate::NativeRecords::new(types, store.clone());
+        let refused = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "header source transport".into(),
+                message: "indexed source exceeds admitted input transport".into(),
+            })
+        };
+        let files = written
+            .iter()
+            .map(|(file, syntaxes)| {
+                let references = syntaxes
+                    .iter()
+                    .map(|syntax| {
+                        records
+                            .encode(&*owners, &(syntax, syntax.occurrence))
+                            .and_then(|bytes| store.put_content(SOURCE_INPUT, &bytes))
+                            .map(Some)
+                            .ok_or_else(refused)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((*file, references))
+            })
+            .collect::<Result<BTreeMap<_, _>, QueryError>>()?;
+        *transport = Transport::Stored {
+            files,
+            records,
+            owners,
+            store,
+        };
+        Ok(())
     }
     pub(super) fn materialize(
         &self,
@@ -81,7 +94,8 @@ impl HeaderSources {
             })
         };
         for file in files {
-            let syntaxes = match &self.transport {
+            let transport = self.transport.read().unwrap_or_else(|e| e.into_inner());
+            let syntaxes = match &*transport {
                 Transport::Written(files) => files.get(file).ok_or_else(refused)?.clone(),
                 Transport::Stored {
                     files,

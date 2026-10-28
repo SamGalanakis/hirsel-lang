@@ -958,7 +958,7 @@ extern "unused" fn unused()"#
             adapters.signature = Some(Arc::new(Header));
             let store = Arc::new(crate::store::MemStore::default());
             let mut engine =
-                QueryEngine::new(default_environment(), adapters).with_result_store(store);
+                QueryEngine::new(default_environment(), adapters).with_result_store(store.clone());
             let context = default_context();
             let file = engine
                 .sources
@@ -971,6 +971,11 @@ extern "unused" fn unused()"#
             let path = parsed.value.items[0].item.definition.clone();
             let written = Arc::downgrade(&parsed.value.items[0]);
             let snapshot = engine.signature_inputs();
+            snapshot
+                .header_products()
+                .unwrap()
+                .archive_sources(store)
+                .unwrap();
             drop(parsed);
             drop(engine);
             assert!(

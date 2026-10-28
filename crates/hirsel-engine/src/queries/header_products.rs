@@ -150,6 +150,16 @@ impl HeaderProducts {
     pub(crate) fn definitions(&self) -> impl Iterator<Item = DefId> + '_ {
         self.rows.keys().copied()
     }
+    /// Freeze input transport under the front host's existing source grant.
+    /// Legacy scalar views keep their written immutable inputs; a disposable
+    /// result provider never becomes their required source-input owner.
+    pub(crate) fn archive_sources(
+        &self,
+        store: Arc<dyn crate::store::ResultStore>,
+    ) -> Result<(), QueryError> {
+        self.syntax
+            .archive(self.types.clone(), self.owners.clone(), store)
+    }
     pub(crate) fn owners(&self) -> &Arc<crate::NativeRecordContext> {
         &self.owners
     }

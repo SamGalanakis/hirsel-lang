@@ -1719,6 +1719,9 @@ impl QueryEngine {
             ));
         }
         let snapshot = self.signature_inputs();
+        if let Some(headers) = snapshot.header_products() {
+            headers.archive_sources(store.clone())?;
+        }
         let mut inputs = BTreeMap::new();
         for (definition, syntax, text, implementation, key, registration) in selected {
             let id = DefId::intern(&definition);
