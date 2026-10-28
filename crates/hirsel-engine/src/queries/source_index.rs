@@ -108,18 +108,6 @@ fn invalid() -> QueryError {
         message: "source index exceeds admission, has an active transaction, or needs generated namespace carry".into(),
     })
 }
-fn hash<K, V>(weight: &mut crate::NativeMetadataWeight, capacity: usize) {
-    if capacity != 0 {
-        let layout = std::alloc::Layout::new::<(K, V)>();
-        weight.add(
-            capacity
-                .saturating_mul(2)
-                .saturating_mul(layout.size().saturating_add(1))
-                .saturating_add(16)
-                .saturating_add(layout.align()),
-        );
-    }
-}
 impl QueryEngine {
     fn source_header_reads(&self, key: &MemoKey) -> Option<&Arc<Reads>> {
         self.signatures
