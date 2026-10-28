@@ -1,6 +1,7 @@
 include!("compiler.rs");
 use std::{fs, process::Command};
 include!("matmul_stages.rs");
+include!("lifecycle.rs");
 
 static COMPILER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

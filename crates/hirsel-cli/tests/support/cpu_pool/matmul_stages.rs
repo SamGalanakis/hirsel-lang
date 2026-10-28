@@ -54,22 +54,11 @@ fn matmul_stage_probes(source: &str) -> String {
 
 fn matmul_job_probes(root: &std::path::Path, width: u32, batches: usize) {
     use std::collections::BTreeSet;
-    let lifecycle = fs::read_to_string(root.join("stages.probe.lifecycle")).unwrap();
-    for kind in ["start", "exit", "retire"] {
-        assert_eq!(
-            lifecycle
-                .lines()
-                .filter(|line| line.starts_with(&format!("{kind} ")))
-                .count(),
-            batches * width as usize
-        );
-    }
-    assert_eq!(
-        lifecycle
-            .lines()
-            .filter(|line| line.starts_with("shutdown "))
-            .count(),
-        batches
+    check_cpu_lifecycle(
+        &root.join("stages.probe.lifecycle"),
+        width as usize,
+        false,
+        batches,
     );
     let controls = fs::read_to_string(root.join("stages.probe.control")).unwrap();
     let mut identities = BTreeSet::new();
