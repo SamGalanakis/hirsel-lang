@@ -109,7 +109,8 @@ impl QueryEngine {
         Ok(files)
     }
     /// Bound front backing from indexed metadata. Planning must not demand
-    /// syntax, freeze declarations or construct a temporary owner catalog.
+    /// syntax or freeze declarations. Source owners use their existing
+    /// immutable indexed product, including its path allocations.
     pub fn front_input_footprint(
         &self,
         definitions: &[DefPath],
@@ -143,9 +144,9 @@ impl QueryEngine {
                 )
             })
             .ok_or_else(refused)?;
-        let owner_bytes =
-            crate::NativeRecordContext::input_bytes_for_anchors(self.sources.anchors().count())
-                .ok_or_else(refused)?;
+        let owner_bytes = crate::NativeRecordContext::capture(self)
+            .input_bytes()
+            .ok_or_else(refused)?;
         let source_headers = self
             .sources
             .input_bytes()
