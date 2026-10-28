@@ -1166,6 +1166,7 @@ fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
 #[test]
 fn cpu_saved_retained_recipes_cover_multiple_owners_and_active_arms() {
     with_compiler_stack(|| {
+        let mut accepted = Vec::new();
         for (result, body, count) in [
             (
                 "(unique List[u64], unique List[u64])",
@@ -1198,8 +1199,7 @@ fn cpu_saved_retained_recipes_cover_multiple_owners_and_active_arms() {
             assert_eq!(summary.retained_count, count, "{result}");
             assert!(!summary.owners.is_empty());
             let all: Vec<_> = program.units.iter().collect();
-            let mut accepted = Vec::new();
-            for kind in 0..2 {
+            for kind in 0..if result.starts_with("Result") { 3 } else { 2 } {
                 let mut bad = plan.clone();
                 let summary = bad
                     .roots
@@ -1213,8 +1213,29 @@ fn cpu_saved_retained_recipes_cover_multiple_owners_and_active_arms() {
                     .unwrap();
                 if kind == 0 {
                     summary.owners.clear();
-                } else {
+                } else if kind == 1 {
                     summary.retained_count -= 1;
+                } else {
+                    let variants = summary
+                        .owners
+                        .iter_mut()
+                        .find_map(|step| {
+                            if let hirsel_lir::layout_types::ScanStep::ActiveVariant {
+                                variants,
+                                ..
+                            } = step
+                            {
+                                Some(variants)
+                            } else {
+                                None
+                            }
+                        })
+                        .expect("result active-arm recipe");
+                    let (_, steps) = variants
+                        .iter_mut()
+                        .find(|(_, steps)| !steps.is_empty())
+                        .unwrap();
+                    steps.clear();
                 }
                 if hirsel_lir::ahead::validate_cpu_workers(
                     &all,
@@ -1223,13 +1244,9 @@ fn cpu_saved_retained_recipes_cover_multiple_owners_and_active_arms() {
                     &bad,
                     program.fuel,
                 ) {
-                    accepted.push(kind);
+                    accepted.push((result, kind));
                 }
             }
-            assert!(
-                accepted.is_empty(),
-                "accepted retained recipe kinds {accepted:?}"
-            );
             assert!(program.units.iter().any(|unit| {
                 unit.unit().tables.calls.iter().enumerate().any(|(i, _)| {
                     plan.cpu_certified_start(unit.unit(), hirsel_lir::ir::CallId(i as u32))
@@ -1270,6 +1287,10 @@ fn cpu_saved_retained_recipes_cover_multiple_owners_and_active_arms() {
                 );
             }
         }
+        assert!(
+            accepted.is_empty(),
+            "accepted retained recipe kinds {accepted:?}"
+        );
     });
 }
 
