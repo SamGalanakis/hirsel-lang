@@ -348,7 +348,8 @@ fn generated_source_selectors_keep_exact_source_ownership() {
 #[test]
 fn callee_launch_binds_checked_decoder_and_refuses_missing_native_root() {
     hirsel_engine::with_compiler_stack(|| {
-        let fixture = Fixture::with_source(Verify::On, "pub fn main(n:u64)->Result[u64,u64]{Ok(n)}");
+        let fixture =
+            Fixture::with_source(Verify::On, "pub fn main(n:u64)->Result[u64,u64]{Ok(n)}");
         let entry = &fixture.selected[0];
         let target = super::super::TargetSpec::x86_64_unknown_linux_gnu();
         let mut source = NativeLinkSource::from_settled(fixture.facts(), &fixture.lower).unwrap();
@@ -357,12 +358,20 @@ fn callee_launch_binds_checked_decoder_and_refuses_missing_native_root() {
         assert!(source.bind_call(&fixture.program, entry, &target).is_err());
         assert_ne!(ordinary, source.manifest_bytes().unwrap());
         let revision = fixture.semantic.semantic_program_revision(entry).unwrap();
-        let call = hirsel_run_config::RunConfig::for_program(
+        let mut call = hirsel_run_config::RunConfig::for_program(
             &revision,
             hirsel_run_schema::LaunchKind::Call,
-        )
-        .validated()
-        .unwrap();
+        );
+        call.call = Some(hirsel_run_schema::calls::CallRecord::new(
+            hirsel_run_schema::CallForm::Compute,
+            &hirsel_run_schema::calls::Cause {
+                instance: [1; 16],
+                ordinal: 0,
+                digest: [2; 32],
+            },
+            &[0; 8],
+        ));
+        let call = call.validated().unwrap();
         source.bind_run(entry, Arc::new(call)).unwrap();
         assert_eq!(root.path, DefPath::core("$native.runner_main"));
         let mut ready =
