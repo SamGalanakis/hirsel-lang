@@ -646,7 +646,16 @@ impl Adapter for SimIo {
                 completion: Completion::Ready,
                 fault: None,
                 resources: None,
-            }) if recorded == summary => {
+            }) if recorded.version == summary.version
+                && recorded.retirement == summary.retirement
+                && recorded.ordinal == summary.ordinal
+                && recorded.value == summary.value
+                && recorded.stop == summary.stop
+                && match (&recorded.native, &summary.native) {
+                    (Some(recorded), Some(actual)) => recorded == actual,
+                    _ => true,
+                } =>
+            {
                 self.position += 1;
                 Ok(())
             }

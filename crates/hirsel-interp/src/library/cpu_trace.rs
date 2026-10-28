@@ -33,63 +33,78 @@ pub(super) fn scalar(result: &OperationResult) -> Result<Vec<u8>, Error> {
     let OperationResult::Complete { value, .. } = result else {
         return Err(invalid("CPU trace requires completed scalar evidence"));
     };
-    fn encode(value: &Value, bytes: &mut Vec<u8>) -> Result<(), Error> {
-        match value {
-            Value::Unit => (),
-            Value::Bool(value) => bytes.push(u8::from(*value)),
-            Value::Integer(value) => {
-                bytes.extend_from_slice(&value.bits().to_le_bytes()[..value.width() as usize / 8])
-            }
-            Value::F32(value) => bytes.extend_from_slice(&value.to_le_bytes()),
-            Value::F64(value) => bytes.extend_from_slice(&value.to_le_bytes()),
-            Value::Sequence {
-                kind: hirsel_types::BuiltinType::List | hirsel_types::BuiltinType::Array,
-                elements,
-                arena: None,
-                ..
-            } => {
-                bytes.extend_from_slice(&(elements.len() as u64).to_le_bytes());
-                for element in elements {
-                    encode(
-                        element
-                            .as_ref()
-                            .ok_or_else(|| invalid("moved CPU sequence element"))?,
-                        bytes,
-                    )?;
-                }
-            }
-            Value::Sequence {
-                kind: hirsel_types::BuiltinType::Inline,
-                elements,
-                arena: None,
-            } => {
-                for element in elements {
-                    encode(
-                        element
-                            .as_ref()
-                            .ok_or_else(|| invalid("moved CPU inline element"))?,
-                        bytes,
-                    )?;
-                }
-            }
-            Value::Tuple(fields) | Value::Box(fields) => {
-                for field in fields {
-                    encode(
-                        field
-                            .as_ref()
-                            .ok_or_else(|| invalid("moved CPU scalar field"))?,
-                        bytes,
-                    )?;
-                }
-            }
-            _ => return Err(invalid("CPU trace has no scalar result encoding")),
-        }
-        Ok(())
-    }
     // TaskFinish owns Some(value), including its initialized discriminant.
     let mut bytes = 1u32.to_le_bytes().to_vec();
-    encode(value, &mut bytes)?;
+    encode_value(value, &mut bytes)?;
     Ok(bytes)
+}
+
+pub(super) fn encode_value(value: &Value, bytes: &mut Vec<u8>) -> Result<(), Error> {
+    match value {
+        Value::Unit => (),
+        Value::Bool(value) => bytes.push(u8::from(*value)),
+        Value::Integer(value) => {
+            bytes.extend_from_slice(&value.bits().to_le_bytes()[..value.width() as usize / 8])
+        }
+        Value::F32(value) => bytes.extend_from_slice(&value.to_le_bytes()),
+        Value::F64(value) => bytes.extend_from_slice(&value.to_le_bytes()),
+        Value::Sequence {
+            kind: hirsel_types::BuiltinType::List | hirsel_types::BuiltinType::Array,
+            elements,
+            arena: None,
+            ..
+        } => {
+            bytes.extend_from_slice(&(elements.len() as u64).to_le_bytes());
+            for element in elements {
+                encode_value(
+                    element
+                        .as_ref()
+                        .ok_or_else(|| invalid("moved CPU sequence element"))?,
+                    bytes,
+                )?;
+            }
+        }
+        Value::Sequence {
+            kind: hirsel_types::BuiltinType::Inline,
+            elements,
+            arena: None,
+        } => {
+            for element in elements {
+                encode_value(
+                    element
+                        .as_ref()
+                        .ok_or_else(|| invalid("moved CPU inline element"))?,
+                    bytes,
+                )?;
+            }
+        }
+        Value::Tuple(fields)
+        | Value::Box(fields)
+        | Value::Record { fields, .. }
+        | Value::Distinct { fields, .. } => {
+            for field in fields {
+                encode_value(
+                    field
+                        .as_ref()
+                        .ok_or_else(|| invalid("moved CPU scalar field"))?,
+                    bytes,
+                )?;
+            }
+        }
+        Value::Variant { variant, fields } => {
+            bytes.extend_from_slice(&variant.to_le_bytes());
+            for field in fields {
+                encode_value(
+                    field
+                        .as_ref()
+                        .ok_or_else(|| invalid("moved CPU variant field"))?,
+                    bytes,
+                )?;
+            }
+        }
+        _ => return Err(invalid("CPU trace has no scalar result encoding")),
+    }
+    Ok(())
 }
 
 impl Library {

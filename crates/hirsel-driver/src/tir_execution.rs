@@ -492,7 +492,15 @@ fn run_provider_on_host(
     let replay = matches!(operations.io, network::HostIo::Replay(_));
     if let Some(refusal) = operations.refused.take() {
         return Err(ToolError::Runtime(if replay {
-            format!("replay refused: {refusal}")
+            if run.budgets().is_some_and(|budget| budget.fuel.is_some())
+                && run.record().io.as_ref().is_some_and(|io| {
+                    io.cpu.is_some() && io.tasks.as_deref() != Some("tasks.free@1")
+                })
+            {
+                format!("replay refused: Ordered CPU fuel accounting is engine-specific; {refusal}")
+            } else {
+                format!("replay refused: {refusal}")
+            }
         } else {
             format!("host Io: {refusal}")
         }));
@@ -538,6 +546,11 @@ fn run_provider_on_host(
     }
     let outcome = hirsel_engine::project_outcome(&execution, &sources)
         .map_err(|error| ToolError::Runtime(format!("{error:?}")))?;
+    if let RunOutcome::BudgetExceeded(kind) = outcome {
+        operations
+            .cpu_budget_stop(kind)
+            .map_err(|error| ToolError::Runtime(format!("{error:?}")))?;
+    }
     if let network::HostIo::Replay(io) = &mut operations.io
         && !operations.library.native_free()
         && !matches!(execution.outcome, hirsel_interp::Outcome::ToolingLimit(_))

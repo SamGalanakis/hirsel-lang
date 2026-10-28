@@ -32,7 +32,7 @@ pub(super) struct Batch {
 pub(super) struct RetiredSummary {
     pub charges: Stretch,
     pub result: Result<(), hirsel_run_schema::BudgetKind>,
-    pub record: crate::io::CpuSummary,
+    pub record: Option<crate::io::CpuSummary>,
 }
 
 impl Batch {
@@ -160,40 +160,45 @@ impl Batch {
         let summary = *summary;
         let value = value.clone();
         let (charges, result) = self.jobs.retire_published_at(self.owners[&task], state);
-        if result.is_ok() {
-            self.summaries.remove(&task);
-            // SAFETY: publication borrows a saved mapper's exclusive record.
-            // Only its logical head retires it, before returning to that frame.
-            unsafe { (*summary).phase = super::ahead::cpu_handoff::SUMMARY_RETIRED };
+        if let Err(stop) = result {
+            return Some(RetiredSummary {
+                charges,
+                result: Err(stop.kind),
+                record: None,
+            });
         }
+        self.summaries.remove(&task);
+        // SAFETY: publication borrows a saved mapper's exclusive record.
+        // Only its logical head retires it, before returning to that frame.
+        unsafe { (*summary).phase = super::ahead::cpu_handoff::SUMMARY_RETIRED };
         let settled = self.jobs.settled();
         let record = crate::io::CpuSummary {
             version: 2,
             retirement: self.retirement,
             ordinal: self.owners[&task] as u64,
-            // SAFETY: the mapper's saved frame still owns the borrowed record.
-            // Do not record its addresses or potentially padded value carrier.
-            descriptor: unsafe { (*summary).descriptor },
-            value_bytes: unsafe { (*summary).value_bytes },
-            retained_count: unsafe { (*summary).retained_count },
             value,
-            pieces: crate::io::CpuSummary::pieces(&self.recorded_prefixes[&task]),
-            level: settled.level,
-            limit: settled.limit,
-            fuel: settled.fuel,
-            stop: result.as_ref().err().map(|stop| stop.kind),
+            stop: None,
+            native: Some(crate::io::CpuNativeSummary {
+                // SAFETY: the mapper's saved frame still owns the borrowed record.
+                // Do not record its addresses or potentially padded value carrier.
+                descriptor: unsafe { (*summary).descriptor },
+                value_bytes: unsafe { (*summary).value_bytes },
+                retained_count: unsafe { (*summary).retained_count },
+                pieces: crate::io::CpuSummary::pieces(&self.recorded_prefixes[&task]),
+                level: settled.level,
+                limit: settled.limit,
+                fuel: settled.fuel,
+            }),
         };
         self.retirement = self
             .retirement
             .checked_add(1)
             .expect("CPU retirement overflow");
-        if result.is_ok() {
-            self.recorded_prefixes.remove(&task);
-        }
+        self.recorded_prefixes.remove(&task);
         Some(RetiredSummary {
             charges,
             result: result.map_err(|stop| stop.kind),
-            record,
+            record: Some(record),
         })
     }
 
@@ -674,10 +679,11 @@ mod tests {
             assert_eq!(summary.phase, SUMMARY_PUBLISHED);
             let RetiredSummary { result, record, .. } =
                 batch.retire_summary(9, &mut state).unwrap();
+            let record = record.unwrap();
             assert_eq!(record.ordinal, 1);
             assert_eq!(record.retirement, 0);
-            assert_eq!(record.level, 60);
-            assert_eq!(record.fuel, 19);
+            assert_eq!(record.native.as_ref().unwrap().level, 60);
+            assert_eq!(record.native.as_ref().unwrap().fuel, 19);
             assert_eq!(record.stop, None);
             record.validate().unwrap();
             assert_eq!(result, Ok(()));
@@ -724,7 +730,7 @@ mod tests {
     fn retired_summary_tape_follows_job_order_and_preserves_selected_budget_stops() {
         use super::super::ahead::cpu_handoff::*;
         use crate::budget::stretch::{Budgets, Event as Charge, summarise};
-        use crate::io::{CpuSummary, Event};
+        use crate::io::Event;
         use hirsel_run_schema::BudgetKind;
         for (limit, fuel, stop) in [(64, 20, BudgetKind::Memory), (128, 1, BudgetKind::Fuel)] {
             let mut state = Settled {
@@ -769,20 +775,24 @@ mod tests {
             assert_eq!(state.level, 0);
             let first = batch.retire_summary(7, &mut state).unwrap();
             assert_eq!(first.result, Ok(()));
-            assert_eq!((first.record.ordinal, first.record.retirement), (0, 0));
+            let first = first.record.unwrap();
+            assert_eq!((first.ordinal, first.retirement), (0, 0));
             assert_eq!(
                 batch.settle(7, &Stretch::new(budgets), &mut state, true),
                 Some(Ok(()))
             );
             let second = batch.retire_summary(9, &mut state).unwrap();
             assert_eq!(second.result, Err(stop));
-            assert_eq!((second.record.ordinal, second.record.retirement), (1, 1));
-            assert_eq!(second.record.stop, Some(stop));
+            assert!(
+                second.record.is_none(),
+                "a rejected result is not published"
+            );
+            assert_eq!(batch.retirement, 1);
             assert_eq!(
                 summaries[1].phase, SUMMARY_PUBLISHED,
                 "a stopped mapper never resumes"
             );
-            let records: [CpuSummary; 2] = [first.record, second.record];
+            let records = [first];
             let events = records
                 .iter()
                 .map(|record| Event {
@@ -793,14 +803,19 @@ mod tests {
                 })
                 .collect();
             let mut replay = SimIo::new(Tree::default(), events);
+            let mut younger = records[0].clone();
+            younger.ordinal = 1;
             assert_eq!(
-                replay.cpu_summary(&records[1]),
+                replay.cpu_summary(&younger),
                 Err(AdapterError::ReplayMismatch(0))
             );
             for record in records {
                 replay.cpu_summary(&record).unwrap();
             }
-            replay.finish().unwrap();
+            replay.set_ending(Some(hirsel_run_schema::RunOutcome::BudgetExceeded(stop)));
+            replay
+                .finish_outcome(&hirsel_run_schema::RunOutcome::BudgetExceeded(stop))
+                .unwrap();
         }
     }
 

@@ -490,20 +490,22 @@ fn settled_cpu_summary() -> hirsel_rt::io::CpuSummary {
         version: 2,
         retirement: 0,
         ordinal: 1,
-        descriptor: 0,
-        value_bytes: 8,
-        retained_count: 0,
         value: 42u64.to_le_bytes().to_vec(),
-        pieces: vec![CpuPiece {
-            credit: 0,
-            fuel: 3,
-            net: 16,
-            envelope: vec![(2, 16)],
-        }],
-        level: 24,
-        limit: 1024,
-        fuel: 97,
         stop: None,
+        native: Some(hirsel_rt::io::CpuNativeSummary {
+            descriptor: 0,
+            value_bytes: 8,
+            retained_count: 0,
+            pieces: vec![CpuPiece {
+                credit: 0,
+                fuel: 3,
+                net: 16,
+                envelope: vec![(2, 16)],
+            }],
+            level: 24,
+            limit: 1024,
+            fuel: 97,
+        }),
     }
 }
 
@@ -642,17 +644,17 @@ fn cpu_summary_replay_checks_all_fields_and_never_consumes_a_mismatch() {
         (|s: &mut hirsel_rt::io::CpuSummary| s.version += 1) as fn(&mut hirsel_rt::io::CpuSummary),
         |s| s.retirement += 1,
         |s| s.ordinal += 1,
-        |s| s.descriptor += 1,
-        |s| s.value_bytes += 1,
-        |s| s.retained_count += 1,
+        |s| s.native.as_mut().unwrap().descriptor += 1,
+        |s| s.native.as_mut().unwrap().value_bytes += 1,
+        |s| s.native.as_mut().unwrap().retained_count += 1,
         |s| s.value[0] ^= 1,
         |s| s.value.pop().map(|_| ()).unwrap(),
-        |s| s.pieces[0].fuel += 1,
-        |s| s.pieces[0].net += 1,
-        |s| s.pieces[0].envelope[0].1 += 1,
-        |s| s.level += 1,
-        |s| s.limit += 1,
-        |s| s.fuel += 1,
+        |s| s.native.as_mut().unwrap().pieces[0].fuel += 1,
+        |s| s.native.as_mut().unwrap().pieces[0].net += 1,
+        |s| s.native.as_mut().unwrap().pieces[0].envelope[0].1 += 1,
+        |s| s.native.as_mut().unwrap().level += 1,
+        |s| s.native.as_mut().unwrap().limit += 1,
+        |s| s.native.as_mut().unwrap().fuel += 1,
         |s| s.stop = Some(hirsel_run_schema::BudgetKind::Fuel),
     ] {
         let mut changed = summary.clone();
@@ -668,4 +670,41 @@ fn cpu_summary_replay_checks_all_fields_and_never_consumes_a_mismatch() {
         replay.cpu_summary(&summary),
         Err(AdapterError::MissingInput(1))
     );
+}
+
+#[test]
+fn cpu_summary_portable_replay_checks_results_without_native_layout_inputs() {
+    let native = settled_cpu_summary();
+    let portable = hirsel_rt::io::CpuSummary {
+        native: None,
+        ..native.clone()
+    };
+    for (recorded, actual) in [(&native, &portable), (&portable, &native)] {
+        let event = Event {
+            request: Request::CpuSummary(recorded.clone()),
+            completion: Completion::Ready,
+            fault: None,
+            resources: None,
+        };
+        let mut replay = SimIo::new(Tree::default(), vec![event]);
+        for change in [
+            (|s: &mut hirsel_rt::io::CpuSummary| s.retirement += 1)
+                as fn(&mut hirsel_rt::io::CpuSummary),
+            |s| s.ordinal += 1,
+            |s| s.stop = Some(hirsel_run_schema::BudgetKind::Fuel),
+            |s| s.value[0] ^= 1,
+            |s| {
+                s.value.pop();
+            },
+        ] {
+            let mut changed = actual.clone();
+            change(&mut changed);
+            assert_eq!(
+                replay.cpu_summary(&changed),
+                Err(AdapterError::ReplayMismatch(0))
+            );
+        }
+        replay.cpu_summary(actual).unwrap();
+        replay.finish().unwrap();
+    }
 }

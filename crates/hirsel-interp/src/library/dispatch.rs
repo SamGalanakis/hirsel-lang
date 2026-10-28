@@ -34,6 +34,8 @@ pub struct Library {
     pub(super) cpu_trace: Option<super::cpu_trace::Trace>,
     pub(super) cpu_supplied: Option<(super::cpu::CpuControl, u32)>,
     pub(super) cpu_waits: std::collections::BTreeMap<u64, super::cpu::Batch>,
+    pub(super) cpu_jobs: std::collections::BTreeMap<u64, u64>,
+    pub(super) cpu_retirement: u64,
     pub(super) cpu_active: std::collections::BTreeSet<u64>,
     pub(super) next_shared: u64,
     /// A scripted client's unmet Expect at the last handle drop (LANG-9).
@@ -116,6 +118,8 @@ impl Library {
             signals: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
+            cpu_jobs: Default::default(),
+            cpu_retirement: 0,
             cpu_active: Default::default(),
             cpu_waits: Default::default(),
             cpu_certified: false,
@@ -1676,6 +1680,7 @@ impl Operations for Library {
         }
         self.free_end(id)?;
         self.cpu_active.remove(&id);
+        self.cpu_jobs.remove(&id);
         self.tasks.finished(id, result)
     }
     fn defer_release(&mut self, root: &crate::value::SharedRoot) -> bool {

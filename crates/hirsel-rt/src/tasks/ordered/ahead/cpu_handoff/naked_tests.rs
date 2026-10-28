@@ -243,8 +243,18 @@ fn settled_native_summary_records_once_and_replays_at_every_runtime_width() {
     assert_eq!(summary.value, 42u64.to_le_bytes());
     assert_eq!(summary.ordinal, 0);
     assert_eq!(summary.retirement, 0);
-    assert_eq!(summary.pieces.iter().map(|p| p.fuel).sum::<u64>(), 3);
-    assert_eq!(summary.fuel, 97);
+    assert_eq!(
+        summary
+            .native
+            .as_ref()
+            .unwrap()
+            .pieces
+            .iter()
+            .map(|p| p.fuel)
+            .sum::<u64>(),
+        3
+    );
+    assert_eq!(summary.native.as_ref().unwrap().fuel, 97);
     assert_eq!(summary.stop, None);
     for width in [1, 2, 4, 8] {
         let replay = run_summary(
@@ -277,12 +287,15 @@ fn head_and_nonhead_allocation_prefixes_record_identical_charges_at_every_runtim
             let Request::CpuSummary(summary) = &events[2].request else {
                 panic!("summary follows the claim")
             };
-            assert_eq!(summary.pieces.len(), 1);
-            assert_eq!(summary.pieces[0].fuel, 5);
-            assert_eq!(summary.pieces[0].net, 48);
-            assert_eq!(summary.pieces[0].envelope, [(1, 16), (2, 48)]);
-            assert_eq!(summary.level, 48);
-            assert_eq!(summary.fuel, 95);
+            assert_eq!(summary.native.as_ref().unwrap().pieces.len(), 1);
+            assert_eq!(summary.native.as_ref().unwrap().pieces[0].fuel, 5);
+            assert_eq!(summary.native.as_ref().unwrap().pieces[0].net, 48);
+            assert_eq!(
+                summary.native.as_ref().unwrap().pieces[0].envelope,
+                [(1, 16), (2, 48)]
+            );
+            assert_eq!(summary.native.as_ref().unwrap().level, 48);
+            assert_eq!(summary.native.as_ref().unwrap().fuel, 95);
             if let Some(canonical) = &canonical {
                 assert_eq!(&events, canonical, "W{width}, nonhead {nonhead}");
             } else {

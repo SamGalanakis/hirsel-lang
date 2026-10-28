@@ -1,6 +1,6 @@
 //! Typed request/completion protocol. Expected I/O errors are data, never language failures.
 mod cpu_summary;
-pub use cpu_summary::{CpuPiece, CpuSummary};
+pub use cpu_summary::{CpuNativeSummary, CpuPiece, CpuSummary};
 
 use crate::handles::{Grant, Handles};
 use crate::net::is_net_request;

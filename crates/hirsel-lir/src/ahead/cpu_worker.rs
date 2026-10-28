@@ -235,9 +235,6 @@ pub fn validate_cpu_summaries(
         else {
             return true;
         };
-        if cpu.mapper.is_none() {
-            return cpu.summary.is_none();
-        }
         let Some(protocol) = CpuWorkerProtocol::derive(worker, table) else {
             return false;
         };
@@ -296,7 +293,7 @@ pub fn validate_cpu_workers(
         {
             return false;
         }
-        let expected_summary = if cpu.mapper.is_some() {
+        let expected_summary = {
             let Some((bytes, owners, retained_count)) =
                 summary_layout(table, protocol.result_layout)
             else {
@@ -315,8 +312,6 @@ pub fn validate_cpu_workers(
                 owners,
                 retained_count,
             })
-        } else {
-            None
         };
         if cpu.summary != expected_summary {
             return false;
@@ -634,7 +629,7 @@ pub(super) fn propose(
     if instructions + u.instructions.len() + u.terminators.len() > MAX_INSTRUCTIONS {
         return Err(no("oversize CPU worker graph"));
     }
-    let summary = if mapper.is_some() {
+    let summary = {
         let (bytes, owners, retained_count) = summary_layout(table, protocol.result_layout)
             .ok_or_else(|| no("CPU summary needs a complete retained-owner recipe"))?;
         Some(CpuSummary {
@@ -647,8 +642,6 @@ pub(super) fn propose(
             owners,
             retained_count,
         })
-    } else {
-        None
     };
     let spine = spine(u, &protocol);
     let wrapper = table.layout(protocol.environment).unwrap();

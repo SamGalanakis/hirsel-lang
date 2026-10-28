@@ -23,7 +23,7 @@ pub use launch::{
 
 mod callbacks;
 mod cpu;
-pub use cpu::CpuControl;
+pub use cpu::{CpuControl, CpuRetirement};
 mod cpu_trace;
 pub use cpu_trace::{CpuBoundary, CpuPhase};
 pub mod race;

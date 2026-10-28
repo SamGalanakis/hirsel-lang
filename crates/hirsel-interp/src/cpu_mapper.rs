@@ -3,28 +3,79 @@
 use crate::{AsyncTirProvider, Error, Value, aggregate::RuntimeTypes};
 use hirsel_tir::{Callee, Constant, Constructor, InstructionKind, Rvalue, Storage, Terminator};
 use hirsel_type_analysis::logical::{Logical, LogicalNominal, Resolved, Scope, type_arguments};
-use hirsel_types::{BuiltinType, Destination, Primitive, TypeId, TypeInterner, TypeKind};
-use std::collections::BTreeSet;
+use hirsel_types::{BuiltinType, Destination, Primitive, TypeId, TypeKind};
+use std::collections::{BTreeSet, HashSet};
 
-fn scalar(types: &TypeInterner, ty: TypeId) -> bool {
-    types.get(ty).is_some_and(|ty| match &ty.kind {
-        TypeKind::Primitive(p) => matches!(
-            p,
-            Primitive::Bool
-                | Primitive::U8
-                | Primitive::U16
-                | Primitive::U32
-                | Primitive::U64
-                | Primitive::I8
-                | Primitive::I16
-                | Primitive::I32
-                | Primitive::I64
-                | Primitive::F32
-                | Primitive::F64
-        ),
-        TypeKind::Tuple(fields) => fields.iter().all(|ty| scalar(types, *ty)),
-        _ => false,
-    })
+fn scalar(runtime: &RuntimeTypes, ty: TypeId) -> bool {
+    fn visit(runtime: &RuntimeTypes, ty: TypeId, active: &mut HashSet<TypeId>) -> bool {
+        if !active.insert(ty) {
+            return false;
+        }
+        let valid = runtime.types.get(ty).is_some_and(|row| match &row.kind {
+            TypeKind::Primitive(p) => matches!(
+                p,
+                Primitive::Bool
+                    | Primitive::U8
+                    | Primitive::U16
+                    | Primitive::U32
+                    | Primitive::U64
+                    | Primitive::I8
+                    | Primitive::I16
+                    | Primitive::I32
+                    | Primitive::I64
+                    | Primitive::F32
+                    | Primitive::F64
+            ),
+            TypeKind::Tuple(fields) => fields.iter().all(|ty| visit(runtime, *ty, active)),
+            TypeKind::Record(fields) => fields.iter().all(|field| visit(runtime, field.ty, active)),
+            TypeKind::Variant(variants) => variants.iter().all(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .all(|(_, ty)| visit(runtime, *ty, active))
+            }),
+            TypeKind::Named {
+                definition,
+                arguments,
+            } => {
+                let Some(nominal) = runtime.get(definition.path()) else {
+                    return false;
+                };
+                if nominal.resource || nominal.finalizer.is_some() {
+                    return false;
+                }
+                let Some(representation) = nominal.representation else {
+                    return false;
+                };
+                // Close the checked declaration exactly as retained-value shape
+                // traversal does, without consulting native receipt metadata.
+                let signature = runtime.serialization.get(definition.path());
+                let default_roles = hirsel_types::NominalRoles::default();
+                let roles = signature
+                    .map(|s| &*s.metadata.roles)
+                    .unwrap_or(&default_roles);
+                hirsel_types::substitute(
+                    &runtime.types,
+                    &runtime.memo,
+                    representation,
+                    &hirsel_types::Substitution {
+                        binder: Some(hirsel_types::GenericBinder::Bound(0)),
+                        roles,
+                        arguments,
+                        authorities: &vec![
+                            hirsel_types::AuthoritySummary::Unknown;
+                            arguments.len()
+                        ],
+                    },
+                )
+                .is_ok_and(|closed| visit(runtime, closed, active))
+            }
+            _ => false,
+        });
+        active.remove(&ty);
+        valid
+    }
+    visit(runtime, ty, &mut HashSet::new())
 }
 
 fn owned(runtime: &RuntimeTypes, ty: TypeId) -> bool {
@@ -119,7 +170,7 @@ pub(crate) async fn certified(
             if !environment
                 .capture_types
                 .iter()
-                .all(|ty| scalar(&runtime.types, *ty))
+                .all(|ty| scalar(runtime, *ty))
             {
                 return Ok(false);
             }
@@ -229,7 +280,7 @@ mod tests {
     use super::*;
     use hirsel_span::Span;
     use hirsel_tir::*;
-    use hirsel_types::{GenericArgument, QueryError, Type};
+    use hirsel_types::{GenericArgument, QueryError, Type, TypeInterner};
     use std::{
         future::Future,
         sync::Arc,

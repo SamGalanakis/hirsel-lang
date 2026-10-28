@@ -90,7 +90,7 @@ mod tests {
             let retired = batch.retire_summary(younger, &mut state).unwrap();
             assert_eq!(retired.result, Ok(()));
             assert_eq!(retired.charges, charges);
-            assert_eq!(retired.record.value, value.to_le_bytes());
+            assert_eq!(retired.record.unwrap().value, value.to_le_bytes());
             assert_eq!(summary.phase, SUMMARY_RETIRED);
             assert_eq!(
                 state,

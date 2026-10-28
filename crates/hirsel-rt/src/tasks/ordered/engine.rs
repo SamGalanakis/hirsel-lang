@@ -297,7 +297,13 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
         record,
     }) = published
     {
-        super::cpu::record_summary(ctx, &record)?;
+        // A speculative mapper may have reached publication beyond the first
+        // rejected charge. Serial replay stops at that charge without a value
+        // to publish. Only a successfully retired result belongs on the tape;
+        // the run's terminal outcome records the rejected budget instead.
+        if let Some(record) = record {
+            super::cpu::record_summary(ctx, &record)?;
+        }
         super::events::charges::partial(ctx, current(ctx), &charges, result);
         result.map_err(Stop::BudgetExceeded)?;
     }

@@ -46,7 +46,13 @@ fn cpu_interpreter_receipt_cuts(width: usize) {
     assert_eq!(controls.len(), 2 * (3 + 2 * width));
     let first = controls[0].0;
     let leave = controls[2 + 2 * width].0;
-    assert_eq!(leave - first, 2 + 2 * width, "one contiguous CPU batch");
+    assert!(
+        original[first..=leave].iter().all(|event| matches!(
+            event.request,
+            Request::CpuControl { .. } | Request::CpuSummary(_)
+        )),
+        "one contiguous CPU batch"
+    );
     let set_status = |event: &mut Event, status: u32| {
         let Request::CpuControl { outcome, .. } = &mut event.request else {
             unreachable!()
@@ -69,10 +75,21 @@ fn cpu_interpreter_receipt_cuts(width: usize) {
         let events = root.join("native.events");
         let mut cells = 0;
         for status in [8, 16, 17, 18, 19] {
-            for cut in first..=leave {
+            for (control, &(cut, _)) in controls[..3 + 2 * width].iter().enumerate() {
+                let claimed = if cut == leave {
+                    2 * width
+                } else {
+                    control.saturating_sub(2)
+                };
                 let mut chosen = original[..=cut].to_vec();
                 set_status(chosen.last_mut().unwrap(), status);
                 if cut != first && cut != leave {
+                    // Already claimed children complete before the controller
+                    // leaves. Keep their independently recorded mapper values,
+                    // while removing controls and results for unclaimed jobs.
+                    chosen.extend(original[cut + 1..leave].iter().filter(|event| {
+                        matches!(&event.request, Request::CpuSummary(summary) if summary.ordinal < claimed as u64)
+                    }).cloned());
                     let mut leaving = original[leave].clone();
                     set_status(&mut leaving, status);
                     chosen.push(leaving);
@@ -144,11 +161,6 @@ fn cpu_interpreter_receipt_cuts(width: usize) {
                     .unwrap()
                     .0;
                 let prefix = &native[..next];
-                let claimed = if cut == leave {
-                    2 * width
-                } else {
-                    (cut - first).saturating_sub(2)
-                };
                 assert_eq!(
                     prefix
                         .iter()

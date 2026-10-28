@@ -398,6 +398,36 @@ struct HostWait {
     arguments: Vec<Value>,
 }
 impl HostLibrary {
+    fn cpu_summary(&mut self, receipt: hirsel_interp::library::CpuRetirement) -> Result<(), Error> {
+        let summary = hirsel_rt::io::CpuSummary {
+            version: 2,
+            retirement: receipt.retirement,
+            ordinal: receipt.ordinal,
+            value: receipt.value,
+            stop: receipt.stop,
+            native: None,
+        };
+        self.io.adapter().cpu_summary(&summary).map_err(|error| {
+            let message = if receipt.stop.is_some() {
+                format!("Ordered CPU budget-stop replay requires the recording engine: {error:?}")
+            } else {
+                format!("{error:?}")
+            };
+            self.refused.get_or_insert(message.clone());
+            Error::Unavailable(format!("host CPU summary: {message}"))
+        })
+    }
+
+    pub(crate) fn cpu_budget_stop(
+        &mut self,
+        kind: hirsel_run_schema::BudgetKind,
+    ) -> Result<(), Error> {
+        if let Some(receipt) = self.library.cpu_budget_stop(kind) {
+            self.cpu_summary(receipt)?;
+        }
+        Ok(())
+    }
+
     pub fn new(
         run: &hirsel_tir::RunConfiguration,
         admitted: &hirsel_run_config::ValidatedRun,
@@ -2642,6 +2672,18 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 .map_err(|e| Error::Unavailable(format!("host exit report: {e}")))?;
         }
         Ok(consume)
+    }
+
+    fn task_finished(
+        &mut self,
+        id: u64,
+        result: OperationResult,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        if let Some(receipt) = self.library.cpu_retire(id, &result)? {
+            self.cpu_summary(receipt)?;
+        }
+        self.library.task_finished(id, result, context)
     }
 
     fn operations(&self) -> &dyn Operations {

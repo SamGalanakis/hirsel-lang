@@ -23,6 +23,14 @@ pub struct CpuControl {
     pub count: u64,
 }
 
+/// Semantic receipt derived solely from the interpreted mapper result.
+pub struct CpuRetirement {
+    pub retirement: u64,
+    pub ordinal: u64,
+    pub value: Vec<u8>,
+    pub stop: Option<hirsel_run_schema::BudgetKind>,
+}
+
 enum Stage {
     Scope,
     Prepare,
@@ -97,6 +105,44 @@ impl Library {
             width: int(arg(arguments, 1)?)?.bits() as u32,
             action: if self.cpu_certified { 4 } else { 0 },
             count: 0,
+        })
+    }
+
+    pub fn cpu_retire(
+        &mut self,
+        child: u64,
+        result: &OperationResult,
+    ) -> Result<Option<CpuRetirement>, Error> {
+        let Some(&ordinal) = self.cpu_jobs.get(&child) else {
+            return Ok(None);
+        };
+        let OperationResult::Complete { value, .. } = result else {
+            return Ok(None);
+        };
+        let mut bytes = Vec::new();
+        cpu_trace::encode_value(value, &mut bytes)?;
+        let retirement = self.cpu_retirement;
+        self.cpu_retirement += 1;
+        self.cpu_jobs.remove(&child);
+        Ok(Some(CpuRetirement {
+            retirement,
+            ordinal,
+            value: bytes,
+            stop: None,
+        }))
+    }
+
+    /// A budget cut has no mapper value. It follows the independently completed
+    /// prefix, including a stop before CPU admission. Controller cuts use ordinal zero.
+    pub fn cpu_budget_stop(&self, kind: hirsel_run_schema::BudgetKind) -> Option<CpuRetirement> {
+        if self.simulation.config.tasks_free || self.simulation.config.cpu.is_none() {
+            return None;
+        }
+        Some(CpuRetirement {
+            retirement: self.cpu_retirement,
+            ordinal: self.cpu_jobs.get(&self.tasks.current).copied().unwrap_or(0),
+            value: Vec::new(),
+            stop: Some(kind),
         })
     }
 
@@ -217,6 +263,9 @@ impl Library {
         self.cpu_boundary(CpuPhase::Control(request, status));
         if matches!(action, 0 | 4) && status == 0 {
             self.cpu_active.insert(self.tasks.current);
+        }
+        if action == 2 && status == 0 {
+            self.cpu_retirement = 0;
         }
         if action == 1 {
             self.cpu_active.remove(&self.tasks.current);
@@ -410,6 +459,7 @@ impl Library {
                 )?;
                 if !self.simulation.config.tasks_free {
                     self.tasks.cpu_children.insert(child);
+                    self.cpu_jobs.insert(child, batch.next as u64);
                 }
                 self.tasks.yield_now = self.simulation.config.tasks_free;
                 self.cpu_boundary(CpuPhase::Spawn(self.ownership_task_path(child).unwrap()));
@@ -624,6 +674,12 @@ mod tests {
                     library.cpu_control(width, 0, 0, &context).unwrap(),
                     Ok(0)
                 ));
+                assert!(
+                    library
+                        .cpu_budget_stop(hirsel_run_schema::BudgetKind::Fuel)
+                        .is_none(),
+                    "Free CPU stops belong exclusively to the phase tape"
+                );
                 let mut result = library.cpu_pause(
                     Batch {
                         width,

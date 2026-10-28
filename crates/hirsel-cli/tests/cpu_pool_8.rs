@@ -148,3 +148,8 @@ include!("support/cpu_pool/interpreter_fuel.rs");
 fn cpu_interpreter_cut_exact_source_fuel_stops() {
     cpu_interpreter_fuel_cuts(8);
 }
+
+#[test]
+fn ordered_summary_encodes_initialized_fields_and_active_arms() {
+    ordered_summary_fields();
+}

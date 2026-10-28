@@ -1133,32 +1133,42 @@ impl Wire for crate::io::CpuSummary {
         self.version.encode(out);
         self.retirement.encode(out);
         self.ordinal.encode(out);
-        self.descriptor.encode(out);
-        self.value_bytes.encode(out);
-        self.retained_count.encode(out);
         self.value.encode(out);
-        self.pieces.encode(out);
-        self.level.encode(out);
-        self.limit.encode(out);
-        self.fuel.encode(out);
         self.stop.encode(out);
+        self.native.encode(out);
     }
     fn decode(input: &mut Decode<'_>) -> Result<Self, String> {
         let summary = Self {
             version: Wire::decode(input)?,
             retirement: Wire::decode(input)?,
             ordinal: Wire::decode(input)?,
+            value: cpu_bounded(input, crate::tasks::ordered::values::BYTES_MAX)?,
+            stop: Wire::decode(input)?,
+            native: Wire::decode(input)?,
+        };
+        summary.validate()?;
+        Ok(summary)
+    }
+}
+impl Wire for crate::io::CpuNativeSummary {
+    fn encode(&self, out: &mut Vec<u8>) {
+        self.descriptor.encode(out);
+        self.value_bytes.encode(out);
+        self.retained_count.encode(out);
+        self.pieces.encode(out);
+        self.level.encode(out);
+        self.limit.encode(out);
+        self.fuel.encode(out);
+    }
+    fn decode(input: &mut Decode<'_>) -> Result<Self, String> {
+        Ok(Self {
             descriptor: Wire::decode(input)?,
             value_bytes: Wire::decode(input)?,
             retained_count: Wire::decode(input)?,
-            value: cpu_bounded(input, crate::tasks::ordered::values::BYTES_MAX)?,
             pieces: cpu_bounded(input, crate::budget::stretch::PIECES_MAX)?,
             level: Wire::decode(input)?,
             limit: Wire::decode(input)?,
             fuel: Wire::decode(input)?,
-            stop: Wire::decode(input)?,
-        };
-        summary.validate()?;
-        Ok(summary)
+        })
     }
 }

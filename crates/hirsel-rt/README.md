@@ -1211,7 +1211,16 @@ with the record's projections, mounts, Env snapshot, clocks and Net rules. Repla
 no grants and acquires no host resource; a recording of other code refuses before entry.
 Source-run launches (`hirsel run --native`) accept the same two spellings beside
 `--hirsel-run`, and the interpreter's host launch uses the same helpers, so a tape
-recorded by either engine replays in the other.
+recorded by either engine replays in the other when it has no budget stop.
+Ordered CPU receipt v2 separates the portable retirement index, job ordinal,
+initialized result bytes and stop kind from optional native descriptor, carrier,
+Stretch and frontier fields. Every replay checks the portable fields. Native
+replay additionally compares every native field when replaying a native receipt;
+the interpreter validates its framing and checksum. A mapper rejected by budget
+settlement publishes no result. Its native run outcome records the budget stop.
+The interpreter records its own value-free CPU stop receipt after its completed
+prefix. Fuel counts and cuts are specific to the engine and compilation, so a
+native CPU tape stopped on fuel is refused by the interpreter.
 
 Stdin and stderr are independent Io projections. RealIo pins explicitly supplied
 Read/Write providers, retries interrupted reads, captures accepted stderr prefixes

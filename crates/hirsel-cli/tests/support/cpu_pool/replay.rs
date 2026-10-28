@@ -68,6 +68,19 @@ fn replay_width(width: usize) {
     }
 }
 
+fn write_cpu_recording(path: &std::path::Path, recording: &hirsel_rt::launch::Recording) {
+    let header = hirsel_rt::launch::Recording {
+        events: vec![],
+        ..recording.clone()
+    };
+    let mut writer =
+        hirsel_rt::launch::RecordingWriter::new(fs::File::create(path).unwrap(), &header).unwrap();
+    for event in &recording.events {
+        writer.append(event).unwrap();
+    }
+    writer.finish().unwrap();
+}
+
 fn ordered_replay_width(width: usize) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
@@ -127,6 +140,123 @@ fn ordered_replay_width(width: usize) {
             let jobs = cpu_job_stages(&root.join("ordered.probe.jobs"));
             assert_eq!(jobs.len(), 2 * width);
             let mut recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
+            let summaries: Vec<_> = recording
+                .events
+                .iter()
+                .filter_map(|event| {
+                    if let hirsel_rt::io::Request::CpuSummary(summary) = &event.request {
+                        Some(summary)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                summaries.len(),
+                2 * width,
+                "{backend} {reorder}: generated summaries"
+            );
+            for (ordinal, summary) in summaries.iter().enumerate() {
+                assert_eq!(summary.version, 2);
+                assert_eq!(summary.ordinal, ordinal as u64);
+                let expected: u64 = expected[ordinal].trim_end_matches("u64").parse().unwrap();
+                assert_eq!(summary.value, expected.to_le_bytes());
+            }
+            if width == 8 && reorder == "auto" {
+                // Every corrupted tape byte is refused by the real frame codec.
+                let bytes = fs::read(&tape).unwrap();
+                for at in 0..bytes.len() {
+                    let mut bad = bytes.clone();
+                    bad[at] ^= 1;
+                    assert!(
+                        hirsel_rt::launch::parse_recording_bytes(&bad).is_err(),
+                        "{backend}: corrupted tape byte {at}"
+                    );
+                }
+                // Recompute framing/checksums so a semantic mismatch must be
+                // detected by serial execution, not merely by frame integrity.
+                let index = recording
+                    .events
+                    .iter()
+                    .position(|event| {
+                        matches!(event.request, hirsel_rt::io::Request::CpuSummary(_))
+                    })
+                    .unwrap();
+                for byte in 0..23 {
+                    let mut changed = recording.clone();
+                    let hirsel_rt::io::Request::CpuSummary(summary) =
+                        &mut changed.events[index].request
+                    else {
+                        unreachable!()
+                    };
+                    match byte {
+                        0..8 => summary.value[byte] ^= 1,
+                        8 => {
+                            summary.value.pop();
+                        }
+                        9 => summary.value.push(0),
+                        10 => summary.retirement += 1,
+                        11 => summary.ordinal += 1,
+                        12 => summary.stop = Some(hirsel_run_schema::BudgetKind::Fuel),
+                        13 => summary.native.as_mut().unwrap().descriptor += 1,
+                        14 => summary.native.as_mut().unwrap().value_bytes += 1,
+                        15 => summary.native.as_mut().unwrap().retained_count += 1,
+                        16 => summary.native.as_mut().unwrap().pieces[0].fuel ^= 1,
+                        17 => summary.native.as_mut().unwrap().pieces[0].net ^= 1,
+                        18 => summary.native.as_mut().unwrap().pieces[0]
+                            .envelope
+                            .push((0, 1)),
+                        19 => summary.native.as_mut().unwrap().level ^= 1,
+                        20 => summary.native.as_mut().unwrap().limit ^= 1,
+                        21 => summary.native.as_mut().unwrap().fuel ^= 1,
+                        _ => {
+                            summary
+                                .native
+                                .as_mut()
+                                .unwrap()
+                                .pieces
+                                .push(hirsel_rt::io::CpuPiece {
+                                    credit: 1,
+                                    fuel: 0,
+                                    net: 0,
+                                    envelope: vec![],
+                                })
+                        }
+                    }
+                    let bad_tape = root.join("corrupted.tape");
+                    write_cpu_recording(&bad_tape, &changed);
+                    let outcome = Command::new(&executable)
+                        .arg("--hirsel-replay")
+                        .arg(&bad_tape)
+                        .env("HIRSEL_RT_WORKERS", "1")
+                        .output()
+                        .unwrap();
+                    assert_eq!(
+                        outcome.status.code(),
+                        Some(hirsel_run_schema::exit::REFUSED),
+                        "{backend}: semantic corruption {byte}: {}",
+                        String::from_utf8_lossy(&outcome.stderr)
+                    );
+                    let interpreted = cpu_interpreter_cli(width, true)
+                        .arg("run")
+                        .arg(&manifest)
+                        .arg("--replay")
+                        .arg(&bad_tape)
+                        .output()
+                        .unwrap();
+                    if byte <= 12 {
+                        assert_eq!(
+                            interpreted.status.code(),
+                            Some(hirsel_run_schema::exit::REFUSED),
+                            "{backend}: interpreted portable corruption {byte}: {interpreted:?}"
+                        );
+                    } else {
+                        // A newly checksummed native-only mutation is opaque to
+                        // the interpreter. Native replay independently checks it.
+                        checked(interpreted);
+                    }
+                }
+            }
             let binding = recording.binding.as_mut().unwrap();
             binding.admitted_at = 0;
             binding.placement = None;
@@ -152,9 +282,230 @@ fn ordered_replay_width(width: usize) {
             assert_eq!(fs::read(&replayed).unwrap(), reference.as_ref().unwrap().0);
             assert_eq!(cpu_job_stages(&root.join("replay.probe.jobs")), jobs);
             assert!(fs::read(&probe).unwrap().is_empty());
+            if width == 8 && reorder == "auto" {
+                for budget in [1, 1000] {
+                    let mut limited: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&grants).unwrap()).unwrap();
+                    limited["budgets"] = serde_json::json!({
+                        "provider": "budgets.limits@2", "fuel": budget
+                    });
+                    let limited_grants = root.join("limited.json");
+                    fs::write(&limited_grants, limited.to_string()).unwrap();
+                    let stopped_tape = root.join("stopped.tape");
+                    let stopped = Command::new(&executable)
+                        .arg("--hirsel-grants")
+                        .arg(&limited_grants)
+                        .arg("--hirsel-record")
+                        .arg(&stopped_tape)
+                        .output()
+                        .unwrap();
+                    assert_eq!(
+                        stopped.status.code(),
+                        Some(hirsel_run_schema::exit::BUDGET_EXCEEDED),
+                        "{backend}: {stopped:?}"
+                    );
+                    let replayed = Command::new(&executable)
+                        .arg("--hirsel-replay")
+                        .arg(&stopped_tape)
+                        .output()
+                        .unwrap();
+                    assert_eq!(
+                        replayed.status.code(),
+                        stopped.status.code(),
+                        "{backend}: {replayed:?}"
+                    );
+                    let interpreted = cpu_interpreter_cli(width, true)
+                        .arg("run")
+                        .arg(&manifest)
+                        .arg("--replay")
+                        .arg(&stopped_tape)
+                        .output()
+                        .unwrap();
+                    assert_eq!(
+                        interpreted.status.code(),
+                        Some(hirsel_run_schema::exit::REFUSED),
+                        "{backend}: native CPU fuel cuts are engine-specific: {interpreted:?}"
+                    );
+                    assert!(
+                        String::from_utf8_lossy(&interpreted.stderr).contains("CPU"),
+                        "{backend}: {interpreted:?}"
+                    );
+                }
+            }
         }
         eprintln!(
             "D02 {backend} W{width}: serial off == physical auto == one-permit replay, complete canonical trace and projected tape"
         );
+    }
+}
+
+fn ordered_summary_fields() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    fs::write(
+        root.join("main.hir"),
+        r#"
+pub type AppError = Grant(GrantError) | Pool(CpuPoolError)
+pub type CpuRow { small: u8, value: u64 }
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let rows = core@1/cpu.map_scoped(tasks, 8u32,
+    fn() -> List[u64] uses {} { [1u64, 2u64] },
+    fn(take job: u64) -> (u8, u64) uses {} { (7u8, job) }) ? Pool
+  failure.check(rows == [(7u8, 1u64), (7u8, 2u64)], Bounds())
+  let arms = core@1/cpu.map_scoped(tasks, 8u32,
+    fn() -> List[u64] uses {} { [1u64, 2u64] },
+    fn(take job: u64) -> Result[u64, u8] uses {} {
+      if job == 1u64 { Ok(job) } else { Error(3u8) }
+    }) ? Pool
+  failure.check(arms == [Ok(1u64), Error(3u8)], Bounds())
+  let records = core@1/cpu.map_scoped(tasks, 8u32,
+    fn() -> List[u64] uses {} { [1u64, 2u64] },
+    fn(take job: u64) -> CpuRow uses {} { CpuRow(small: 7u8, value: job) }) ? Pool
+  failure.check(records == [CpuRow(small: 7u8, value: 1u64), CpuRow(small: 7u8, value: 2u64)], Bounds())
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let manifest = root.join("hirsel.json");
+    fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_summary_fields","version":"1"},
+        "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+    let grants = root.join("grants.json");
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        checked(
+            cpu_compiler()
+                .args(["build", "--fuel", "--validate-stages", "--backend", backend])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        let mut reference = None;
+        for reorder in ["off", "auto"] {
+            fs::write(&grants, serde_json::json!({"placement":{"cores":1,"reorder":reorder},
+                "io":{"dirs":[],"tasks":"tasks.cooperative@1","cpu":{"provider":"cpu.scoped@1",
+                "max_workers":8,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
+            let tape = root.join(format!("{backend}-{reorder}.tape"));
+            checked(
+                Command::new(&executable)
+                    .arg("--hirsel-grants")
+                    .arg(&grants)
+                    .arg("--hirsel-record")
+                    .arg(&tape)
+                    .output()
+                    .unwrap(),
+            );
+            let recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
+            let summaries: Vec<_> = recording
+                .events
+                .iter()
+                .filter_map(|event| {
+                    if let hirsel_rt::io::Request::CpuSummary(summary) = &event.request {
+                        Some(summary.value.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let expected = vec![
+                [vec![7], 1u64.to_le_bytes().to_vec()].concat(),
+                [vec![7], 2u64.to_le_bytes().to_vec()].concat(),
+                [0u32.to_le_bytes().to_vec(), 1u64.to_le_bytes().to_vec()].concat(),
+                [1u32.to_le_bytes().to_vec(), vec![3]].concat(),
+                [vec![7], 1u64.to_le_bytes().to_vec()].concat(),
+                [vec![7], 2u64.to_le_bytes().to_vec()].concat(),
+            ];
+            assert_eq!(
+                summaries, expected,
+                "{backend} {reorder}: padding and inactive arms"
+            );
+            checked(
+                cpu_interpreter_cli(8, true)
+                    .arg("run")
+                    .arg(&manifest)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .output()
+                    .unwrap(),
+            );
+            if reorder == "auto" {
+                let portable = root.join(format!("{backend}-portable.tape"));
+                checked(
+                    cpu_interpreter_cli(8, true)
+                        .arg("run")
+                        .arg(&manifest)
+                        .arg("--grants")
+                        .arg(&grants)
+                        .arg("--record")
+                        .arg(&portable)
+                        .output()
+                        .unwrap(),
+                );
+                checked(
+                    Command::new(&executable)
+                        .arg("--hirsel-replay")
+                        .arg(&portable)
+                        .output()
+                        .unwrap(),
+                );
+                let mut mutations = 0;
+                for (event_index, event) in recording.events.iter().enumerate() {
+                    let hirsel_rt::io::Request::CpuSummary(summary) = &event.request else {
+                        continue;
+                    };
+                    for byte in 0..summary.value.len() {
+                        let mut changed = recording.clone();
+                        let hirsel_rt::io::Request::CpuSummary(summary) =
+                            &mut changed.events[event_index].request
+                        else {
+                            unreachable!()
+                        };
+                        summary.value[byte] ^= 1;
+                        let corrupted = root.join("fields-corrupted.tape");
+                        write_cpu_recording(&corrupted, &changed);
+                        let native = Command::new(&executable)
+                            .arg("--hirsel-replay")
+                            .arg(&corrupted)
+                            .output()
+                            .unwrap();
+                        let interpreted = cpu_interpreter_cli(8, true)
+                            .arg("run")
+                            .arg(&manifest)
+                            .arg("--replay")
+                            .arg(&corrupted)
+                            .output()
+                            .unwrap();
+                        for (engine, output) in [("native", native), ("TIR", interpreted)] {
+                            assert_eq!(
+                                output.status.code(),
+                                Some(hirsel_run_schema::exit::REFUSED),
+                                "{backend} {engine} fields event {event_index} byte {byte}: {output:?}"
+                            );
+                        }
+                        mutations += 1;
+                    }
+                }
+                assert_eq!(
+                    mutations, 53,
+                    "all tuple, active-arm and record semantic bytes"
+                );
+            }
+            if let Some(reference) = &reference {
+                assert_eq!(&summaries, reference);
+            } else {
+                reference = Some(summaries);
+            }
+            checked(
+                Command::new(&executable)
+                    .arg("--hirsel-replay")
+                    .arg(&tape)
+                    .env("HIRSEL_RT_WORKERS", "1")
+                    .output()
+                    .unwrap(),
+            );
+        }
     }
 }
