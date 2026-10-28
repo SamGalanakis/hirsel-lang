@@ -91,3 +91,17 @@ include!("support/cpu_pool/allocation_audit.rs");
 fn native_typed_prefix_allocations_are_freed_before_heap_teardown() {
     typed_prefix_allocation_audit(8);
 }
+
+include!("support/cpu_pool/cleanup_cuts.rs");
+#[test]
+fn native_wide_success_every_byte_cleanup_cut() {
+    wide_cleanup_cuts(8, "success");
+}
+#[test]
+fn native_wide_failure_every_byte_cleanup_cut() {
+    wide_cleanup_cuts(8, "failure");
+}
+#[test]
+fn native_wide_cancel_every_byte_cleanup_cut() {
+    wide_cleanup_cuts(8, "cancel");
+}

@@ -1,4 +1,5 @@
 use std::{fs, process::Command};
+include!("matmul_stages.rs");
 
 static COMPILER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -125,6 +126,11 @@ fn every_cell(width: u32) {
             include_str!("../../../../../bench/langarena/cpu_harness.hir"),
         ),
     ] {
+        let source = if name == "matmul_parallel.hir" {
+            matmul_stage_probes(source)
+        } else {
+            source.to_owned()
+        };
         fs::write(root.join(name), source).unwrap();
     }
     let mut sizes = vec![1, width.saturating_sub(1), width, width + 1, 7];
@@ -176,7 +182,9 @@ fn every_cell(width: u32) {
             },
             {
                 let mut run = Command::new(&executable);
-                run.arg("--hirsel-grants").arg(&grants);
+                run.arg("--hirsel-grants")
+                    .arg(&grants)
+                    .env("HIRSEL_RT_CPU_PROBE", root.join("stages.probe"));
                 run
             },
         ] {
@@ -186,8 +194,9 @@ fn every_cell(width: u32) {
                 "{backend} W={width} sizes={sizes:?}: {output:?}"
             );
         }
+        matmul_job_probes(root, width, sizes.len());
         eprintln!(
-            "CPU every-cell {backend} W={width}, sizes={sizes:?}, cells={}",
+            "CPU transpose/output-init/map/join/assembly invariants and every-cell {backend} W={width}, sizes={sizes:?}, cells={}",
             sizes.iter().map(|n| n * n).sum::<u32>()
         );
     }
