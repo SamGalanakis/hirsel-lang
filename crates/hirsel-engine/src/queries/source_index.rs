@@ -24,7 +24,7 @@ pub struct SourceIndexState {
     declarations: crate::DeclarationIndex,
     package_manifests: BTreeMap<hirsel_syntax::PackageId, ContentHash>,
     types: Arc<hirsel_types::TypeInterner>,
-    catalog: catalog::Catalog,
+    catalog: catalog::SourceCatalog,
     compiler: ContentHash,
     snapshot_epoch: crate::Revision,
     snapshot_inputs_revision: u64,
@@ -38,12 +38,15 @@ pub(crate) enum SourceHeader {
 pub(crate) struct PackedSourceHeader {
     memo: crate::memo::Memo<QueryOutput<hirsel_types::SignatureRef>>,
     products: Arc<PhaseProducts>,
+    details: Option<Box<SourceHeaderDetails>>,
+    consistent: bool,
+}
+struct SourceHeaderDetails {
     failure: Option<hirsel_types::OperationalFailure>,
     covered: Option<Vec<SignatureDependency>>,
     depth: Option<crate::memo::DepthEvidence<Span>>,
     acceptance: Option<hirsel_validate::ExecutionReceipt>,
     selections: Vec<crate::comptime::Selection>,
-    consistent: bool,
 }
 impl SourceHeader {
     fn capture(entry: Arc<Entry<hirsel_types::SignatureRef>>) -> Self {
@@ -66,19 +69,45 @@ impl PackedSourceHeader {
             .value
             .as_ref()
             .is_ok_and(|output| output.dependencies == entry.covered);
+        let details = (entry.detail.operational_failure.is_some()
+            || !same_coverage
+            || entry.depth.is_some()
+            || entry.acceptance.is_some()
+            || !entry.selections.is_empty())
+        .then(|| {
+            Box::new(SourceHeaderDetails {
+                failure: entry.detail.operational_failure.clone(),
+                covered: (!same_coverage).then(|| entry.covered.clone()),
+                depth: entry.depth.clone(),
+                acceptance: entry.acceptance.clone(),
+                selections: entry.selections.clone(),
+            })
+        });
         Self {
             memo: entry.memo.clone(),
             products: entry.products.clone(),
-            failure: entry.detail.operational_failure.clone(),
-            covered: (!same_coverage).then(|| entry.covered.clone()),
-            depth: entry.depth.clone(),
-            acceptance: entry.acceptance.clone(),
-            selections: entry.selections.clone(),
+            details,
             consistent: entry.consistent,
         }
     }
     fn restore(self) -> Arc<Entry<hirsel_types::SignatureRef>> {
-        let covered = self.covered.unwrap_or_else(|| {
+        let SourceHeaderDetails {
+            failure,
+            covered,
+            depth,
+            acceptance,
+            selections,
+        } = self
+            .details
+            .map(|details| *details)
+            .unwrap_or(SourceHeaderDetails {
+                failure: None,
+                covered: None,
+                depth: None,
+                acceptance: None,
+                selections: vec![],
+            });
+        let covered = covered.unwrap_or_else(|| {
             self.memo
                 .value
                 .as_ref()
@@ -89,13 +118,13 @@ impl PackedSourceHeader {
             memo: self.memo,
             products: self.products,
             detail: DependencyReads {
-                operational_failure: self.failure,
+                operational_failure: failure,
                 ..Default::default()
             },
             covered,
-            depth: self.depth,
-            acceptance: self.acceptance,
-            selections: self.selections,
+            depth,
+            acceptance,
+            selections,
             consistent: self.consistent,
             verification: Default::default(),
         })
@@ -190,6 +219,21 @@ impl QueryEngine {
                 .len()
                 .saturating_mul(size_of::<(DefId, SourceHeader)>()),
         );
+        for entry in self.signatures.values() {
+            let same_coverage = entry
+                .memo
+                .value
+                .as_ref()
+                .is_ok_and(|output| output.dependencies == entry.covered);
+            if entry.detail.operational_failure.is_some()
+                || !same_coverage
+                || entry.depth.is_some()
+                || entry.acceptance.is_some()
+                || !entry.selections.is_empty()
+            {
+                weight.add(size_of::<SourceHeaderDetails>());
+            }
+        }
         weight.map(&self.specialization_dependencies, |w, _, entry| {
             let mut reads = crate::memo::retained::Weight::default();
             reads.reads(&entry.reads);
@@ -311,7 +355,9 @@ impl QueryEngine {
                 ))
                 .ok_or_else(invalid)?;
         }
-        if hirsel_intern::memory::metered() {
+        if hirsel_intern::memory::metered()
+            || std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some()
+        {
             let mut headers = if shared_products {
                 crate::memo::retained::source_shared_products_bytes()
             } else {
@@ -585,7 +631,7 @@ impl SourceIndexState {
         engine.types = types;
         // Pure structural memoization is disposable; no previous body phase
         // or interpreter is installed into the fresh source engine.
-        engine.catalog = catalog;
+        engine.catalog = catalog.restore();
         engine.snapshot_epoch = snapshot_epoch;
         engine.snapshot_inputs_revision = snapshot_inputs_revision;
         Ok(())

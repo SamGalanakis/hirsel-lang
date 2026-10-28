@@ -174,6 +174,24 @@ pub(crate) struct Catalog {
     facts_cache:
         std::sync::RwLock<BTreeMap<hirsel_syntax::LexicalOwner, (ContentHash, SourceFacts)>>,
 }
+pub(super) struct SourceCatalog {
+    files: Box<[(FileId, FileContext)]>,
+    candidates: Box<[(DefId, Box<[Candidate]>)]>,
+}
+impl SourceCatalog {
+    pub(super) fn restore(self) -> Catalog {
+        Catalog {
+            files: self.files.into_vec().into_iter().collect(),
+            candidates: self
+                .candidates
+                .into_vec()
+                .into_iter()
+                .map(|(id, rows)| (id.path().clone(), rows.into_vec()))
+                .collect(),
+            facts_cache: Default::default(),
+        }
+    }
+}
 impl Clone for Catalog {
     fn clone(&self) -> Self {
         Self {
@@ -226,7 +244,7 @@ impl Catalog {
         sources: &SourceMap,
         items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
         indexed: &BTreeMap<FileId, (FileContext, QueryEnvironment)>,
-    ) -> Self {
+    ) -> SourceCatalog {
         let mut carry = self.clone();
         for (file, (context, _)) in indexed {
             carry.files.insert(*file, context.clone());
@@ -249,11 +267,19 @@ impl Catalog {
             candidates.sort_by_key(|c| c.occurrence);
             carry.candidates.insert(path.clone(), candidates);
         }
-        // Source carry is immutable until restoration. Rebuild sorted nodes
-        // with alloc's bulk collector so its physical bound uses full nodes.
-        carry.files = carry.files.into_iter().collect();
-        carry.candidates = carry.candidates.into_iter().collect();
-        carry
+        SourceCatalog {
+            files: carry
+                .files
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            candidates: carry
+                .candidates
+                .into_iter()
+                .map(|(path, rows)| (DefId::intern(&path), rows.into_boxed_slice()))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        }
     }
 
     /// Bound the prospective body-free catalog without constructing it. The
@@ -264,16 +290,40 @@ impl Catalog {
         indexed: &BTreeMap<FileId, (FileContext, QueryEnvironment)>,
     ) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
-        weight.add(self.payload_bytes(false, true) as usize);
-        weight.map(indexed, |w, _, (context, _)| {
+        let files = self.files.len()
+            + indexed
+                .keys()
+                .filter(|file| !self.files.contains_key(file))
+                .count();
+        let definitions = self.candidates.len()
+            + items
+                .keys()
+                .filter(|path| !self.candidates.contains_key(*path))
+                .count();
+        weight.add(files.saturating_mul(size_of::<(FileId, FileContext)>()));
+        weight.add(definitions.saturating_mul(size_of::<(DefId, Box<[Candidate]>)>()));
+        for context in self.files.values() {
+            weight.add(context.package.name.capacity());
+            weight.add(context.package.version.capacity());
+            weight.vec(&context.modules, |w, module| w.add(module.capacity()));
+        }
+        for candidates in self.candidates.values() {
+            weight.add(candidates.len().saturating_mul(size_of::<Candidate>()));
+            for candidate in candidates {
+                let facts = &candidate.facts;
+                weight.flat_vec(&facts.comptime);
+                weight.flat_vec(&facts.associations);
+                weight.vec(&facts.arms, |w, (name, _, _)| w.add(name.capacity()));
+            }
+        }
+        for (context, _) in indexed.values() {
+            let w = &mut weight;
             w.add(context.package.name.capacity());
             w.add(context.package.version.capacity());
             w.vec(&context.modules, |w, module| w.add(module.capacity()));
-        });
-        weight.bulk_tree::<DefPath, Vec<Candidate>>(items.len());
-        for (path, syntaxes) in items {
+        }
+        for syntaxes in items.values() {
             let w = &mut weight;
-            w.path(path);
             // Existing candidate vectors are charged above; with_capacity in
             // source_carry allocates exactly the combined candidate count.
             w.add(syntaxes.len().saturating_mul(size_of::<Candidate>()));
