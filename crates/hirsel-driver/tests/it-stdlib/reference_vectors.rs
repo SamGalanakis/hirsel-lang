@@ -1,5 +1,5 @@
 //! Shared, bounded-source batches of ordinary Hirsel assertions, without a step budget.
-use crate::source_std::load_program_source;
+use crate::source_std::{load_program_source, tir};
 use hirsel_driver::*;
 use hirsel_engine::*;
 use std::{fmt::Write, path::Path};
@@ -74,12 +74,12 @@ fn run_selected(
             let ids: Vec<_> = batch.iter().map(|case| case.id.as_str()).collect();
             let fixture =
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_numeric.hir");
-            let mut loaded = load_program_source(&fixture, Some(&source))
-                .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}"));
-            loaded
-                .check_for_execution()
-                .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}\n{source}"));
             if native {
+                let mut loaded = load_program_source(&fixture, Some(&source))
+                    .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}"));
+                loaded
+                    .check_for_execution()
+                    .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}\n{source}"));
                 use hirsel_driver::native::{OptLevel, Options, Partition, TargetSpec, Toolchain};
                 let dir_scratch = tempfile::Builder::new()
                     .prefix("hirsel-vectors-")
@@ -112,22 +112,22 @@ fn run_selected(
                 std::fs::remove_dir_all(dir).unwrap();
                 continue;
             }
-            loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
-                limits: hirsel_interp::Limits {
-                    steps: None,
-                    call_depth: 256,
-                    source: None,
-                },
-                ..Default::default()
-            }));
-            let run = run_observed_snapshot(
-                &mut loaded.engine,
+            let prepared = tir(&fixture, Some(&source), None)
+                .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}\n{source}"));
+            let run = testing::observe_tir(
+                &prepared,
                 &RunConfiguration {
-                    entry: loaded.entry,
+                    entry: prepared.entry.clone(),
                     hash_seed: 0,
                     inputs: vec![],
                 },
                 SimulationConfig::default(),
+                hirsel_interp::Limits {
+                    steps: None,
+                    call_depth: 256,
+                    source: None,
+                },
+                false,
             )
             .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}"));
             assert!(
