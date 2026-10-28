@@ -33,13 +33,26 @@ fn failed_representation_edit_withholds_other_file_lower_obligations_like_cold()
         let actual_check = warm.check_applied().unwrap();
         assert!(!actual_check.diagnostics.is_empty());
         let actual = warm.checked_products(true).unwrap();
-        let mut cold = COMPILER
-            .with_config(config)
-            .with_owned_engines()
-            .load_program(&manifest)
+        let mut cold = hirsel_driver::requests::CompilerRequests::for_host(
+            COMPILER.with_config(config.clone()),
+            config.clone(),
+        );
+        let completed = cold
+            .execute(
+                &manifest,
+                hirsel_driver::requests::CompileOperation::CheckedProducts {
+                    lowering: config.lowering,
+                    canonical: true,
+                },
+            )
             .unwrap();
-        let expected_check = cold.check_configured().unwrap();
-        let expected = cold.engine.checked_products(&cold.entry).unwrap();
+        let hirsel_driver::requests::CompileResult::CheckedProducts {
+            checked: expected_check,
+            products: expected,
+        } = &completed.result
+        else {
+            panic!("expected cold checked products")
+        };
         let render = |check: &hirsel_engine::CheckOutput| {
             check
                 .diagnostics
@@ -47,9 +60,14 @@ fn failed_representation_edit_withholds_other_file_lower_obligations_like_cold()
                 .map(|d| d.render_human(&check.sources))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(render(&actual_check), render(&expected_check));
+        assert_eq!(render(&actual_check), render(expected_check));
         assert_eq!(actual_check.completion, expected_check.completion);
-        assert_eq!(actual.canonical, expected.canonical);
+        assert!(
+            actual.canonical == expected.canonical,
+            "canonical lengths {:?}/{:?}",
+            actual.canonical.as_ref().map(|text| text.len()),
+            expected.canonical.as_ref().map(|text| text.len())
+        );
         assert_eq!(actual.canonical_reads(), expected.canonical_reads());
         assert_eq!(actual.digest, expected.digest);
     });
