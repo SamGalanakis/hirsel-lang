@@ -961,6 +961,7 @@ impl InstanceTasks {
             &self.options,
             &manifest,
             operations,
+            source.query_policy().reuse,
             |key, operations| {
                 if source
                     .declarations()

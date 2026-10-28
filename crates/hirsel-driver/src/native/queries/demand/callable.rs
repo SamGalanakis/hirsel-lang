@@ -27,6 +27,134 @@ impl Scope {
     }
 }
 impl DemandInstances {
+    fn cached_callable_scope(
+        &self,
+        originals: &[(InstanceAddress, Arc<DiscoveredInstance>)],
+        action: Action,
+        options: &crate::native::Options,
+        manifest: &hirsel_core_contract::Manifest,
+        operations: &mut hirsel_layout::operation::OperationRegistry,
+        source: &mut impl FnMut(
+            &InstanceAddress,
+            &mut hirsel_layout::operation::OperationRegistry,
+        ) -> Result<(), String>,
+    ) -> Option<Scope> {
+        let mut publisher = self.queries.callable();
+        let mut requests = self.requests.clone();
+        let mut pending = originals
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        let mut candidates = BTreeMap::new();
+        let mut at = 0;
+        while at < pending.len() {
+            let key = pending[at].clone();
+            at += 1;
+            if candidates.contains_key(key.instance.encoding()) {
+                continue;
+            }
+            if candidates.len() >= originals.len() + hirsel_rc::closure_calls::MAX_SPECIALIZATIONS {
+                return None;
+            }
+            let product = publisher.candidate(&key)?;
+            if product.product.action != action {
+                return None;
+            }
+            let discovery = self.descriptor(&key, &product).ok()?;
+            for request in &discovery.requests {
+                let dependency = self.address(request.key.bind().ok()?);
+                if let Some(previous) =
+                    requests.insert(request.key.encoding.clone(), request.clone())
+                    && previous != *request
+                {
+                    return None;
+                }
+                pending.push(dependency);
+            }
+            candidates.insert(key.instance.encoding().to_vec(), (key, product, discovery));
+        }
+        for (key, _, _) in candidates.values() {
+            source(key, operations).ok()?;
+        }
+        let mut outputs = Vec::new();
+        for (key, candidate, discovery) in candidates.into_values() {
+            let request = requests.get(key.instance.encoding())?;
+            let (_, original) = originals.iter().find(|(original, _)| {
+                let input = &self.requests[original.instance.encoding()];
+                input.recipe == request.recipe
+                    && input.lexical == request.lexical
+                    && input.receipt_roots == request.receipt_roots
+                    && input.layouts == request.layouts
+                    && input.plan == request.plan
+                    && original.instance.definition() == key.instance.definition()
+                    && original.instance.body() == key.instance.body()
+            })?;
+            let selected_operations = super::super::instance_operations::InstanceOperations {
+                inventory: Some(&self.seal_inventory),
+                declarations: operations,
+                receipts: Some(&self.receipt_sources),
+                source: request
+                    .source_definition()
+                    .map(|_| (key.instance.definition(), key.instance.digest())),
+                all_sources: false,
+                pretransfer: Some(
+                    original
+                        .adapters
+                        .iter()
+                        .map(|symbol| {
+                            let mut selected = operations
+                                .pretransfer_adapters
+                                .iter()
+                                .filter(|r| &r.adapter == symbol);
+                            let reference = selected.next()?;
+                            selected.next().is_none().then(|| reference.clone())
+                        })
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+            };
+            let product = publisher.lookup(
+                &key,
+                action,
+                &NativeEnvironment {
+                    target: &self.target,
+                    manifest,
+                    operations: &selected_operations,
+                    discharge: Some(&options.discharge),
+                },
+            )?;
+            if product.product != candidate.product {
+                return None;
+            }
+            let dependencies = discovery
+                .requests
+                .iter()
+                .map(|r| Some(self.address(r.key.bind().ok()?)))
+                .collect::<Option<Vec<_>>>()?;
+            outputs.push((
+                key,
+                Arc::new(DiscoveredInstance {
+                    product,
+                    ready_source: ReadySourceFacts::decode(&discovery.ready_source).ok()?,
+                    seal_demand: discovery.seal_demand,
+                    callees: discovery.callees,
+                    dependencies,
+                    selection_reads: discovery.selection_reads,
+                    constant_reads: discovery.constant_reads,
+                    templates: discovery.templates,
+                    operation_freedom: discovery.operation_freedom,
+                    emission: discovery.emission,
+                    discharge: discovery.discharge,
+                    adapters: original.adapters.clone(),
+                }),
+            ));
+        }
+        outputs.sort_by(|a, b| a.0.canonical_cmp(&b.0));
+        Some(Scope {
+            outputs,
+            operations: operations.clone(),
+            requests,
+        })
+    }
     pub(in crate::native::queries) fn use_callable_scope(&mut self, scope: &Scope) {
         self.queries = self.queries.callable();
         self.requests = scope.requests.clone();
@@ -41,6 +169,7 @@ impl DemandInstances {
         options: &crate::native::Options,
         manifest: &hirsel_core_contract::Manifest,
         mut operations: hirsel_layout::operation::OperationRegistry,
+        reuse: bool,
         mut source: impl FnMut(
             &InstanceAddress,
             &mut hirsel_layout::operation::OperationRegistry,
@@ -48,6 +177,33 @@ impl DemandInstances {
     ) -> Result<Scope, String> {
         let mut originals = self.completed_inputs()?;
         originals.sort_by(|a, b| a.0.canonical_cmp(&b.0));
+        let action_bytes = serde_json::to_vec(&(
+            crate::COMPILER_IDENTITY.as_slice(),
+            originals
+                .iter()
+                .map(|(_, o)| o.product.product.record)
+                .collect::<Vec<_>>(),
+            options.scoped_specialization,
+        ))
+        .map_err(|e| e.to_string())?;
+        let action = Action(ContentHash::of_parts(
+            "hirsel.native.callable-values-action.v1",
+            [action_bytes.as_slice()],
+        ));
+        if reuse
+            && self.verify_store != hirsel_engine::store::VerifyStore::Recompute
+            && options.validation != crate::native::Validation::EveryStage
+            && let Some(scope) = self.cached_callable_scope(
+                &originals,
+                action,
+                options,
+                manifest,
+                &mut operations,
+                &mut source,
+            )
+        {
+            return Ok(scope);
+        }
         let environment = NativeEnvironment {
             target: &self.target,
             manifest,
@@ -120,19 +276,6 @@ impl DemandInstances {
             .collect::<BTreeMap<_, _>>();
         let queries = self.queries.callable();
         let mut publisher = queries;
-        let action_bytes = serde_json::to_vec(&(
-            crate::COMPILER_IDENTITY.as_slice(),
-            originals
-                .iter()
-                .map(|(_, o)| o.product.product.record)
-                .collect::<Vec<_>>(),
-            options.scoped_specialization,
-        ))
-        .map_err(|e| e.to_string())?;
-        let action = Action(ContentHash::of_parts(
-            "hirsel.native.callable-values-action.v1",
-            [action_bytes.as_slice()],
-        ));
         let mut outputs = Vec::new();
         for ((unit, key), origin) in units.into_iter().zip(&keys).zip(&specialized.origins) {
             let original = &originals[origin.index()].1;
