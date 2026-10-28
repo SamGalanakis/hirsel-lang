@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 
 const KIND: u32 = 0x4602_0001;
 type Proofs = Vec<(DefId, UniqueInference)>;
-#[derive(Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Eq, PartialEq)]
 pub(super) struct Facts {
     pub proofs: Proofs,
     pub reads: Reads,
@@ -76,12 +76,6 @@ impl QueryTask for Task {
                 .as_ref()
                 .is_some_and(|expected| *expected != facts)
             {
-                if std::env::var_os("HIRSEL_TRACE_PRIVATE_INFERENCE").is_some() {
-                    eprintln!(
-                        "private inference cached: {:#?}\nprivate inference recomputed: {facts:#?}",
-                        self.inference.expected.as_ref().unwrap()
-                    );
-                }
                 Err(QueryError::Operational(hirsel_types::OperationalFailure {
                     operation: "verify-cache".into(),
                     message: "private inference differs from its cached result".into(),
