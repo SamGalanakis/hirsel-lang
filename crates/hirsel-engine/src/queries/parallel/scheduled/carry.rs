@@ -624,7 +624,7 @@ impl BodyTask {
             crate::memo::MemoKey::new(QueryKind::Modes, input.definition),
             reads.clone(),
         )];
-        if let Some((_, reads)) = &facts.checked {
+        if let Some((_, reads, _)) = &facts.checked {
             memo_rows.push((
                 crate::memo::MemoKey::new(QueryKind::Check, input.definition),
                 reads.clone(),

@@ -816,7 +816,7 @@ pub(super) fn restore_frozen_mode(
             summary,
             growth,
             storage: None,
-            checked: checked.as_ref().map(|(checked, _)| checked.clone()),
+            checked: checked.as_ref().map(|(checked, _, _)| checked.clone()),
             reads: reads.clone(),
             text,
         })
