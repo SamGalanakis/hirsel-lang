@@ -948,18 +948,38 @@ impl FrontLowerQueries {
         } else {
             &input.evaluate
         };
-        if let Some(product) = self.load_carry(id, &path, key) {
-            match product {
-                // The compact descriptor can outlive V's independently
-                // evictable content. A current V miss needs the ordinary
-                // producer, even while the source observations still match.
-                Ok(product)
-                    if id.kind == FRONT_LOWER_KIND && self.native_product(product).is_none() => {}
-                product => return product,
+        // A constant's checked Lower body does not replace its value product.
+        // Restore Evaluate first even when the Lower descriptor itself hits;
+        // receipt readers and other settled consumers cannot request it later.
+        let can_restore = if id.kind == FRONT_LOWER_KIND
+            && self
+                .snapshot
+                .signature(DefId::intern(&path))
+                .is_some_and(|signature| {
+                    signature.is_ok_and(|signature| {
+                        matches!(signature.kind, hirsel_types::SignatureKind::Const { .. })
+                    })
+                }) {
+            let evaluate = self.evaluate_query(&path).ok_or(self.errors.protocol)?;
+            reads.read_consuming(evaluate).await.is_ok()
+        } else {
+            true
+        };
+        if can_restore {
+            if let Some(product) = self.load_carry(id, &path, key) {
+                match product {
+                    // The compact descriptor can outlive V's independently
+                    // evictable content. A current V miss needs the ordinary
+                    // producer, even while the source observations still match.
+                    Ok(product)
+                        if id.kind == FRONT_LOWER_KIND
+                            && self.native_product(product).is_none() => {}
+                    product => return product,
+                }
             }
-        }
-        if let Some(product) = self.load_stored(id, &path, key) {
-            return product;
+            if let Some(product) = self.load_stored(id, &path, key) {
+                return product;
+            }
         }
         // The live future and working bodies use this task's runtime weight.
         // Only actual settled descriptor/receipt ownership is retained below;

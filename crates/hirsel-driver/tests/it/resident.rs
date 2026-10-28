@@ -151,6 +151,48 @@ fn session_representation_edit_matches_cold(opaque: bool, reads_field: bool) {
         let expected_receipt = cold.engine.checked_products(&cold.entry).unwrap();
         assert_eq!(diagnostics(&actual), diagnostics(&expected));
         assert_eq!(actual.completion, expected.completion);
+        if receipt.digest != expected_receipt.digest {
+            let actual_text = receipt.canonical.as_deref().unwrap_or("");
+            let expected_text = expected_receipt.canonical.as_deref().unwrap_or("");
+            let offset = actual_text
+                .bytes()
+                .zip(expected_text.bytes())
+                .position(|(a, b)| a != b);
+            eprintln!(
+                "RECEIPT_TEXT lengths={}/{} first_difference={offset:?}",
+                actual_text.len(),
+                expected_text.len()
+            );
+            if let Some(offset) = offset {
+                for (name, text) in [("actual", actual_text), ("expected", expected_text)] {
+                    eprintln!(
+                        "RECEIPT_TEXT {name} {:?}",
+                        String::from_utf8_lossy(
+                            &text.as_bytes()
+                                [offset.saturating_sub(160)..text.len().min(offset + 400)]
+                        )
+                    );
+                }
+            }
+            let actual_reads = receipt.canonical_reads();
+            let expected_reads = expected_receipt.canonical_reads();
+            for (name, reads, other) in [
+                ("actual", &actual_reads, &expected_reads),
+                ("expected", &expected_reads, &actual_reads),
+            ] {
+                for ((owner, key), value) in reads
+                    .iter()
+                    .filter(|(key, value)| other.get(*key) != Some(*value))
+                    .take(12)
+                {
+                    eprintln!(
+                        "RECEIPT_READ {name} owner={:?} key={:?} value={value:?}",
+                        String::from_utf8_lossy(owner),
+                        String::from_utf8_lossy(key)
+                    );
+                }
+            }
+        }
         assert_eq!(receipt.digest, expected_receipt.digest);
         assert_eq!(receipt.canonical, expected_receipt.canonical);
         assert_eq!(
