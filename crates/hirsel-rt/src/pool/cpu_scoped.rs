@@ -172,7 +172,10 @@ pub(super) struct Workers {
 }
 
 impl Workers {
-    fn request_exit(&self) {
+    fn request_exit(&mut self) {
+        // Dormant destinations own no native work. Return their credits even
+        // when a stopped mapper keeps the run and its own guard alive.
+        self.pending.clear();
         for exec in &self.execs {
             exec.post(Post::Exit, None);
         }
@@ -180,7 +183,6 @@ impl Workers {
 
     fn join(&mut self) {
         self.request_exit();
-        self.pending.clear();
         for thread in self.threads.drain(..) {
             thread
                 .join()
@@ -350,7 +352,7 @@ unsafe fn start_at(
 }
 
 pub(super) fn request_exit(execs: &Execs) {
-    if let Some(workers) = &*execs.scoped.lock().unwrap() {
+    if let Some(workers) = &mut *execs.scoped.lock().unwrap() {
         workers.request_exit();
     }
 }
