@@ -133,6 +133,7 @@ pub(crate) struct Exec {
     held: AtomicBool,
     /// A scoped domain owns this worker's compute credit even while it is idle.
     reserved: AtomicBool,
+    scoped_slot: AtomicU32,
     exited: AtomicBool,
     lost: AtomicBool,
     ready: Cell<Option<hirsel_free::work::Worker<free::Saved>>>,
@@ -174,6 +175,10 @@ impl Exec {
             worker: Cell::new(worker),
             held: AtomicBool::new(held),
             reserved: AtomicBool::new(false),
+            scoped_slot: AtomicU32::new(match kind {
+                Kind::Scoped(index) => u32::from(index),
+                _ => u32::MAX,
+            }),
             exited: AtomicBool::new(false),
             lost: AtomicBool::new(false),
             ready: Cell::new(None),
@@ -187,6 +192,11 @@ impl Exec {
             home_signal: Default::default(),
             recording: Default::default(),
         })
+    }
+
+    pub(super) fn scoped_index(&self) -> Option<u32> {
+        let index = self.scoped_slot.load(Ordering::Acquire);
+        (index != u32::MAX).then_some(index)
     }
 
     /// Post `post`; false when the inbox is closed. A task posted makes the exec busy before

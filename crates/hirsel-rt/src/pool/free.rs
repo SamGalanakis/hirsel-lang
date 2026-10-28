@@ -1159,7 +1159,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
         return;
     }
     #[cfg(all(feature = "tsan", target_arch = "x86_64"))]
-    if matches!(exec.kind, Kind::Scoped(_)) {
+    if exec.scoped_index().is_some() {
         // The mutant copies a queued image before start's exclusive claim/take.
         unsafe { double_claim::dispatch(&queued) };
     }

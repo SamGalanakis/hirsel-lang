@@ -445,6 +445,7 @@ pub(super) mod tests {
         entered: AtomicU32,
         private: AtomicU32,
         scoped: bool,
+        caller: std::sync::Mutex<Option<std::thread::ThreadId>>,
     }
 
     unsafe extern "C" fn child(
@@ -456,7 +457,12 @@ pub(super) mod tests {
         let [address, ordinal] =
             unsafe { crate::alloc::payload(environment).cast::<[u64; 2]>().read() };
         let probe = unsafe { &*(address as *const Probe) };
-        if probe.scoped {
+        if probe.scoped && ordinal == 0 {
+            assert_eq!(
+                Some(std::thread::current().id()),
+                *probe.caller.lock().unwrap()
+            );
+        } else if probe.scoped {
             assert!(
                 std::thread::current()
                     .name()
@@ -537,6 +543,7 @@ pub(super) mod tests {
                 },
                 move |ctx| unsafe {
                     if scoped {
+                        *seen.caller.lock().unwrap() = Some(std::thread::current().id());
                         let _role = role::Guard::new(ctx);
                         crate::pool::cpu_scoped::enter(ctx, width).unwrap();
                     }

@@ -162,7 +162,7 @@ pub(crate) unsafe fn worker(
     exec: &super::super::Exec,
     kind: &str,
 ) {
-    if let super::super::Kind::Scoped(worker) = exec.kind
+    if let Some(worker) = exec.scoped_index()
         && let Some(probe) = unsafe { (*run).cpu_probe.as_ref() }
     {
         probe.event(kind, 0, exec as *const _ as usize, 0);
@@ -296,7 +296,7 @@ pub(crate) unsafe fn resume(ctx: *mut TaskCtx) {
         if (*ctx).run_ref().cpu_probe.is_none() {
             return;
         }
-        let super::super::Kind::Scoped(worker) = (*super::super::own_exec()).kind else {
+        let Some(worker) = (*super::super::own_exec()).scoped_index() else {
             (*ctx).cpu_sample = None;
             return;
         };
@@ -315,8 +315,8 @@ pub(crate) unsafe fn resume(ctx: *mut TaskCtx) {
                 .cpu_probe
                 .as_ref()
                 .unwrap()
-                .perturb(domain, u32::from(worker));
-            (*ctx).cpu_sample = Some(Sample::now(domain, u32::from(worker)));
+                .perturb(domain, worker);
+            (*ctx).cpu_sample = Some(Sample::now(domain, worker));
         }
     }
 }

@@ -147,6 +147,9 @@ impl Drop for Assigned {
         let mut state = self.permits.state.lock().unwrap();
         assert!(self.exec.reserved.swap(false, Ordering::AcqRel));
         self.exec.held.store(false, Ordering::Release);
+        if !matches!(self.exec.kind, Kind::Scoped(_)) {
+            self.exec.scoped_slot.store(u32::MAX, Ordering::Release);
+        }
         state.held -= 1;
         if self.exec.lost.swap(false, Ordering::AcqRel) {
             state.lost -= 1;
@@ -162,6 +165,7 @@ pub(super) struct Workers {
     execs: Vec<Arc<Exec>>,
     threads: Vec<std::thread::JoinHandle<()>>,
     pending: Vec<Option<Assigned>>,
+    calling: Option<Assigned>,
     cursor: usize,
     caller: Option<Owner>,
     controllers: Option<Controllers>,
@@ -176,7 +180,7 @@ impl Workers {
         // Dormant destinations own no native work. Return their credits even
         // when a stopped mapper keeps the run and its own guard alive.
         self.pending.clear();
-        for exec in &self.execs {
+        for exec in self.execs.iter().skip(usize::from(self.calling.is_some())) {
             exec.post(Post::Exit, None);
         }
     }
@@ -198,11 +202,12 @@ impl Workers {
 /// # Safety
 /// The caller holds the scheduler role for this live run, before publishing
 /// any scoped frame. Worker zero runs preparation; mappers keep their owners.
+#[cfg(test)]
 pub(super) unsafe fn start(
     run: *mut RunShared,
     reservation: Reservation,
 ) -> Result<Vec<super::Owner>, Refusal> {
-    unsafe { start_at(run, reservation, None) }
+    unsafe { start_at(run, reservation, None, None) }
 }
 
 impl Workers {
@@ -293,6 +298,7 @@ unsafe fn start_at(
     run: *mut RunShared,
     mut reservation: Reservation,
     fail_at: Option<u32>,
+    calling: Option<Arc<Exec>>,
 ) -> Result<Vec<super::Owner>, Refusal> {
     let execs = unsafe {
         (*(*run).execs.get())
@@ -312,7 +318,8 @@ unsafe fn start_at(
         execs: Vec::with_capacity(width as usize),
         threads: Vec::with_capacity(width as usize),
         pending: Vec::with_capacity(width as usize),
-        cursor: usize::from(!unsafe { (*run).free_mode }),
+        calling: None,
+        cursor: 0,
         caller: None,
         controllers: None,
         _topology: topology.clone(),
@@ -321,23 +328,39 @@ unsafe fn start_at(
         caller_task: u32::MAX,
     };
     for index in 0..width {
-        let exec = Exec::new(Kind::Scoped(index as u16), std::ptr::null_mut(), false);
+        let exec = if index == 0 {
+            calling
+                .clone()
+                .unwrap_or_else(|| Exec::new(Kind::Scoped(0), std::ptr::null_mut(), false))
+        } else {
+            Exec::new(Kind::Scoped(index as u16), std::ptr::null_mut(), false)
+        };
         let mut assigned = reservation.assign(Arc::clone(&exec)).unwrap();
         assigned.topology = topology.clone();
-        execs
-            .holders
-            .workers
-            .lock()
-            .unwrap()
-            .push(Arc::downgrade(&exec));
+        if index == 0 && calling.is_some() {
+            exec.scoped_slot.store(0, Ordering::Release);
+            workers.calling = Some(assigned);
+            workers.pending.push(None);
+        } else {
+            execs
+                .holders
+                .workers
+                .lock()
+                .unwrap()
+                .push(Arc::downgrade(&exec));
+            workers.pending.push(Some(assigned));
+        }
         workers.execs.push(exec);
-        workers.pending.push(Some(assigned));
     }
     // Fault injection also exercises rollback of every eagerly started prefix.
     let count = if fail_at.is_some() { width as usize } else { 1 };
     if let Err(error) = workers.start_pending(run, 0..count, fail_at) {
         workers.join();
-        for exec in &workers.execs {
+        for exec in workers
+            .execs
+            .iter()
+            .skip(usize::from(workers.calling.is_some()))
+        {
             let worker = exec.worker.replace(std::ptr::null_mut());
             if worker.is_null() {
                 continue;
@@ -372,7 +395,12 @@ pub(super) fn shutdown(execs: &Execs) {
 
 pub(super) fn busy(execs: &Execs) -> usize {
     execs.scoped.lock().unwrap().as_ref().map_or(0, |workers| {
-        workers.execs.iter().filter(|exec| exec.busy()).count()
+        workers
+            .execs
+            .iter()
+            .skip(usize::from(workers.calling.is_some()))
+            .filter(|exec| exec.busy())
+            .count()
     })
 }
 
@@ -386,6 +414,7 @@ pub(super) fn workers(execs: &Execs) -> Vec<*mut Worker> {
             workers
                 .execs
                 .iter()
+                .skip(usize::from(workers.calling.is_some()))
                 .map(|exec| exec.worker.get())
                 .filter(|worker| !worker.is_null())
                 .collect()
@@ -398,7 +427,11 @@ pub(super) unsafe fn finish(run: *mut RunShared) {
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     if let Some(mut workers) = execs.scoped.lock().unwrap().take() {
         workers.join();
-        for exec in &workers.execs {
+        for exec in workers
+            .execs
+            .iter()
+            .skip(usize::from(workers.calling.is_some()))
+        {
             assert!(!exec.busy());
             let worker = exec.worker.replace(std::ptr::null_mut());
             if worker.is_null() {
@@ -426,13 +459,16 @@ pub(super) fn forget(execs: &mut Execs) -> Vec<*mut Worker> {
             workers
                 .execs
                 .iter()
+                .skip(usize::from(workers.calling.is_some()))
                 .map(|exec| exec.worker.get())
                 .filter(|worker| !worker.is_null())
                 .collect()
         })
 }
 
-/// Enter and leave migrate through the ordinary saved-frame owner protocol.
+/// Like rayon-core 1.13 join/mod.rs:132-174, the caller runs the first job
+/// and drains before returning. Saved frames keep the existing task identities.
+/// Enter and leave use the ordinary saved-frame owner protocol.
 /// The caller gives back its process credit before requesting the full batch.
 /// # Safety
 /// A running physical-dispatch task holds the scheduler role. Its selected
@@ -449,6 +485,20 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
     if execs.scoped.lock().unwrap().is_some() {
         return Err(Refusal::Busy);
     }
+    let address = super::current(execs);
+    let calling = if address == Arc::as_ptr(&execs.home) {
+        Arc::clone(&execs.home)
+    } else {
+        execs
+            .holders
+            .workers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .find(|exec| Arc::as_ptr(exec) == address)
+            .expect("the calling executor belongs to this run")
+    };
     let mut controllers = Vec::new();
     if crate::tasks::ordered::engine::on(ctx) {
         for owner in crate::tasks::cpu_control_owners(ctx) {
@@ -488,7 +538,9 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
                 return Err(Refusal::ResourceLimit);
             }
             for exec in candidates {
-                if !controllers.iter().any(|old| Arc::ptr_eq(old, &exec)) {
+                if !Arc::ptr_eq(&calling, &exec)
+                    && !controllers.iter().any(|old| Arc::ptr_eq(old, &exec))
+                {
                     controllers.push(exec);
                 }
             }
@@ -499,7 +551,8 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
     let reservation = execs.permits.reserve_with_controllers(width, controllers);
     let owners = match reservation {
         Ok((reservation, controllers)) => {
-            unsafe { start(run, reservation) }.map(|owners| (owners, controllers))
+            unsafe { start_at(run, reservation, None, Some(calling)) }
+                .map(|owners| (owners, controllers))
         }
         Err(error) => Err(error),
     };
@@ -595,6 +648,10 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) {
     request_exit(execs);
     unsafe { migrate(ctx) };
     unsafe { finish(run) };
+    {
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        super::acquire_permit(ctx);
+    }
 }
 
 fn capacity_lost(ctx: *mut TaskCtx) -> bool {
@@ -751,9 +808,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
         let slot = execs.scoped.lock().unwrap();
         if let Some(workers) = slot.as_ref()
             && workers.caller_task != unsafe { (*ctx).task_id }
-            && let Kind::Scoped(worker) = unsafe { (*super::own_exec()).kind }
+            && let Some(worker) = unsafe { (*super::own_exec()).scoped_index() }
         {
-            unsafe { probe::begin(ctx, workers.domain, u32::from(worker)) };
+            unsafe { probe::begin(ctx, workers.domain, worker) };
         }
     }
     if let Some(probe) = unsafe { (*ctx).run_ref().cpu_probe.as_ref() } {
@@ -872,7 +929,7 @@ mod tests {
                 let permits = Arc::new(Permits::new(width));
                 for fail_at in (0..width).map(Some).chain([None]) {
                     let reservation = permits.try_reserve(width).unwrap();
-                    let owners = start_at(run, reservation, fail_at);
+                    let owners = start_at(run, reservation, fail_at, None);
                     if fail_at.is_some() {
                         assert_eq!(owners, Err(Refusal::WorkerStartFailed));
                         assert!(workers(execs).is_empty());
@@ -928,7 +985,7 @@ mod tests {
     }
 
     #[test]
-    fn caller_yields_its_only_credit_and_migrates_back_after_fresh_width_one_calls() {
+    fn caller_runs_scoped_width_one_and_returns_its_credit_after_each_call() {
         #[cfg(feature = "tsan")]
         let switches = crate::fiber::TSAN_SWITCHES.load(Ordering::Relaxed);
         let mut run = crate::host::BodyRun::new(1, false);
@@ -941,8 +998,7 @@ mod tests {
                 let original = std::thread::current().id();
                 for _ in 0..2 {
                     enter(ctx, 1).unwrap();
-                    assert!(matches!((*super::super::own_exec()).kind, Kind::Scoped(0)));
-                    assert_ne!(std::thread::current().id(), original);
+                    assert_eq!(std::thread::current().id(), original);
                     assert_eq!(enter(ctx, 1), Err(Refusal::NestedPool));
                     assert!(matches!(next_owner(ctx), Owner::Compute(_)));
                     leave(ctx);
@@ -981,8 +1037,7 @@ mod tests {
                         0
                     });
                     assert_eq!(result, Ok(0));
-                    assert!(matches!((*super::super::own_exec()).kind, Kind::Scoped(0)));
-                    assert_ne!(std::thread::current().id(), original);
+                    assert_eq!(std::thread::current().id(), original);
                     assert_eq!(enter(ctx, 1), Err(Refusal::NestedPool));
                     let result = crate::tasks::ordered::cpu::control(ctx, 1, 1, 0, || {
                         leave(ctx);
@@ -1050,7 +1105,7 @@ mod tests {
                     0
                 );
                 assert_eq!(out, 0);
-                assert!(matches!((*super::super::own_exec()).kind, Kind::Scoped(0)));
+                assert!(!matches!((*super::super::own_exec()).kind, Kind::Scoped(_)));
                 assert_eq!(
                     hirsel_rt_v2_cpu_map_scoped(ctx, &mut out, &tasks, 1, 2, 3),
                     0
