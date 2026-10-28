@@ -282,12 +282,18 @@ def main():
 
             # glibc 2.28's own startup objects and nonshared archive, unchanged.
             development = root / "usr/lib" / target["multiarch"]
-            # Debian's 2.28 AArch64 package predates its static PIE CRT. Use
-            # the already pinned Arm GNU sysroot's static closure on that
-            # target; the dynamic ABI floor remains 2.28 on both targets.
-            static_development = (args.arm_sysroot / "usr/lib64" if target["deb"] == "arm64" else development)
+            # Static libc needs built-in files/DNS NSS modules: glibc 2.36
+            # nss/nss_module.c:174-180. The 2.28 static resolver instead loads
+            # host modules with incompatible private libc symbols. Arm's pinned
+            # sysroot already supplies these and its static PIE CRT. Keep the
+            # dynamic ABI floor at 2.28 on both targets.
+            static_root = scratch / ("static-" + target["deb"])
+            if target["deb"] == "amd64":
+                run(["dpkg-deb", "-x", debs["glibc-static:amd64"], static_root])
+            static_development = (args.arm_sysroot / "usr/lib64" if target["deb"] == "arm64" else
+                                  static_root / "usr/lib" / target["multiarch"])
             static_source = ("Arm GNU Toolchain 14.3.rel1 sysroot: usr/lib64" if target["deb"] == "arm64" else
-                             f"libc6-dev {target['deb']}: usr/lib/{target['multiarch']}")
+                             f"libc6-dev 2.36-9+deb12u14 {target['deb']}: usr/lib/{target['multiarch']}")
             for name in ("Scrt1.o", "crti.o", "crtn.o", "libc_nonshared.a"):
                 shutil.copyfile(development / name, directory / name)
                 record(name, source=f"libc6-dev {target['deb']}: usr/lib/{target['multiarch']}/{name}")
@@ -316,7 +322,9 @@ def main():
                     shutil.copyfile(original, directory / "static" / name)
                     static_libraries.append("static/" + name)
                     record("static/" + name, source=f"{static_source}/{name}")
-            static_libraries.append("libc_nonshared.a")
+            shutil.copyfile(static_development / "libc_nonshared.a", directory / "static/libc_nonshared.a")
+            static_libraries.append("static/libc_nonshared.a")
+            record("static/libc_nonshared.a", source=f"{static_source}/libc_nonshared.a")
             # Link-only stubs at the floor: the release's own dynamic symbol
             # tables, cross-checked against Zig's abilists.
             zig = abilists.symbols(target["zig"], FLOOR)

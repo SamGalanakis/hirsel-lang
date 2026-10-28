@@ -53,6 +53,11 @@
       "sha256": "76b8413920d91a9a4289f99839933d0d30095e0ec12b05bb4f1a7f27e5ef4a55",
       "size": 2691760
     },
+    "glibc-static:amd64": {
+      "url": "https://deb.debian.org/debian/pool/main/g/glibc/libc6-dev_2.36-9+deb12u14_amd64.deb",
+      "sha256": "0218fc2befcd784c1b0c6292c0a137ce89fad054efaa579ad083bee0f2c01aae",
+      "size": 1903668
+    },
     "linux-headers:amd64": {
       "url": "https://archive.debian.org/debian/pool/main/l/linux/linux-libc-dev_4.19.249-2_amd64.deb",
       "sha256": "c512f30f5abe413464b79ed23b54958df8cc104446c3ae93d83d28e23728a571",

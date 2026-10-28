@@ -593,6 +593,8 @@ extern void hirsel_rt_v2_launch(void);
 static void (*volatile keep)(void) = hirsel_rt_v2_launch;
 extern int pthread_create(unsigned long *, const void *, void *(*)(void *), void *);
 extern int pthread_join(unsigned long, void **);
+extern int getaddrinfo(const char *, const char *, const void *, void **);
+extern void freeaddrinfo(void *);
 static __thread unsigned value;
 static void *worker(void *argument) {
     value = (unsigned)(unsigned long)argument;
@@ -604,6 +606,10 @@ int main(void) {
     value = 17;
     if (pthread_create(&thread, (void *)0, worker, (void *)42) != 0) return 2;
     if (pthread_join(thread, &result) != 0) return 3;
+    void *addresses = (void *)0;
+    if (getaddrinfo("localhost", "80", (void *)0, &addresses) != 0) return 5;
+    if (addresses == (void *)0) return 6;
+    freeaddrinfo(addresses);
     return value == 17 && result == (void *)42 && keep != (void *)0 ? 0 : 4;
 }
 "#,
