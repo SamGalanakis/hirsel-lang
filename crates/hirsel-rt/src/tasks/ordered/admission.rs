@@ -101,11 +101,29 @@ mod tests {
         }
     }
 
+    struct TasksProjection;
+    impl crate::io::Adapter for TasksProjection {
+        fn preflight(
+            &self,
+            _: &crate::io::Request,
+        ) -> Result<Option<crate::io::Completion>, crate::io::AdapterError> {
+            Ok(None)
+        }
+        fn call(
+            &mut self,
+            request: crate::io::Request,
+        ) -> Result<crate::io::Completion, crate::io::AdapterError> {
+            assert!(matches!(request, crate::io::Request::Tasks { .. }));
+            Ok(crate::io::Completion::Handle(Ok(7)))
+        }
+    }
+
     #[test]
     fn a_scalar_run_keeps_its_result_when_capacity_files_are_unreadable() {
         for fail_capture in [false, true] {
             let mut run = crate::host::BodyRun::new(1, false);
-            unsafe { run.use_physical_dispatch() };
+            unsafe { run.use_ordered_home_dispatch() };
+            run.adapter = Some(Box::new(TasksProjection));
             let outcome = run.run(
                 |ctx| defer(ctx, fail_capture),
                 |ctx| unsafe {
@@ -120,7 +138,10 @@ mod tests {
                     crate::alloc::payload(block).cast::<u64>().write(42);
                     assert_eq!(crate::alloc::payload(block).cast::<u64>().read(), 42);
                     crate::release::hirsel_rt_v2_free(ctx, block);
-                    Admission::activate(ctx);
+                    assert!(matches!(
+                        crate::io::capability_call(ctx, crate::io::Request::Tasks { io: 1 }),
+                        Ok(crate::io::Completion::Handle(Ok(7)))
+                    ));
                     assert!(super::super::engine::on(ctx));
                     crate::STATUS_OK
                 },
@@ -133,7 +154,7 @@ mod tests {
     #[test]
     fn the_first_pool_claim_stops_on_unreadable_capacity_before_its_effect() {
         let mut run = crate::host::BodyRun::new(1, false);
-        unsafe { run.use_physical_dispatch() };
+        unsafe { run.use_ordered_home_dispatch() };
         let outcome = run.run(
             |ctx| defer(ctx, true),
             |ctx| unsafe {
@@ -149,7 +170,7 @@ mod tests {
     #[test]
     fn first_tasks_admission_preserves_existing_memory_charges_and_owns_later_release() {
         let mut run = crate::host::BodyRun::new(1, false);
-        unsafe { run.use_physical_dispatch() };
+        unsafe { run.use_ordered_home_dispatch() };
         let outcome = run.run(
             |ctx| unsafe {
                 defer(ctx, false);

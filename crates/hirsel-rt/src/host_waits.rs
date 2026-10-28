@@ -514,6 +514,9 @@ pub(crate) unsafe fn issue(
     ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
+    if matches!(request, Request::Tasks { .. } | Request::TestTasks { .. }) {
+        unsafe { crate::tasks::ordered::admission::Admission::activate(ctx) };
+    }
     if crate::tasks::free::host::native::enabled(ctx) {
         let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
         return unsafe { crate::tasks::free::host::native::issue(ctx, request) };
