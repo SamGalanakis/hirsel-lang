@@ -115,7 +115,7 @@ fn cpu_fixture_empty_list_four_engine_agreement(width: u32) {
 fn cpu_fixture_copied_list_four_engine_agreement(width: u32) {
     cpu_fixture_allocating_four_engine_mapper(
         width,
-        "fn(take job: u64) -> unique List[u64] uses {} { let mut out: List[u64] = []; list.reserve(mut out, 128u64); list.push(mut out, job); list.push(mut out, job + 7u64); let mut copied = copy out; copied[1] = job + 7u64; take copied }",
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut out: List[u64] = []; list.reserve(mut out, 128u64); list.push(mut out, job); list.push(mut out, job + 7u64); let mut copied = copy out; copied[1] = job + 7u64; [copied[0], copied[1]] }",
     );
 }
 
