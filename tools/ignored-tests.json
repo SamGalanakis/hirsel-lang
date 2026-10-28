@@ -417,5 +417,127 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_launch_71::native_ownership_accepts_explicit_empty_grants_for_the_original_grant_free_vector": {
+    "source": "crates/hirsel-cli/tests/cli/ownership_launch_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ]
+  },
+  "ownership_launch_71::native_ownership_grants_args_record_and_replay_keep_actual_child_lifetimes": {
+    "source": "crates/hirsel-cli/tests/cli/ownership_launch_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ]
+  },
+  "ownership_launch_71::native_ownership_compiles_the_selected_seeds_and_scheduler_before_recording_and_replay": {
+    "source": "crates/hirsel-cli/tests/cli/ownership_launch_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ]
+  },
+  "ownership_launch_71::native_ownership_keeps_the_admitted_fuel_checks_while_tracing_loop_lifetimes": {
+    "source": "crates/hirsel-cli/tests/cli/ownership_launch_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ]
+  },
+  "ownership_launch_71::ownership_native_granted_args_record_and_replay_keep_the_selected_resource_lineage": {
+    "source": "crates/hirsel-driver/tests/it/ownership_launch_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_resource_selection_71::source_resource_selection_keeps_owned_data_fields_inside_each_resource_lifetime": {
+    "source": "crates/hirsel-driver/tests/it/ownership_resource_selection_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_resource_selection_71::source_resource_selection_proves_mutex_data_and_owned_task_results_have_no_resource_credit": {
+    "source": "crates/hirsel-driver/tests/it/ownership_resource_selection_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_resource_selection_71::source_resource_selection_keeps_a_resource_across_a_named_data_callback": {
+    "source": "crates/hirsel-driver/tests/it/ownership_resource_selection_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_capture_71::native_spawn_transfers_two_equal_resources_to_its_actual_child": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_capture_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_capture_71::child_failure_before_taking_equal_captures_retires_each_environment_field": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_capture_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_capture_71::failed_finalizers_retire_both_equal_captures_in_the_actual_child": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_capture_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_capture_71::native_free_spawn_transfers_equal_resources_and_retires_the_actual_child": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_capture_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_capture_71::native_free_failed_finalizers_retain_both_actual_capture_lifetimes": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_capture_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_tasks_71::native_child_local_resources_keep_equal_tokens_in_distinct_tasks": {
+    "source": "crates/hirsel-driver/tests/it/ownership_tasks_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_tasks_71::native_empty_callback_binding_keeps_actual_spawn_and_child_local_resource_lifetimes": {
+    "source": "crates/hirsel-driver/tests/it/ownership_tasks_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "native_host_quota_contraction_drains_and_replays": {
+    "source": "crates/hirsel-cli/tests/cpu_pool_4.rs",
+    "inputs": [],
+    "target": "//:hirsel-cli-test-cpu_pool_4",
+    "standalone": true
   }
 }

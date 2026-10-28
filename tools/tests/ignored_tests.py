@@ -318,8 +318,14 @@ class IgnoredTests(unittest.TestCase):
             text = (ROOT / home['source']).read_text()
             names = [name for _, name in ignored_declarations(text)]
             self.assertIn(case.rsplit('::', 1)[-1], names, case)
-            registry = home.get('module_registry', str(Path(home['source']).parent / 'modules.rs'))
-            self.assertIn(f'mod {Path(home["source"]).stem};', (ROOT / registry).read_text())
+            source = Path(home['source'])
+            if home.get('standalone', False):
+                self.assertEqual(source.parent.name, 'tests')
+                self.assertEqual(home['target'], f'//:{source.parents[1].name}-test-{source.stem}')
+                self.assertNotIn('::', case)
+            else:
+                registry = home.get('module_registry', str(source.parent / 'modules.rs'))
+                self.assertIn(f'mod {source.stem};', (ROOT / registry).read_text())
             environment = {key: '/retained/input with spaces' for key in home['inputs']}
             command = runner['command'](case, environment)
             self.assertEqual(command[-5:], ['--test-arg=--exact', f'--test-arg={case}',
