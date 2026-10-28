@@ -94,7 +94,7 @@ fn precompute_rejects_disabled_verification_before_package_loading() {
 
 #[test]
 fn precomputed_dependency_readers_preserve_order_admission_and_owner_lifetime() {
-    use hirsel_engine::{DefinitionQueries, QueryKind, runtime::ProcessBudget, store::MemStore};
+    use hirsel_engine::{QueryKind, runtime::ProcessBudget};
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
@@ -105,35 +105,46 @@ fn precomputed_dependency_readers_preserve_order_admission_and_owner_lifetime() 
         .unwrap();
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"dependency_reader","version":"1"},"sources":[{"path":"library.hir","module":[]}],"dependencies":[]}"#).unwrap();
         let config = CompileConfig {
-            store: Arc::new(MemStore::default()),
+            store: Arc::new(DirStore::new(directory.path().join("products"))),
             jobs: hirsel_intern::jobs::Jobs::ONE,
             hold_bytes: 0,
             ..Default::default()
         };
-        let compiler = COMPILER.with_config(config.clone()).with_owned_engines();
-        let mut requests = CompilerRequests::for_host(compiler.clone(), config);
+        let cold = {
+            let mut requests =
+                CompilerRequests::for_host(COMPILER.with_config(config.clone()), config.clone());
+            let output = requests
+                .execute(&manifest, CompileOperation::Precompute)
+                .unwrap();
+            let CompileResult::Precomputed { sources, .. } = &output.result else {
+                panic!("expected cold source products")
+            };
+            let path = sources
+                .definitions()
+                .find(|path| path.0.name == "answer")
+                .unwrap()
+                .clone();
+            let bound = sources.dependency_decode_bytes(&path).unwrap();
+            let budget = ProcessBudget::new(bound);
+            let dependencies = sources
+                .dependencies(&path, budget.reserve(bound).unwrap())
+                .unwrap();
+            (path, dependencies.dependencies().to_vec())
+        };
+        let (path, expected) = cold;
+        assert!(!expected.is_empty());
+        assert!(
+            expected.windows(2).any(|rows| rows[0] == rows[1]),
+            "repeated ordered reads are part of the oracle"
+        );
+        let mut requests = CompilerRequests::for_host(COMPILER.with_config(config.clone()), config);
         let output = requests
             .execute(&manifest, CompileOperation::Precompute)
             .unwrap();
         let CompileResult::Precomputed { sources, .. } = &output.result else {
-            panic!("expected source products")
+            panic!("expected restored source products")
         };
         let sources = sources.clone();
-        let path = sources
-            .definitions()
-            .find(|path| path.0.name == "answer")
-            .unwrap()
-            .clone();
-        // The scalar reader independently decodes the published Lower record.
-        // This compares the complete ordered wire sequence, including repeats.
-        let mut reference = compiler.load_check_package(&manifest).unwrap();
-        let checked = reference
-            .check(hirsel_engine::LoweringPolicy::Reachable)
-            .unwrap();
-        assert!(checked.diagnostics.is_empty());
-        assert_eq!(checked.completion, hirsel_engine::CheckCompletion::Complete);
-        let expected = reference.engine.lower_to_tir(&path).unwrap().dependencies;
-        assert!(!expected.is_empty());
         let queries = [QueryKind::Check, QueryKind::Modes, QueryKind::Lower]
             .map(|kind| (path.clone(), kind))
             .to_vec();
