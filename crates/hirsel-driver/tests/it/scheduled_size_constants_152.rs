@@ -12,6 +12,7 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
         std::fs::write(&manifest,r#"{"schema":1,"package":{"name":"stage","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[]}"#).unwrap();
         for jobs in [1, 2, 8] {
             let store = Arc::new(MemStore::default());
+            let mut selected_hidden = None;
             for warm in [false, true] {
                 let mut program = COMPILER
                     .with_config(CompileConfig {
@@ -135,19 +136,39 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
                         hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(expected))
                     );
                 }
-                let generic = lower.settled_definition(scaled).unwrap();
-                let hidden = generic
-                    .bodies
-                    .iter()
-                    .flat_map(|body| &body.rvalues)
-                    .find_map(|value| match value {
-                        hirsel_tir::Rvalue::ReadConstant {
-                            definition,
-                            arguments,
-                        } if !arguments.is_empty() => Some(definition.clone()),
-                        _ => None,
-                    })
-                    .expect("the original generic body retains its staged size read");
+                let hidden = if warm {
+                    selected_hidden
+                        .clone()
+                        .expect("cold TIR selected its staged declaration")
+                } else {
+                    let generic = lower.settled_definition(scaled).unwrap();
+                    let hidden = generic
+                        .bodies
+                        .iter()
+                        .flat_map(|body| &body.rvalues)
+                        .find_map(|value| match value {
+                            hirsel_tir::Rvalue::ReadConstant {
+                                definition,
+                                arguments,
+                            } if !arguments.is_empty() => Some(definition.clone()),
+                            _ => None,
+                        })
+                        .expect("the original generic body retains its staged size read");
+                    selected_hidden = Some(hidden.clone());
+                    hidden
+                };
+                if warm {
+                    assert_eq!(
+                        lower.work(a).initializers,
+                        0,
+                        "A restores its completed value"
+                    );
+                    assert_eq!(
+                        lower.work(b).initializers,
+                        0,
+                        "B restores its completed value"
+                    );
+                }
                 assert!(declarations.contains(&hidden));
                 assert_eq!(
                     lower.settled_constant(&hidden, &[2]).unwrap().root.kind,
