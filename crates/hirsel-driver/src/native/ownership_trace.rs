@@ -344,7 +344,7 @@ pub(crate) fn emit_relocated(
         }
     }
     super::check_runtime_calls(program)?;
-    let object = match backend {
+    let mut object = match backend {
         Backend::Llvm if resources => {
             hirsel_llvm::emit_object_resources_ownership(selected, inputs, plans)
                 .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
@@ -360,7 +360,9 @@ pub(crate) fn emit_relocated(
                 .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
         }
     };
-    let glue = super::emit_glue(program, backend, &registry)?;
+    let mut glue = super::emit_glue(program, backend, &registry)?;
+    compact_object(&mut object);
+    compact_object(&mut glue);
     Ok(LeafObjects {
         objects: vec![object, glue],
         // Bulk construction packs the immutable marker trees. No insert or
@@ -383,6 +385,31 @@ pub struct LeafExecution {
     pub program: [u8; 32],
     pub trace: Result<hirsel_run_schema::ownership_trace::Trace, String>,
 }
+// Diagnostic outputs retain their buffers after the compiler context returns.
+// Release builder spare capacity before charging the existing output grant.
+fn compact_object(object: &mut ObjectArtifact) {
+    object.bytes.shrink_to_fit();
+    object.exports.shrink_to_fit();
+    object.imports.shrink_to_fit();
+    object.relocations.shrink_to_fit();
+    object.debug.shrink_to_fit();
+    object.reproducibility.toolchain.shrink_to_fit();
+    for symbol in object.exports.iter_mut().chain(&mut object.imports) {
+        symbol.name.shrink_to_fit();
+    }
+    for row in &mut object.debug {
+        row.symbol.shrink_to_fit();
+        row.items.shrink_to_fit();
+        row.sources.shrink_to_fit();
+        row.owner_kinds.shrink_to_fit();
+        row.ranges.shrink_to_fit();
+    }
+    if let Some(ahead) = &mut object.ahead {
+        ahead.frames.shrink_to_fit();
+        ahead.bounds.shrink_to_fit();
+    }
+}
+
 impl LeafObjects {
     pub(crate) fn retained_bytes(&self) -> u64 {
         use hirsel_engine::NativeMetadataWeight as Weight;
@@ -425,7 +452,8 @@ impl LeafObjects {
                 w.flat_vec(&ahead.bounds);
             }
         });
-        w.map(&self.units, |w, _, markers| {
+        w.bulk_tree::<[u8; 32], BTreeMap<u32, Box<Metadata>>>(self.units.len());
+        for markers in self.units.values() {
             w.bulk_tree::<u32, Box<Metadata>>(markers.len());
             for marker in markers.values() {
                 w.add(std::mem::size_of::<Metadata>());
@@ -454,13 +482,12 @@ impl LeafObjects {
                     }
                 });
             }
-        });
-        w.map(&self.calls, |w, _, targets| {
-            // Constructed once by collect; empty sets never allocated nodes.
-            if !targets.is_empty() {
-                w.tree::<[u8; 32], ()>(targets.len())
-            }
-        });
+        }
+        // physical_calls bulk-collects both immutable levels from checked sites.
+        w.bulk_tree::<[u8; 32], BTreeSet<[u8; 32]>>(self.calls.len());
+        for targets in self.calls.values() {
+            w.bulk_tree::<[u8; 32], ()>(targets.len());
+        }
         w.bytes()
     }
     pub fn objects(&self) -> &[ObjectArtifact] {

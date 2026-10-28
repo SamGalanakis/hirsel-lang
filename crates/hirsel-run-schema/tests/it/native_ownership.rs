@@ -1281,7 +1281,7 @@ fn native_parallel_cycles_and_chains_preserve_equal_resource_identities() {
                     action,
                     token,
                     owner,
-                    ..template.clone()
+                    ..*template.clone()
                 }),
             );
             rows.push(Row::Event {
