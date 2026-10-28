@@ -154,3 +154,25 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         [2, 2, 2, 0, 0],
     );
 }
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn empty_and_present_resource_results_preserve_only_the_actual_equal_fields() {
+    results(
+        r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let absent=task.async(s,fn()->Option[(Token,Token)] {None()})
+  let empty=task.await(s,take absent)
+  let present=task.async(s,fn()->Option[(Token,Token)] {Some((Token(),Token()))})
+  let filled=task.await(s,take present)
+ })
+ Ok(())
+}
+"#,
+        0,
+        [2, 2, 2, 0, 0],
+    );
+}

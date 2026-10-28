@@ -679,5 +679,13 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_result_71::empty_and_present_resource_results_preserve_only_the_actual_equal_fields": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_result_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }
