@@ -407,3 +407,56 @@ thread_local! { static CLONED_NODES: Cell<usize> = const { Cell::new(0) }; }
 pub(super) fn record_clone(shadow: &Shadow) {
     CLONED_NODES.with(|count| count.set(count.get() + nodes(shadow)));
 }
+
+#[test]
+fn whole_local_take_keeps_holder_identity_and_checks_ended_bounds_before_extraction() {
+    use hirsel_tir::{Operand, PlaceId, UseKind};
+    let holder = Holder::new(true);
+    let mut frame = frame(own(Shadow::default(), &holder), vec![]);
+    frame.slots[0] = Some(Value::Bytes(vec![3, 7]));
+    frame.check.as_mut().unwrap().copies.insert(0);
+    frame.check.as_mut().unwrap().borrowed.insert(0);
+    let operand = Operand {
+        place: PlaceId(0),
+        usage: UseKind::Take,
+    };
+    let (value, shadow) = frame.operand_shadow(&operand).unwrap();
+    assert_eq!(value, Value::Bytes(vec![3, 7]));
+    identical(&shadow, &own(Shadow::default(), &holder));
+    assert!(frame.slots[0].is_none());
+    let check = frame.check.as_mut().unwrap();
+    assert_eq!(check.shadows[0], Shadow::default());
+    assert!(!check.copies.contains(&0));
+    assert!(!check.borrowed.contains(&0));
+    let region = check.state.borrow_mut().instance(Kind::Region);
+    check.shadows[0] = Shadow::of(vec![region]);
+    check.state.borrow_mut().close(region);
+    frame.slots[0] = Some(Value::Bytes(vec![9]));
+    assert!(frame.operand_shadow(&operand).is_err());
+    assert_eq!(frame.slots[0], Some(Value::Bytes(vec![9])));
+}
+
+#[test]
+fn whole_mutable_inline_take_preserves_the_source_shadow_and_access_bookkeeping() {
+    use hirsel_tir::{Operand, PlaceId, UseKind};
+    let holder = Holder::new(true);
+    let tree = own(Shadow::default(), &holder);
+    let mut frame = frame(tree.clone(), vec![]);
+    frame.mut_parameters.push(LocalId(0));
+    frame.slots[0] = Some(Value::Unit);
+    frame.check.as_mut().unwrap().copies.insert(0);
+    frame.check.as_mut().unwrap().borrowed.insert(0);
+    let (value, shadow) = frame
+        .operand_shadow(&Operand {
+            place: PlaceId(0),
+            usage: UseKind::Take,
+        })
+        .unwrap();
+    assert_eq!(value, Value::Unit);
+    assert_eq!(shadow, Shadow::default());
+    assert_eq!(frame.slots[0], Some(Value::Unit));
+    let check = frame.check.as_ref().unwrap();
+    identical(&check.shadows[0], &tree);
+    assert!(check.copies.contains(&0));
+    assert!(check.borrowed.contains(&0));
+}
