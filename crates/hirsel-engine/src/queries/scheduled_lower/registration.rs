@@ -17,11 +17,17 @@ const FAILURE: Domain = Domain {
     schema: 1,
 };
 struct Input {
+    key: EntryKey,
     definition: DefId,
     syntax: Reference,
     implementation: ContentHash,
     site: Span,
     instance_reads: Reads,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Stored {
+    output: Reference,
+    decode_bytes: u64,
 }
 struct Data {
     text: Result<String, QueryError>,
@@ -113,53 +119,57 @@ impl FrontRegistrationQueries {
     }
     async fn run(self: Arc<Self>, id: QueryId, reads: QueryReads) -> Result<ProductRef, Reference> {
         let input = &self.inputs[&id.address.0];
-        let mut source = Source {
-            owner: self.lower.clone(),
-            reads,
-            observed: Rc::new(RefCell::new(ReadsBuilder::new())),
-            refusal: Rc::new(Cell::new(None)),
-            depth: Rc::new(RefCell::new(DepthEvidence::leaf(dependency_limit(
-                self.lower.limits.call_depth,
-            )))),
-            framed: true,
-            evidence: Rc::new(RefCell::new(Evidence::new(
-                self.lower.verify,
-                self.weight.retained,
-            ))),
-        };
-        source.record(
-            ReadKey::ExecutedBody(input.definition),
-            memos::optional(Some(input.implementation)),
-        );
-        source.merge(&input.instance_reads);
-        let text = if source.depth.borrow().limit() == 0 {
-            Err(source.overflow(input.site))
+        let mut data = if let Some(data) = self.restore(input) {
+            Arc::new(data)
         } else {
-            self.compute(input, &mut source).await
+            let mut source = Source {
+                owner: self.lower.clone(),
+                reads,
+                observed: Rc::new(RefCell::new(ReadsBuilder::new())),
+                refusal: Rc::new(Cell::new(None)),
+                depth: Rc::new(RefCell::new(DepthEvidence::leaf(dependency_limit(
+                    self.lower.limits.call_depth,
+                )))),
+                framed: true,
+                evidence: Rc::new(RefCell::new(Evidence::new(
+                    self.lower.verify,
+                    self.weight.retained,
+                ))),
+            };
+            source.record(
+                ReadKey::ExecutedBody(input.definition),
+                memos::optional(Some(input.implementation)),
+            );
+            source.merge(&input.instance_reads);
+            let text = if source.depth.borrow().limit() == 0 {
+                Err(source.overflow(input.site))
+            } else {
+                self.compute(input, &mut source).await
+            };
+            if let Some(reference) = source.refusal.get() {
+                return Err(reference);
+            }
+            let observed = std::mem::take(&mut *source.observed.borrow_mut())
+                .finish()
+                .map_err(|_| self.errors.protocol)?;
+            let acceptance = text
+                .as_ref()
+                .ok()
+                .and_then(|_| source.evidence.borrow().finish(&observed));
+            let mut depth = source.depth.borrow().clone();
+            depth.first[0] = None;
+            Arc::new(Data {
+                text,
+                reads: observed,
+                depth,
+                acceptance,
+                _allowance: None,
+            })
         };
-        if let Some(reference) = source.refusal.get() {
-            return Err(reference);
-        }
-        let observed = std::mem::take(&mut *source.observed.borrow_mut())
-            .finish()
-            .map_err(|_| self.errors.protocol)?;
-        let acceptance = text
-            .as_ref()
-            .ok()
-            .and_then(|_| source.evidence.borrow().finish(&observed));
-        let mut depth = source.depth.borrow().clone();
-        depth.first[0] = None;
-        let mut data = Arc::new(Data {
-            text,
-            reads: observed,
-            depth,
-            acceptance,
-            _allowance: None,
-        });
-        let bytes = self
+        let (bytes, record_decode_bytes) = self
             .lower
             .records
-            .encode(
+            .encode_with_decode_bytes(
                 &self.lower.anchors,
                 &(input.definition, &data.text, &data.reads, &data.depth),
             )
@@ -217,11 +227,129 @@ impl FrontRegistrationQueries {
             action,
             record,
         };
+        if !failed
+            && let Some(decode_bytes) = weight
+                .bytes()
+                .checked_mul(2)
+                .and_then(|bytes| bytes.checked_add(record_decode_bytes))
+        {
+            self.remember(input, record, &data, decode_bytes);
+        }
         self.outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.address.0, (product, data));
         if failed { Err(record) } else { Ok(product) }
+    }
+    fn storage_key(input: &Input) -> EntryKey {
+        EntryKey(
+            ContentHash::of_parts(
+                "hirsel.front.registration.variants.v1",
+                [input.key.0.0.as_slice()],
+            ),
+            input.key.1,
+            input.key.2,
+        )
+    }
+    fn observe(&self, input: &Input, read: &ReadKey) -> Option<ContentHash> {
+        if *read == ReadKey::ExecutedBody(input.definition) {
+            Some(memos::optional(Some(input.implementation)))
+        } else {
+            self.lower.observe(input.definition.path(), read)
+        }
+    }
+    fn restore(&self, input: &Input) -> Option<Data> {
+        use crate::store::Entry;
+        if self.lower.verify != Verify::On || !self.lower.store.query_cache_enabled() {
+            return None;
+        }
+        let key = Self::storage_key(input);
+        let variant = Entry::load(&*self.lower.store, &key).resolve_current(
+            &*self.lower.store,
+            &key,
+            |read| self.observe(input, read),
+        )?;
+        let stored: Stored = bincode::deserialize(&variant.payload).ok()?;
+        if stored.output.domain != OUTPUT
+            || stored.output.len > self.weight.scratch
+            || stored.decode_bytes > self.weight.scratch
+        {
+            return None;
+        }
+        let acceptance = if self.lower.verify == Verify::On {
+            Some(self.lower.store.verifier()?.execution(
+                persistent::evaluation_subject(&key, &variant.payload),
+                |package| self.lower.snapshot.validation_input_digest(package),
+            )?)
+        } else {
+            None
+        };
+        let bytes = self.lower.store.get_content(stored.output)?;
+        let (definition, text, reads, depth): (
+            DefId,
+            Result<String, QueryError>,
+            Reads,
+            DepthEvidence<Span>,
+        ) = self.lower.records.decode(&self.lower.anchors, &bytes)?;
+        if definition != input.definition
+            || text.is_err()
+            || reads
+                .first_changed(|read| self.observe(input, read))
+                .is_some()
+            || depth.bounded
+            || depth.first.len() != dependency_limit(self.lower.limits.call_depth) as usize + 1
+            || depth
+                .first
+                .iter()
+                .flatten()
+                .any(|site| self.lower.sources.slice(*site).is_none())
+        {
+            return None;
+        }
+        let persisted = persistent::persisted_execution_reads(&reads, acceptance.as_ref())?;
+        if persisted != variant.reads {
+            return None;
+        }
+        Some(Data {
+            text,
+            reads,
+            depth,
+            acceptance,
+            _allowance: None,
+        })
+    }
+    fn remember(&self, input: &Input, output: Reference, data: &Data, decode_bytes: u64) {
+        use crate::store::{Entry, VariantRef};
+        if !self.lower.store.query_cache_enabled() || data.acceptance.is_none() {
+            return;
+        }
+        let Some(reads) =
+            persistent::persisted_execution_reads(&data.reads, data.acceptance.as_ref())
+        else {
+            return;
+        };
+        let key = Self::storage_key(input);
+        let Ok(payload) = bincode::serialize(&Stored {
+            output,
+            decode_bytes,
+        }) else {
+            return;
+        };
+        // The local execution association binds both the checked output
+        // reference and its measured decode bound before any restoration.
+        if let Some(receipt) = &data.acceptance
+            && let Some(cache) = self.lower.store.verifier()
+        {
+            cache.publish_execution(persistent::evaluation_subject(&key, &payload), receipt);
+        }
+        let Some(variant) = VariantRef::publish(&*self.lower.store, &key, reads, &payload) else {
+            return;
+        };
+        let mut entry = Entry::load(&*self.lower.store, &key);
+        entry.insert(variant);
+        self.lower
+            .store
+            .put_query(key.2, &key, entry.action(&key), &entry.encode_for(&key));
     }
     async fn compute(&self, input: &Input, source: &mut Source) -> Result<String, QueryError> {
         let bytes = self
@@ -389,6 +517,7 @@ impl QueryEngine {
             inputs.insert(
                 key.0,
                 Input {
+                    key,
                     definition: DefId::intern(definition),
                     syntax: archived,
                     implementation: syntax.text_hash,

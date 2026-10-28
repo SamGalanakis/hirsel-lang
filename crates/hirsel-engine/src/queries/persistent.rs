@@ -561,7 +561,7 @@ fn persisted_evaluation(
     canonical.executed = persisted_execution_reads(&value.executed, value.acceptance.as_ref())?;
     Some(canonical)
 }
-fn persisted_execution_reads(
+pub(super) fn persisted_execution_reads(
     executed: &Reads,
     acceptance: Option<&hirsel_validate::ExecutionReceipt>,
 ) -> Option<Reads> {
