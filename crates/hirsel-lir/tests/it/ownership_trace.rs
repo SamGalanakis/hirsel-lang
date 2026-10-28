@@ -5870,7 +5870,7 @@ fn ownership_trace_incoming_sealed_owner_requires_a_proved_plain_root() {
         t.table.layouts.push(record);
         let abi = t.abi(&[(Passing::Take, owner)], Some(owner));
         t.table.fn_abis[abi.0 as usize].parameters[0].passing =
-            hirsel_lir::layout_types::ParameterPassing::ByValue;
+            hirsel_lir::abi_types::ParameterPassing::ByValue;
         t.builder.unit.header.abi = abi;
         let value = t.value_as(ValueRepr::Handle, owner, Holding::Owned);
         t.param(value);
