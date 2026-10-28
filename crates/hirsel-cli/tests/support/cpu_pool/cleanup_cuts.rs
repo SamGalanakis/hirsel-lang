@@ -57,6 +57,7 @@ fn native_cleanup_cut_history(width: usize, source: &str, logs: usize, name: &st
         assert_eq!(bytes[frames.last().unwrap().0 + 8], 3);
         let partial = root.join("partial.tape");
         let probe = root.join("partial.probe");
+        let lifecycle = root.join("partial.probe.lifecycle");
         let mut cuts = 0;
         let mut progressed = 0;
         // Replay every byte of every native phase frame, including result
@@ -90,6 +91,10 @@ fn native_cleanup_cut_history(width: usize, source: &str, logs: usize, name: &st
                 );
                 assert!(fs::read(&probe).unwrap().is_empty());
                 assert!(
+                    fs::read(&lifecycle).unwrap().is_empty(),
+                    "a torn-history replay started CPU workers at byte {end}"
+                );
+                assert!(
                     observed.contains("truncated"),
                     "cut {end}: {output:?}\n{observed}"
                 );
@@ -116,6 +121,10 @@ fn native_cleanup_cut_history(width: usize, source: &str, logs: usize, name: &st
         checked(qual_native_output(&mut replay, root));
         assert_eq!(fs::read_to_string(&projection).unwrap(), live_projection);
         assert!(fs::read(&probe).unwrap().is_empty());
+        assert!(
+            fs::read(&lifecycle).unwrap().is_empty(),
+            "a complete-history replay started CPU workers"
+        );
         eprintln!(
             "Free {backend} W{width} {name} native job-result/cleanup: {cuts} byte cuts across {} durable frames replayed plus complete history",
             frames.len() - 1
