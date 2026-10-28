@@ -8,16 +8,16 @@ pub struct SourceIndexState {
     sources: SourceMap,
     indexed_sources: BTreeMap<FileId, (FileContext, QueryEnvironment)>,
     builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
-    syntax_keys: BTreeMap<(DefPath, QueryKind), ContentHash>,
+    syntax_keys: Box<[(DefId, ContentHash)]>,
     signatures: Vec<(DefId, SourceHeader)>,
     specialization_dependencies: BTreeMap<DefId, parallel::SpecializationDependencies>,
-    private_summary_reads: BTreeMap<DefId, Arc<Reads>>,
-    private_summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
-    private_unique_failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
+    private_summary_reads: Box<[(DefId, Arc<Reads>)]>,
+    private_summaries: Box<[(DefId, hirsel_types::UniqueSummary)]>,
+    private_unique_failures: Box<[(DefId, Vec<hirsel_types::UniqueFailure>)]>,
     private_summary_revision: Option<crate::Revision>,
     graph: crate::memo::SourceHeaderGraph,
     front_changes: frontier::FrontTracker,
-    inputs: hirsel_syntax::DefMap<memos::DefInputs>,
+    inputs: Box<[(DefId, memos::DefInputs)]>,
     environment_seen: Option<(QueryEnvironment, crate::ComptimeLimits, Option<ContentHash>)>,
     published_manifest: Option<ContentHash>,
     vanished: BTreeSet<DefId>,
@@ -208,16 +208,21 @@ impl QueryEngine {
             w.add(reads.bytes.try_into().unwrap_or(usize::MAX));
             w.vec(&entry.paths, |w, path| w.path(path));
         });
-        hash::<DefId, hirsel_types::UniqueSummary>(&mut weight, self.private_summaries.capacity());
+        weight
+            .add(self.private_summaries.len() * size_of::<(DefId, hirsel_types::UniqueSummary)>());
         for summary in self.private_summaries.values() {
             weight.flat_vec(&summary.preserves_unique);
             weight.flat_vec(&summary.results);
             weight.flat_vec(&summary.nonretaining);
         }
-        weight.map(&self.private_unique_failures, |w, _, failures| {
-            w.vec(failures, |w, failure| w.add(failure.message.capacity()));
-        });
-        weight.tree::<DefId, Arc<Reads>>(self.private_summary_reads.len());
+        weight.add(
+            self.private_unique_failures.len()
+                * size_of::<(DefId, Vec<hirsel_types::UniqueFailure>)>(),
+        );
+        for failures in self.private_unique_failures.values() {
+            weight.vec(failures, |w, failure| w.add(failure.message.capacity()));
+        }
+        weight.add(self.private_summary_reads.len() * size_of::<(DefId, Arc<Reads>)>());
         let mut previous: Option<&Arc<Reads>> = None;
         for reads in self.private_summary_reads.values() {
             // Module proofs share receipts and sort together by DefPath. Any
@@ -230,7 +235,7 @@ impl QueryEngine {
             }
             previous = Some(reads);
         }
-        hash::<DefId, memos::DefInputs>(&mut weight, self.inputs.capacity());
+        weight.add(self.inputs.len() * size_of::<(DefId, memos::DefInputs)>());
         for value in self.inputs.values() {
             weight.add(value.retained_bytes());
         }
@@ -249,18 +254,13 @@ impl QueryEngine {
             }
             w.add(environment.compiler_version.capacity());
         });
-        // into_source_index bulk-collects these selected keys in sorted order.
-        weight.bulk_tree::<(DefPath, QueryKind), ContentHash>(
+        weight.add(
             self.syntax_keys
                 .keys()
                 .filter(|(_, kind)| *kind == QueryKind::Signature)
-                .count(),
+                .count()
+                * size_of::<(DefId, ContentHash)>(),
         );
-        for ((path, kind), _) in &self.syntax_keys {
-            if *kind == QueryKind::Signature {
-                weight.path(path);
-            }
-        }
         weight.map(&self.package_manifests, |w, package, _| {
             w.add(package.name.capacity());
             w.add(package.version.capacity());
@@ -478,16 +478,30 @@ impl QueryEngine {
             syntax_keys: std::mem::take(&mut self.syntax_keys)
                 .into_iter()
                 .filter(|((_, kind), _)| *kind == QueryKind::Signature)
-                .collect(),
+                .map(|((path, _), hash)| (DefId::intern(&path), hash))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             signatures,
             specialization_dependencies: std::mem::take(&mut self.specialization_dependencies),
-            private_summary_reads: std::mem::take(&mut self.private_summary_reads),
-            private_summaries: std::mem::take(&mut self.private_summaries),
-            private_unique_failures: std::mem::take(&mut self.private_unique_failures),
+            private_summary_reads: std::mem::take(&mut self.private_summary_reads)
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            private_summaries: std::mem::take(&mut self.private_summaries)
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            private_unique_failures: std::mem::take(&mut self.private_unique_failures)
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             private_summary_revision: self.private_summary_revision,
             graph,
             front_changes: std::mem::take(&mut self.front_changes),
-            inputs: std::mem::take(&mut self.inputs),
+            inputs: std::mem::take(&mut self.inputs)
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             environment_seen: self.environment_seen.take(),
             published_manifest: self.published_manifest,
             vanished: std::mem::take(&mut self.vanished),
@@ -557,20 +571,24 @@ impl SourceIndexState {
         engine.sources = sources;
         engine.indexed_sources = indexed_sources;
         engine.builtins = builtins;
-        engine.syntax_keys = syntax_keys;
+        engine.syntax_keys = syntax_keys
+            .into_vec()
+            .into_iter()
+            .map(|(id, hash)| ((id.path().clone(), QueryKind::Signature), hash))
+            .collect();
         engine.signatures = signatures
             .into_iter()
             .map(|(id, header)| (id, header.restore()))
             .collect();
         engine.specialization_dependencies = specialization_dependencies;
-        engine.private_summary_reads = private_summary_reads;
-        engine.private_summaries = private_summaries;
-        engine.private_unique_failures = private_unique_failures;
+        engine.private_summary_reads = private_summary_reads.into_vec().into_iter().collect();
+        engine.private_summaries = private_summaries.into_vec().into_iter().collect();
+        engine.private_unique_failures = private_unique_failures.into_vec().into_iter().collect();
         engine.private_summary_revision = private_summary_revision;
         engine.graph = graph.restore();
         engine.graph.reset_stats();
         engine.front_changes = front_changes;
-        engine.inputs = inputs;
+        engine.inputs = inputs.into_vec().into_iter().collect();
         engine.environment_seen = environment_seen;
         engine.published_manifest = published_manifest;
         engine.vanished = vanished;
