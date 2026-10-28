@@ -9,24 +9,45 @@ fn library_defaults_read_installed_products_and_preserve_explicit_none() {
         with_compiler_stack(|| {
             let manifest = std::path::Path::new(&manifest);
             let definition = DefPath(ItemPath {
-                package: PackageId { name: "library_defaults".into(), version: "1".into() },
-                modules: vec![], name: "first".into(),
+                package: PackageId {
+                    name: "library_defaults".into(),
+                    version: "1".into(),
+                },
+                modules: vec![],
+                name: "first".into(),
             });
             assert!(COMPILER.configuration().store.enabled());
             let mut installed = COMPILER.load_check_package(manifest).unwrap();
             installed.engine.check_definition(&definition).unwrap();
-            assert_eq!(installed.engine.recompute_count(&definition, QueryKind::Check), 0);
-            assert_eq!(installed.engine.recompute_count(&definition, QueryKind::Modes), 0);
+            assert_eq!(
+                installed
+                    .engine
+                    .recompute_count(&definition, QueryKind::Check),
+                0
+            );
+            assert_eq!(
+                installed
+                    .engine
+                    .recompute_count(&definition, QueryKind::Modes),
+                0
+            );
             let explicit = COMPILER.with_config(CompileConfig::default());
             assert!(!explicit.configuration().store.enabled());
             let mut fresh = explicit.load_check_package(manifest).unwrap();
             fresh.engine.check_definition(&definition).unwrap();
-            assert_eq!(fresh.engine.recompute_count(&definition, QueryKind::Check), 1);
+            assert_eq!(
+                fresh.engine.recompute_count(&definition, QueryKind::Check),
+                1
+            );
         });
         return;
     }
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("main.hir"), "pub fn first()->u64{7u64}\n").unwrap();
+    std::fs::write(
+        directory.path().join("main.hir"),
+        "pub fn first()->u64{7u64}\n",
+    )
+    .unwrap();
     let manifest = directory.path().join("hirsel.json");
     std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"library_defaults","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[]}"#).unwrap();
     let products = directory.path().join("products");
