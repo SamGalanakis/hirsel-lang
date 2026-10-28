@@ -67,3 +67,10 @@ include!("support/cpu_pool/interpreter_fuel.rs");
 fn cpu_interpreter_cut_exact_source_fuel_stops() {
     cpu_interpreter_fuel_cuts(1);
 }
+
+include!("support/cpu_pool/four_engine.rs");
+
+#[test]
+fn ordered_allocating_fixture_agrees_across_four_engines_width_1() {
+    cpu_fixture_allocating_four_engine_agreement(1);
+}

@@ -78,6 +78,14 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 "#;
 fn ordered_remaining(name: &str, template: &str, status: i32) {
+    ordered_remaining_mode(name, template, status, false);
+}
+fn ordered_remaining_mode(name: &str, template: &str, status: i32, allocating: bool) {
+    let template = if allocating {
+        allocating_cpu_source(template)
+    } else {
+        template.to_owned()
+    };
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let first = template
@@ -207,7 +215,7 @@ fn ordered_remaining(name: &str, template: &str, status: i32) {
                         .map(|x| x.parse().unwrap())
                         .collect()
                 })
-                .filter(|fields: &Vec<u64>| fields[0] == failed_domain && fields[2] & 4 != 0)
+                .filter(|fields: &Vec<u64>| fields[0] == failed_domain && fields[2] == 132)
                 .collect();
             let older = boundaries
                 .iter()
@@ -221,7 +229,7 @@ fn ordered_remaining(name: &str, template: &str, status: i32) {
             // sample is no failure event; observe the actual alternate handoffs.
             assert!(
                 younger < older,
-                "job 1 must reach its checked failure boundary before job 0: {boundaries:?}"
+                "{backend}: job 1 must reach its checked failure boundary before job 0: {boundaries:?}"
             );
             eprintln!(
                 "{backend} reversed FAIL-2: job 1 boundary {younger} before job 0 boundary {older}; reported job 0; reentry succeeded"

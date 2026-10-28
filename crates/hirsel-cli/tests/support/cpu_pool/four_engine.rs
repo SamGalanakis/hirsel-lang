@@ -97,3 +97,22 @@ fn cpu_fixture_four_engine_source(width: u32, source: String, expected_output: &
         }
     });
 }
+
+fn cpu_fixture_allocating_four_engine_agreement(width: u32) {
+    let jobs = (1..=2 * width)
+        .map(|n| format!("{n}u64"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let expected = (1..=2 * width)
+        .map(|n| format!("[{n}u64, {}u64]", n + 7))
+        .collect::<Vec<_>>()
+        .join(",");
+    let source = include_str!("interpreter.hir")
+        .replace("WIDTH", &format!("{width}u32"))
+        .replace("JOBS", &format!("[{jobs}]"))
+        .replace("EXPECTED", &format!("[{expected}]"))
+        .replace("fn(take job: u64) -> u64 uses {} { job + 7u64 }",
+            "fn(take job: u64) -> unique List[u64] uses {} { let mut out = [job]; list.reserve(mut out, 128u64); list.push(mut out, job + 7u64); take out }");
+    cpu_fixture_four_engine_source(width, source.clone(), b"cpu-scalar-ok\n");
+    cpu_interpreter_matrix(width as usize, false, &source, false);
+}

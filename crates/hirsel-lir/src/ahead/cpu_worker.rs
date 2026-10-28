@@ -171,13 +171,7 @@ impl AheadPlan {
     /// The private start selector carries no new source operation or ABI field.
     /// Emitters compare the actual mapper code against this checked recipe.
     pub fn cpu_start(&self, unit: &LirUnit<Ready>, call: CallId) -> Option<ContentHash> {
-        let root = self.cpu_certified_start(unit, call)?;
-        self.roots[&root]
-            .cpu
-            .as_ref()?
-            .mapper
-            .is_none()
-            .then_some(root)
+        self.cpu_certified_start(unit, call)
     }
 
     /// Select complete compiler evidence, including allocating graphs. Joint

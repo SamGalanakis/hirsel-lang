@@ -153,3 +153,48 @@ fn cpu_interpreter_cut_exact_source_fuel_stops() {
 fn ordered_summary_encodes_initialized_fields_and_active_arms() {
     ordered_summary_fields();
 }
+
+#[test]
+#[ignore = "requires a private exclusive cpuset; run explicitly for overlap qualification"]
+fn ordered_allocating_mappers_overlap_and_replay() {
+    run_width_policy_backends_mode(8, "tasks.cooperative@1", &["llvm", "cranelift"], true);
+}
+#[test]
+fn ordered_allocating_jobs_match_serial_reference_and_replay() {
+    ordered_replay_width_mode(8, true);
+}
+
+#[test]
+fn ordered_allocating_failure_order_and_cleanup() {
+    ordered_remaining_mode("failure", ORDERED_FAILURE, 0, true);
+}
+
+#[test]
+fn ordered_allocating_cancel_before_claim() {
+    ordered_remaining_mode("cancel-before", ORDERED_CANCEL, 0, true);
+}
+
+#[test]
+fn ordered_allocating_cancel_after_claim() {
+    ordered_remaining_mode("cancel-after", ORDERED_CANCEL, 0, true);
+}
+
+#[test]
+fn ordered_allocating_fuel_stop() {
+    ordered_remaining_mode(
+        "fuel",
+        ORDERED_FUEL,
+        hirsel_run_schema::exit::BUDGET_EXCEEDED,
+        true,
+    );
+}
+
+#[test]
+fn ordered_allocating_summary_encodes_initialized_fields_and_active_arms() {
+    ordered_allocating_summary_fields();
+}
+
+#[test]
+fn ordered_allocating_fixture_agrees_across_four_engines_width_8() {
+    cpu_fixture_allocating_four_engine_agreement(8);
+}

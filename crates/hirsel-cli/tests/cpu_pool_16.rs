@@ -70,3 +70,19 @@ include!("support/cpu_pool/interpreter.rs");
 fn cpu_interpreter_ordered_cancellation_at_every_task_phase() {
     cpu_interpreter_cancel_cuts(8);
 }
+
+#[test]
+#[ignore = "requires a private exclusive cpuset; run explicitly for overlap qualification"]
+fn ordered_allocating_mappers_overlap_and_replay() {
+    run_width_policy_backends_mode(16, "tasks.cooperative@1", &["llvm", "cranelift"], true);
+}
+#[test]
+fn ordered_allocating_jobs_match_serial_reference_and_replay() {
+    ordered_replay_width_mode(16, true);
+}
+
+include!("support/cpu_pool/four_engine.rs");
+#[test]
+fn ordered_allocating_fixture_agrees_across_four_engines_width_16() {
+    cpu_fixture_allocating_four_engine_agreement(16);
+}

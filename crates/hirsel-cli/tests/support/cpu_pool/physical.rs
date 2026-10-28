@@ -114,6 +114,45 @@ fn run_width_policy(width: usize, provider: &str) {
     run_width_policy_backends(width, provider, &["llvm", "cranelift"]);
 }
 fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
+    run_width_policy_backends_mode(width, provider, backends, false);
+}
+fn allocating_cpu_source(source: &str) -> String {
+    source
+        .lines()
+        .flat_map(|line| {
+            let indent = &line[..line.len() - line.trim_start().len()];
+            if line.trim() == "let mut x = job" {
+                vec![
+                    format!("{indent}let mut out = [job]"),
+                    format!("{indent}list.reserve(mut out, 128u64)"),
+                    line.to_owned(),
+                ]
+            } else if line.trim() == "x" {
+                vec![
+                    format!("{indent}list.push(mut out, x)"),
+                    format!("{indent}take out"),
+                ]
+            } else {
+                vec![line.replace(
+                    "fn(take job: u64) -> u64",
+                    "fn(take job: u64) -> unique List[u64]",
+                )]
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace(
+            "-> Result[List[u64], CpuPoolError]",
+            "-> Result[List[unique List[u64]], CpuPoolError]",
+        )
+        .replace("Ok([0u64, 1u64])", "Ok([[0u64, 0u64], [1u64, 1u64]])")
+}
+fn run_width_policy_backends_mode(
+    width: usize,
+    provider: &str,
+    backends: &[&str],
+    allocating: bool,
+) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let source = include_str!("physical.hir");
@@ -131,8 +170,17 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
             x = x.wrapping_mul(6364136223846793005).wrapping_add(i);
             x ^= x >> 29;
         }
-        expected.push(format!("{x}u64"));
+        expected.push(if allocating {
+            format!("[{q}u64, {x}u64]")
+        } else {
+            format!("{x}u64")
+        });
     }
+    let source = if allocating {
+        allocating_cpu_source(source)
+    } else {
+        source.to_owned()
+    };
     let source = source
         .replace("3000000u64", &format!("{iterations}u64"))
         .replace("WIDTH64", &format!("{width}u64"))
@@ -157,6 +205,7 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
                 .unwrap(),
         );
         let probe = root.join("probe.txt");
+        let tape = root.join(format!("{backend}.tape"));
         let mut command = Command::new(&executable);
         command
             .arg("--hirsel-grants")
@@ -164,6 +213,9 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
             .env("HIRSEL_RT_CPU_PROBE", &probe)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        if allocating {
+            command.arg("--hirsel-record").arg(&tape);
+        }
         #[cfg(feature = "native-tsan")]
         {
             use std::os::unix::process::CommandExt;
@@ -207,6 +259,13 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
         assert_eq!(cpus.len(), width);
         let ownership = exclusive_cpus(&cpus);
         let exclusive = ownership.as_ref().cloned().unwrap_or_default();
+        if allocating {
+            assert_eq!(
+                exclusive.len(),
+                width,
+                "allocating P({width}) requires full exclusive CPU ownership: {ownership:?}"
+            );
+        }
         cpus.sort_by_key(|cpu| (!exclusive.contains(cpu), *cpu));
         let mut child = command.spawn().unwrap();
         let before = physical_host_snapshot(child.id(), &cpus);
@@ -290,6 +349,21 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
             .any(|prefix| line.starts_with(prefix))
         }) {
             eprintln!("CPU retired {line}");
+        }
+        if allocating {
+            let replay_probe = root.join("allocating-replay.probe");
+            let replay = checked(
+                Command::new(&executable)
+                    .arg("--hirsel-replay")
+                    .arg(&tape)
+                    .env("HIRSEL_RT_WORKERS", "1")
+                    .env("HIRSEL_RT_CPU_PROBE", &replay_probe)
+                    .output()
+                    .unwrap(),
+            );
+            assert_eq!(replay.stdout, output.stdout);
+            assert_eq!(replay.stderr, output.stderr);
+            assert!(fs::read(&replay_probe).unwrap().is_empty());
         }
         if exclusive.len() == width || width == 1 {
             eprintln!(

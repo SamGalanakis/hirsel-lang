@@ -134,3 +134,23 @@ include!("support/cpu_pool/interpreter_fuel.rs");
 fn cpu_interpreter_cut_exact_source_fuel_stops() {
     cpu_interpreter_fuel_cuts(4);
 }
+
+#[test]
+#[ignore = "requires a private exclusive cpuset; run explicitly for overlap qualification"]
+fn ordered_allocating_mappers_overlap_and_replay() {
+    run_width_policy_backends_mode(4, "tasks.cooperative@1", &["llvm", "cranelift"], true);
+}
+#[test]
+fn ordered_allocating_jobs_match_serial_reference_and_replay() {
+    ordered_replay_width_mode(4, true);
+}
+
+#[test]
+fn ordered_allocating_success_and_failure_release_every_owner_before_teardown() {
+    ordered_allocating_cleanup_audit(4);
+}
+
+#[test]
+fn ordered_allocating_fixture_agrees_across_four_engines_width_4() {
+    cpu_fixture_allocating_four_engine_agreement(4);
+}

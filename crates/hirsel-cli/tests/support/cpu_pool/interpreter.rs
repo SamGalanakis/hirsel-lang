@@ -309,7 +309,7 @@ fn cpu_interpreter_cli(width: usize, scalar: bool) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
     // Sixteen 128 MiB compiler stacks plus the front/native transports exceed
     // this harness's unchanged 3 GiB query allowance. Runtime width is separate.
-    if width == 8 && !scalar {
+    if width >= 8 && !scalar {
         command.env("HIRSEL_JOBS", "1");
     }
     command

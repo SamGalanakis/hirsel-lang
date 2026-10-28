@@ -44,7 +44,7 @@ fn ready_with_specialization(
 }
 
 #[test]
-fn cpu_worker_custody_accepts_owned_inputs_and_results_without_admitting_allocation() {
+fn cpu_worker_custody_admits_checked_owned_inputs_and_allocating_results() {
     with_compiler_stack(|| {
         let source = SOURCE
             .replace(
@@ -97,17 +97,24 @@ fn cpu_worker_custody_accepts_owned_inputs_and_results_without_admitting_allocat
                     .any(|certificate| certificate.root == protocol.worker)
             );
         }
-        assert!(
-            program.units.iter().all(|u| u
-                .unit()
-                .tables
-                .calls
-                .iter()
-                .enumerate()
-                .all(|(i, _)| plan
-                    .cpu_start(u.unit(), hirsel_lir::ir::CallId(i as u32))
-                    .is_none())),
-            "allocating custody does not authorize admission"
+        let starts: Vec<_> = program
+            .units
+            .iter()
+            .flat_map(|unit| {
+                unit.unit()
+                    .tables
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, _)| {
+                        plan.cpu_start(unit.unit(), hirsel_lir::ir::CallId(index as u32))
+                    })
+            })
+            .collect();
+        assert_eq!(
+            starts,
+            [protocol.worker],
+            "only the checked allocating worker is admitted"
         );
         let mut forged = protocol.clone();
         forged.result = forged.jobs;
@@ -804,17 +811,25 @@ fn cpu_saved_summary_checks_live_result_ordinal_and_retained_owner_on_both_emitt
                         .any(|certificate| certificate.root == id)
                 );
             }
-            assert!(program.units.iter().all(|unit| {
-                unit.unit()
-                    .tables
-                    .calls
-                    .iter()
-                    .enumerate()
-                    .all(|(index, _)| {
-                        plan.cpu_start(unit.unit(), hirsel_lir::ir::CallId(index as u32))
-                            .is_none()
-                    })
-            }));
+            let starts: Vec<_> = program
+                .units
+                .iter()
+                .flat_map(|unit| {
+                    unit.unit()
+                        .tables
+                        .calls
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, _)| {
+                            plan.cpu_start(unit.unit(), hirsel_lir::ir::CallId(index as u32))
+                        })
+                })
+                .collect();
+            assert_eq!(
+                starts,
+                [id],
+                "mode {mode}: only the fully checked summary worker is admitted"
+            );
         }
         let captured = SOURCE.replace(
             "job + 7u64",
