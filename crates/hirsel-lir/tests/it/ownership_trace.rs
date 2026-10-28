@@ -5886,3 +5886,100 @@ fn ownership_trace_incoming_sealed_owner_requires_a_proved_plain_root() {
         }
     }
 }
+
+#[test]
+fn ownership_runtime_mutable_binding_proves_the_actual_without_granting_custody() {
+    use hirsel_lir::stage::Value;
+    let mut t = Lir::<Value>::new(&[(Passing::Mut, l::I64)], None);
+    let slot = t.slot(l::I64, SlotKind::Parameter(0), ROOT);
+    let incoming = t.version_of(slot);
+    t.param(incoming);
+    let address = t.at(ENTRY, slot, &[], &[]);
+    let version = t.version_of(slot);
+    let normal = t.builder.block(BlockKind::Body, &[]);
+    let failure = t.builder.propagate();
+    let abi = t.abi(&[(Passing::Mut, l::I64)], None);
+    t.declare_operation(
+        super::operation_abi::scalar_signature(
+            "ownership.mutable_binding",
+            &[(
+                hirsel_syntax::PassingMode::Mut,
+                hirsel_types::Primitive::I64,
+            )],
+            None,
+        ),
+        Default::default(),
+        abi,
+    );
+    t.call_to(
+        ENTRY,
+        Callee::Operation(OperationRef(0)),
+        abi,
+        &[(Passing::Mut, l::I64)],
+        None,
+        &[ArgumentValue::Address { address, version }],
+        (normal, &[]),
+        failure,
+    );
+    t.builder.ret(normal, None);
+    let operations = t.operations.clone();
+    let (unit, table, manifest) = t.finish();
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let unit = hirsel_lir::validate::validate(unit, &inputs).unwrap();
+    let before = hirsel_codec::to_text(unit.unit());
+    let plan = Plan::new(
+        unit.unit(),
+        vec![Observation {
+            point: Point::CallEntered(ENTRY),
+            marker: ObserveOwnership {
+                id: MarkerId(0),
+                site: unit.unit().tables.source_anchors[0].site,
+                kind: Kind::Alias,
+                token: Location::Address(address),
+                owner: Location::Parameter(0),
+            },
+        }],
+    );
+    check(unit.unit(), &plan).unwrap();
+    assert_eq!(hirsel_codec::to_text(unit.unit()), before);
+    check_transform(
+        unit.unit(),
+        &plan,
+        unit.unit(),
+        &plan,
+        Some(&recipe(&plan, &plan)),
+    )
+    .unwrap();
+    for (kind, owner) in [
+        (Kind::Move, Location::Parameter(0)),
+        (Kind::Alias, Location::Parameter(1)),
+    ] {
+        let mut forged = plan.clone();
+        forged.observations[0].marker.kind = kind;
+        forged.observations[0].marker.owner = owner;
+        assert_eq!(
+            check(unit.unit(), &forged).unwrap_err(),
+            Error::InvalidBinding(MarkerId(0))
+        );
+    }
+    let empty = Plan::new(unit.unit(), vec![]);
+    assert_eq!(
+        check_transform(
+            unit.unit(),
+            &plan,
+            unit.unit(),
+            &empty,
+            Some(&recipe(&plan, &empty))
+        )
+        .unwrap_err(),
+        Error::MissingMarker(MarkerId(0))
+    );
+}

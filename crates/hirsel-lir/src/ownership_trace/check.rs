@@ -495,7 +495,7 @@ pub(super) fn mutable_alias<S>(unit: &LirUnit<S>, observation: &Observation) -> 
     let Some(call) = unit.tables.calls.get(call.index()) else {
         return false;
     };
-    matches!(call.callee, Callee::Direct(_)) && call.pretransfer_failure.is_none()
+    matches!(call.callee, Callee::Direct(_) | Callee::Operation(_)) && call.pretransfer_failure.is_none()
         && call.arguments.get(&unit.pools.call_arguments).is_some_and(|arguments| arguments.iter().any(|argument|
             argument.parameter == parameter && argument.passing == Passing::Mut
                 && matches!(argument.value, ArgumentValue::Address { address: actual, .. } if actual == address)))
