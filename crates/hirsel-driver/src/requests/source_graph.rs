@@ -828,9 +828,6 @@ impl Plan {
         })?;
         // Source indexing is an optional reuse cache. Never let it reject an
         // otherwise admissible graph or consume the producers' main grants.
-        if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
-            eprintln!("source carry plan: required={source_index_bytes} allowance={} snapshot={} fixed={fixed}", slack / 32, limits.snapshot_bytes);
-        }
         let source_index_bytes = if source_index_bytes <= slack / 32 {
             source_index_bytes
         } else {
@@ -2165,18 +2162,9 @@ pub(super) fn install(
     // Move only source/header state. Scalar bodies, S1 and every controller
     // are dropped before the immutable graph becomes visible.
     if plan.source_index_bytes != 0 {
-        if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
-            eprintln!("source carry transfer allowance={}", source_index_allowance.bytes());
-        }
         let state = program
             .engine
             .into_source_index(source_index_allowance)
-            .map_err(|error| {
-                if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
-                    eprintln!("source carry transfer refused: {error:?}");
-                }
-                error
-            })
             .ok();
         *source_index.lock().unwrap_or_else(|e| e.into_inner()) = state;
     }
