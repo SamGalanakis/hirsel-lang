@@ -142,6 +142,7 @@ fn claim_and_settlement_share_the_interval_and_stop_on_unreadable_capacity() {
     if !isolated("claim_and_settlement_share_the_interval_and_stop_on_unreadable_capacity") {
         return;
     }
+    crate::pool::set_compute_grant(8);
     let run = BodyRun::new(4, false);
     let control = run.control();
     let manager = manager(control.clone(), 4);
@@ -167,12 +168,20 @@ fn claim_and_settlement_share_the_interval_and_stop_on_unreadable_capacity() {
     assert!(service.check(Duration::from_secs(1), || Ok(contracted.clone())));
     assert!(!service.permits(4));
     assert!(service.permits(1));
+    // Fixed requests retain their topology under quota contraction; scoped
+    // admission still observes the floored physical limit above.
+    assert_eq!(
+        manager.state.lock().unwrap().resolver.resolution().target,
+        4
+    );
+    contracted.effective_cpuset = CpuSet::parse("0").unwrap();
+    assert!(service.check(Duration::from_secs(2), || Ok(contracted)));
     assert_eq!(
         manager.state.lock().unwrap().resolver.resolution().target,
         1
     );
     assert!(!control.status().stop_requested);
-    assert!(!service.check(Duration::from_secs(2), || Err(
+    assert!(!service.check(Duration::from_secs(3), || Err(
         "unreadable hard limit".into()
     )));
     assert!(control.status().stop_requested);
