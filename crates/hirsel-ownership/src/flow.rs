@@ -7875,9 +7875,13 @@ impl Checker<'_, '_> {
                 if parametric {
                     value.modes.uniqueness = Uniqueness::Unique;
                 }
-                if !*constructor && !replaced
+                if !*constructor
+                    && !replaced
                     && let Some(root) = self.ty(*expression)
-                    && matches!(self.t.row(root).kind, TypeKind::Named { .. } | TypeKind::Tuple(_))
+                    && matches!(
+                        self.t.row(root).kind,
+                        TypeKind::Named { .. } | TypeKind::Tuple(_)
+                    )
                 {
                     for (row, ty) in hirsel_types::unique_summary::result_rows(
                         self.t,
@@ -7894,7 +7898,9 @@ impl Checker<'_, '_> {
                                 value.unique_parts.insert(vec![Projection::Field(field)]);
                             }
                             UniqueResultRow::Payload { variant, field } => {
-                                value.unique_parts.insert(vec![Projection::VariantField { variant, field }]);
+                                value
+                                    .unique_parts
+                                    .insert(vec![Projection::VariantField { variant, field }]);
                             }
                         }
                     }

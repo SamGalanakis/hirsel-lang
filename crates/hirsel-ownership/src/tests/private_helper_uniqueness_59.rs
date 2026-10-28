@@ -453,8 +453,21 @@ fn private_helper_forwards_declared_unique_result_payload() {
         let (mut engine, output) = check(source);
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         let input = engine.export_native_input().unwrap();
-        let header = input.signatures.values().find(|s| s.definition.path().0.name == "execute").unwrap();
-        assert!(header.metadata.inferred_unique.results.contains(&UniqueResultRow::Payload { variant: 0, field: 0 }));
+        let header = input
+            .signatures
+            .values()
+            .find(|s| s.definition.path().0.name == "execute")
+            .unwrap();
+        assert!(
+            header
+                .metadata
+                .inferred_unique
+                .results
+                .contains(&UniqueResultRow::Payload {
+                    variant: 0,
+                    field: 0
+                })
+        );
         engine.import_native_input(input).unwrap();
     });
 }
