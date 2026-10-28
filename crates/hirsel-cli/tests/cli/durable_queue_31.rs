@@ -89,12 +89,10 @@ fn durable_queue_31_reference_checked() {
     with_compiler_stack(|| {
         let root = evidence();
         let manifest = package(&root);
-        let mut loaded = hirsel_driver::load_program(&manifest).unwrap_or_else(|e| panic!("{e}"));
-        loaded
-            .check_for_execution()
+        let prepared = hirsel_driver::request_tir(&manifest, Verify::On, None)
             .unwrap_or_else(|e| panic!("{e}"));
         let run = RunConfiguration {
-            entry: loaded.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -135,11 +133,16 @@ fn durable_queue_31_reference_checked() {
                 }
                 eprintln!("DURABLE_QUEUE_31_STARTED {id}/{engine}");
                 let steps = case["steps"].as_u64().unwrap();
-                let execution = if engine == "reference" {
-                    run_observed_snapshot_bounded(&mut loaded.engine, &run, config.clone(), steps)
-                } else {
-                    run_observed_checked_bounded(&mut loaded.engine, &run, config.clone(), steps)
-                }
+                let execution = hirsel_driver::testing::observe_tir(
+                    &prepared,
+                    &run,
+                    config.clone(),
+                    hirsel_interp::Limits {
+                        steps: Some(steps),
+                        ..Default::default()
+                    },
+                    engine == "checked-h",
+                )
                 .unwrap();
                 fs::write(
                     root.join(format!("{id}-{engine}.receipt")),
@@ -632,7 +635,7 @@ fn durable_queue_31_existing_tapes_and_refusal_controls() {
     with_compiler_stack(|| {
         let root = PathBuf::from(std::env::var_os("DURABLE_QUEUE_31_TAPES").unwrap());
         let manifest = root.join("hirsel.json");
-        let mut program = hirsel_driver::load_program(&manifest).unwrap();
+        let prepared = hirsel_driver::request_tir(&manifest, Verify::On, None).unwrap();
         let selected: Vec<Value> =
             serde_json::from_slice(&fs::read(root.join("tape-index.json")).unwrap()).unwrap();
         let controls = root.join("controls");
@@ -650,8 +653,8 @@ fn durable_queue_31_existing_tapes_and_refusal_controls() {
                 {
                     continue;
                 }
-                let observed = hirsel_driver::replay_loaded_observations(
-                    &mut program,
+                let observed = hirsel_driver::replay_prepared_observations(
+                    &prepared,
                     &tape,
                     Some(30_000_000),
                     checked,
@@ -707,8 +710,8 @@ fn durable_queue_31_existing_tapes_and_refusal_controls() {
                     continue;
                 }
                 assert!(
-                    hirsel_driver::replay_loaded_observations(
-                        &mut program,
+                    hirsel_driver::replay_prepared_observations(
+                        &prepared,
                         &path,
                         Some(30_000_000),
                         checked
