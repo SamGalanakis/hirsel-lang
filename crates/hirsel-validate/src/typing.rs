@@ -2585,10 +2585,28 @@ impl<'a> Checker<'a> {
                 && hirsel_types::unique_summary::same_module(path, self.definition.path.path())
                 && let Some(signature) = self.signatures.get(path)
             {
+                let actual_rows = hirsel_types::unique_summary::result_rows(
+                    target,
+                    actual_result,
+                    &signature.metadata.roles,
+                    &mut |id| self.signatures.get(id).cloned().map(std::sync::Arc::new),
+                );
+                let claimed: Vec<_> = signature
+                    .metadata
+                    .inferred_unique
+                    .results
+                    .iter()
+                    .copied()
+                    .filter(|fact| {
+                        actual_rows.iter().any(|(row, ty)| {
+                            row == fact && target.row(*ty).modes.uniqueness == Uniqueness::Unique
+                        })
+                    })
+                    .collect();
                 hirsel_types::unique_summary::result_evidence(
                     target,
                     root,
-                    &signature.metadata.inferred_unique.results,
+                    &claimed,
                     &signature.metadata.roles,
                     &mut |id| self.signatures.get(id).cloned().map(std::sync::Arc::new),
                 )
