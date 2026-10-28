@@ -24,6 +24,58 @@ pub struct Record {
     )]
     pub payload: Vec<u8>,
 }
+
+// bincode 1.3.3 de/read.rs:131-135 forwards a checked slice to Serde's
+// borrowed-byte visitor. This reads the existing Vec wire format verbatim.
+#[derive(Deserialize)]
+struct RecordView<'a> {
+    anchors: Vec<(DefPath, u32)>,
+    types: Vec<TypeRef>,
+    #[serde(borrow)]
+    payload: &'a [u8],
+}
+
+/// One portable record's immutable payload, type positions and source owners.
+/// The byte range retains its full backing and admission through every clone.
+/// Opening checks the envelope; each typed read resolves current source anchors
+/// and checked type components independently, without transferring V authority.
+#[derive(Clone)]
+pub struct StoredRecord(Arc<StoredRecordOwner>);
+struct StoredRecordOwner {
+    anchors: Vec<(DefPath, u32)>,
+    types: Arc<ProductTypes>,
+    payload: hirsel_artifact_store::Bytes,
+}
+impl StoredRecord {
+    pub fn payload(&self) -> &hirsel_artifact_store::Bytes {
+        &self.0.payload
+    }
+    pub fn decode<T: serde::de::DeserializeOwned>(
+        &self,
+        mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+    ) -> Option<T> {
+        let anchors = self
+            .0
+            .anchors
+            .iter()
+            .map(|(owner, occurrence)| anchor(owner, *occurrence))
+            .collect::<Option<_>>()?;
+        decode_payload(&self.0.payload, self.0.types.clone(), anchors)
+    }
+}
+
+fn decode_payload<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    types: Arc<ProductTypes>,
+    anchors: Vec<Anchor>,
+) -> Option<T> {
+    hirsel_types::with_type_source(types, || {
+        hirsel_span::with_anchor_codec(&mut AnchorCodec::Decode(anchors), || {
+            options(bytes.len()).deserialize(bytes)
+        })
+    })
+    .ok()
+}
 /// Serialize an opaque byte payload using the format's bulk byte operation.
 pub fn serialize_payload<S: serde::Serializer>(
     payload: &[u8],
@@ -138,7 +190,7 @@ impl TypeRecords {
         bytes: &[u8],
         mut visit: impl FnMut(hirsel_artifact_store::Reference) -> Option<bool>,
     ) -> Option<()> {
-        let record: Record = options(bytes.len()).deserialize(bytes).ok()?;
+        let record: RecordView<'_> = options(bytes.len()).deserialize(bytes).ok()?;
         let mut pending = record.types;
         while let Some(reference) = pending.pop() {
             if visit(reference.reference())? {
@@ -186,24 +238,39 @@ impl TypeRecords {
         bytes: &[u8],
         mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
     ) -> Option<T> {
-        let record: Record = options(bytes.len()).deserialize(bytes).ok()?;
+        let record: RecordView<'_> = options(bytes.len()).deserialize(bytes).ok()?;
         let anchors = record
             .anchors
             .iter()
             .map(|(owner, occurrence)| anchor(owner, *occurrence))
             .collect::<Option<_>>()?;
-        hirsel_types::with_type_source(
+        decode_payload(
+            record.payload,
             Arc::new(ProductTypes {
                 records: self.clone(),
                 references: record.types,
             }),
-            || {
-                hirsel_span::with_anchor_codec(&mut AnchorCodec::Decode(anchors), || {
-                    options(record.payload.len()).deserialize(&record.payload)
-                })
-            },
+            anchors,
         )
-        .ok()
+    }
+
+    /// Open once when retaining an ordinary stored record. All typed consumers
+    /// of its clones share the same portable owner and exact payload range.
+    pub fn open_record(
+        self: &Arc<Self>,
+        bytes: hirsel_artifact_store::Bytes,
+    ) -> Option<StoredRecord> {
+        let record: RecordView<'_> = options(bytes.len()).deserialize(&bytes).ok()?;
+        let offset = (record.payload.as_ptr() as usize).checked_sub(bytes.as_ptr() as usize)?;
+        let payload = bytes.range(offset as u64, record.payload.len() as u64, 1)?;
+        Some(StoredRecord(Arc::new(StoredRecordOwner {
+            anchors: record.anchors,
+            types: Arc::new(ProductTypes {
+                records: self.clone(),
+                references: record.types,
+            }),
+            payload,
+        })))
     }
 }
 struct DecodeOptions {
@@ -243,6 +310,80 @@ mod tests {
             modules: vec![],
             name: "owner".into(),
         })
+    }
+    #[test]
+    fn stored_record_views_share_backing_and_recheck_current_source_bindings() {
+        let store = Arc::new(Memory::default());
+        let records = TypeRecords::new(TypeInterner::new(None), store);
+        let unit = records.types.intern(Type::unit());
+        let original = Anchor::fresh();
+        let span = hirsel_span::Span::new(original, 3, 7).unwrap();
+        let encoded = records
+            .encode_record(&(unit, span), |a| (a == original).then(|| (path(), 2)))
+            .unwrap();
+        let owner = Arc::new(());
+        let bytes = hirsel_artifact_store::Bytes::from(encoded).retain_owner(owner.clone());
+        let view: RecordView<'_> = options(bytes.len()).deserialize(&bytes).unwrap();
+        let pointer = view.payload.as_ptr();
+        let record = records.open_record(bytes.clone()).unwrap();
+        assert_eq!(record.payload().as_ptr(), pointer);
+        let second = record.clone();
+        assert!(Arc::ptr_eq(&record.0, &second.0));
+        assert!(Arc::ptr_eq(&record.0.types, &second.0.types));
+        drop(bytes);
+        for current in [Anchor::fresh(), Anchor::fresh()] {
+            let (decoded, site): (TypeId, hirsel_span::Span) = second
+                .decode(|owner, occurrence| {
+                    (owner == &path() && occurrence == 2).then_some(current)
+                })
+                .unwrap();
+            assert_eq!(decoded, unit);
+            assert_eq!(site, hirsel_span::Span::new(current, 3, 7).unwrap());
+        }
+        assert!(
+            second
+                .decode::<(TypeId, hirsel_span::Span)>(|_, _| None)
+                .is_none()
+        );
+        let held = second.payload().range(0, 1, 1).unwrap();
+        drop((record, second, records));
+        assert_eq!(Arc::strong_count(&owner), 2);
+        drop(held);
+        assert_eq!(Arc::strong_count(&owner), 1);
+    }
+
+    #[test]
+    fn borrowed_record_payload_keeps_existing_bounds_and_exact_consumption() {
+        let record = Record {
+            anchors: vec![],
+            types: vec![],
+            payload: vec![7; 8192],
+        };
+        let bytes = bincode::serialize(&record).unwrap();
+        let view: RecordView<'_> = options(bytes.len()).deserialize(&bytes).unwrap();
+        assert_eq!(view.payload, record.payload);
+        assert_eq!(view.payload.as_ptr(), bytes[24..].as_ptr());
+        for len in [0, 1, 23, bytes.len() - 1] {
+            assert!(
+                options(len)
+                    .deserialize::<RecordView<'_>>(&bytes[..len])
+                    .is_err()
+            );
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(
+            options(trailing.len())
+                .deserialize::<RecordView<'_>>(&trailing)
+                .is_err()
+        );
+        let mut forged = bytes;
+        forged[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(
+            options(forged.len())
+                .deserialize::<RecordView<'_>>(&forged)
+                .is_err()
+        );
     }
     #[test]
     fn captured_record_decode_layout_covers_small_and_growing_transport_vectors() {
