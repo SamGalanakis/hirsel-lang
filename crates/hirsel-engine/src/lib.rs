@@ -47,7 +47,11 @@ mod storage_graph;
 mod table_keys;
 pub use diagnostics::*;
 pub use generic_graph::{InstanceEdge, InstanceGraph, InstanceKind};
+mod source_components;
 mod summary;
+pub use source_components::{
+    SourceGrowthComponent, SourceGrowthFacets, SourceGrowthFact, SourceGrowthProducer,
+};
 pub use summary::{
     CallClass, CheckedSummary, DefinitionSummary, Frame, FrameKind, GenericParameterRef,
     GrowthEdge, ParameterGrowth, PublishedSummary, SummaryCall, growing_sites, summarize,
