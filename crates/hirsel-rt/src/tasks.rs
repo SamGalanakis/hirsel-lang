@@ -173,6 +173,8 @@ impl Slot {
 
 struct Task {
     generation: u32,
+    #[cfg(feature = "ownership-trace")]
+    ownership_queue: Option<crate::ownership_trace::QueueBinding>,
     /// Stable control block, created at the first lease. Holders keep the
     /// slot from reuse; they never reach this row or its context.
     control: Option<registry::TaskLease>,
@@ -995,6 +997,8 @@ impl Task {
             };
         }
         Task {
+            #[cfg(feature = "ownership-trace")]
+            ownership_queue: None,
             generation,
             control: None,
             cancel_subs: Vec::new(),
@@ -4380,23 +4384,22 @@ unsafe fn receive_ready(
     channel: u32,
     slot: *mut u8,
 ) -> Option<u32> {
+    #[cfg(feature = "ownership-trace")]
+    let owner = handle(task, s.task(task).generation);
     if let Some(cause) = s.canceled_task(task, shield) {
         #[cfg(feature = "ownership-trace")]
-        unsafe {
-            let ctx = s.task(task).ctx;
+        {
+            let mut binding = s.task(task).ownership_queue.take();
             s.channels.payload(channel).canceled_observed(
-                (*ctx).ownership_task,
-                &mut (*ctx).ownership_queue,
+                owner,
+                &mut binding,
                 crate::channels::CANCELED + cause,
             );
+            s.task(task).ownership_queue = binding;
         }
         return Some(crate::channels::CANCELED + cause);
     }
     // SAFETY: caller contract.
-    #[cfg(feature = "ownership-trace")]
-    let owner = handle(task, s.task(task).generation);
-    #[cfg(feature = "ownership-trace")]
-    let owner_ctx = s.task(task).ctx;
     match unsafe {
         #[cfg(not(feature = "ownership-trace"))]
         {
@@ -4404,8 +4407,12 @@ unsafe fn receive_ready(
         }
         #[cfg(feature = "ownership-trace")]
         {
-            s.channels
-                .receive_observed(channel, slot, owner, &mut (*owner_ctx).ownership_queue)
+            let mut binding = s.task(task).ownership_queue.take();
+            let result = s
+                .channels
+                .receive_observed(channel, slot, owner, &mut binding);
+            s.task(task).ownership_queue = binding;
+            result
         }
     } {
         Ok(true) => Some(crate::channels::DONE),
@@ -4665,6 +4672,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     // SAFETY: caller contract.
     let (current, ready) = role::with_role(ctx, |s| {
         let current = s.current;
+        #[cfg(feature = "ownership-trace")]
+        if let Some(binding) = unsafe { (*ctx).ownership_queue.take() } {
+            s.task(current).ownership_queue = Some(binding);
+        }
         (current, unsafe {
             receive_ready(s, current, shield, channel, message)
         })

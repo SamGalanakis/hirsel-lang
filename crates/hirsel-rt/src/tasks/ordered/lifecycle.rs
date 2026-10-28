@@ -751,6 +751,10 @@ pub(crate) unsafe fn receive(
     let descriptor = engine::carrier_descriptor(ctx, Kind::Receiver, word);
     unsafe { super::events::prepare_receive(ctx, word, descriptor) };
     let me = role::with_role(ctx, |s| s.current);
+    #[cfg(feature = "ownership-trace")]
+    if let Some(binding) = unsafe { (*ctx).ownership_queue.take() } {
+        role::with_role(ctx, |s| s.task(me).ownership_queue = Some(binding));
+    }
     let (status, progress) = engine::head_observed(
         ctx,
         "channel.receive",
