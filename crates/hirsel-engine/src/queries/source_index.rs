@@ -714,6 +714,33 @@ mod tests {
         engine
     }
     #[test]
+    fn retained_specialization_receipts_survive_body_free_registration_passes() {
+        let path = DefPath::core("retained_specialization");
+        let mut engine = engine(std::slice::from_ref(&path));
+        let id = DefId::intern(&path);
+        let text = engine.key_text(&path, QueryKind::Resolve).unwrap();
+        let mut reads = crate::memo::ReadsBuilder::new();
+        reads.record(ReadKey::Environment, engine.environment_value());
+        engine.specialization_dependencies.insert(
+            id,
+            parallel::SpecializationDependencies {
+                text,
+                reads: Arc::new(reads.finish().unwrap()),
+                paths: vec![],
+            },
+        );
+        let before = engine.memo_stats().touched;
+        engine.register_specializations(std::slice::from_ref(&path));
+        assert!(engine.specialization_dependencies.contains_key(&id));
+        assert_eq!(engine.memo_stats().touched, before);
+
+        // An unchanged body hash cannot validate a changed compiler input.
+        engine.environment.compiler_version.push_str("-changed");
+        assert_eq!(engine.key_text(&path, QueryKind::Resolve).unwrap(), text);
+        engine.register_specializations(std::slice::from_ref(&path));
+        assert!(engine.memo_stats().touched > before);
+    }
+    #[test]
     fn source_index_moves_bounded_anchors_headers_and_reverse_reads_without_a_controller() {
         crate::with_compiler_stack(|| {
             drop(engine(&[]));
