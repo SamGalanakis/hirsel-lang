@@ -210,11 +210,12 @@ mod tests {
         let key = crate::memo::MemoKey::new(QueryKind::Modes, definition);
         let empty = Arc::new(Reads::empty());
         let first = outcome(empty.clone(), checked.clone());
-        let base = metadata(&first, &None, None, &[]).unwrap();
+        let base = metadata(&first, &None, None, &[]).unwrap()
+            + crate::memo::retained_arc_bytes(&Vec::<SignatureDependency>::new());
         assert_eq!(
             metadata(
                 &first,
-                &Some((checked.clone(), empty.clone())),
+                &Some((checked.clone(), empty.clone(), Arc::new(Vec::new()))),
                 None,
                 &[(key, empty)]
             ),
@@ -245,7 +246,7 @@ mod tests {
         let independent = Arc::new((*checked).clone());
         let distinct = metadata(
             &second,
-            &Some((independent, second.reads.clone())),
+            &Some((independent, second.reads.clone(), Arc::new(Vec::new()))),
             None,
             &[],
         )
