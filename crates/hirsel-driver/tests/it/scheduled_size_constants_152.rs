@@ -7,7 +7,7 @@ fn admitted_size_instances_preserve_duplicate_roots_and_closed_values_after_rest
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
-        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,4]=[1,2,3,4];scaled(xs)}\n";
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,4]=[1,2,3,4];scaled(xs)}\n";
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
         std::fs::write(&manifest,r#"{"schema":1,"package":{"name":"stage","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[]}"#).unwrap();
         for jobs in [1, 2, 8] {
