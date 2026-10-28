@@ -34,13 +34,17 @@ pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> b
 // Only resource selection uses this proof. Owned selection retains its
 // original channel custody requirements.
 pub(super) fn plain_channel_handle(layouts: &LayoutTable, layout: LayoutId) -> bool {
-    use crate::layout_types::{DropStep, HandleKind, ScanStep};
+    use crate::layout_types::{DropStep, HandleKind, ScalarKind, ScanStep};
     let Some(record) = layouts.layout(layout) else {
         return false;
     };
     if !matches!(record.kind, LayoutKind::Handle)
         || record.finalizer.is_some()
-        || !record.fields.is_empty()
+        || !matches!(record.fields.as_slice(), [field]
+            if field.ordinal == 0 && field.offset == 0 && !field.unaligned
+                && layouts.layout(field.layout).is_some_and(|word|
+                    word.kind == LayoutKind::Scalar(ScalarKind::U64)
+                        && plain(layouts, field.layout, 0)))
         || !matches!(
             record.drop.as_slice(),
             [DropStep::CloseHandle { offset: 0 }]
@@ -271,6 +275,7 @@ mod tests {
             record(LayoutKind::Unit),
             record(LayoutKind::Resource),
             record(LayoutKind::Handle),
+            record(LayoutKind::Scalar(ScalarKind::U64)),
         ];
         let channel = LayoutId(2);
         for kind in [HandleKind::Sender, HandleKind::Receiver] {
@@ -282,8 +287,17 @@ mod tests {
                 "recursive",
                 "extra scan",
                 "drop",
+                "missing word",
+                "owned word",
+                "misplaced word",
             ] {
                 let record = &mut table.layouts[2];
+                record.fields = vec![FieldLayout {
+                    ordinal: 0,
+                    offset: 0,
+                    layout: LayoutId(3),
+                    unaligned: false,
+                }];
                 record.drop = vec![DropStep::CloseHandle { offset: 0 }];
                 record.scan = vec![ScanStep::Handle {
                     offset: 0,
@@ -315,6 +329,9 @@ mod tests {
                     }
                     "extra scan" => record.scan.push(record.scan[0].clone()),
                     "drop" => record.drop.clear(),
+                    "missing word" => record.fields.clear(),
+                    "owned word" => record.fields[0].layout = LayoutId(1),
+                    "misplaced word" => record.fields[0].offset = 8,
                     _ => unreachable!(),
                 }
                 assert_eq!(
