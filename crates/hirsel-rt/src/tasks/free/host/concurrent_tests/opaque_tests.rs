@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 struct Probe {
     run: AtomicPtr<crate::context::RunShared>,
     parked: AtomicBool,
+    parked_waiter: std::sync::Mutex<Option<(u32, u32)>>,
     delivered: AtomicBool,
     done: AtomicBool,
     home_dropped: AtomicBool,
@@ -15,6 +16,8 @@ struct Probe {
     write: std::sync::Mutex<UnixStream>,
     notice: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
     replay: bool,
+    stop_in_wait: bool,
+    expired_timer: bool,
 }
 struct Home {
     thread: std::thread::ThreadId,
@@ -59,6 +62,14 @@ impl crate::io::Adapter for Home {
         self.check();
         self.driver.parked(token);
         self.probe.parked.store(true, Ordering::Release);
+        if let Some(waiter) = self.probe.parked_waiter.lock().unwrap().take() {
+            unsafe {
+                crate::tasks::free::home::runner_wakes(
+                    self.probe.run.load(Ordering::Acquire),
+                    &[waiter],
+                );
+            }
+        }
     }
     fn ready(&mut self) -> Result<crate::io::Ready, AdapterError> {
         self.check();
@@ -66,6 +77,10 @@ impl crate::io::Adapter for Home {
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         self.check();
+        assert!(
+            self.interruptible,
+            "uninterruptible opaque provider is refused before entering its wait"
+        );
         self.probe.waits.fetch_add(1, Ordering::Release);
         if let Some(notice) = self.probe.notice.lock().unwrap().take() {
             notice.send(()).unwrap();
@@ -175,7 +190,14 @@ unsafe fn spawn_home(ctx: *mut TaskCtx, probe: &Arc<Probe>) {
 }
 unsafe fn program(ctx: *mut TaskCtx, probe: &Arc<Probe>, adapter: Option<&dyn ConcurrentAdapter>) {
     unsafe {
+        if !probe.replay {
+            *probe.parked_waiter.lock().unwrap() =
+                Some(crate::tasks::free::home::runner_waiter(ctx));
+        }
         spawn_home(ctx, probe);
+        if !probe.replay {
+            wait_flag(ctx, &probe.parked);
+        }
         let mut registry = Registry::default();
         let Completion::ClockGrant(Ok(clock)) = request(
             ctx,
@@ -195,14 +217,16 @@ unsafe fn program(ctx: *mut TaskCtx, probe: &Arc<Probe>, adapter: Option<&dyn Co
                 ctx,
                 Request::SleepUntil {
                     clock,
-                    deadline: now + 20_000_000
+                    deadline: now + if probe.expired_timer { 0 } else { 20_000_000 }
                 },
                 adapter,
                 &mut registry
             ),
             Completion::Wait(Ok(()))
         );
-        if !probe.replay {
+        // Stop/refusal modes leave the home request pending even when
+        // the timer completed before home could enter its opaque wait.
+        if !probe.replay && !probe.stop_in_wait {
             assert!(
                 probe.parked.load(Ordering::Acquire),
                 "custom request saved before timer completed"
@@ -220,19 +244,22 @@ fn opaque_saved_home_request_progresses_with_concurrent_timer_and_stops_reclaim_
         for durable in [false, true] {
             // Success; external stop inside the opaque wait; reject an
             // uninterruptible provider before calling its blocking wait.
-            for mode in 0..3 {
+            for mode in 0..5 {
                 let (read, write) = UnixStream::pair().unwrap();
                 let (notice, waiting) = std::sync::mpsc::channel();
                 let probe = Arc::new(Probe {
                     run: Default::default(),
                     parked: false.into(),
+                    parked_waiter: Default::default(),
                     delivered: false.into(),
                     done: false.into(),
                     home_dropped: false.into(),
                     waits: 0.into(),
                     write: std::sync::Mutex::new(write),
-                    notice: std::sync::Mutex::new((mode == 1).then_some(notice)),
+                    notice: std::sync::Mutex::new(matches!(mode, 1 | 3).then_some(notice)),
                     replay: false,
+                    stop_in_wait: mode != 0,
+                    expired_timer: matches!(mode, 3 | 4),
                 });
                 let mut real = crate::io_real::RealIo::grant(&std::env::temp_dir()).unwrap();
                 real.discard_history();
@@ -258,13 +285,13 @@ fn opaque_saved_home_request_progresses_with_concurrent_timer_and_stops_reclaim_
                     read,
                     driver: Default::default(),
                     token: 0,
-                    interruptible: mode != 2,
+                    interruptible: !matches!(mode, 2 | 4),
                 }));
                 unsafe {
                     run.use_physical_dispatch();
                 }
                 let control = run.control();
-                let stopper = (mode == 1).then(|| {
+                let stopper = matches!(mode, 1 | 3).then(|| {
                     std::thread::spawn(move || {
                         waiting
                             .recv_timeout(std::time::Duration::from_secs(5))
@@ -292,12 +319,13 @@ fn opaque_saved_home_request_progresses_with_concurrent_timer_and_stops_reclaim_
                     stopper.join().unwrap();
                 }
                 assert_eq!(outcome.pending, 0);
+                assert!(probe.parked.load(Ordering::Acquire));
                 match mode {
                     0 => {
                         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
                         assert!(probe.done.load(Ordering::Acquire));
                     }
-                    1 => assert_eq!(outcome.ended, Err(Stop::Requested)),
+                    1 | 3 => assert_eq!(outcome.ended, Err(Stop::Requested)),
                     _ => {
                         assert_eq!(
                             outcome.ended,
@@ -336,6 +364,7 @@ fn opaque_saved_home_request_progresses_with_concurrent_timer_and_stops_reclaim_
                     let probe = Arc::new(Probe {
                         run: Default::default(),
                         parked: false.into(),
+                        parked_waiter: Default::default(),
                         delivered: false.into(),
                         done: false.into(),
                         home_dropped: false.into(),
@@ -343,6 +372,8 @@ fn opaque_saved_home_request_progresses_with_concurrent_timer_and_stops_reclaim_
                         write: std::sync::Mutex::new(write),
                         notice: Default::default(),
                         replay: true,
+                        stop_in_wait: mode != 0,
+                        expired_timer: matches!(mode, 3 | 4),
                     });
                     let mut run = crate::host::BodyRun::new(replay_width, false);
                     run.free = true;

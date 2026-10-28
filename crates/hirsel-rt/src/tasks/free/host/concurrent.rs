@@ -514,7 +514,14 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
 /// Home only, with no running or runnable task and no scheduler role.
 pub(crate) unsafe fn wait(run: *mut RunShared) -> Stopped<bool> {
     let io = unsafe { (*run).free_io.get().expect("concurrent admission") };
-    let concurrent = io.adapter.wait_sources().map_err(Stop::refusal)?;
+    // The final concurrent completion can leave an opaque home request alone.
+    // Keep the shared stop-aware wait, without polling an idle adapter's stale
+    // wake-only readiness when it has no remaining requests or timers.
+    let concurrent = if io.pending() {
+        io.adapter.wait_sources().map_err(Stop::refusal)?
+    } else {
+        crate::io::WaitSources::Drivers(Vec::new())
+    };
     let home = if unsafe { (*run).host_waits.load(Ordering::Acquire) != 0 } {
         match unsafe { crate::host_waits::wait_sources_home(run) }? {
             Some(sources) => sources,
