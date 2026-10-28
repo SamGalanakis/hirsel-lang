@@ -1,6 +1,6 @@
 //! Vectors ported before implementation from Rust coretests/tests/net/{parser,
 //! ip_addr,socket_addr}.rs (f6c1107f), and Zig Io/net/HostName.zig (bff490a2).
-use crate::source_std::load_program_source;
+use crate::source_std::tir;
 use hirsel_driver::*;
 use hirsel_engine::*;
 
@@ -14,18 +14,18 @@ pub(super) fn execute_source(source: &str) {
     with_compiler_stack(|| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/std_source/main.hir");
-        let mut program = load_program_source(&path, Some(source)).unwrap();
-        program
-            .check_for_execution()
-            .unwrap_or_else(|e| panic!("{e}\n{source}"));
-        let run = run_observed_snapshot(
-            &mut program.engine,
-            &RunConfiguration {
-                entry: program.entry.clone(),
-                hash_seed: 0,
-                inputs: vec![],
-            },
+        let prepared = tir(&path, Some(source), None).unwrap_or_else(|e| panic!("{e}\n{source}"));
+        let config = RunConfiguration {
+            entry: prepared.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let run = testing::observe_tir(
+            &prepared,
+            &config,
             SimulationConfig::default(),
+            InterpreterAdapter::default().limits,
+            false,
         )
         .unwrap();
         assert!(
@@ -36,14 +36,12 @@ pub(super) fn execute_source(source: &str) {
             "{:?}\n{source}",
             run.outcome
         );
-        let checked = run_observed_checked(
-            &mut program.engine,
-            &RunConfiguration {
-                entry: program.entry,
-                hash_seed: 0,
-                inputs: vec![],
-            },
+        let checked = testing::observe_tir(
+            &prepared,
+            &config,
             SimulationConfig::default(),
+            InterpreterAdapter::default().limits,
+            true,
         )
         .unwrap();
         assert!(

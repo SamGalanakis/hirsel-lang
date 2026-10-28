@@ -170,12 +170,10 @@ fn execute_overlap_vectors(source: &str, cases: usize) {
     with_compiler_stack(|| {
         let path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_source/main.hir");
-        let mut program = crate::source_std::load_program_source(&path, Some(source)).unwrap();
-        program
-            .check_for_execution()
+        let prepared = crate::source_std::tir(&path, Some(source), None)
             .unwrap_or_else(|error| panic!("{error}\n{source}"));
         let config = RunConfiguration {
-            entry: program.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -184,8 +182,14 @@ fn execute_overlap_vectors(source: &str, cases: usize) {
                 test_seed: seed,
                 ..Default::default()
             };
-            let run =
-                run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
+            let run = testing::observe_tir(
+                &prepared,
+                &config,
+                simulation.clone(),
+                InterpreterAdapter::default().limits,
+                false,
+            )
+            .unwrap();
             assert!(
                 matches!(
                     run.outcome,
@@ -194,7 +198,14 @@ fn execute_overlap_vectors(source: &str, cases: usize) {
                 "pair {seed}: {:?}\n{source}",
                 run.outcome
             );
-            let checked = run_observed_checked(&mut program.engine, &config, simulation).unwrap();
+            let checked = testing::observe_tir(
+                &prepared,
+                &config,
+                simulation,
+                InterpreterAdapter::default().limits,
+                true,
+            )
+            .unwrap();
             assert!(
                 matches!(
                     checked.outcome,
