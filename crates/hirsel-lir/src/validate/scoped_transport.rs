@@ -552,6 +552,20 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                         reject(report, at, value, "callable used as data");
                     }
                 }
+                Inst::Compare { left, right, .. } => {
+                    // Structural C proves both layouts comparable. Comparison
+                    // only reads them and produces a Boolean, retaining neither
+                    // operand, including on its explicit failure edge.
+                    for value in [left, right] {
+                        if n[value.index()]
+                            .values()
+                            .flat_map(|r| &r.scoped)
+                            .any(|v| callable_origins.contains(v))
+                        {
+                            reject(report, at, value, "callable used as data");
+                        }
+                    }
+                }
                 Inst::Store { address, value, .. } | Inst::Replace { address, value, .. } => {
                     let a = facts.addresses[address.index()].as_ref().unwrap();
                     let local = matches!(a.root, Root::Slot(s) if !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_) | SlotKind::Capture(_)))
