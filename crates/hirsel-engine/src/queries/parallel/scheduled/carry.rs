@@ -105,15 +105,6 @@ impl FrontCarry {
         };
         let entries = rows.entries.len() + usize::from(!rows.entries.contains_key(&key));
         if used.saturating_add(index_bytes(entries, subscriptions)) > self.allowance.bytes() {
-            if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
-                eprintln!(
-                    "front carry refuses {owner:?} rows={} required={} allowance={} facts={}",
-                    rows.entries.len(),
-                    used.saturating_add(index_bytes(entries, subscriptions)),
-                    self.allowance.bytes(),
-                    bytes.len()
-                );
-            }
             return;
         }
         let Some(generation) = rows.generation.checked_add(1) else {
