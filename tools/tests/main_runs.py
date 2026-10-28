@@ -152,6 +152,15 @@ class Lifecycle(unittest.TestCase):
         reds, _ = self.observe([('binary-shard-1', result)], ['binary::known_case'], command=command)
         self.assertEqual(reds['workspace tests: binary-shard-1']['ids'], ['binary::new_case'])
 
+    def test_failed_child_stdout_belongs_to_its_started_parent(self):
+        result = self.result([('parent', 'FAILED')])
+        result['details'] = result['details'].replace('test parent', 'HIRSEL_TEST_STARTED parent\ntest parent')
+        result['details'] += '\nrunning 1 test\ntest delegated_worker ... FAILED\n'
+        reds, status = self.observe([('binary', result)], ['binary::parent'])
+        self.assertEqual(reds, {})
+        cases = [o['identity'] for o in status['observations'] if o['scope'] == 'case']
+        self.assertEqual(cases, ['binary::parent'])
+
     def test_expired_cas_upload_is_infrastructure_with_no_executed_bodies(self):
         result = dict(status=self.events.FAIL,
                       details='---- STDOUT ----\n\n---- STDERR ----\n'

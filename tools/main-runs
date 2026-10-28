@@ -238,6 +238,8 @@ def failing_ids(target, details):
     binary = re.sub(r'-shard-\d+$', '', target)
     cases = re.findall(r'^test (\S+)(?: - should panic)? \.\.\. FAILED(?: <[0-9.]+s>)?$', details, re.M)
     cases += re.findall(r'^---- (\S+) stdout ----$', details, re.M)
+    started = set(re.findall(r'^HIRSEL_TEST_STARTED (\S+)$', details, re.M))
+    cases = [case for case in cases if not started or case in started]
     ids = [f'{binary}::{case}' for case in cases] + re.findall(r'^(conformance/\S+\.hir): ', details, re.M)
     return list(dict.fromkeys(ids + re.findall(r'"path"\s*:\s*"(conformance/[^"]+\.hir)"', details)))
 
@@ -246,8 +248,10 @@ def case_observations(target, result):
     """Explicit libtest identities only; never infer a passing corpus case from a parent."""
     binary = re.sub(r'-shard-\d+$', '', target)
     details = result['details']
+    started = set(re.findall(r'^HIRSEL_TEST_STARTED (\S+)$', details, re.M))
     cases = [(f'{binary}::{case}', {'ok': 'pass', 'FAILED': 'failure', 'ignored': 'skipped'}[status])
-             for case, status in re.findall(r'^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b', details, re.M)]
+             for case, status in re.findall(r'^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b', details, re.M)
+             if not started or case in started]
     failures = {identity for identity, status in cases if status == 'failure'}
     cases += [(identity, 'failure') for identity in failing_ids(target, details) if identity not in failures]
     return cases
