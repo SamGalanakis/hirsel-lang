@@ -76,6 +76,7 @@ pub struct CpuWorkerGraph {
     pub spine: Spine,
     pub mapper: Option<CpuMapperGraph>,
     pub summary: Option<CpuSummary>,
+    pub roots: Option<CpuSaveRoots>,
 }
 
 /// A borrowed image of the successful mapper result. The original SSA result
@@ -340,7 +341,9 @@ pub fn validate_cpu_workers(
                 fuel_points: crate::fuel::fuel_points(worker.unit()),
             },
         );
-        if graph.bodies != proposal.graph.bodies || cpu.spine != spine(worker.unit(), &protocol) {
+        if (cpu.mapper.is_some() && cpu.roots.as_ref().is_none_or(|roots| !super::cpu_roots::check(units, table, &graph, &protocol, roots)))
+            || (cpu.mapper.is_none() && cpu.roots.is_some())
+            || graph.bodies != proposal.graph.bodies || cpu.spine != spine(worker.unit(), &protocol) {
             return false;
         }
         let Some(wrapper) = table.layout(protocol.environment) else {
@@ -589,11 +592,14 @@ pub(super) fn propose(
         },
     );
     graph.root = u.header.instance;
+    let roots = if mapper.is_some() {
+        Some(super::cpu_roots::propose(units, table, &graph, &protocol).ok_or_else(|| no("unproved CPU save roots"))?)
+    } else { None };
     graph.identity = ContentHash::of_parts(
         "hirsel.ahead.cpu-worker.v1",
         [
             graph.identity.0.as_slice(),
-            format!("{binding:?}{spine:?}{recipe:?}{summary:?}").as_bytes(),
+            format!("{binding:?}{spine:?}{recipe:?}{summary:?}{roots:?}").as_bytes(),
         ],
     );
     Ok(RootPlan {
@@ -606,6 +612,7 @@ pub(super) fn propose(
             spine,
             mapper,
             summary,
+            roots,
         }),
     })
 }

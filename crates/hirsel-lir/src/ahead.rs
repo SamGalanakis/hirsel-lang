@@ -12,15 +12,17 @@ use crate::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpe
 use crate::stage::{Ready, ValidatedUnit};
 
 mod cpu_mapper;
+mod cpu_roots;
 mod cpu_worker;
 mod host_return;
 mod plan;
+pub use cpu_roots::{CpuCaptureRoot, CpuSavePoint, CpuSaveRoots};
 pub use cpu_mapper::{CpuMapperGraph, cpu_mapper_graph, validate_cpu_mapper_graph};
 pub use cpu_worker::{
     CpuMapperBinding, CpuSummary, CpuWorkerGraph, CpuWorkerProtocol, cpu_mapper_candidates,
     cpu_owned_layout, validate_cpu_workers,
 };
-pub use host_return::{HostReturnGraph, ReadContinuation, Spine, read_metadata_name};
+pub use host_return::{LiveOwners, HostReturnGraph, ReadContinuation, Spine, read_metadata_name};
 pub use plan::{
     AheadPlan, CaptureRecipe, RootPlan, alternate_name, alternate_resume_name, environments,
     metadata_name, prospective,

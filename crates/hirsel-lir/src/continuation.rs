@@ -45,6 +45,7 @@ pub use runtime::{RuntimeOpKind, RuntimeOpPlan, RuntimeResultSlot, RuntimeResult
 pub use scope::ScopeOpPlan;
 mod tail;
 mod validate;
+pub(crate) use validate::cpu_saved_frames;
 pub use tail::{OwnedTail, TailCarrier, TailKind};
 mod cleanup;
 pub use validate::{
