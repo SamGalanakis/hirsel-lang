@@ -108,3 +108,8 @@ include!("support/cpu_pool/four_engine.rs");
 fn cpu_interpreter_scalar_fixture_agrees_across_four_engines() {
     cpu_fixture_four_engine_agreement(4);
 }
+
+#[test]
+fn cpu_interpreter_canceled_admission_agrees_across_four_engines() {
+    cpu_fixture_canceled_admission(4);
+}

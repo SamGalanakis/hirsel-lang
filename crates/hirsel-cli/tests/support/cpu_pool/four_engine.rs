@@ -1,4 +1,25 @@
 fn cpu_fixture_four_engine_agreement(width: u32) {
+    let jobs = (1..=2 * width)
+        .map(|n| format!("{n}u64"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let expected = (1..=2 * width)
+        .map(|n| format!("{}u64", n + 7))
+        .collect::<Vec<_>>()
+        .join(",");
+    let source = include_str!("interpreter.hir")
+        .replace("WIDTH", &format!("{width}u32"))
+        .replace("JOBS", &format!("[{jobs}]"))
+        .replace("EXPECTED", &format!("[{expected}]"));
+    cpu_fixture_four_engine_source(width, source, b"cpu-scalar-ok\n");
+}
+
+fn cpu_fixture_canceled_admission(width: u32) {
+    let source = include_str!("cancel_admission.hir").replace("WIDTH", &format!("{width}u32"));
+    cpu_fixture_four_engine_source(width, source, b"cpu-canceled-ok\n");
+}
+
+fn cpu_fixture_four_engine_source(width: u32, source: String, expected_output: &[u8]) {
     use hirsel_driver::{compiler_adapters, native};
     use hirsel_engine::{
         QueryEngine, RunConfiguration, check_progress, default_context, default_environment,
@@ -6,18 +27,6 @@ fn cpu_fixture_four_engine_agreement(width: u32) {
     };
 
     with_compiler_stack(|| {
-        let jobs = (1..=2 * width)
-            .map(|n| format!("{n}u64"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let expected = (1..=2 * width)
-            .map(|n| format!("{}u64", n + 7))
-            .collect::<Vec<_>>()
-            .join(",");
-        let source = include_str!("interpreter.hir")
-            .replace("WIDTH", &format!("{width}u32"))
-            .replace("JOBS", &format!("[{jobs}]"))
-            .replace("EXPECTED", &format!("[{expected}]"));
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let file = engine.sources.add("cpu.hir", source).unwrap();
         let checked = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -64,7 +73,7 @@ fn cpu_fixture_four_engine_agreement(width: u32) {
             };
             let run = run_observed_snapshot(&mut engine, &config, (&fixture).into()).unwrap();
             let reference = native::Observation::of_reference(run.observation.as_ref().unwrap());
-            assert_eq!(reference.output, b"cpu-scalar-ok\n");
+            assert_eq!(reference.output, expected_output);
             assert!(reference.failures.is_empty(), "{reference:?}");
             let checked = run_observed_checked(&mut engine, &config, (&fixture).into()).unwrap();
             assert_eq!(
