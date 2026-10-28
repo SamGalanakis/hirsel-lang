@@ -454,7 +454,7 @@ impl Task {
                         Arc::new(Data {
                             product: Arc::new(crate::NativeDiscoveryProduct {
                                 product: Some(product),
-                                source,
+                                source: Arc::new(source),
                                 contracts,
                                 requirements,
                             }),

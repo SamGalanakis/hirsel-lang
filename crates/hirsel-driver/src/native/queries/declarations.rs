@@ -43,7 +43,7 @@ pub struct NativeDeclarations {
     pub roots: RootInputs,
     pub program: Program,
     pub context: DiscoveryContext,
-    pub sources: BTreeMap<DefPath, NativeDefinitionProduct>,
+    pub sources: BTreeMap<DefPath, Arc<NativeDefinitionProduct>>,
     pub source_anchors: BTreeMap<DefPath, Vec<hirsel_span::Anchor>>,
     pub discoveries: Vec<ProductRef>,
     pub constant_definitions: Vec<DefPath>,
@@ -105,7 +105,7 @@ impl NativeDeclarations {
         if !violations.is_empty() {
             return Err(invalid(format!("invalid instance bodies: {violations:?}")));
         }
-        source.lower = output;
+        Arc::make_mut(source).lower = output;
         Ok(definition)
     }
 

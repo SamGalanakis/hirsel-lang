@@ -200,9 +200,10 @@ impl NativeInstanceInputs {
     ) -> Result<Arc<Self>, QueryError> {
         check_binding(&declarations, &lower).map_err(invalid)?;
         for (path, source) in &mut declarations.sources {
-            source.lower = lower
-                .input(path)
-                .and_then(|(output, _, _, _)| output.cloned());
+            let selected = lower.input(path).and_then(|(output, _, _, _)| output);
+            if source.lower.as_ref() != selected {
+                Arc::make_mut(source).lower = selected.cloned();
+            }
         }
         let codec = lower.record_context();
         let metadata_bytes = declarations

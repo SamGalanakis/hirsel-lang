@@ -190,7 +190,7 @@ pub(super) fn compile_roots_inspect<R>(
         .native_original_reader(&paths, store.clone())
         .unwrap();
     for (path, source) in &mut declarations.sources {
-        source.lower = original
+        Arc::make_mut(source).lower = original
             .input(path)
             .and_then(|(output, _, _, _)| output.cloned());
     }

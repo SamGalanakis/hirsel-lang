@@ -119,7 +119,7 @@ struct Record {
 #[derive(Clone)]
 pub struct NativeDiscoveryProduct {
     pub product: Option<crate::runtime::ProductRef>,
-    pub source: NativeDefinitionProduct,
+    pub source: Arc<NativeDefinitionProduct>,
     pub contracts: Option<NativeBodyContracts>,
     pub requirements: InstanceGraph,
 }
@@ -253,7 +253,7 @@ impl NativeDiscoveryCache {
                         action: previous.action,
                         record: previous.reference,
                     }),
-                    source,
+                    source: Arc::new(source),
                     contracts: record.contracts,
                     requirements: record.requirements,
                 });
@@ -305,7 +305,7 @@ impl NativeDiscoveryCache {
         })();
         Ok(NativeDiscoveryProduct {
             product,
-            source,
+            source: Arc::new(source),
             contracts,
             requirements,
         })

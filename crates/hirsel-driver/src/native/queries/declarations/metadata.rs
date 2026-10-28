@@ -1,6 +1,7 @@
-use super::NativeDeclarations;
+use super::{NativeDeclarations, RootInputs};
 use hirsel_engine::NativeMetadataWeight as Weight;
 use hirsel_rc::instance::Requirement;
+use std::sync::Arc;
 
 fn requirement(w: &mut Weight, value: &Requirement) {
     let Requirement {
@@ -36,6 +37,14 @@ impl NativeDeclarations {
             discoveries,
             constant_definitions,
         } = self;
+        let shared = match roots {
+            RootInputs::Front(front) => front
+                .catalogue
+                .iter()
+                .map(|product| Arc::as_ptr(&product.source))
+                .collect::<std::collections::HashSet<_>>(),
+            RootInputs::Owned(_) => Default::default(),
+        };
         let mut w = Weight::default();
         w.add(size_of::<Self>());
         if let Some(roots) = roots.owned_mut() {
@@ -90,7 +99,10 @@ impl NativeDeclarations {
         });
         w.packed_map(sources, |w, path, value| {
             w.path(path);
-            w.source(value);
+            if !shared.contains(&Arc::as_ptr(value)) {
+                w.arc(value);
+                w.source(value);
+            }
         });
         w.packed_map(source_anchors, |w, path, anchors| {
             w.path(path);

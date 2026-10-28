@@ -42,6 +42,29 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
         let original = Arc::downgrade(&body);
         drop(reader);
         let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
+        for product in &facts.catalogue {
+            assert!(Arc::ptr_eq(
+                &product.source,
+                &declarations.sources[&product.source.definition],
+            ));
+        }
+        let complete = context
+            .reader(
+                facts.originals.iter().map(|product| (**product).clone()),
+                store.clone(),
+            )
+            .unwrap();
+        let shared = NativeInstanceInputs::from_products(
+            NativeDeclarations::from_front(facts.clone()).unwrap(),
+            complete,
+        )
+        .unwrap();
+        for product in &facts.catalogue {
+            assert!(Arc::ptr_eq(
+                &product.source,
+                &shared.declarations.sources[&product.source.definition],
+            ));
+        }
         let empty = context
             .reader(std::iter::empty::<NativeOriginalProduct>(), store.clone())
             .unwrap();
@@ -77,6 +100,10 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
         drop(body);
         drop(facts);
         drop(engine);
+        assert!(Arc::ptr_eq(
+            &descriptor,
+            &shared.declarations.sources[&main]
+        ));
         assert!(
             original.upgrade().is_none(),
             "immutable worker inputs retain no original Definition"

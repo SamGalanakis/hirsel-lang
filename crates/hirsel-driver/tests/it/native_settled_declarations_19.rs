@@ -47,7 +47,8 @@ fn settled_native_declaration_assembly_runs_without_a_source_controller() {
             .is_err()
         );
         let mut crossed = catalogue.clone();
-        crossed[0].source.source.syntax = catalogue.last().unwrap().source.source.syntax.clone();
+        Arc::make_mut(&mut crossed[0].source).source.syntax =
+            catalogue.last().unwrap().source.source.syntax.clone();
         assert!(
             NativeDeclarations::from_settled(
                 &signatures,

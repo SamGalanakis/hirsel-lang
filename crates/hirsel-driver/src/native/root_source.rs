@@ -23,7 +23,7 @@ pub struct NativeLinkFacts<'a> {
     pub program: &'a hirsel_rc::instance::Program,
     pub operations: Arc<hirsel_layout::operation::OperationRegistry>,
     pub roots: &'a NativeSourceRoots,
-    pub declarations: &'a BTreeMap<DefPath, NativeDefinitionProduct>,
+    pub declarations: &'a BTreeMap<DefPath, Arc<NativeDefinitionProduct>>,
     pub entries: &'a BTreeMap<DefPath, u32>,
     pub anchors: &'a BTreeMap<DefPath, Vec<Anchor>>,
     pub signatures: Arc<SignatureSnapshot>,

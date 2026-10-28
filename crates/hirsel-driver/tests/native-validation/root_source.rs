@@ -28,7 +28,7 @@ struct Fixture {
     program: hirsel_rc::instance::Program,
     operations: Arc<hirsel_layout::operation::OperationRegistry>,
     roots: NativeSourceRoots,
-    declarations: BTreeMap<DefPath, NativeDefinitionProduct>,
+    declarations: BTreeMap<DefPath, Arc<NativeDefinitionProduct>>,
     entries: BTreeMap<DefPath, u32>,
     anchors: BTreeMap<DefPath, Vec<Anchor>>,
     signatures: Arc<SignatureSnapshot>,
@@ -79,7 +79,7 @@ impl Fixture {
             .map(|path| {
                 (
                     path.clone(),
-                    engine.native_definition_product(path).unwrap(),
+                    Arc::new(engine.native_definition_product(path).unwrap()),
                 )
             })
             .collect();
@@ -87,7 +87,7 @@ impl Fixture {
             .native_original_reader(&paths, store.clone())
             .unwrap();
         for (path, source) in &mut declarations {
-            source.lower = lower
+            Arc::make_mut(source).lower = lower
                 .input(path)
                 .and_then(|(output, _, _, _)| output.cloned());
         }
