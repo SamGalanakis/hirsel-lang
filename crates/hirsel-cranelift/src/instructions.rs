@@ -1177,6 +1177,9 @@ impl FnEmitter<'_, '_, '_> {
         deep: bool,
         failure: FailureId,
     ) -> Emitted {
+        if self.cpu_reserve()? {
+            return Ok(());
+        }
         let site = self.construct_site(construct)?;
         let ty = self.value_type(value)?;
         if !deep

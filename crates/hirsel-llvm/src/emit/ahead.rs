@@ -343,11 +343,26 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             definition: self.definition().clone(),
             what: "CPU growth without its physical state".into(),
         })?;
-        let place = self.place(recipe.address)?;
-        let old = self.load(Shape::Scalar(ScalarKind::Pointer), place);
-        let kept = self
-            .sequence_state_at(place)
-            .map(|state| self.grown_facts(state, old));
+        use hirsel_lir::ahead::CpuGrowthPlace;
+        let place = match recipe.place {
+            CpuGrowthPlace::Address(address) => Some(self.place(address)?),
+            CpuGrowthPlace::Copy { .. } => None,
+        };
+        let old = match recipe.place {
+            CpuGrowthPlace::Copy { value, .. } => self.get(value)?,
+            CpuGrowthPlace::Address(_) => {
+                self.load(Shape::Scalar(ScalarKind::Pointer), place.unwrap())
+            }
+        };
+        let kept = recipe.capacity.and_then(|_| {
+            self.sequence_state_at(place.unwrap())
+                .map(|state| self.grown_facts(state, old))
+        });
+        let kind = match recipe.place {
+            CpuGrowthPlace::Copy { .. } => 5,
+            CpuGrowthPlace::Address(_) if recipe.capacity.is_some() => 1,
+            CpuGrowthPlace::Address(_) => 4,
+        };
         let environment = self.builder.load(
             self.module.ptr_type(),
             self.builder.offset(
@@ -364,20 +379,31 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             .prologue
             .alloca(self.module.array_type(self.module.int_type(8), 88), 8);
         let i32t = self.module.int_type(32);
+        let LayoutKind::Block { payload } = self.layout(recipe.layout)?.kind else {
+            return self.invalid("CPU sequence handoff without a block payload");
+        };
+        let descriptor = self.descriptor(payload)?;
         for (offset, value, align) in [
             (0, self.module.const_int(i32t, 1), 4),
-            (4, self.module.const_int(i32t, 1), 4),
+            (4, self.module.const_int(i32t, kind), 4),
             (8, ordinal, 8),
             (16, old, 8),
             (24, self.module.const_zero(self.module.ptr_type()), 8),
-            (32, self.descriptor(recipe.layout)?, 4),
+            (32, descriptor, 4),
             (36, self.module.const_zero(i32t), 4),
             (40, self.const_u64(0), 8),
             (48, self.const_u64(0), 8),
             (56, self.const_u64(0), 8),
             (64, self.const_u64(recipe.size), 8),
             (72, self.const_u64(u64::from(recipe.align)), 8),
-            (80, self.get(recipe.capacity)?, 8),
+            (
+                80,
+                match recipe.capacity {
+                    Some(capacity) => self.get(capacity)?,
+                    None => self.const_u64(0),
+                },
+                8,
+            ),
         ] {
             self.builder.store(
                 value,
@@ -410,6 +436,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.offset(record, self.const_u64(16)),
             8,
         );
+        if let CpuGrowthPlace::Copy { result, .. } = recipe.place {
+            return self.define(result, grown).map(|()| true);
+        }
+        let place = place.unwrap();
         self.store(Shape::Scalar(ScalarKind::Pointer), grown, place);
         if let (Some(state), Some((unique, untracked))) = (self.sequence_state_at(place), kept) {
             self.builder.store(unique, state.unique, 1);

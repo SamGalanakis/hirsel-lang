@@ -17,7 +17,8 @@ mod cpu_worker;
 mod host_return;
 mod plan;
 pub use cpu_mapper::{
-    CpuGrowth, CpuMapperGraph, CpuRegional, cpu_mapper_graph, validate_cpu_mapper_graph,
+    CpuGrowth, CpuGrowthPlace, CpuMapperGraph, CpuRegional, cpu_mapper_graph,
+    validate_cpu_mapper_graph,
 };
 pub use cpu_roots::{CpuCaptureRoot, CpuSavePoint, CpuSaveRoots};
 pub use cpu_worker::{

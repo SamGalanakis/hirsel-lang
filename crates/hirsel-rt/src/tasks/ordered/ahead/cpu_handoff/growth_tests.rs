@@ -34,7 +34,7 @@ unsafe fn heap_backing(ctx: *mut TaskCtx) -> u64 {
 }
 
 fn run_growth(sequence: bool, refuse: bool, repeat: bool, refusal: Option<Refusal>) {
-    run_growth_with_sharing(sequence, refuse, repeat, refusal, false, false);
+    run_growth_with_sharing(sequence, refuse, repeat, refusal, false, false, None);
 }
 
 fn run_growth_with_sharing(
@@ -44,7 +44,10 @@ fn run_growth_with_sharing(
     refusal: Option<Refusal>,
     shared: bool,
     holders: bool,
+    kind: Option<u32>,
 ) {
+    let untracked = kind == Some(CHECK_UNTRACKED_SEQUENCE);
+    let copy = kind == Some(COPY_SEQUENCE);
     let grant = hirsel_run_schema::CpuGrant {
         provider: "cpu.scoped@1".into(),
         max_workers: 4,
@@ -88,7 +91,13 @@ fn run_growth_with_sharing(
             let old = alloc::hirsel_rt_v2_alloc(
                 ctx,
                 index,
-                if holders { 64 } else { 32 },
+                if copy {
+                    65536
+                } else if holders {
+                    64
+                } else {
+                    32
+                },
                 8,
                 alloc::DOMAIN_HEAP,
                 0,
@@ -126,6 +135,8 @@ fn run_growth_with_sharing(
                 },
                 kind: if matches!(refusal, Some(Refusal::Region)) {
                     ALLOC_REGION
+                } else if let Some(kind) = kind {
+                    kind
                 } else if sequence {
                     GROW_SEQUENCE
                 } else {
@@ -135,7 +146,7 @@ fn run_growth_with_sharing(
                 block: old,
                 // These fields belong only to ALLOC_REGION in the landed ABI.
                 region: std::ptr::dangling_mut(),
-                index: u32::MAX,
+                index: if kind.is_some() { index } else { u32::MAX },
                 flags: u32::MAX,
                 extent: 65536,
                 align: 8,
@@ -151,15 +162,35 @@ fn run_growth_with_sharing(
                 (&raw mut *native).cast(),
             );
             let held = refuse.then(|| {
-                ledger
-                    .reserve_heap(grant.max_batch_bytes - heap_backing(ctx))
-                    .unwrap()
+                if copy {
+                    // A large copy needs new backing. Fill the ledger's exact
+                    // remaining capacity without approximating allocator metadata.
+                    let mut held = Vec::new();
+                    let mut bytes = grant.max_batch_bytes;
+                    while bytes != 0 {
+                        if let Ok(reservation) = ledger.reserve_heap(bytes) {
+                            held.push(reservation);
+                        }
+                        bytes >>= 1;
+                    }
+                    held
+                } else {
+                    vec![
+                        ledger
+                            .reserve_heap(grant.max_batch_bytes - heap_backing(ctx))
+                            .unwrap(),
+                    ]
+                }
             });
             crate::fiber::switch(&raw mut native.physical.idle_sp, sp);
             assert_eq!(native.physical.reason, 32);
             assert_eq!(native.physical.saved_sp, sp.wrapping_sub(32));
             crate::stop::set_running(std::ptr::null_mut());
             crate::tasks::role::enter(ctx);
+            if kind.is_some() {
+                super::super::cpu_worker::admit(&raw mut *native);
+                assert_eq!(native.cpu_phase, 3);
+            }
             assert_eq!(serve(ctx, &raw mut *native), Ok(!refuse));
             if refusal.is_some() {
                 assert_eq!(native.growth_status, u32::from(NOT_CERTIFIED));
@@ -200,10 +231,36 @@ fn run_growth_with_sharing(
                 assert_eq!(serve(ctx, &raw mut *native), Ok(true));
             }
             let fresh = request.block;
+            if untracked {
+                assert_eq!(fresh, old, "ArenaPush must not relocate a heap owner");
+                assert_eq!(native.growth_status, u32::from(ACCEPTED));
+                assert_eq!(
+                    std::slice::from_raw_parts(alloc::payload(old).cast::<u64>(), input.len()),
+                    input.as_slice()
+                );
+                crate::tasks::role::release(ctx);
+                crate::stop::set_running(ctx);
+                crate::fiber::switch(&raw mut native.physical.idle_sp, native.physical.saved_sp);
+                assert_eq!(native.physical.reason, 64);
+                assert!(native.growth.is_null());
+                (*ctx).ahead_physical = std::ptr::null_mut();
+                (*ctx).heap().free(old);
+                (*ctx).heap().trim();
+                engine::at_head(ctx).unwrap();
+                assert_eq!((*ctx).heap_ref().live().0, 0);
+                return crate::STATUS_OK;
+            }
             assert_ne!(fresh, old);
+            if copy {
+                assert_eq!(
+                    (*old).count,
+                    crate::count::COUNT_UNIQUE,
+                    "a shallow copy borrows the original credit"
+                );
+            }
             assert_eq!(
                 (*ctx).heap_ref().live().0,
-                if shared { 2 } else { 1 } + u64::from(holders),
+                if shared || copy { 2 } else { 1 } + u64::from(holders),
                 "unique growth reclaims its input; shared growth retains the other holder"
             );
             if shared {
@@ -218,7 +275,7 @@ fn run_growth_with_sharing(
                 );
             }
             assert_eq!(alloc::payload(fresh).cast::<u64>().read(), input[0]);
-            if sequence {
+            if sequence && !copy {
                 assert_eq!(alloc::payload(fresh).add(16).cast::<u64>().read(), input[2]);
                 let exact =
                     alloc::sequence_slots((*ctx).heap_ref(), fresh, 16, request.element_size);
@@ -246,7 +303,7 @@ fn run_growth_with_sharing(
                 assert_eq!(request.block, fresh);
                 assert_eq!(
                     (*ctx).heap_ref().live().0,
-                    if shared { 2 } else { 1 } + u64::from(holders),
+                    if shared || copy { 2 } else { 1 } + u64::from(holders),
                     "a resumed no-op must not free the result twice"
                 );
                 crate::tasks::role::release(ctx);
@@ -277,7 +334,11 @@ fn run_growth_with_sharing(
                 );
             } else {
                 (*ctx).heap().free(fresh);
-                if shared {
+                if shared || copy {
+                    assert_eq!(
+                        std::slice::from_raw_parts(alloc::payload(old).cast::<u64>(), input.len()),
+                        input.as_slice()
+                    );
                     (*ctx).heap().free(old);
                 }
             }
@@ -329,7 +390,7 @@ fn native_growth_refuses_wrong_claims_versions_and_regions_without_consuming_the
 #[test]
 fn shared_flat_sequence_growth_keeps_other_holders_and_retries_once() {
     for refuse in [false, true] {
-        run_growth_with_sharing(true, refuse, true, None, true, false);
+        run_growth_with_sharing(true, refuse, true, None, true, false, None);
     }
 }
 
@@ -692,7 +753,7 @@ fn saved_region_allocation_preserves_refused_inputs_charges_once_and_revokes_on_
 #[test]
 fn shared_holder_sequence_growth_retains_children_across_refusal_and_original_release() {
     for refuse in [false, true] {
-        run_growth_with_sharing(true, refuse, true, None, true, true);
+        run_growth_with_sharing(true, refuse, true, None, true, true, None);
     }
 }
 
@@ -712,6 +773,38 @@ fn saved_raw_region_preserves_headerless_storage_across_backing_refusal() {
     for diagnostic in [false, true] {
         for refuse in [false, true] {
             run_region_storage(refuse, diagnostic, false, None, true);
+        }
+    }
+}
+
+#[test]
+fn saved_arena_push_preserves_heap_inputs_and_refuses_wrong_claims() {
+    for refusal in [None, Some(Refusal::Ordinal), Some(Refusal::Version)] {
+        run_growth_with_sharing(
+            true,
+            false,
+            false,
+            refusal,
+            false,
+            false,
+            Some(CHECK_UNTRACKED_SEQUENCE),
+        );
+    }
+}
+
+#[test]
+fn saved_shallow_sequence_copy_preserves_the_borrowed_original_credit() {
+    for refuse in [false, true] {
+        for holders in [false, true] {
+            run_growth_with_sharing(
+                true,
+                refuse,
+                false,
+                None,
+                false,
+                holders,
+                Some(COPY_SEQUENCE),
+            );
         }
     }
 }

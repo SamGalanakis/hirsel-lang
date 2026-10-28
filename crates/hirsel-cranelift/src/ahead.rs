@@ -2,6 +2,7 @@
 use crate::function::{FnEmitter, flags};
 use crate::module::Emitted;
 use cranelift_codegen::ir::{self, InstBuilder, Value, condcodes::IntCC, types};
+use hirsel_lir::layout_types::LayoutKind;
 
 impl FnEmitter<'_, '_, '_> {
     fn ahead_helper(&mut self, handoff: bool, args: &[Value]) -> Emitted<Option<Value>> {
@@ -528,8 +529,15 @@ impl FnEmitter<'_, '_, '_> {
         let Some(state) = self.ahead_state else {
             return self.invalid("CPU growth without its physical state");
         };
-        let place = self.place(recipe.address)?;
-        let old = self.load_ptr(place.ptr);
+        use hirsel_lir::ahead::CpuGrowthPlace;
+        let place = match recipe.place {
+            CpuGrowthPlace::Address(address) => Some(self.place(address)?),
+            CpuGrowthPlace::Copy { .. } => None,
+        };
+        let old = match recipe.place {
+            CpuGrowthPlace::Address(_) => self.load_ptr(place.unwrap().ptr),
+            CpuGrowthPlace::Copy { value, .. } => self.get1(value)?,
+        };
         let environment = self.load_ty(
             types::I64,
             state,
@@ -540,13 +548,27 @@ impl FnEmitter<'_, '_, '_> {
         let version = self.b.ins().iconst(types::I32, 1);
         let zero32 = self.b.ins().iconst(types::I32, 0);
         let zero = self.u64c(0);
-        let descriptor = self.descriptor_value(recipe.layout)?;
+        let LayoutKind::Block { payload } = self.layout(recipe.layout)?.kind else {
+            return self.invalid("CPU sequence handoff without a block payload");
+        };
+        let descriptor = self.descriptor_value(payload)?;
         let size = self.u64c(recipe.size);
         let align = self.u64c(u64::from(recipe.align));
-        let capacity = self.get1(recipe.capacity)?;
+        let kind = self.b.ins().iconst(
+            types::I32,
+            match recipe.place {
+                CpuGrowthPlace::Copy { .. } => 5,
+                CpuGrowthPlace::Address(_) if recipe.capacity.is_some() => 1,
+                CpuGrowthPlace::Address(_) => 4,
+            },
+        );
+        let capacity = match recipe.capacity {
+            Some(capacity) => self.get1(capacity)?,
+            None => zero,
+        };
         for (offset, value) in [
             (0, version),
-            (4, version),
+            (4, kind),
             (8, ordinal),
             (16, old),
             (24, zero),
@@ -570,7 +592,10 @@ impl FnEmitter<'_, '_, '_> {
         let refused = self.b.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
         self.b.ins().trapnz(refused, crate::function::TRAP);
         let grown = self.load_ty(types::I64, record, 16);
-        self.store_at(grown, place.ptr, 0);
+        match recipe.place {
+            CpuGrowthPlace::Copy { result, .. } => self.define1(result, grown)?,
+            CpuGrowthPlace::Address(_) => self.store_at(grown, place.unwrap().ptr, 0),
+        }
         Ok(true)
     }
 }

@@ -187,7 +187,9 @@ pub(super) unsafe fn admit(native: *mut native::Native) {
             fuel: 0,
             descriptor: None,
         });
-        (*native).cpu_phase = 0;
+        // Canonical admission retires this prefix, not the job's claim.
+        // Later checked storage/publication handoffs still name that job.
+        (*native).cpu_phase = 3;
     }
 }
 

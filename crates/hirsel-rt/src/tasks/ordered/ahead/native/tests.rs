@@ -43,6 +43,9 @@ fn cpu_tail_requires_its_own_certificate_and_the_canonical_claim_arm() {
             assert!(!super::super::cpu_worker::armed(ctx));
             if cpu {
                 assert_eq!(native.physical.points_left, 1024);
+                super::super::cpu_worker::admit(&raw mut *native);
+                assert_eq!(native.cpu_phase, 3, "canonical admission retains the claim");
+                assert!(!super::super::cpu_worker::armed(ctx));
             }
             (*ctx).ahead_physical = std::ptr::null_mut();
         }

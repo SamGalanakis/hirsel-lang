@@ -737,6 +737,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 deep,
                 failure,
             } => {
+                if self.cpu_reserve()? {
+                    return Ok(());
+                }
                 let site = self.construct_site(construct)?;
                 let ty = self.value_type(value)?;
                 if !deep

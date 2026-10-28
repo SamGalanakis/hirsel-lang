@@ -18,10 +18,17 @@ pub struct CpuMapperGraph {
 
 /// A saved flat-sequence reservation. Strict C proves the mutable place and
 /// live old owner; the checker reconstructs the element arithmetic separately.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CpuGrowthPlace {
+    Address(AddressId),
+    Copy { value: ValueId, result: ValueId },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CpuGrowth {
-    pub address: AddressId,
-    pub capacity: ValueId,
+    pub place: CpuGrowthPlace,
+    /// None checks ArenaPush's untracked heap/static owner on idle.
+    pub capacity: Option<ValueId>,
     pub layout: LayoutId,
     pub element: LayoutId,
     pub size: u64,
@@ -437,6 +444,7 @@ fn body_custody(u: &LirUnit<Ready>, table: &LayoutTable) -> bool {
             Inst::Store { address, .. }
             | Inst::Replace { address, .. }
             | Inst::SeqReserve { address, .. }
+            | Inst::ArenaPush { address, .. }
             | Inst::SeqSetLen { address, .. }
             | Inst::BeginLoan {
                 address,
@@ -535,9 +543,12 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
             mode: ConvertMode::Widen | ConvertMode::Truncate | ConvertMode::TryNarrow,
             ..
         } => Action::Private,
-        Inst::SeqReserve {
-            address, capacity, ..
-        } => {
+        Inst::SeqReserve { address, .. } | Inst::ArenaPush { address, .. } => {
+            let capacity = match inst {
+                Inst::SeqReserve { capacity, .. } => Some(*capacity),
+                Inst::ArenaPush { .. } => None,
+                _ => unreachable!(),
+            };
             if mutable_capture(u, *address) {
                 return None;
             }
@@ -556,9 +567,54 @@ fn instruction(u: &LirUnit<Ready>, table: &LayoutTable, inst: &Inst) -> Option<A
                 return None;
             }
             Action::Grow(CpuGrowth {
-                address: *address,
-                capacity: *capacity,
+                place: CpuGrowthPlace::Address(*address),
+                capacity,
                 layout,
+                element,
+                size,
+                align: record.align,
+            })
+        }
+        Inst::UniqueCopy {
+            value,
+            result,
+            construct,
+            deep: false,
+            ..
+        } => {
+            let site = u.tables.constructs.get(construct.index())?;
+            let ty = u.types.get(u.values.get(value.index())?.ty.index())?;
+            if ty.repr != ValueRepr::Block
+                || !matches!(
+                    site.placement,
+                    Some(Placement::Fixed(StorageOwner::Heap(_)))
+                )
+                || !matches!(
+                    site.destination,
+                    DestinationClass::Heap | DestinationClass::Inferred
+                )
+                || site.arena_no_drop
+                || !cpu_owned_layout(table, ty.layout)
+            {
+                return None;
+            }
+            let LayoutKind::Block { payload } = table.layout(ty.layout)?.kind else {
+                return None;
+            };
+            let LayoutKind::Sequence { element } = table.layout(payload)?.kind else {
+                return None;
+            };
+            let record = table.layout(element)?;
+            let SizeSpec::Fixed(size) = record.size else {
+                return None;
+            };
+            Action::Grow(CpuGrowth {
+                place: CpuGrowthPlace::Copy {
+                    value: *value,
+                    result: *result,
+                },
+                capacity: None,
+                layout: ty.layout,
                 element,
                 size,
                 align: record.align,

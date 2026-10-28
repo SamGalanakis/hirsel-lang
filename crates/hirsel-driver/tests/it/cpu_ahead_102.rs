@@ -1052,8 +1052,12 @@ fn cpu_saved_growth_checks_inputs_and_composes_private_helper_frames() {
                 .growth;
             let recipe = growth.get_mut(&key).unwrap();
             match field {
-                0 => recipe.address = hirsel_lir::ir::AddressId(u32::MAX),
-                1 => recipe.capacity = hirsel_lir::ir::ValueId(u32::MAX),
+                0 => {
+                    recipe.place = hirsel_lir::ahead::CpuGrowthPlace::Address(
+                        hirsel_lir::ir::AddressId(u32::MAX),
+                    )
+                }
+                1 => recipe.capacity = Some(hirsel_lir::ir::ValueId(u32::MAX)),
                 2 => recipe.layout = recipe.element,
                 3 => recipe.element = recipe.layout,
                 4 => recipe.size += 1,
@@ -1480,4 +1484,32 @@ fn refresh_cpu_mapper_identity(
             .as_bytes(),
         ],
     );
+}
+
+#[test]
+fn cpu_allocating_loop_reserve_has_a_complete_start_recipe() {
+    with_compiler_stack(|| {
+        let source = SOURCE.replace(
+            "fn(take job: u64) -> u64 uses {} { job + 7u64 }",
+            "fn(take job: u64) -> unique List[u64] uses {} { let mut out = [job]; list.reserve(mut out, 128u64); let mut x = job; for i in 0u64..2048u64 { x = int.wrapping_add(int.wrapping_mul(x, 6364136223846793005u64), i); x = x ^ (x >> 29u64) }; list.push(mut out, x); take out }",
+        ).replace("match outcome {\n    Ok(rows) => failure.check(rows == [8u64, 9u64, 10u64, 11u64], Bounds()),\n    Error(_) => (),\n  }", "let _ = take outcome");
+        let program = ready_with_regions(&source, true);
+        let plan = native::ahead_plan(&program);
+        assert!(
+            program
+                .units
+                .iter()
+                .any(|unit| unit
+                    .unit()
+                    .tables
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .any(|(index, _)| plan
+                        .cpu_certified_start(unit.unit(), hirsel_lir::ir::CallId(index as u32))
+                        .is_some())),
+            "{:?}",
+            plan.refusals
+        );
+    });
 }

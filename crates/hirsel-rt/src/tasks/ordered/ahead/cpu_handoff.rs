@@ -16,6 +16,10 @@ pub const GROW_SEQUENCE: u32 = 1;
 pub const ALLOC_REGION: u32 = 2;
 /// Headerless compiler-local storage, with the ordinary non-geometric segment charge.
 pub const ALLOC_RAW_REGION: u32 = 3;
+/// ArenaPush is a no-op for admitted heap/static sequence owners.
+pub const CHECK_UNTRACKED_SEQUENCE: u32 = 4;
+/// A shallow sequence copy borrows its original and keeps every original credit.
+pub const COPY_SEQUENCE: u32 = 5;
 pub const STACK_BYTES: u64 = 80;
 
 /// The value and retained-block table remain owned by the saved mapper until
@@ -109,7 +113,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_publish(
     core::arch::naked_asm!(
         "test rdi, rdi", "je 2f", "test rsi, rsi", "je 2f",
         "cmp byte ptr [rdi + {cpu}], 0", "je 2f",
-        "cmp dword ptr [rdi + {cpu_phase}], 2", "jne 2f",
+        "mov eax, [rdi + {cpu_phase}]", "sub eax, 2", "cmp eax, 1", "ja 2f",
         "cmp qword ptr [rdi + {summary}], 0", "jne 3f",
         "push rbx", "mov rbx, rdi", "mov [rbx + {summary}], rsi",
         "mov dword ptr [rbx + {status}], {refused}",
@@ -253,7 +257,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_grow(
     core::arch::naked_asm!(
         "test rdi, rdi", "je 2f", "test rsi, rsi", "je 2f",
         "cmp byte ptr [rdi + {cpu}], 0", "je 2f",
-        "cmp dword ptr [rdi + {cpu_phase}], 2", "jne 2f",
+        "mov eax, [rdi + {cpu_phase}]", "sub eax, 2", "cmp eax, 1", "ja 2f",
         "cmp qword ptr [rdi + {growth}], 0", "jne 3f",
         "push rbx", "mov rbx, rdi", "mov [rbx + {growth}], rsi",
         "mov dword ptr [rbx + {status}], {refused}",

@@ -325,6 +325,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         count: Option<ValueId>,
         failure: FailureId,
     ) -> Emitted {
+        if self.cpu_reserve()? {
+            return Ok(());
+        }
         use hirsel_lir::runtime_abi::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_OFFSET};
         let place = self.place(address)?;
         // A Packed List's elements have no stride: the runtime only charges it and

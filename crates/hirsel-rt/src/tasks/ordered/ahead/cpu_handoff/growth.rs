@@ -16,13 +16,16 @@ pub(in crate::tasks::ordered::ahead) struct HeapPlan {
     keep: u64,
     elements: Option<(u64, u64)>,
     detach: bool,
+    copy: bool,
 }
 
 /// Compute the same class extent as block_grow/seq_grow without allocating,
 /// freeing, or changing a saved input. Shared sequences detach at the
 /// requested capacity, as alloc::detach_reserved does.
 unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(HeapPlan, u64, u64)> {
-    if !matches!(request.kind, GROW_BLOCK | GROW_SEQUENCE) || request.block.is_null() {
+    if !matches!(request.kind, GROW_BLOCK | GROW_SEQUENCE | COPY_SEQUENCE)
+        || request.block.is_null()
+    {
         return None;
     }
     // SAFETY: the checked Growth caller retains its live unique block.
@@ -30,6 +33,30 @@ unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(HeapPlan, u64, u6
         let old = request.block;
         if (*old).index() >= (*ctx).heap_ref().layout_count() {
             return None;
+        }
+        if request.kind == COPY_SEQUENCE {
+            let layout = &*(*ctx).descriptor((*old).index());
+            if (*old).count == 0
+                || (*old).index() != request.index
+                || !matches!((*old).domain(), alloc::DOMAIN_HEAP | alloc::DOMAIN_STATIC)
+                || layout.finalizer.is_some()
+            {
+                return None;
+            }
+            // copy::clone_block uses this exact extent and alignment, then
+            // copy_held retains children without consuming the borrowed input.
+            let (bytes, align) = (*ctx).heap().usable(old);
+            return Some((
+                HeapPlan {
+                    old,
+                    keep: bytes,
+                    elements: None,
+                    detach: true,
+                    copy: true,
+                },
+                bytes,
+                align,
+            ));
         }
         let unique =
             (*old).count == crate::count::COUNT_UNIQUE && (*old).domain() == alloc::DOMAIN_HEAP;
@@ -57,6 +84,7 @@ unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(HeapPlan, u64, u6
                     keep: request.keep,
                     elements: None,
                     detach: false,
+                    copy: false,
                 },
                 request.extent,
                 request.align,
@@ -116,6 +144,7 @@ unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(HeapPlan, u64, u6
                 keep: if empty_static { 0 } else { keep },
                 elements: Some((offset, request.element_size)),
                 detach,
+                copy: false,
             },
             extent,
             align,
@@ -389,6 +418,27 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
                         .is_some()
                 })
         });
+        if request.kind == CHECK_UNTRACKED_SEQUENCE {
+            // ArenaPush leaves heap/static blocks unchanged. Tracked arena
+            // inputs have no admitted mapper custody and must still refuse.
+            let untracked = certified
+                && !request.block.is_null()
+                && unsafe {
+                    let block = request.block;
+                    (*block).count != 0
+                        && matches!((*block).domain(), alloc::DOMAIN_HEAP | alloc::DOMAIN_STATIC)
+                        && (*block).index() == request.index
+                        && (*block).index() < (*ctx).heap_ref().layout_count()
+                };
+            unsafe {
+                finish(
+                    native,
+                    request.block,
+                    if untracked { ACCEPTED } else { NOT_CERTIFIED },
+                )
+            };
+            return Ok(true);
+        }
         let prepared = certified.then(|| unsafe { plan(ctx, request) }).flatten();
         let Some((plan, extent, align)) = prepared.filter(|(_, extent, align)| {
             *extent <= alloc::EXTENT_MAX
@@ -443,7 +493,7 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
             crate::copy::retain_children(ctx, fresh);
             // The original retains its other credits; immortal/static storage
             // keeps none. A shared sequence cannot be freed by this return.
-            if (*plan.old).count != crate::COUNT_IMMORTAL {
+            if !plan.copy && (*plan.old).count != crate::COUNT_IMMORTAL {
                 (*plan.old).count -= 1;
             }
         } else {

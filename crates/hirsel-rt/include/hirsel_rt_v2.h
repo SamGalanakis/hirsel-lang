@@ -900,6 +900,8 @@ hirsel_rt_v2_header *hirsel_rt_v2_cpu_ahead_alloc(hirsel_rt_v2_ahead_physical *s
 #define HIRSEL_RT_V2_CPU_SUMMARY_WITHDRAWN 3
 #define HIRSEL_RT_V2_CPU_GROW_BLOCK 0
 #define HIRSEL_RT_V2_CPU_GROW_SEQUENCE 1
+#define HIRSEL_RT_V2_CPU_CHECK_UNTRACKED_SEQUENCE 4
+#define HIRSEL_RT_V2_CPU_COPY_SEQUENCE 5
 #define HIRSEL_RT_V2_CPU_ALLOC_REGION 2
 typedef struct hirsel_rt_v2_cpu_summary {
     uint32_t version, phase;
@@ -925,6 +927,8 @@ _Static_assert(offsetof(hirsel_rt_v2_cpu_growth, capacity) == 80, "cpu growth ca
  * growth replaces block; on refusal every field and input stays unchanged.
  * GROW_BLOCK uses keep/extent/align; GROW_SEQUENCE uses element_size,
  * element_align/capacity; ALLOC_REGION uses region/index/extent/align/flags.
+ * CHECK_UNTRACKED_SEQUENCE validates a heap/static owner and leaves it unchanged.
+ * COPY_SEQUENCE copies its borrowed block at capacity and retains children.
  * Regions are ordinal-local, never shared between saved mappers. */
 uint8_t hirsel_rt_v2_cpu_publish(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_cpu_summary *summary);
 uint8_t hirsel_rt_v2_cpu_ahead_publish(hirsel_rt_v2_ahead_physical *state, hirsel_rt_v2_cpu_summary *summary);

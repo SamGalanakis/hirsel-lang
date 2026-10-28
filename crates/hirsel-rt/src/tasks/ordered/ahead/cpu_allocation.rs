@@ -91,7 +91,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_alloc(
     core::arch::naked_asm!(
         "push rbx", "mov rbx, rdi",
         "cmp byte ptr [rbx + {cpu}], 0", "je 2f",
-        "cmp dword ptr [rbx + {cpu_phase}], 2", "jne 2f",
+        "mov eax, [rbx + {cpu_phase}]", "sub eax, 2", "cmp eax, 1", "ja 2f",
         "cmp dword ptr [rbx + {request_phase}], 0", "jne 2f",
         "mov [rbx + {index}], esi", "mov [rbx + {extent}], rdx", "mov [rbx + {align}], rcx",
         "mov qword ptr [rbx + {result}], 0", "mov dword ptr [rbx + {request_phase}], {requested}",
@@ -124,7 +124,7 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bo
         !super::private(ctx),
         "CPU allocation follows a canonical claim"
     );
-    assert!(unsafe { (*native).cpu && (*native).cpu_phase == 2 });
+    assert!(unsafe { (*native).cpu && matches!((*native).cpu_phase, 2 | 3) });
     let request: &mut Request = unsafe { &mut (*native).allocation };
     assert!(request.pending());
     crate::alloc::check_request(request.extent, request.align);

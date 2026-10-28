@@ -169,6 +169,9 @@ impl FnEmitter<'_, '_, '_> {
         count: Option<ValueId>,
         failure: FailureId,
     ) -> Emitted {
+        if self.cpu_reserve()? {
+            return Ok(());
+        }
         let place = self.place(address)?;
         // A Packed List's elements have no stride: the runtime only charges it and
         // copies a shared one, so it reads no element shape.
