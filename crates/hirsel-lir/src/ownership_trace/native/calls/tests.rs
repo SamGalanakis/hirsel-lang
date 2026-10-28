@@ -281,3 +281,115 @@ fn finite_callable_equations_converge_when_a_cycle_reverses_predecessor_order() 
     assert_eq!(y.merge(&Code::Known(a), true), x);
     assert_eq!(x.merge(&Code::Known(b), true), y);
 }
+
+#[test]
+fn callable_storage_versions_preserve_borrowed_code_and_poison_unknown_writeback() {
+    let mut reader = unit("borrowed_reader");
+    let formal = value(&mut reader);
+    reader.parameter(formal);
+    let slot = reader.slot(ValueRepr::Callable, LayoutId(0), SlotKind::Parameter(0));
+    let address = reader.address(
+        AddressBase::Slot(slot),
+        &[],
+        ValueRepr::Callable,
+        LayoutId(0),
+    );
+    reader.loan(address, true);
+    let read = value(&mut reader);
+    reader.push(
+        BlockId(0),
+        Inst::Read {
+            result: read,
+            address,
+            reaching: formal,
+            mode: ReadMode::Borrow,
+        },
+    );
+    reader.ret(BlockId(0), Some(read));
+    let reader = reader.finish();
+    let mut caller = unit("versioned_caller");
+    let known = reference(&mut caller, "versioned_caller");
+    let result = value(&mut caller);
+    invoke(&mut caller, "borrowed_reader", known, result);
+    let caller = caller.finish();
+    let codes = solve(&[&caller, &reader]).unwrap();
+    assert!(matches!(codes[1][read.index()], Code::Known(_)));
+    assert_eq!(codes[0][result.index()], codes[0][known.index()]);
+
+    let mut caller = unit("writeback_caller");
+    let known = reference(&mut caller, "writeback_caller");
+    let slot = caller.slot(ValueRepr::Callable, LayoutId(0), SlotKind::Local);
+    let address = caller.address(
+        AddressBase::Slot(slot),
+        &[],
+        ValueRepr::Callable,
+        LayoutId(0),
+    );
+    caller.loan(address, true);
+    let stored = value(&mut caller);
+    caller.push(
+        BlockId(0),
+        Inst::Store {
+            address,
+            value: known,
+            version: stored,
+        },
+    );
+    let before = value(&mut caller);
+    caller.push(
+        BlockId(0),
+        Inst::Read {
+            result: before,
+            address,
+            reaching: stored,
+            mode: ReadMode::Borrow,
+        },
+    );
+    let written = value(&mut caller);
+    let target = symbol(&mut caller, "unknown_mutator");
+    let call = caller.call(
+        Callee::Direct(target),
+        &[(
+            Passing::Mut,
+            ArgumentValue::Address {
+                address,
+                version: written,
+            },
+        )],
+        None,
+    );
+    let next = caller.block(BlockKind::Body, &[]);
+    let normal = caller.edge(next, &[]);
+    caller.term(
+        BlockId(0),
+        Terminator::Call {
+            call,
+            normal: Some(normal),
+            failure: FailureId(0),
+        },
+    );
+    let after = value(&mut caller);
+    caller.push(
+        next,
+        Inst::Read {
+            result: after,
+            address,
+            reaching: written,
+            mode: ReadMode::Borrow,
+        },
+    );
+    caller.ret(next, None);
+    let caller = caller.finish();
+    let mut mutator = unit("unknown_mutator");
+    let parameter = value(&mut mutator);
+    mutator.parameter(parameter);
+    mutator.ret(BlockId(0), None);
+    let mutator = mutator.finish();
+    for finite in [false, true] {
+        let codes = solve_mode(&[&caller, &mutator], finite).unwrap();
+        assert!(matches!(codes[0][before.index()], Code::Known(_)));
+        assert_eq!(codes[0][written.index()], Code::Dynamic);
+        assert_eq!(codes[0][after.index()], Code::Dynamic);
+        assert_eq!(codes[1][parameter.index()], Code::Dynamic);
+    }
+}

@@ -1,9 +1,9 @@
 //! Read-only callable identity equations, adapted from
 //! hirsel-rc/src/closure_calls.rs::discover. Diagnostic discovery never rewrites
 //! a call or authorizes an ABI; ordinary C remains mandatory. Unknown joins,
-//! mutable storage, projections and incoming dynamic callables stay refused.
+//! unknown writebacks, projections and incoming dynamic callables stay refused.
 use super::*;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) struct Target {
@@ -83,14 +83,11 @@ pub(super) fn discover<S>(u: &LirUnit<S>) -> Vec<Code> {
 fn discover_seeded<S>(u: &LirUnit<S>, seeds: &[Code], finite: bool) -> Vec<Code> {
     let mut inputs = vec![Vec::new(); u.values.len()];
     let mut constants = vec![Code::Dynamic; u.values.len()];
-    let mutable: BTreeSet<_> = u
-        .tables
-        .loans
-        .iter()
-        .filter(|loan| loan.mutable)
-        .filter_map(|loan| whole(u, loan.address))
-        .collect();
-    let safe = |address| whole(u, address).is_some_and(|slot| !mutable.contains(&slot));
+    // C checks each Read's exact reaching storage version. A mutable loan
+    // alone does not change that version's code. An unknown mut writeback
+    // defines a fresh version which remains Dynamic below, so it cannot reuse
+    // the earlier callable identity. Projected storage still needs a proof.
+    let whole_storage = |address| whole(u, address).is_some();
     for id in super::super::check::used_edges(u) {
         let edge = &u.tables.edges[id.index()];
         for (&p, &a) in u.blocks[edge.target.index()]
@@ -117,7 +114,7 @@ fn discover_seeded<S>(u: &LirUnit<S>, seeds: &[Code], finite: bool) -> Vec<Code>
                 address,
                 reaching,
                 ..
-            } if safe(address) => Some((result, reaching)),
+            } if whole_storage(address) => Some((result, reaching)),
             Inst::Store {
                 address,
                 value,
@@ -128,7 +125,7 @@ fn discover_seeded<S>(u: &LirUnit<S>, seeds: &[Code], finite: bool) -> Vec<Code>
                 value,
                 version,
                 ..
-            } if safe(address) => Some((version, value)),
+            } if whole_storage(address) => Some((version, value)),
             Inst::Weaken { result, value } | Inst::Recast { result, value } => {
                 Some((result, value))
             }
