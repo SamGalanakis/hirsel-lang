@@ -1,6 +1,6 @@
 //! Committed FIFO positions, independent of Resource lineage. A runtime row
 //! cannot create, move or drop credit without a separately checked binding.
-use super::{ChannelDirection, Error, Row};
+use super::{ChannelDirection, CleanupLayouts, Error, Row};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
@@ -12,6 +12,7 @@ struct Queue {
     pending: BTreeSet<u64>,
     detached: bool,
     receipt: Option<Receipt>,
+    cleanup: Option<(u64, u64, bool)>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Receipt {
@@ -22,6 +23,43 @@ pub(super) struct Receipt {
     pub status: u32,
 }
 impl Queues {
+    pub(super) fn cleanup_begin(
+        &mut self,
+        queue: u64,
+        layout: u32,
+        item: u64,
+    ) -> Result<(), Error> {
+        let state = self.0.get_mut(&queue).ok_or(Error::InvalidQueue(queue))?;
+        let (next, end, active) = state.cleanup.as_mut().ok_or(Error::InvalidQueue(queue))?;
+        if state.layout != layout || !state.detached || *next != item || item >= *end || *active {
+            return Err(Error::InvalidQueue(queue));
+        }
+        *active = true;
+        Ok(())
+    }
+    pub(super) fn cleanup_end(&mut self, queue: u64, item: u64) -> Result<(), Error> {
+        let state = self.0.get_mut(&queue).ok_or(Error::InvalidQueue(queue))?;
+        let (next, end, active) = state.cleanup.as_mut().ok_or(Error::InvalidQueue(queue))?;
+        if !*active || *next != item || item >= *end {
+            return Err(Error::InvalidQueue(queue));
+        }
+        *active = false;
+        *next += 1;
+        Ok(())
+    }
+    pub(super) fn finish_cleanups(&self, layouts: Option<&CleanupLayouts>) -> Result<(), Error> {
+        for (&queue, state) in &self.0 {
+            if let Some((next, end, active)) = state.cleanup
+                && (active || next != end)
+                && layouts
+                    .and_then(|layouts| layouts.get(&state.layout))
+                    .is_some_and(|bindings| !bindings.is_empty())
+            {
+                return Err(Error::UnsupportedQueueCleanup(queue));
+            }
+        }
+        Ok(())
+    }
     pub(super) fn known(&self, queue: u64, layout: u32) -> Result<(), Error> {
         let state = self.0.get(&queue).ok_or(Error::InvalidQueue(queue))?;
         if state.layout != layout || state.detached {
@@ -51,6 +89,7 @@ impl Queues {
                         pending: BTreeSet::new(),
                         detached: false,
                         receipt: None,
+                        cleanup: None,
                     },
                 );
                 return Ok(true);
@@ -108,6 +147,7 @@ impl Queues {
                 if state.detached || first != state.received || end != state.sent {
                     false
                 } else {
+                    state.cleanup = Some((first, end, false));
                     state.received = state.sent;
                     state.pending.clear();
                     state.detached = true;

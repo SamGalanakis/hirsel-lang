@@ -388,3 +388,192 @@ fn queue_detachment_cannot_invent_completion_of_queued_resource_finalizers() {
         Error::UnsupportedQueueCleanup(1)
     );
 }
+
+fn queued_cleanup() -> (Log, Units, CleanupLayouts, LocalCalls) {
+    let (mut log, units) = fixture();
+    log.rows.truncate(6);
+    log.rows.extend([
+        Row::QueueDetached {
+            task: 0,
+            queue: 1,
+            layout: 99,
+            first: 0,
+            end: 1,
+        },
+        Row::QueueCleanupBegin {
+            task: 0,
+            queue: 1,
+            layout: 99,
+            item: 0,
+        },
+        Row::QueueCleanupDrop {
+            task: 0,
+            queue: 1,
+            item: 0,
+            step: 17,
+        },
+        Row::QueueCleanupEnd {
+            task: 0,
+            queue: 1,
+            item: 0,
+        },
+        Row::Leave { task: 0, frame: 1 },
+    ]);
+    let layouts = BTreeMap::from([(
+        99,
+        BTreeMap::from([(
+            17,
+            Box::new(CleanupBinding {
+                path: vec![],
+                source: Site {
+                    definition: "fixture::Token.drop".into(),
+                    file: "channel.hir".into(),
+                    line: 70,
+                    column: 1,
+                },
+            }),
+        )]),
+    )]);
+    let calls = BTreeMap::from([([7; 32], BTreeSet::new())]);
+    (log, units, layouts, calls)
+}
+
+fn cleanup_decode(
+    log: &mut Log,
+    units: &Units,
+    layouts: &CleanupLayouts,
+    calls: &LocalCalls,
+) -> Result<hirsel_run_schema::ownership_trace::Trace, Error> {
+    log.row_count = log.rows.len() as u64;
+    decode_runtime(log, log.program, units, calls, layouts, 100)
+}
+
+#[test]
+fn queued_resource_drops_only_at_its_checked_actual_descriptor_completion() {
+    let (mut log, units, layouts, calls) = queued_cleanup();
+    let trace = cleanup_decode(&mut log, &units, &layouts, &calls).unwrap();
+    let analysis = trace.analyze(log.program, 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+    assert_eq!(trace.events.len(), 3);
+    let last = trace.events.last().unwrap();
+    let Action::Drop { owner, .. } = &last.action else {
+        panic!("missing completed drop")
+    };
+    assert_eq!(last.site, layouts[&99][&17].source);
+    assert_eq!(
+        owner.storage,
+        Storage::Object {
+            name: "native.channel".into(),
+            id: 1,
+            item: 0
+        }
+    );
+}
+
+#[test]
+fn queued_cleanup_rejects_missing_duplicate_and_forged_scope_completions() {
+    let (log, units, layouts, calls) = queued_cleanup();
+    for index in 6..10 {
+        let mut changed = log.clone();
+        changed.rows.remove(index);
+        assert!(
+            cleanup_decode(&mut changed, &units, &layouts, &calls).is_err(),
+            "missing {index}"
+        );
+        let mut changed = log.clone();
+        changed.rows.insert(index, changed.rows[index]);
+        assert!(
+            cleanup_decode(&mut changed, &units, &layouts, &calls).is_err(),
+            "duplicate {index}"
+        );
+    }
+    let mut changed = log.clone();
+    changed.rows.drain(7..10);
+    assert!(
+        cleanup_decode(&mut changed, &units, &layouts, &calls).is_err(),
+        "a deleted balanced scope passed"
+    );
+    let mut changed = log.clone();
+    let Row::QueueCleanupDrop { step, .. } = &mut changed.rows[8] else {
+        unreachable!()
+    };
+    *step = 18;
+    assert!(cleanup_decode(&mut changed, &units, &layouts, &calls).is_err());
+    let mut changed = log.clone();
+    let Row::QueueCleanupBegin { layout, .. } = &mut changed.rows[7] else {
+        unreachable!()
+    };
+    *layout = 100;
+    assert!(cleanup_decode(&mut changed, &units, &layouts, &calls).is_err());
+    let mut changed = log.clone();
+    assert!(
+        cleanup_decode(&mut changed, &units, &CleanupLayouts::new(), &calls).is_err(),
+        "raw detachment acquired drop authority"
+    );
+}
+
+#[test]
+fn queued_equal_resource_fields_keep_distinct_credit_and_descriptor_drop_order() {
+    use hirsel_run_schema::ownership_trace::Projection;
+    let (mut log, mut units, mut layouts, calls) = queued_cleanup();
+    let markers = units.get_mut(&[7; 32]).unwrap();
+    let first = markers.get_mut(&0).unwrap();
+    let field = |ordinal| {
+        Some(LocationPath {
+            root: FIRST,
+            fields: vec![Projection::Field { field: ordinal }],
+        })
+    };
+    first.token_path = field(0);
+    first.owner_path = field(0);
+    let mut second = first.clone();
+    second.token_path = field(1);
+    second.owner_path = field(1);
+    markers.insert(4, second);
+    log.rows.insert(3, event(4, 0, FIRST, FIRST));
+    layouts.get_mut(&99).unwrap().get_mut(&17).unwrap().path = vec![Projection::Field { field: 1 }];
+    let mut earlier = layouts[&99][&17].clone();
+    earlier.path = vec![Projection::Field { field: 0 }];
+    layouts.get_mut(&99).unwrap().insert(19, earlier);
+    log.rows.insert(
+        10,
+        Row::QueueCleanupDrop {
+            task: 0,
+            queue: 1,
+            item: 0,
+            step: 19,
+        },
+    );
+    let trace = cleanup_decode(&mut log, &units, &layouts, &calls).unwrap();
+    let created = trace
+        .events
+        .iter()
+        .filter_map(|event| match &event.action {
+            Action::Create { token, .. } => Some(token.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let dropped = trace
+        .events
+        .iter()
+        .filter_map(|event| match &event.action {
+            Action::Drop { token, .. } => Some(token.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(dropped, [created[1].clone(), created[0].clone()]);
+    let analysis = trace.analyze(log.program, 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    let mut reversed = log.clone();
+    reversed.rows.swap(9, 10);
+    assert!(
+        cleanup_decode(&mut reversed, &units, &layouts, &calls).is_err(),
+        "reordered valid steps passed"
+    );
+}

@@ -7,10 +7,11 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod cleanups;
 mod queues;
 mod transfers;
 
-pub const VERSION: u32 = 14;
+pub const VERSION: u32 = 15;
 const MUTABLE_PARAMETER: u64 = (u32::MAX - 1) as u64;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
@@ -81,6 +82,25 @@ pub enum Row {
         layout: u32,
         first: u64,
         end: u64,
+    },
+    /// Actual per-image cleanup after receiver detachment, outside queue locks.
+    QueueCleanupBegin {
+        task: u64,
+        queue: u64,
+        layout: u32,
+        item: u64,
+    },
+    /// The completed step of the independently checked payload descriptor.
+    QueueCleanupDrop {
+        task: u64,
+        queue: u64,
+        item: u64,
+        step: u32,
+    },
+    QueueCleanupEnd {
+        task: u64,
+        queue: u64,
+        item: u64,
     },
     /// A checked caller binding consumed at the actual queue transition.
     QueueTransfer {
@@ -223,6 +243,16 @@ pub struct DropMember {
 pub type Units = BTreeMap<[u8; 32], BTreeMap<u32, Box<Metadata>>>;
 /// Closed direct-call targets, derived from checked units rather than log rows.
 pub type LocalCalls = BTreeMap<[u8; 32], BTreeSet<[u8; 32]>>;
+
+/// Independently derived declaration path and finalizer source of one completed
+/// descriptor step. Runtime rows contain neither this path nor this source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CleanupBinding {
+    pub path: Vec<super::Projection>,
+    pub source: Site,
+}
+/// Linked payload descriptor index, then its exact Resource completion steps.
+pub type CleanupLayouts = BTreeMap<u32, BTreeMap<u32, Box<CleanupBinding>>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -385,7 +415,7 @@ pub fn decode_leaf(
     units: &Units,
     limit: usize,
 ) -> Result<Trace, Error> {
-    decode(log, program, units, None, limit)
+    decode(log, program, units, None, None, limit)
 }
 
 /// Local lifetimes may nest only across a compiler-checked call without owned
@@ -402,7 +432,25 @@ pub fn decode_local_calls(
     }) {
         return Err(Error::Binding);
     }
-    decode(log, program, units, Some(calls), limit)
+    decode(log, program, units, Some(calls), None, limit)
+}
+
+/// Decode runtime-owned image cleanup with independently checked descriptor
+/// programs, in addition to the existing source markers and call bindings.
+pub fn decode_runtime(
+    log: &Log,
+    program: [u8; 32],
+    units: &Units,
+    calls: &LocalCalls,
+    cleanups: &CleanupLayouts,
+    limit: usize,
+) -> Result<Trace, Error> {
+    if calls.iter().any(|(parent, targets)| {
+        !units.contains_key(parent) || targets.iter().any(|target| !units.contains_key(target))
+    }) {
+        return Err(Error::Binding);
+    }
+    decode(log, program, units, Some(calls), Some(cleanups), limit)
 }
 
 fn decode(
@@ -410,6 +458,7 @@ fn decode(
     program: [u8; 32],
     units: &Units,
     calls: Option<&LocalCalls>,
+    cleanup_layouts: Option<&CleanupLayouts>,
     limit: usize,
 ) -> Result<Trace, Error> {
     if log.version != VERSION || log.program != program {
@@ -510,6 +559,7 @@ fn decode(
     let mut ended_tasks = BTreeSet::new();
     let mut tracker = Tracker::new(limit);
     let mut queues = queues::Queues::default();
+    let mut cleanups = cleanups::Cleanups::default();
     for &row in &log.rows {
         match row {
             Row::Task { task, depth } => {
@@ -607,6 +657,9 @@ fn decode(
             | Row::QueuePublished { task, .. }
             | Row::QueueReceived { task, .. }
             | Row::QueueDetached { task, .. }
+            | Row::QueueCleanupBegin { task, .. }
+            | Row::QueueCleanupDrop { task, .. }
+            | Row::QueueCleanupEnd { task, .. }
             | Row::QueueTransfer { task, .. }
             | Row::QueueCanceled { task, .. } => task,
             Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
@@ -622,17 +675,34 @@ fn decode(
             return Err(Error::InvalidTask(task));
         }
         if let Row::QueueDetached {
-            queue, first, end, ..
+            queue,
+            layout,
+            first,
+            end,
+            ..
         } = row
             && tracker.inventory().owners.keys().any(|owner| {
                 matches!(&owner.storage, Storage::Object { name, id, item }
                     if name == "native.channel" && *id == queue && (first..end).contains(item))
             })
+            && !cleanup_layouts
+                .and_then(|layouts| layouts.get(&layout))
+                .is_some_and(|bindings| !bindings.is_empty())
         {
             // Raw detachment is not proof that a Resource finalizer completed.
             return Err(Error::UnsupportedQueueCleanup(queue));
         }
         if queues.observe(row)? {
+            continue;
+        }
+        if cleanups.observe(
+            row,
+            &identity.path,
+            identity.operation.unwrap_or(0),
+            cleanup_layouts,
+            &mut queues,
+            &mut tracker,
+        )? {
             continue;
         }
         if let Row::Spawn {
@@ -782,7 +852,10 @@ fn decode(
             | Row::QueueSent { .. }
             | Row::QueuePublished { .. }
             | Row::QueueReceived { .. }
-            | Row::QueueDetached { .. } => unreachable!(),
+            | Row::QueueDetached { .. }
+            | Row::QueueCleanupBegin { .. }
+            | Row::QueueCleanupDrop { .. }
+            | Row::QueueCleanupEnd { .. } => unreachable!(),
             Row::Enter { frame, unit, .. } => {
                 if frame == 0 || !entered.insert(frame) {
                     return Err(Error::InvalidFrame(frame));
@@ -1358,5 +1431,7 @@ fn decode(
     {
         return Err(Error::Incomplete);
     }
+    cleanups.finish()?;
+    queues.finish_cleanups(cleanup_layouts)?;
     tracker.finish(program, true).map_err(Error::Consistency)
 }
