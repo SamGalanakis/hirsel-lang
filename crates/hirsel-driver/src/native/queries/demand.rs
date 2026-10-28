@@ -564,16 +564,22 @@ impl DemandInstances {
         for request in requests {
             let key = request.key.bind()?;
             if request.recipe.domain != LIBRARY_RECIPE
-                || (!key.definition().is_core("arena.seal") && !key.definition().is_core("region.with"))
+                || (!key.definition().is_core("arena.seal")
+                    && !key.definition().is_core("region.with"))
             {
                 continue;
             }
-            let bytes = self.store.get_content(request.plan)
+            let bytes = self
+                .store
+                .get_content(request.plan)
                 .ok_or("missing sealed library instance plan")?;
-            let plan: InstancePlan = self.records.decode(source, &bytes)
+            let plan: InstancePlan = self
+                .records
+                .decode(source, &bytes)
                 .ok_or("sealed library instance plan decoding failed")?;
             if let Some(expected) = plan.sealed_source(&source.declarations().program, &key)? {
-                self.seal_inventory.insert((key.definition().clone(), key.digest()), expected);
+                self.seal_inventory
+                    .insert((key.definition().clone(), key.digest()), expected);
             }
         }
         Ok(())
@@ -972,8 +978,10 @@ impl DemandInstances {
             inventory: Some(&self.seal_inventory),
             declarations: &inventory_operations,
             receipts: Some(&self.receipt_sources),
-            source: None,
-            all_sources: true,
+            source: request
+                .source_definition()
+                .map(|_| (key.instance.definition(), key.instance.digest())),
+            all_sources: false,
             pretransfer: None,
         };
         let environment = NativeEnvironment {
@@ -1366,8 +1374,10 @@ impl DemandInstances {
             inventory: Some(&self.seal_inventory),
             declarations: &inventory_operations,
             receipts: Some(&self.receipt_sources),
-            source: None,
-            all_sources: true,
+            source: request
+                .source_definition()
+                .map(|_| (key.instance.definition(), key.instance.digest())),
+            all_sources: false,
             pretransfer: None,
         };
         let inputs = Inputs {

@@ -245,7 +245,10 @@ impl InstanceQueries {
     > {
         let current = self
             .lookup_inner(key, product.product.action, environment)
-            .ok_or("Value materialization lost current C admission")?;
+            .ok_or_else(|| format!(
+                "Value materialization lost current C admission for {} body {} instance {:?}, phase 0x{:08x}",
+                key.instance.definition(), key.instance.body(), key.instance.digest(), self.phase.kind(),
+            ))?;
         if current.product != product.product {
             return Err("Value materialization descriptor differs".into());
         }
