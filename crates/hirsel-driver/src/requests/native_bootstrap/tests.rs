@@ -500,22 +500,7 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
                 )
                 .unwrap();
             let routing = NativeRouting::new(
-                &[
-                    INSTANCE_KIND,
-                    instance_tasks::INSTANCE_INPUT_KIND,
-                    instance_tasks::DISCOVERY_KIND,
-                    ARENA_CANDIDATES_KIND,
-                    ARENA_CHOSEN_KIND,
-                    arena_tasks::ARENA_GRAPH_KIND,
-                    compilation_tasks::COMPILATION_KIND,
-                    crate::native::queries::seal_demand::SEAL_DEMAND_KIND,
-                    READY_KIND,
-                    ROOT_KIND,
-                    object_queries::CODEGEN_KIND,
-                    object_queries::LINK_KIND,
-                    link_tasks::LINK_INPUT_KIND,
-                    link_tasks::LINK_MANIFEST_KIND,
-                ],
+                super::super::native_assembly::KINDS,
                 errors.protocol,
                 budget.reserve(16 << 10).unwrap(),
             )
@@ -941,22 +926,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                 )
                 .unwrap();
             let routing = NativeRouting::new(
-                &[
-                    INSTANCE_KIND,
-                    instance_tasks::INSTANCE_INPUT_KIND,
-                    instance_tasks::DISCOVERY_KIND,
-                    ARENA_CANDIDATES_KIND,
-                    ARENA_CHOSEN_KIND,
-                    arena_tasks::ARENA_GRAPH_KIND,
-                    compilation_tasks::COMPILATION_KIND,
-                    crate::native::queries::seal_demand::SEAL_DEMAND_KIND,
-                    READY_KIND,
-                    ROOT_KIND,
-                    object_queries::CODEGEN_KIND,
-                    object_queries::LINK_KIND,
-                    link_tasks::LINK_INPUT_KIND,
-                    link_tasks::LINK_MANIFEST_KIND,
-                ],
+                super::super::native_assembly::KINDS,
                 errors.protocol,
                 budget.reserve(16 << 10).unwrap(),
             )
