@@ -1,4 +1,4 @@
-use hirsel_engine::with_compiler_stack;
+use hirsel_engine::{CompileConfig, QueryKind, store, with_compiler_stack};
 
 const SOURCE: &str = r#"@loop_source(open, next)
 type View { source: String }
@@ -58,5 +58,56 @@ fn a_broken_dependency_association_is_reported_before_client_body_planning() {
                 assert_eq!(at.start, 0);
             }
         }
+    });
+}
+
+#[test]
+fn association_preflight_reuses_unchanged_headers_and_rechecks_an_edited_target() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        let file = directory.path().join("main.hir");
+        let source = "@format(render)\ntype View { value:u64 }\nfn render(v:View, mut out:List[u8]) {}\nfn neighbor()->u64 { 1u64 }\npub fn main() {}\n";
+        std::fs::write(&file, source).unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"association","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let mut session = hirsel_driver::session::Session::open_configured(
+            &manifest,
+            CompileConfig {
+                store: std::sync::Arc::new(store::MemStore::default()),
+                ..Default::default()
+            },
+        );
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        let changed = source.replace("1u64", "2u64");
+        std::fs::write(&file, &changed).unwrap();
+        session.apply(vec![hirsel_driver::session::FileChange {
+            path: file.clone(),
+            bytes: Some(changed.as_bytes().to_vec()),
+        }]);
+        assert!(session.check_applied().unwrap().diagnostics.is_empty());
+        assert!(
+            session.touched_memos().iter().all(|key| {
+                key.kind != QueryKind::Signature
+                    || !matches!(key.def.path().0.name.as_str(), "View" | "render")
+            }),
+            "{:?}",
+            session.touched_memos()
+        );
+
+        let invalid = changed.replace("render(v:View", "render(take v:View");
+        std::fs::write(&file, &invalid).unwrap();
+        session.apply(vec![hirsel_driver::session::FileChange {
+            path: file,
+            bytes: Some(invalid.into_bytes()),
+        }]);
+        let output = session.check_applied().unwrap();
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule.as_str() == "SEM-3"),
+            "{:?}",
+            output.diagnostics
+        );
     });
 }
