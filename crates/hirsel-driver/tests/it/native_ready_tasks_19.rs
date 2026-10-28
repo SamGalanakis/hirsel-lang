@@ -667,10 +667,12 @@ fn ready_case_inner_mutation(
                     roots
                         .with_ready(root, |units, emit, plans| {
                             assert_eq!(plans.len(), units.len());
+                            assert!(plans.values().all(|plan| plan.selection
+                                == hirsel_lir::ownership_trace::Selection::Resources));
                             let llvm =
-                                hirsel_llvm::emit_object_relocated_ownership(units, emit, plans)
+                                hirsel_llvm::emit_object_resources_ownership(units, emit, plans)
                                     .map_err(|e| e.to_string())?;
-                            let clif = hirsel_cranelift::emit_object_relocated_ownership(
+                            let clif = hirsel_cranelift::emit_object_resources_ownership(
                                 units, emit, plans,
                             )
                             .map_err(|e| e.to_string())?;
@@ -678,11 +680,11 @@ fn ready_case_inner_mutation(
                             let mut missing = plans.clone();
                             missing.pop_first();
                             assert!(
-                                hirsel_llvm::emit_object_relocated_ownership(units, emit, &missing)
+                                hirsel_llvm::emit_object_resources_ownership(units, emit, &missing)
                                     .is_err()
                             );
                             assert!(
-                                hirsel_cranelift::emit_object_relocated_ownership(
+                                hirsel_cranelift::emit_object_resources_ownership(
                                     units, emit, &missing
                                 )
                                 .is_err()
