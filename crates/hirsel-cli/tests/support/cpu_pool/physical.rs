@@ -224,6 +224,23 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
             overlap(&samples, width, &exclusive),
             "no switch-free CPU overlap at W={width}, exclusive={exclusive:?}\n{before}\n{after}\n{threads:?}\n{retired}\n{samples}\n{rejected}"
         );
+        eprintln!(
+            "CPU samples accepted={} rejected={}",
+            samples.lines().count(),
+            rejected.lines().count()
+        );
+        for line in retired.lines().filter(|line| {
+            [
+                "worker ",
+                "schedstat:",
+                "voluntary_ctxt_switches:",
+                "nonvoluntary_ctxt_switches:",
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        }) {
+            eprintln!("CPU retired {line}");
+        }
         if exclusive.len() == width || width == 1 {
             eprintln!(
                 "CPU {provider} {backend} P({width}): switch-free overlap with positive CPU progress, ownership={ownership:?}"
