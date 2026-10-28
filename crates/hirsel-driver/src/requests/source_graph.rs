@@ -826,17 +826,13 @@ impl Plan {
                 "compiler immutable input inventory exceeds snapshot admission".into(),
             )
         })?;
-        // Source indexing is an optional reuse cache. Never let it reject an
-        // otherwise admissible graph or consume the producers' main grants.
+        // Source indexing shares the front's retained snapshot allowance.
+        // Keep its existing ceiling and leave every producer's input inventory.
         let source_index_bytes = if source_index_bytes <= slack / 32 {
             source_index_bytes
         } else {
             0
         };
-        let source = source
-            .checked_add(source_index_bytes)
-            .ok_or_else(|| uninstalled())?;
-        let slack = slack - source_index_bytes;
         let native_slack = if needs_native {
             slack / 2
         } else if needs_ownership {
@@ -1440,7 +1436,7 @@ pub(super) fn install(
     let GraphAdmission {
         runtime,
         source,
-        front,
+        mut front,
         lower,
         mut growth,
         check,
@@ -1448,8 +1444,7 @@ pub(super) fn install(
         mut run,
     } = loading.finish(plan.snapshots)?;
     let mut check = check;
-    let mut source = source;
-    let source_index_allowance = source
+    let source_index_allowance = front
         .split(plan.source_index_bytes)
         .ok_or_else(|| uninstalled())?;
     let source = Arc::new(source);
