@@ -172,6 +172,9 @@ pub(in crate::tasks::ordered) unsafe fn save(ctx: *mut TaskCtx, owner: Owner) {
         let native = &raw mut **native;
         let saved = Saved::bind(ctx, &*native, owner);
         let heap = (*ctx).heap();
+        // Switch-out already folded the task view. Collect on the parked
+        // view so the next bind folds the new counters before restoring it.
+        heap.park();
         let cap = heap.idle_cap;
         heap.idle_cap = 0;
         heap.trim();

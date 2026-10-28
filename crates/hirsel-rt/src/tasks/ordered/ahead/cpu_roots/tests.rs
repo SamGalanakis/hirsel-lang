@@ -242,6 +242,9 @@ fn withdrawal(published: bool, diagnostic: bool) {
             );
             let charged = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
             crate::fiber::switch(&raw mut (*child_native).physical.idle_sp, child_sp);
+            // A physical switch-out folds the old view before after_save.
+            // The next switch-in must load the collector's updated counters.
+            (*other).heap().unbind();
             role::with_role(ctx, |s| {
                 let Logical::Ordered(d) = &mut s.logical else {
                     unreachable!()
@@ -253,6 +256,12 @@ fn withdrawal(published: bool, diagnostic: bool) {
             assert!(
                 held(other) < before,
                 "a discarded ordinal must return its unreachable backing"
+            );
+            TaskCtx::attach(other, (*other).worker_ptr());
+            assert_eq!(
+                (*other).view.compiled.idle_slabs,
+                0,
+                "the resumed heap view contains no reclaimed idle pages"
             );
             assert_eq!(
                 held(ctx),

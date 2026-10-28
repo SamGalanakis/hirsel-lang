@@ -325,7 +325,7 @@ impl Driver {
 }
 
 /// IdleGuard protects this entire callback. Physical save publication has
-/// already happened; no context, host service or fiber switch is involved.
+/// already happened; no context bridge, host service or fiber switch is involved.
 pub(crate) fn after_save(
     s: &mut super::super::Scheduler,
     task: u32,
