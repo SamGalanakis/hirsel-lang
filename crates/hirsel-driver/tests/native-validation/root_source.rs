@@ -348,7 +348,7 @@ fn generated_source_selectors_keep_exact_source_ownership() {
 #[test]
 fn callee_launch_binds_checked_decoder_and_refuses_missing_native_root() {
     hirsel_engine::with_compiler_stack(|| {
-        let fixture = Fixture::with_source(Verify::On, "fn main(n:u64)->Result[u64,u64]{Ok(n)}");
+        let fixture = Fixture::with_source(Verify::On, "pub fn main(n:u64)->Result[u64,u64]{Ok(n)}");
         let entry = &fixture.selected[0];
         let target = super::super::TargetSpec::x86_64_unknown_linux_gnu();
         let mut source = NativeLinkSource::from_settled(fixture.facts(), &fixture.lower).unwrap();

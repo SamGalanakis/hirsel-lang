@@ -366,6 +366,12 @@ impl ReadyProgram {
             .launches
             .keys()
             .filter(|entry| self.functions.contains_key(*entry))
+            .filter(|entry| {
+                !matches!(
+                    self.launches.get(*entry),
+                    Some(super::link::LaunchKind::Call { .. })
+                )
+            })
             .map(|entry| {
                 super::exit_report::derive(input, self, entry).map(|report| (entry.clone(), report))
             })
