@@ -44,19 +44,20 @@ pub struct FrontGrowthOutput {
     _owner: Arc<FrontGrowthQueries>,
 }
 impl FrontGrowthQueries {
-    /// Bounded root subscriptions and immutable path/anchor inventory. Body
-    /// outputs are owned by FrontBodyQueries, rather than charged once again
-    /// as an arbitrary body-size allowance for every growth subscription.
-    /// The runtime separately owns the live task frame; it is not an input
-    /// allocation to subtract again from this producer's output grant.
+    /// Root handles and the owner itself. The exact front keeps source paths,
+    /// anchors and body outputs; the admitted task keeps its execution frame.
     pub fn input_bytes(definitions: &[DefPath], _weight: MemoryWeight) -> Option<u64> {
-        let slot = (std::mem::size_of::<QueryId>()
-            + std::mem::size_of::<Option<Result<ProductRef, Reference>>>()
-            + std::mem::size_of::<DefPath>()
-            + 128) as u64;
-        definitions.iter().try_fold(0u64, |total, path| {
-            total.checked_add(slot.checked_add(bincode::serialized_size(path).ok()?)?)
-        })
+        let package = definitions
+            .iter()
+            .map(|path| path.0.package.name.len() + path.0.package.version.len())
+            .max()
+            .unwrap_or(0);
+        (std::mem::size_of::<Self>() as u64)
+            .checked_add((2 * std::mem::size_of::<usize>()) as u64)?
+            .checked_add(package as u64)?
+            .checked_add(
+                (definitions.len() as u64).checked_mul(std::mem::size_of::<QueryId>() as u64)?,
+            )
     }
     pub fn failure(&self, reference: Reference) -> Option<QueryError> {
         self.failure
@@ -346,21 +347,20 @@ impl QueryEngine {
         {
             return Err(refusal());
         }
-        let roots = definitions
-            .iter()
-            .map(|path| {
-                front.query(path).ok_or_else(|| {
-                    QueryError::Operational(hirsel_types::OperationalFailure {
-                        operation: "source growth admission".into(),
-                        message: format!("missing checked-root producer for {path:?}"),
-                    })
+        // Keep this backing exact so the forecast and retained-input debit
+        // describe the same allocation even for non-power-of-two root counts.
+        let mut roots = Vec::with_capacity(definitions.len());
+        for path in &definitions {
+            roots.push(front.query(path).ok_or_else(|| {
+                QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "source growth admission".into(),
+                    message: format!("missing checked-root producer for {path:?}"),
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        // The prospective inventory above remains an admission bound. The
-        // settled owner retains only root IDs and handles to the exact front
-        // source. Charge its real backing before assigning the remainder of
-        // this same reservation to its completed output.
+            })?);
+        }
+        // The settled owner retains only root IDs and handles to the exact
+        // front source. Charge its real backing before assigning the remainder
+        // of this same reservation to its completed output.
         let source = front.stage_source();
         let package = root.0.package.clone();
         let mut retained = crate::NativeMetadataWeight::default();
