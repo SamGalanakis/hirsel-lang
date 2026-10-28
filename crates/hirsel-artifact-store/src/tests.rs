@@ -1253,3 +1253,30 @@ fn owned_buffer_conversion_keeps_its_payload_and_shared_child_lifetime() {
     drop(clone);
     assert_eq!(&*child, &(16..48u8).collect::<Vec<_>>());
 }
+
+#[test]
+fn small_ranges_charge_the_complete_shared_backing_once() {
+    for (bytes, expected) in [
+        (Bytes::from(vec![7; 8192]), 7),
+        (Bytes::from(Arc::<[u8]>::from(vec![8; 8192])), 8),
+    ] {
+        let child = bytes.range(4000, 1, 1).unwrap();
+        let allocations = |bytes: &Bytes| {
+            let mut allocations = std::collections::BTreeMap::new();
+            bytes.visit_retained_allocations(|identity, amount| {
+                assert!(allocations.insert(identity, amount).is_none());
+            });
+            allocations
+        };
+        let parent = allocations(&bytes);
+        assert_eq!(parent, allocations(&child));
+        assert!(parent.values().sum::<usize>() >= 8192);
+        let mut shared = parent.clone();
+        child.visit_retained_allocations(|identity, amount| {
+            assert_eq!(shared.entry(identity).or_insert(amount), &amount);
+        });
+        assert_eq!(shared, parent);
+        drop(bytes);
+        assert_eq!(child[0], expected);
+    }
+}

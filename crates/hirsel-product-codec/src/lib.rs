@@ -4,12 +4,14 @@
 hirsel_guard::install!();
 
 mod base;
+mod indexed_types;
 mod types;
 pub use base::{BaseIndex, SharedTypes};
 use bincode::Options;
 use hirsel_span::{Anchor, AnchorCodec};
 use hirsel_syntax::DefPath;
 use hirsel_types::{TableBuilder, TypeInterner};
+pub use indexed_types::{CheckedTypeComponent, TypeEdge, TypeRow, TypeTag};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 pub use types::{ProductTypes, TypeRecords, TypeRef};
@@ -195,7 +197,11 @@ impl TypeRecords {
         while let Some(reference) = pending.pop() {
             if visit(reference.reference())? {
                 let component = types::component(self.store.as_ref(), reference)?;
-                pending.extend(component.dependencies);
+                pending.extend(
+                    (0..component.dependency_count())
+                        .map(|n| component.dependency(n))
+                        .collect::<Option<Vec<_>>>()?,
+                );
             }
         }
         Some(())

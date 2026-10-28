@@ -1,6 +1,6 @@
 //! Shared immutable type positions reference the same canonical components as
 //! ordinary products. Opening the index never deserializes component rows.
-use crate::{TypeRecords, TypeRef, types};
+use crate::{TypeEdge, TypeRecords, TypeRef, types};
 use hirsel_artifact_store::Contents;
 use hirsel_intern::IdHash;
 use hirsel_types::{Type, TypeBase, TypeBaseSource, TypeId, TypeInterner};
@@ -55,25 +55,20 @@ impl TypeBaseSource for Source {
     fn rows(&self, position: u32, base: &TypeBase) -> Option<Vec<(u32, Type)>> {
         let reference = *self.index.references.get(position as usize)?;
         let component = types::component(self.store.as_ref(), reference)?;
-        let table = types::checked_table(&component)?;
-        let mut positions = Vec::with_capacity(component.count as usize);
-        for member in 0..component.count {
-            positions.push(*self.positions.get(&TypeRef {
-                member,
-                ..reference
-            })?);
-        }
-        let ids = positions
-            .iter()
-            .map(|&p| base.id_at(p))
-            .chain(
-                component
-                    .dependencies
-                    .iter()
-                    .map(|d| base.id_at(*self.positions.get(d)?)),
-            )
+        let rows = (0..component.len())
+            .map(|member| {
+                component.row(member)?.materialize(|edge| {
+                    let reference = match edge {
+                        TypeEdge::Member(member) => TypeRef {
+                            member,
+                            ..reference
+                        },
+                        TypeEdge::External(reference) => reference,
+                    };
+                    base.id_at(*self.positions.get(&reference)?)
+                })
+            })
             .collect::<Option<Vec<_>>>()?;
-        let rows = table.resolve_positions(&ids)?;
         self.members
             .get(&reference.key())?
             .iter()

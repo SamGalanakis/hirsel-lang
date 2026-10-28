@@ -292,6 +292,43 @@ impl Deref for Bytes {
     }
 }
 impl Bytes {
+    /// Visit the complete physical backing retained by this view. Identities
+    /// are process-local allocation keys for the existing shared-charge policy;
+    /// they never enter portable records. A child range retains the same charges.
+    /// An attached admission owner is already charged by its reservation.
+    pub fn visit_retained_allocations(&self, mut visit: impl FnMut(usize, usize)) {
+        let mut region = &self.region;
+        loop {
+            visit(
+                Arc::as_ptr(region) as usize,
+                std::mem::size_of::<Region>() + 2 * std::mem::size_of::<usize>(),
+            );
+            match &**region {
+                #[cfg(unix)]
+                Region::Map { address, len } => visit(*address as usize, *len),
+                Region::Owned(bytes) => visit(
+                    bytes.as_ptr() as usize,
+                    bytes.len() + 2 * std::mem::size_of::<usize>(),
+                ),
+                Region::Buffer(bytes) => visit(bytes.as_ptr() as usize, bytes.len()),
+                Region::Static(_) => (),
+                Region::Checked(checked) => {
+                    visit(
+                        &**checked as *const CheckedRegion as usize,
+                        std::mem::size_of::<CheckedRegion>(),
+                    );
+                    region = &checked.region;
+                    continue;
+                }
+                Region::Retained { region: parent, .. } => {
+                    region = parent;
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+
     /// Retain an admission reservation or other lifetime owner through clones
     /// and child ranges without copying the underlying immutable bytes.
     pub fn retain_owner(self, owner: Arc<dyn Send + Sync>) -> Self {

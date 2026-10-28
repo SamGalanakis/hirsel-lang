@@ -1,16 +1,16 @@
 //! Canonical immutable type components. Ordinary query records carry only
 //! directly used references. Decoding a reference reuses already interned
 //! components and never decodes another product's complete TypeTable.
-use bincode::Options;
+use crate::{CheckedTypeComponent, TypeEdge};
 use hirsel_artifact_store::{Contents, Domain, Output, Reference};
 use hirsel_intern::persist::Source;
 use hirsel_syntax::ContentHash;
-use hirsel_types::{TypeId, TypeInterner, TypeTable};
+use hirsel_types::{TypeId, TypeInterner};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-pub(super) const DOMAIN: Domain = Domain { kind: 2, schema: 1 };
+pub(super) const DOMAIN: Domain = Domain { kind: 2, schema: 2 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct TypeRef {
@@ -19,23 +19,28 @@ pub struct TypeRef {
     pub(super) member: u32,
 }
 impl TypeRef {
+    /// A portable designation, with no verifier or content authority.
+    pub fn from_reference(reference: Reference, member: u32) -> Option<Self> {
+        (reference.domain == DOMAIN && reference.len <= hirsel_artifact_store::MAX_RECORD as u64)
+            .then_some(Self {
+                output: reference.output.0,
+                len: reference.len,
+                member,
+            })
+    }
+    pub fn member(self) -> u32 {
+        self.member
+    }
     pub(super) fn key(self) -> (ContentHash, u64) {
         (self.output, self.len)
     }
-    pub(super) fn reference(self) -> Reference {
+    pub fn reference(self) -> Reference {
         Reference {
             output: Output(self.output),
             domain: DOMAIN,
             len: self.len,
         }
     }
-}
-#[derive(Serialize, Deserialize)]
-pub(super) struct Component {
-    pub(super) dependencies: Vec<TypeRef>,
-    pub(super) count: u32,
-    pub(super) cyclic: bool,
-    rows: Vec<u8>,
 }
 
 pub struct TypeRecords {
@@ -48,6 +53,10 @@ pub struct TypeRecords {
 impl TypeRecords {
     /// The content domain of every published type record.
     pub const DOMAIN: Domain = DOMAIN;
+    /// Open a component for read-only row access without interning its graph.
+    pub fn open_component(&self, reference: TypeRef) -> Option<CheckedTypeComponent> {
+        component(self.store.as_ref(), reference)
+    }
     pub fn new(types: Arc<TypeInterner>, store: Arc<dyn Contents>) -> Arc<Self> {
         Self::with_base(types, store, HashMap::new())
     }
@@ -132,44 +141,59 @@ impl TypeRecords {
                     }
                 },
             );
-            let root = *members.iter().min_by_key(|&&n| keys[&nodes[n]])?;
-            let mut order = Vec::new();
-            let mut seen = HashSet::new();
-            let mut stack = vec![root];
-            while let Some(n) = stack.pop() {
-                if !seen.insert(n) {
-                    continue;
-                }
-                order.push(nodes[n]);
-                stack.extend(graph[n].iter().rev().copied().filter(|n| set.contains(n)));
-            }
+            let order = crate::indexed_types::canonical_order(
+                &component_nodes,
+                &keys,
+                |id| {
+                    self.types
+                        .row(id)
+                        .kind
+                        .graph_edges()
+                        .iter()
+                        .map(|edge| {
+                            Some(if numbers.get(&edge.ty).is_some_and(|n| set.contains(n)) {
+                                crate::indexed_types::OrderedEdge::Member(edge.ty)
+                            } else {
+                                crate::indexed_types::OrderedEdge::External(*known.get(&edge.ty)?)
+                            })
+                        })
+                        .collect()
+                },
+                |id| {
+                    let mut row = self.types.row(id).clone();
+                    row.kind = row.kind.map_edges(|_| TypeId::DANGLING);
+                    hirsel_types::with_session_ids(|| bincode::serialize(&row)).ok()
+                },
+            )?;
+            let root = *numbers.get(order.first()?)?;
             let mut positions: HashMap<_, _> = order
                 .iter()
                 .enumerate()
                 .map(|(i, id)| (*id, i as u32))
                 .collect();
             let mut dependencies = Vec::new();
+            let mut external = HashMap::new();
             for &id in &order {
                 for edge in self.types.row(id).kind.graph_edges() {
                     if positions.contains_key(&edge.ty) {
                         continue;
                     }
-                    positions.insert(edge.ty, (order.len() + dependencies.len()).try_into().ok()?);
-                    dependencies.push(*known.get(&edge.ty)?);
+                    let reference = *known.get(&edge.ty)?;
+                    let next = (order.len() + dependencies.len()).try_into().ok()?;
+                    let position = *external.entry(reference).or_insert_with(|| {
+                        dependencies.push(reference);
+                        next
+                    });
+                    positions.insert(edge.ty, position);
                 }
             }
-            let rows = hirsel_types::with_type_positions(positions, || {
-                let rows: Vec<_> = order.iter().map(|id| self.types.row(*id)).collect();
-                bincode::serialize(&rows)
-            })
-            .ok()?;
-            let component = Component {
-                count: order.len().try_into().ok()?,
-                cyclic: order.len() > 1 || graph[root].contains(&root),
-                dependencies,
-                rows,
-            };
-            let bytes = bincode::serialize(&component).ok()?;
+            let rows: Vec<_> = order.iter().map(|id| self.types.row(*id)).collect();
+            let bytes = CheckedTypeComponent::encode(
+                &rows,
+                &positions,
+                &dependencies,
+                order.len() > 1 || graph[root].contains(&root),
+            )?;
             let output = self.store.put_content(DOMAIN, &bytes)?;
             for (member, id) in order.into_iter().enumerate() {
                 known.insert(
@@ -202,7 +226,7 @@ impl TypeRecords {
                 0usize,
             )];
             while let Some((_, component, next)) = stack.last_mut() {
-                if let Some(dependency) = component.dependencies.get(*next).copied() {
+                if let Some(dependency) = component.dependency((*next).try_into().ok()?) {
                     *next += 1;
                     if self.base.contains_key(&dependency) {
                         continue;
@@ -222,24 +246,34 @@ impl TypeRecords {
                     continue;
                 }
                 let (reference, component, _) = stack.pop()?;
-                let dependencies: Vec<_> = component
-                    .dependencies
-                    .iter()
-                    .map(|d| {
-                        self.base
-                            .get(d)
+                let dependencies: HashMap<_, _> = (0..component.dependency_count())
+                    .map(|n| {
+                        let d = component.dependency(n)?;
+                        let id = self
+                            .base
+                            .get(&d)
                             .copied()
-                            .or_else(|| known.get(&d.key())?.get(d.member as usize).copied())
+                            .or_else(|| known.get(&d.key())?.get(d.member as usize).copied())?;
+                        Some((d, id))
                     })
                     .collect::<Option<_>>()?;
-                let table = checked_table(&component)?;
-                let count = component.count as usize;
-                let cyclic = component.cyclic;
+                let count = component.len() as usize;
+                let cyclic = component.is_cyclic();
                 let resolve = |local: &[TypeId]| {
-                    let ids: Vec<_> = local.iter().chain(&dependencies).copied().collect();
-                    table
-                        .resolve_positions(&ids)
-                        .expect("validated component indices")
+                    (0..component.len())
+                        .map(|member| {
+                            component
+                                .row(member)
+                                .expect("checked row")
+                                .materialize(|edge| match edge {
+                                    TypeEdge::Member(n) => local.get(n as usize).copied(),
+                                    TypeEdge::External(reference) => {
+                                        dependencies.get(&reference).copied()
+                                    }
+                                })
+                                .expect("validated component indices")
+                        })
+                        .collect::<Vec<_>>()
                 };
                 let ids: Arc<[TypeId]> = if cyclic {
                     self.types.intern_graph(count, resolve).into()
@@ -256,49 +290,8 @@ impl TypeRecords {
             .copied()
     }
 }
-pub(super) fn component(store: &dyn Contents, reference: TypeRef) -> Option<Component> {
-    let bytes = store.get_content(reference.reference())?;
-    let component: Component = options(bytes.len()).deserialize(&bytes).ok()?;
-    if component.count == 0
-        || component.count as usize > component.rows.len()
-        || (!component.cyclic && component.count != 1)
-    {
-        return None;
-    }
-    Some(component)
-}
-pub(super) fn checked_table(component: &Component) -> Option<TypeTable> {
-    let table: TypeTable = options(component.rows.len())
-        .deserialize(&component.rows)
-        .ok()?;
-    let count = component.count as usize;
-    if table.len() != count
-        || !table.valid_positions(count.checked_add(component.dependencies.len())?)
-    {
-        return None;
-    }
-    let graph: Vec<Vec<usize>> = table
-        .edge_positions()
-        .iter()
-        .map(|edges| {
-            edges
-                .iter()
-                .filter_map(|&n| ((n as usize) < count).then_some(n as usize))
-                .collect()
-        })
-        .collect();
-    if (count > 1 || graph[0].contains(&0)) != component.cyclic
-        || hirsel_graph::components(&graph).len() != 1
-    {
-        return None;
-    }
-    Some(table)
-}
-fn options(len: usize) -> impl Options {
-    bincode::DefaultOptions::new()
-        .with_fixint_encoding()
-        .with_limit(len as u64)
-        .reject_trailing_bytes()
+pub(super) fn component(store: &dyn Contents, reference: TypeRef) -> Option<CheckedTypeComponent> {
+    CheckedTypeComponent::open(store.get_content(reference.reference())?, reference)
 }
 pub struct ProductTypes {
     pub records: Arc<TypeRecords>,
@@ -360,6 +353,57 @@ mod tests {
         let decoder = TypeRecords::new(TypeInterner::new(None), store);
         let loaded = decoder.get(expected[0]).unwrap();
         assert_eq!(decoder.encode(&[loaded]).unwrap(), expected);
+    }
+    #[test]
+    fn cyclic_component_bytes_ignore_root_sharing_and_worker_history() {
+        fn cycle(reverse: bool, split: bool) -> (Arc<TypeInterner>, Vec<TypeId>) {
+            let types = TypeInterner::new(None);
+            let unit = types.intern(Type::unit());
+            if reverse {
+                types.intern(Type::boolean());
+            }
+            let external = types.intern(Type::with_kind(TypeKind::Box(unit)));
+            let other = if split {
+                types.intern(Type::with_kind(TypeKind::Box(types.intern(Type::unit()))))
+            } else {
+                external
+            };
+            let ids = types.intern_graph(2, |ids| {
+                let (a, b) = if reverse {
+                    (ids[1], ids[0])
+                } else {
+                    (ids[0], ids[1])
+                };
+                let a_row = Type::with_kind(TypeKind::Tuple(vec![b, external, other].into()));
+                let b_row = Type::with_kind(TypeKind::Box(a));
+                if reverse {
+                    vec![b_row, a_row]
+                } else {
+                    vec![a_row, b_row]
+                }
+            });
+            let roots = if reverse { vec![ids[1], ids[0]] } else { ids };
+            (types, roots)
+        }
+        let store = Arc::new(Memory::default());
+        let (types, roots) = cycle(false, false);
+        let expected = TypeRecords::new(types, store.clone())
+            .encode(&roots)
+            .unwrap();
+        for reverse in [false, true] {
+            for split in [false, true] {
+                let (types, roots) = cycle(reverse, split);
+                let records = TypeRecords::new(types, store.clone());
+                records.encode(&[roots[1]]).unwrap();
+                assert_eq!(records.encode(&roots).unwrap(), expected);
+                let checked = records.open_component(expected[0]).unwrap();
+                assert_eq!(checked.len(), 2);
+                assert_eq!(checked.dependency_count(), 1, "canonical external sharing");
+                let decoder = TypeRecords::new(TypeInterner::new(None), store.clone());
+                let restored: Vec<_> = expected.iter().map(|&r| decoder.get(r).unwrap()).collect();
+                assert_eq!(decoder.encode(&restored).unwrap(), expected);
+            }
+        }
     }
     #[test]
     fn lazy_type_source_decodes_only_demanded_components_and_reuses_rows() {
@@ -425,16 +469,32 @@ mod tests {
         let encoder = TypeRecords::new(types, store.clone());
         let reference = encoder.encode(&[pair]).unwrap()[0];
         let bytes = store.inner.get_content(reference.reference()).unwrap();
-        for fault in 0..4 {
-            let mut component: Component = options(bytes.len()).deserialize(&bytes).unwrap();
+        for fault in 0..7 {
+            let mut bytes = bytes.to_vec();
             match fault {
-                0 => component.rows.pop().map(|_| ()).unwrap(),
-                1 => component.count += 1,
-                2 => component.cyclic = true,
-                3 => component.dependencies[0].output = ContentHash::of_bytes(b"absent"),
+                0 => {
+                    bytes.pop();
+                }
+                1 => {
+                    bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
+                }
+                2 => {
+                    bytes[16..20].copy_from_slice(&1u32.to_le_bytes());
+                }
+                3 => {
+                    bytes[32..64].copy_from_slice(&ContentHash::of_bytes(b"absent").0);
+                }
+                4 => {
+                    bytes[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
+                }
+                5 => {
+                    bytes[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+                }
+                6 => {
+                    bytes[20] = 1;
+                }
                 _ => unreachable!(),
             }
-            let bytes = bincode::serialize(&component).unwrap();
             let output = store.put_content(DOMAIN, &bytes).unwrap();
             let forged = TypeRef {
                 output: output.output.0,
@@ -444,8 +504,6 @@ mod tests {
             let decoder = TypeRecords::new(TypeInterner::new(None), store.clone());
             let before = decoder.types.len();
             assert!(decoder.get(forged).is_none(), "fault {fault}");
-            // Valid external dependencies can be interned before a corrupt
-            // parent's local rows are rejected, but the parent never publishes.
             assert!(decoder.types.len() <= before + 2);
         }
     }
