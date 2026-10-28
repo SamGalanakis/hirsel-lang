@@ -355,9 +355,7 @@ impl QueryEngine {
                 ))
                 .ok_or_else(invalid)?;
         }
-        if hirsel_intern::memory::metered()
-            || std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some()
-        {
+        if hirsel_intern::memory::metered() {
             let mut headers = if shared_products {
                 crate::memo::retained::source_shared_products_bytes()
             } else {

@@ -4,6 +4,7 @@ use super::*;
 use crate::memo::retained::Weight;
 
 struct Row {
+    id: u32,
     generation: u64,
     owner: DefId,
     text: ContentHash,
@@ -16,9 +17,10 @@ struct Row {
 #[derive(Default)]
 struct Rows {
     entries: BTreeMap<Key, Row>,
+    identities: BTreeMap<u32, Key>,
     used: u64,
     generation: u64,
-    subscriptions: BTreeSet<(ReadKey, DefId, ContentHash, Key)>,
+    subscriptions: BTreeSet<(ReadKey, crate::memo::PackageKey, u32)>,
 }
 /// Validated subscription generations for one immutable source view. A later
 /// graph may replace a shared row, but cannot make this view trust that row.
@@ -94,6 +96,13 @@ impl FrontCarry {
         else {
             return;
         };
+        let id = if let Some(row) = rows.entries.get(&key) {
+            row.id
+        } else if let Ok(id) = u32::try_from(rows.entries.len()) {
+            id
+        } else {
+            return;
+        };
         let entries = rows.entries.len() + usize::from(!rows.entries.contains_key(&key));
         if used.saturating_add(index_bytes(entries, subscriptions)) > self.allowance.bytes() {
             if std::env::var_os("HIRSEL_TRACE_SOURCE_CARRY").is_some() {
@@ -111,17 +120,24 @@ impl FrontCarry {
             return;
         };
         if let Some(old) = rows.entries.remove(&key) {
-            for (read, value) in old.reads.iter() {
-                rows.subscriptions.remove(&(*read, old.owner, *value, key));
+            for (read, _) in old.reads.iter() {
+                rows.subscriptions.remove(&(
+                    *read,
+                    crate::memo::PackageKey::of(&old.owner.path().0.package),
+                    old.id,
+                ));
             }
         }
-        for (read, value) in reads.iter() {
-            rows.subscriptions.insert((*read, owner, *value, key));
+        let package = crate::memo::PackageKey::of(&owner.path().0.package);
+        for (read, _) in reads.iter() {
+            rows.subscriptions.insert((*read, package, id));
         }
+        rows.identities.insert(id, key);
         rows.generation = generation;
         rows.entries.insert(
             key,
             Row {
+                id,
                 generation,
                 owner,
                 text,
@@ -141,7 +157,8 @@ impl FrontCarry {
 fn index_bytes(entries: usize, subscriptions: usize) -> u64 {
     let mut weight = crate::NativeMetadataWeight::default();
     weight.tree::<Key, Row>(entries);
-    weight.tree::<(ReadKey, DefId, ContentHash, Key), ()>(subscriptions);
+    weight.tree::<u32, Key>(entries);
+    weight.tree::<(ReadKey, crate::memo::PackageKey, u32), ()>(subscriptions);
     weight.bytes()
 }
 
@@ -371,20 +388,31 @@ impl FrontBodyQueries {
             // Observe the reverse subscription index without visiting body
             // memos. Only subscribers to changed or unknown inputs are dirty.
             let mut previous = None;
-            for (read, owner, value, key) in &rows.subscriptions {
+            for (read, package, id) in &rows.subscriptions {
+                let Some((key, row)) = rows
+                    .identities
+                    .get(id)
+                    .and_then(|key| rows.entries.get_key_value(key))
+                else {
+                    clean.clear();
+                    break;
+                };
+                // Only package-scoped V observations use the owner's context;
+                // lookup reads already carry their own module and qualifier.
                 let current = match previous {
-                    Some((last_read, last_owner, observed))
-                        if last_read == *read && last_owner == *owner =>
+                    Some((last_read, last_package, observed))
+                        if last_read == *read && last_package == *package =>
                     {
                         observed
                     }
                     _ => {
-                        let observed = self.observe(owner.path(), read);
-                        previous = Some((*read, *owner, observed));
+                        let observed = self.observe(row.owner.path(), read);
+                        previous = Some((*read, *package, observed));
                         observed
                     }
                 };
-                if current != Some(*value) {
+                let expected = row.reads.get(read);
+                if expected.is_none() || current != expected {
                     clean.remove(key);
                 }
             }
