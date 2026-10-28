@@ -362,9 +362,9 @@ fn callee_launch_binds_checked_decoder_and_refuses_missing_native_root() {
             &revision,
             hirsel_run_schema::LaunchKind::Call,
         );
-        call.call = Some(hirsel_run_schema::calls::CallRecord::new(
+        call.call = Some(hirsel_run_schema::CallRecord::new(
             hirsel_run_schema::CallForm::Compute,
-            &hirsel_run_schema::calls::Cause {
+            &hirsel_run_schema::Cause {
                 instance: [1; 16],
                 ordinal: 0,
                 digest: [2; 32],
