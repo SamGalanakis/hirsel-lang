@@ -284,9 +284,10 @@ pub(crate) static TSAN_SWITCHES: std::sync::atomic::AtomicU64 =
 /// stack's range first.
 #[cfg(feature = "tsan")]
 mod tsan {
+    use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::ffi::c_void;
-    use std::sync::Mutex;
+    use std::sync::RwLock;
 
     unsafe extern "C" {
         fn __tsan_get_current_fiber() -> *mut c_void;
@@ -298,11 +299,16 @@ mod tsan {
     /// Each range's low address: its high address and its fiber, for the stack mappings and for
     /// the threads' own stacks. A thread's reported stack may span mappings (the main thread's
     /// reaches its stack limit), so a mapping is looked up first.
-    static MAPPINGS: Mutex<BTreeMap<usize, (usize, usize)>> = Mutex::new(BTreeMap::new());
-    static THREADS: Mutex<BTreeMap<usize, (usize, usize)>> = Mutex::new(BTreeMap::new());
+    static MAPPINGS: RwLock<BTreeMap<usize, (usize, usize)>> = RwLock::new(BTreeMap::new());
+    static THREADS: RwLock<BTreeMap<usize, (usize, usize)>> = RwLock::new(BTreeMap::new());
+    thread_local! {
+        // OS-thread lifetime, so a recycled pthread stack registers its new
+        // native fiber instead of inheriting the previous thread's identity.
+        static REGISTERED: Cell<bool> = const { Cell::new(false) };
+    }
 
-    fn find(ranges: &Mutex<BTreeMap<usize, (usize, usize)>>, at: usize) -> Option<usize> {
-        let ranges = ranges.lock().unwrap();
+    fn find(ranges: &RwLock<BTreeMap<usize, (usize, usize)>>, at: usize) -> Option<usize> {
+        let ranges = ranges.read().unwrap();
         let (_, &(high, fiber)) = ranges.range(..=at).next_back()?;
         (at < high).then_some(fiber)
     }
@@ -311,7 +317,7 @@ mod tsan {
         // SAFETY: creating a fiber has no preconditions.
         let fiber = unsafe { __tsan_create_fiber(0) };
         MAPPINGS
-            .lock()
+            .write()
             .unwrap()
             .insert(low as usize, (high as usize, fiber as usize));
         fiber
@@ -327,7 +333,7 @@ mod tsan {
     }
 
     pub(super) fn destroy(low: *mut u8, fiber: *mut c_void) {
-        MAPPINGS.lock().unwrap().remove(&(low as usize));
+        MAPPINGS.write().unwrap().remove(&(low as usize));
         // SAFETY: the stack's fiber runs nowhere any more.
         unsafe { __tsan_destroy_fiber(fiber) };
     }
@@ -335,7 +341,7 @@ mod tsan {
     /// The fiber suspended at `to`, after registering the calling thread's own stack when it
     /// runs there.
     pub(super) fn target(to: *mut u8, here: usize) -> *mut c_void {
-        if find(&MAPPINGS, here).is_none() {
+        if !REGISTERED.get() && find(&MAPPINGS, here).is_none() {
             // SAFETY: the calling thread's attributes describe its own live stack.
             unsafe {
                 let mut attr: libc::pthread_attr_t = std::mem::zeroed();
@@ -345,7 +351,8 @@ mod tsan {
                     libc::pthread_attr_destroy(&mut attr);
                     let low = low as usize;
                     let fiber = __tsan_get_current_fiber() as usize;
-                    THREADS.lock().unwrap().insert(low, (low + size, fiber));
+                    THREADS.write().unwrap().insert(low, (low + size, fiber));
+                    REGISTERED.set(true);
                 }
             }
         }

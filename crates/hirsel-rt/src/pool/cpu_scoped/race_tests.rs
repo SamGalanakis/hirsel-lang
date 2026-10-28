@@ -26,11 +26,13 @@ fn tsan_direct_switch_covers_naked_cpu_handoff() {
                 let ping = pointer.cast::<Ping>();
                 unsafe {
                     (*ping).entered = true;
-                    let marker = 0u64;
-                    (*ping).private_sp = (&raw const marker) as u64;
-                    (*ping).result =
-                        crate::tsan_callbacks::tests::probe((*ping).callback.as_mut_ptr());
-                    crate::fiber::fiber_switch(&raw mut (*ping).saved, (*ping).idle);
+                    for _ in 0..8 {
+                        let marker = 0u64;
+                        (*ping).private_sp = (&raw const marker) as u64;
+                        (*ping).result =
+                            crate::tsan_callbacks::tests::probe((*ping).callback.as_mut_ptr());
+                        crate::fiber::fiber_switch(&raw mut (*ping).saved, (*ping).idle);
+                    }
                 }
                 unreachable!("the completed control is never resumed")
             }
@@ -47,7 +49,11 @@ fn tsan_direct_switch_covers_naked_cpu_handoff() {
             unsafe {
                 let start = stack.prepare(entry, (&raw mut ping).cast(), std::ptr::null_mut());
                 crate::tsan_callbacks::bind(&raw mut ping.idle);
-                crate::fiber::fiber_switch(&raw mut ping.idle, start);
+                let mut target = start;
+                for _ in 0..8 {
+                    crate::fiber::fiber_switch(&raw mut ping.idle, target);
+                    target = ping.saved;
+                }
                 crate::tsan_callbacks::clear();
             }
             assert!(ping.entered);
@@ -59,7 +65,7 @@ fn tsan_direct_switch_covers_naked_cpu_handoff() {
                 "callback must run on native idle: {native_sp:x} {ping:?}"
             );
             assert!(ping.private_sp.abs_diff(ping.callback[0]) > 65536);
-            assert_eq!(crate::fiber::TSAN_SWITCHES.load(SeqCst) - before, 2);
+            assert_eq!(crate::fiber::TSAN_SWITCHES.load(SeqCst) - before, 16);
         },
     );
 }
