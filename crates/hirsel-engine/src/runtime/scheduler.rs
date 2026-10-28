@@ -95,7 +95,6 @@ pub struct RuntimeStats {
     pub duplicate_reads: u64,
     pub wait_tokens: u64,
     pub cycle_repair_visits: u64,
-    pub actual_metadata_bytes: u64,
     pub peak_bytes: u64,
     pub charged_bytes: u64,
     pub active: usize,
@@ -450,23 +449,32 @@ impl AdmittedRuntime {
         Ok(())
     }
     pub fn stats(&self) -> RuntimeStats {
+        self.shared.lock().stats
+    }
+    /// Inspect allocated metadata capacities, sparse indexes and traversal
+    /// scratch. Task/product payloads retain their independent MemoryWeights.
+    /// This explicit inspection never runs in progress/stat counter reads.
+    pub fn metadata_capacity_bytes(&self) -> u64 {
         let state = self.shared.lock();
-        let mut stats = state.stats;
-        stats.actual_metadata_bytes = state.nodes.allocated_bytes()
-            + (state.ready.len() * (size_of::<(Reverse<u64>, Key)>() + 64)
-                + state.costs.len() * (size_of::<(Key, u64)>() + 64)
-                + state.factories.len() * (size_of::<(u32, Factory)>() + 64)
+        (size_of::<Shared>()
+            + 2 * size_of::<usize>()
+            + self.workers.capacity() * size_of::<JoinHandle<()>>()) as u64
+            + state.nodes.allocated_bytes()
+            + (tree_bytes::<(Reverse<u64>, Key), ()>(state.ready.len())
+                + tree_bytes::<Key, u64>(state.costs.len())
+                + tree_bytes::<u32, Factory>(state.factories.len())
+                + tree_bytes::<u64, Vec<Key>>(state.requests.len())
+                + state.cleanup.capacity() * size_of::<BTreeMap<Key, Option<Reference>>>()
                 + state
                     .requests
                     .values()
-                    .map(|r| r.capacity() * size_of::<Key>() + 128)
+                    .map(|r| r.capacity() * size_of::<Key>())
                     .sum::<usize>()
                 + state
                     .cleanup
                     .iter()
-                    .map(|q| q.len() * (size_of::<(Key, Option<Reference>)>() + 64))
-                    .sum::<usize>()) as u64;
-        stats
+                    .map(|q| tree_bytes::<Key, Option<Reference>>(q.len()))
+                    .sum::<usize>()) as u64
     }
     pub fn completion(&self) -> RuntimeCompletion {
         RuntimeCompletion {
@@ -668,10 +676,16 @@ impl State {
         self.ready
             .remove(&(Reverse(self.costs.get(&key).copied().unwrap_or(1)), key));
     }
-    fn ensure(&mut self, query: Key) -> Result<(), Reference> {
-        if let Some(node) = self.nodes.get_mut(&query) {
+    fn ensure(&mut self, query: Key) -> Result<NodeId, Reference> {
+        let known = self.nodes.lookup(query);
+        self.ensure_known(query, known)
+    }
+    fn ensure_known(&mut self, query: Key, known: Option<NodeId>) -> Result<NodeId, Reference> {
+        if let Some(id) = known
+            && let Some(node) = self.nodes.get_id_mut(id)
+        {
             node.live = true;
-            return Ok(());
+            return Ok(id);
         }
         if !self.nodes.can_insert(query, self.max_entries) {
             return Err(self.errors.resource);
@@ -736,7 +750,7 @@ impl State {
         };
         self.retained += weight.retained;
         let ready = matches!(status, Status::Ready);
-        self.nodes.insert(
+        let node_id = self.nodes.insert(
             query,
             Node {
                 execution: Some(Box::new(Execution {
@@ -758,7 +772,7 @@ impl State {
             self.queue(query);
         }
         self.account();
-        Ok(())
+        Ok(node_id)
     }
     fn mark_live(&mut self) {
         self.nodes
@@ -864,21 +878,23 @@ impl QueryContext for Context<'_> {
     fn read(&mut self, dependency: QueryId) -> Poll<Outcome> {
         let mut state = self.shared.lock();
         if state.stopped
-            || state.nodes.get(&self.query).is_none_or(|n| {
-                !n.live || n.discard || state.nodes.node_id(self.query) != Some(self.generation)
-            })
+            || state
+                .nodes
+                .get_id(self.generation)
+                .is_none_or(|n| !n.live || n.discard)
         {
             return Poll::Ready(Err(state.errors.cancelled));
         }
         let dependency = key(dependency);
-        let existing = state.nodes.edge(self.generation, dependency);
+        let known = state.nodes.lookup(dependency);
+        let existing = known.and_then(|target| state.nodes.edge_to(self.generation, target));
         if existing.is_none() && state.edges >= state.max_entries * 4 {
             return Poll::Ready(Err(state.errors.resource));
         }
-        if let Err(error) = state.ensure(dependency) {
-            return Poll::Ready(Err(error));
-        }
-        let producer = state.nodes.node_id(dependency).expect("ensured dependency");
+        let producer = match state.ensure_known(dependency, known) {
+            Ok(producer) => producer,
+            Err(error) => return Poll::Ready(Err(error)),
+        };
         let edge = if let Some(edge) = existing {
             state.stats.duplicate_reads += 1;
             edge
@@ -897,7 +913,7 @@ impl QueryContext for Context<'_> {
             });
             edge
         };
-        if let Some(result) = state.result(dependency) {
+        if let Some(result) = state.nodes.result(producer) {
             return Poll::Ready(result);
         }
         if state.nodes.subscribe(self.generation, edge, producer) {
@@ -1219,4 +1235,4 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64, caller: bool) {
 mod nodes;
 #[cfg(test)]
 mod tests;
-use nodes::{Edge, NodeId, Nodes, Subscriber};
+use nodes::{Edge, NodeId, Nodes, Subscriber, tree_bytes};

@@ -59,13 +59,31 @@ impl Nodes {
         let node = &mut self.rows[*self.index.get(key)? as usize];
         (!matches!(node.status, Status::Dormant)).then_some(node)
     }
-    pub fn node_id(&self, key: Key) -> Option<NodeId> {
+    pub fn lookup(&self, key: Key) -> Option<NodeId> {
         let &slot = self.index.get(&key)?;
-        let node = &self.rows[slot as usize];
-        (!matches!(node.status, Status::Dormant)).then_some(NodeId {
+        Some(NodeId {
             slot,
-            generation: node.generation,
+            generation: self.rows[slot as usize].generation,
         })
+    }
+    pub fn node_id(&self, key: Key) -> Option<NodeId> {
+        self.lookup(key).filter(|&id| self.get_id(id).is_some())
+    }
+    pub fn get_id(&self, id: NodeId) -> Option<&Node> {
+        let node = self.rows.get(id.slot as usize)?;
+        (node.generation == id.generation && !matches!(node.status, Status::Dormant))
+            .then_some(node)
+    }
+    pub fn get_id_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        let node = self.rows.get_mut(id.slot as usize)?;
+        (node.generation == id.generation && !matches!(node.status, Status::Dormant))
+            .then_some(node)
+    }
+    pub fn result(&self, id: NodeId) -> Option<Outcome> {
+        match &self.get_id(id)?.status {
+            Status::Settled(result) => Some(**result),
+            _ => None,
+        }
     }
     pub fn key_at(&self, slot: u32) -> Key {
         self.keys[slot as usize].expect("interned edge")
@@ -91,15 +109,16 @@ impl Nodes {
             (!matches!(node.status, Status::Dormant)).then_some((key, node))
         })
     }
-    pub fn insert(&mut self, key: Key, mut node: Node) {
+    pub fn insert(&mut self, key: Key, mut node: Node) -> NodeId {
         self.serial = self.serial.checked_add(1).expect("admitted generation");
         node.generation = self.serial;
-        if let Some(&slot) = self.index.get(&key) {
+        let slot = if let Some(&slot) = self.index.get(&key) {
             let old = &mut self.rows[slot as usize];
             assert!(matches!(old.status, Status::Dormant));
             node.position = old.position;
             node.subscribers = std::mem::take(&mut old.subscribers);
             *old = node;
+            slot
         } else {
             let slot = if let Some(slot) = self.free.pop() {
                 node.position = self.rows[slot as usize].position;
@@ -115,6 +134,11 @@ impl Nodes {
                 slot
             };
             self.index.insert(key, slot);
+            slot
+        };
+        NodeId {
+            slot,
+            generation: self.serial,
         }
     }
     fn reclaim(&mut self, slot: u32) {
@@ -148,10 +172,16 @@ impl Nodes {
     pub fn edge_count(&self) -> usize {
         self.edges.len()
     }
+    #[cfg(test)]
     pub fn edge(&self, source: NodeId, target: Key) -> Option<usize> {
         let &slot = self.index.get(&target)?;
         self.edges
             .get(&(source.slot, slot))
+            .map(|&edge| edge as usize)
+    }
+    pub fn edge_to(&self, source: NodeId, target: NodeId) -> Option<usize> {
+        self.edges
+            .get(&(source.slot, target.slot))
             .map(|&edge| edge as usize)
     }
     pub fn insert_edge(&mut self, source: NodeId, target: NodeId) -> Option<usize> {
@@ -278,15 +308,22 @@ impl Nodes {
         }
     }
     pub fn allocated_bytes(&self) -> u64 {
-        // BTreeMap allowance includes partial nodes and allocator overhead;
-        // vectors use actual capacities. Repair scratch peaks at 12 bytes/row.
+        let capacity = self.edges.capacity();
+        let buckets = if capacity == 0 {
+            0
+        } else {
+            (capacity * 8).div_ceil(7).next_power_of_two().max(4)
+        };
+        // Include sparse B-tree nodes and hash control/bucket slack, as in
+        // MemoGraph::retained_bytes. Vectors use allocated capacities; the
+        // interval sorter needs at most eight extra bytes per arena row.
         let bytes = self.rows.capacity() * size_of::<Node>()
             + self.keys.capacity() * size_of::<Option<Key>>()
             + (self.free.capacity() + self.order.capacity()) * size_of::<u32>()
-            + self.index.len() * (size_of::<Key>() + size_of::<u32>() + 64)
+            + tree_bytes::<Key, u32>(self.index.len())
             + self.rows.len() * 12
-            + self.edges.capacity() * (size_of::<((u32, u32), u32)>() + 1)
-            + 64
+            + buckets * (size_of::<((u32, u32), u32)>() + 1)
+            + 32
             + self
                 .rows
                 .iter()
@@ -322,4 +359,11 @@ impl Nodes {
     pub fn rows_for_test(&self, id: NodeId) -> u32 {
         self.rows[id.slot as usize].position
     }
+}
+
+// Rust std BTree node.rs uses B=6, eleven entry slots and twelve child
+// pointers. Non-root nodes have at least five entries. Include one sparse
+// root even after the final removal; 64 bytes cover headers and alignment.
+pub(super) fn tree_bytes<K, V>(len: usize) -> usize {
+    (1 + len / 5) * (64 + 11 * (size_of::<K>() + size_of::<V>()) + 12 * size_of::<usize>())
 }

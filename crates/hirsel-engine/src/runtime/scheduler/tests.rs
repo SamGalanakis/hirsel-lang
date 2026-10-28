@@ -1941,7 +1941,7 @@ fn repeated_pending_then_settled_reads_keep_one_token_and_one_ready_transition()
     assert_eq!(stats.wait_tokens, 1);
     assert_eq!(stats.wakes, 1);
     assert_eq!(stats.duplicate_reads, 47);
-    assert!(stats.actual_metadata_bytes <= stats.bookkeeping_bytes);
+    assert!(rt.metadata_capacity_bytes() <= stats.bookkeeping_bytes);
     println!(
         "layout hot={} outgoing={} reverse={} execution={} outcome={} actual={} allowance={}",
         size_of::<super::Node>(),
@@ -1949,7 +1949,50 @@ fn repeated_pending_then_settled_reads_keep_one_token_and_one_ready_transition()
         size_of::<Subscriber>(),
         size_of::<Execution>(),
         size_of::<Outcome>(),
-        stats.actual_metadata_bytes,
+        rt.metadata_capacity_bytes(),
         stats.bookkeeping_bytes
     );
+}
+
+#[test]
+fn compact_metadata_capacity_bound_covers_measured_allocations() {
+    for width in [1, 4, 64, 256] {
+        let ((mut nodes, bound), allocations) = crate::test_alloc::measured(|| {
+            let mut nodes = Nodes::default();
+            for i in 0..width {
+                nodes.insert(key(query(i)), bare_node());
+            }
+            for i in 0..width {
+                for j in i + 1..width.min(i + 5) {
+                    let source = nodes.node_id(key(query(i))).unwrap();
+                    let target = nodes.node_id(key(query(j))).unwrap();
+                    nodes.insert_edge(source, target).unwrap();
+                }
+            }
+            let (bound, sizing) =
+                crate::test_alloc::measured_independent(|| nodes.allocated_bytes());
+            assert_eq!(sizing.allocations, 0);
+            (nodes, bound)
+        });
+        assert!(allocations.live >= 0);
+        assert!(
+            allocations.live as u64 <= bound,
+            "width {width}: measured {} exceeds {bound}",
+            allocations.live
+        );
+        assert!(
+            bound <= width * ENTRY_BYTES,
+            "width {width}: metadata allowance exceeded"
+        );
+        // Reclamation retains arena capacity and possibly an empty tree root.
+        for i in 0..width {
+            nodes.remove(&key(query(i)));
+        }
+        println!(
+            "metadata width={width} measured={} bound={bound} peak={} reclaimed_bound={}",
+            allocations.live,
+            allocations.peak,
+            nodes.allocated_bytes()
+        );
+    }
 }
