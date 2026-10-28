@@ -200,7 +200,7 @@ fn signature_entry_bytes(
         source_names: names,
         ..Default::default()
     };
-    if !head {
+    if !head || !projected {
         weight.add(arc_bytes(entry));
     }
     if compact_reads {
@@ -211,6 +211,9 @@ fn signature_entry_bytes(
     }
     weight.cloned_vectors = projected;
     if head {
+        if !projected {
+            weight.add(arc_bytes(&*entry.detail.resolver));
+        }
         // The exact typed read receipt is authoritative. A carried head drops
         // the normalizer's duplicate resolver/path observations, retaining only
         // an operational refusal and the empty resolver Arc's allocation.
@@ -221,6 +224,7 @@ fn signature_entry_bytes(
         weight.detail(&entry.detail);
     }
     if !head
+        || !projected
         || !entry
             .memo
             .value

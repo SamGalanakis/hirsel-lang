@@ -31,7 +31,11 @@ pub struct SourceIndexState {
     // The SourceMap also owns this token, including its detached output clones.
     allowance: Arc<MemoryReservation>,
 }
-pub(crate) struct SourceHeader {
+pub(crate) enum SourceHeader {
+    Shared(Arc<Entry<hirsel_types::SignatureRef>>),
+    Packed(PackedSourceHeader),
+}
+pub(crate) struct PackedSourceHeader {
     memo: crate::memo::Memo<QueryOutput<hirsel_types::SignatureRef>>,
     products: Arc<PhaseProducts>,
     failure: Option<hirsel_types::OperationalFailure>,
@@ -42,6 +46,20 @@ pub(crate) struct SourceHeader {
     consistent: bool,
 }
 impl SourceHeader {
+    fn capture(entry: Arc<Entry<hirsel_types::SignatureRef>>) -> Self {
+        if Arc::strong_count(&entry) > 1 {
+            return Self::Shared(entry);
+        }
+        Self::Packed(PackedSourceHeader::capture(entry))
+    }
+    fn restore(self) -> Arc<Entry<hirsel_types::SignatureRef>> {
+        match self {
+            Self::Shared(entry) => entry,
+            Self::Packed(header) => header.restore(),
+        }
+    }
+}
+impl PackedSourceHeader {
     fn capture(entry: Arc<Entry<hirsel_types::SignatureRef>>) -> Self {
         let same_coverage = entry
             .memo
