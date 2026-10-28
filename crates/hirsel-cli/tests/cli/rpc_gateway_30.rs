@@ -284,15 +284,15 @@ fn native(group: &str, live: bool) {
         .map(Value::to_string)
         .collect();
     with_compiler_stack(|| {
-        let mut loaded = hirsel_driver::load_program(&manifest).unwrap();
-        loaded.check_for_execution().unwrap();
+        let prepared =
+            hirsel_driver::request_tir(&manifest, hirsel_engine::Verify::On, None).unwrap();
         for path in report["tapes"].as_array().unwrap() {
             let tape = Path::new(path["path"].as_str().unwrap());
             let steps = path["steps"].as_u64().unwrap_or(STEPS);
             let plain =
-                hirsel_driver::replay_loaded_observations(&mut loaded, tape, Some(steps), false);
+                hirsel_driver::replay_prepared_observations(&prepared, tape, Some(steps), false);
             let checked =
-                hirsel_driver::replay_loaded_observations(&mut loaded, tape, Some(steps), true);
+                hirsel_driver::replay_prepared_observations(&prepared, tape, Some(steps), true);
             match (plain, checked) {
                 (Ok(reference), Ok(checked)) => {
                     assert!(reference.equivalent(&checked));
