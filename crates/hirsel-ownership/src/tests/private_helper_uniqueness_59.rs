@@ -451,6 +451,15 @@ fn private_helper_forwards_declared_unique_result_payload() {
     with_compiler_stack(|| {
         let source = "pub fn produced()->Result[unique List[u8],()] { Ok([]) }\nfn execute()->Result[List[u8],()] { produced() }\npub fn main()->Result[(),()] { let work = fn()->Result[unique List[u8],()] { execute() }; let _ = work()?; Ok(()) }\n";
         let (mut engine, output) = check(source);
+        let mut execute = entry_path(&default_context());
+        execute.0.name = "execute".into();
+        let signature = engine.item_signature(&execute).unwrap();
+        assert!(signature.value.metadata.inferred_unique.results.contains(
+            &UniqueResultRow::Payload {
+                variant: 0,
+                field: 0
+            }
+        ));
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         let input = engine.export_native_input().unwrap();
         let header = input

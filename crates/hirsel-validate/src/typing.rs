@@ -2580,6 +2580,22 @@ impl<'a> Checker<'a> {
         });
         let expected =
             expected.and_then(|root| hirsel_types::declared_receipt_evidence(target, root).ok());
+        let expected = expected.map(|root| {
+            if let Callee::Definition { path, .. } = callee
+                && hirsel_types::unique_summary::same_module(path, self.definition.path.path())
+                && let Some(signature) = self.signatures.get(path)
+            {
+                hirsel_types::unique_summary::result_evidence(
+                    target,
+                    root,
+                    &signature.metadata.inferred_unique.results,
+                    &signature.metadata.roles,
+                    &mut |id| self.signatures.get(id).cloned().map(std::sync::Arc::new),
+                )
+            } else {
+                root
+            }
+        });
         let sharing_result = match &store.get(f.result).unwrap().kind {
             TypeKind::Parameter(TypeParameterRef::Bound {
                 depth: 0,

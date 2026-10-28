@@ -6486,6 +6486,53 @@ impl Checker<'_> {
                     _ => hirsel_types::UniqueSummary::default(),
                 };
                 let mut inferred_parts = crossing::Parts::default();
+                let declared = match callee {
+                    Callee::Definition { path, arguments } => {
+                        self.signatures.get(path).and_then(|s| {
+                            let SignatureKind::Function(function) = &s.kind else {
+                                return None;
+                            };
+                            self.imported_in(
+                                function.result,
+                                arguments,
+                                &self.generic_declarations(),
+                            )
+                            .map(|result| (result, s.metadata.roles.clone()))
+                        })
+                    }
+                    Callee::Indirect {
+                        value, arguments, ..
+                    } => match &self.t.row(self.place_type(value.place)).kind {
+                        TypeKind::Function(function) => self
+                            .imported_in(function.result, arguments, &self.generic_declarations())
+                            .map(|result| {
+                                (
+                                    result,
+                                    self.signatures
+                                        .get(self.definition.path)
+                                        .map(|s| s.metadata.roles.clone())
+                                        .unwrap_or_default(),
+                                )
+                            }),
+                        _ => None,
+                    },
+                };
+                if let Some((root, roles)) = declared
+                    && matches!(
+                        self.t.row(root).kind,
+                        TypeKind::Named { .. } | TypeKind::Tuple(_)
+                    )
+                {
+                    for (row, ty) in
+                        hirsel_types::unique_summary::result_rows(self.t, root, &roles, &mut |d| {
+                            self.signatures.get(d).cloned().map(std::sync::Arc::new)
+                        })
+                    {
+                        if self.t.row(ty).modes.uniqueness == hirsel_types::Uniqueness::Unique {
+                            inferred_parts.set(&unique_row_path(row), true);
+                        }
+                    }
+                }
                 for row in &inferred.results {
                     inferred_parts.set(&unique_row_path(*row), true);
                 }

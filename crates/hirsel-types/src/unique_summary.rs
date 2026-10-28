@@ -85,6 +85,82 @@ pub fn result_rows(
     rows
 }
 
+/// Apply direct-call result facts to the value receipt, leaving the callable
+/// declaration unchanged. Nominal payloads refine only a direct bound member.
+pub fn result_evidence(
+    types: &crate::TypeInterner,
+    root: crate::TypeId,
+    facts: &[UniqueResultRow],
+    roles: &crate::NominalRoles,
+    lookup: &mut impl FnMut(hirsel_syntax::DefId) -> Option<crate::SignatureRef>,
+) -> crate::TypeId {
+    use crate::{GenericArgument, SignatureKind, TypeKind, TypeParameterRef, Uniqueness};
+    let unique = |ty| {
+        let mut row = types.row(ty).clone();
+        row.modes.uniqueness = Uniqueness::Unique;
+        types.intern(row)
+    };
+    if facts.is_empty() {
+        return root;
+    }
+    let mut row = types.row(root).clone();
+    for fact in facts {
+        match (fact, &mut row.kind) {
+            (UniqueResultRow::Root, _) => row.modes.uniqueness = Uniqueness::Unique,
+            (UniqueResultRow::Tuple(field), TypeKind::Tuple(parts)) => {
+                if let Some(part) = parts.get(*field as usize) {
+                    let mut refined = parts.to_vec();
+                    refined[*field as usize] = unique(*part);
+                    *parts = refined.into();
+                }
+            }
+            (
+                UniqueResultRow::Payload { variant, field },
+                TypeKind::Named {
+                    definition,
+                    arguments,
+                },
+            ) if roles.result_type.as_ref() == Some(definition.path())
+                || definition.path() == &hirsel_syntax::DefPath::core("Option") =>
+            {
+                let Some(signature) = lookup(*definition) else {
+                    continue;
+                };
+                let SignatureKind::Type(declaration) = &signature.kind else {
+                    continue;
+                };
+                let Some(representation) = declaration.representation else {
+                    continue;
+                };
+                let TypeKind::Variant(variants) = &types.row(representation).kind else {
+                    continue;
+                };
+                let Some((_, ty)) = variants
+                    .get(*variant as usize)
+                    .and_then(|arm| arm.fields.get(*field as usize))
+                else {
+                    continue;
+                };
+                let TypeKind::Parameter(TypeParameterRef::Bound {
+                    depth: 0,
+                    parameter,
+                }) = types.row(*ty).kind
+                else {
+                    continue;
+                };
+                let index = parameter.0 as usize;
+                if let Some(GenericArgument::Type(part)) = arguments.get(index) {
+                    let mut refined = arguments.to_vec();
+                    refined[index] = GenericArgument::Type(unique(*part));
+                    *arguments = refined.into();
+                }
+            }
+            _ => (),
+        }
+    }
+    types.intern(row)
+}
+
 /// The particular evidence a direct caller needed.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UniqueClaim {
