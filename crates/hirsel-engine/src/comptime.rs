@@ -1490,6 +1490,8 @@ impl QueryEngine {
         if self.staged_constants.get(&path).is_some_and(|old| {
             old.signature.fingerprint == constant.signature.fingerprint
                 && old.inputs == constant.inputs
+                && old.expression == constant.expression
+                && old.owner == constant.owner
         }) {
             return;
         }

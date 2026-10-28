@@ -182,6 +182,14 @@ impl FrontStageQueries {
             .checked_add((data.sites.capacity() * size_of::<Span>()) as u64)
             .ok_or(self.errors.resource)?;
         charge = charge
+            .checked_add(crate::memo::retained_arc_bytes(&*data.reads))
+            .ok_or(self.errors.resource)?;
+        for (_, bytes) in data.reads.allocations() {
+            charge = charge
+                .checked_add(bytes as u64)
+                .ok_or(self.errors.resource)?;
+        }
+        charge = charge
             .checked_add(match &data.result {
                 Ok(registrations) => {
                     crate::memo::retained::retained_staged_declaration_bytes(registrations)
@@ -506,7 +514,10 @@ impl QueryEngine {
                 .tree
                 .expressions
                 .iter()
-                .position(|expression| expression.origin.span == *site)
+                .position(|expression| {
+                    matches!(expression.kind, hirsel_syntax::ExprKind::Comptime(_))
+                        && expression.origin.span == *site
+                })
                 .ok_or_else(|| {
                     refused("staged expression site no longer belongs to its source".into())
                 })?;
