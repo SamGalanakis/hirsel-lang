@@ -372,6 +372,23 @@ fn body_custody(u: &LirUnit<Ready>, table: &LayoutTable) -> bool {
                 Some(LayoutKind::Callable { .. })
             )
     };
+    let local_data = |id| {
+        if !cpu_owned_layout(table, id) {
+            return false;
+        }
+        let Some(layout) = table.layout(id) else {
+            return false;
+        };
+        // Uncounted block values still use their ordinary reference layout.
+        // Custody concerns the headerless payload, not that layout's scan word.
+        let payload = match layout.kind {
+            LayoutKind::Block { payload } | LayoutKind::Box { payload } => table.layout(payload),
+            _ => Some(layout),
+        };
+        payload.is_some_and(|layout| {
+            layout.scan.is_empty() && layout.drop.is_empty() && layout.finalizer.is_none()
+        })
+    };
     let owned = |ty: &LirType| {
         matches!(
             ty.repr,
@@ -395,10 +412,7 @@ fn body_custody(u: &LirUnit<Ready>, table: &LayoutTable) -> bool {
                 .count()
                 != 1
         } else if ty.repr == ValueRepr::Uncounted {
-            !cpu_owned_layout(table, ty.layout)
-                || !table.layout(ty.layout).is_some_and(|layout| {
-                    layout.scan.is_empty() && layout.drop.is_empty() && layout.finalizer.is_none()
-                })
+            !local_data(ty.layout)
         } else if local_callable(ty) {
             super::plan::known_code(u, ValueId(index as u32), &[], false).is_none()
         } else {
@@ -408,7 +422,7 @@ fn body_custody(u: &LirUnit<Ready>, table: &LayoutTable) -> bool {
         let ty = &u.types[slot.ty.index()];
         !owned(ty)
             && !local_callable(ty)
-            && !(ty.repr == ValueRepr::Uncounted && cpu_owned_layout(table, ty.layout))
+            && !(ty.repr == ValueRepr::Uncounted && local_data(ty.layout))
     }) {
         return false;
     }
