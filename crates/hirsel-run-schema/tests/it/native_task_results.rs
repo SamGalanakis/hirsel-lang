@@ -308,3 +308,23 @@ fn a_lost_runtime_binding_refuses_even_when_the_log_claims_completeness() {
     log.complete = false;
     assert_eq!(decode(&log, &units).unwrap_err(), Error::Incomplete);
 }
+#[test]
+fn result_copy_cannot_take_credit_from_a_returned_child_frame() {
+    let (mut log, units) = fixture(1);
+    let moved = log.rows.remove(9);
+    log.rows.insert(10, moved);
+    let result = decode(&log, &units);
+    assert!(matches!(result, Err(Error::InvalidFrame(2))), "{result:?}");
+}
+
+#[test]
+fn saved_result_delivery_cannot_revive_a_returned_parent_frame() {
+    let (mut log, units) = fixture(1);
+    log.rows.remove(12);
+    let leave = log.rows.pop().unwrap();
+    assert!(matches!(leave, Row::Leave { task: 0, frame: 1 }));
+    log.rows.insert(9, leave);
+    log.row_count = log.rows.len() as u64;
+    let result = decode(&log, &units);
+    assert!(matches!(result, Err(Error::InvalidFrame(1))), "{result:?}");
+}
