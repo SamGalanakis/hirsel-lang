@@ -86,7 +86,11 @@ pub(super) fn plain_channel_handle(layouts: &LayoutTable, layout: LayoutId) -> b
         })
 }
 
-pub(super) fn empty_option<S>(unit: &LirUnit<S>, layouts: &LayoutTable, mut value: ValueId) -> bool {
+pub(super) fn empty_option<S>(
+    unit: &LirUnit<S>,
+    layouts: &LayoutTable,
+    mut value: ValueId,
+) -> bool {
     let layout = unit.types[unit.values[value.index()].ty.index()].layout;
     let Some(record) = layouts.layout(layout) else {
         return false;

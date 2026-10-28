@@ -16,7 +16,9 @@ mod reachability;
 mod runtime_calls;
 mod selection;
 mod task_results;
-pub use task_results::{TaskResultCall, TaskResultDirection, task_result_call, task_result_payload};
+pub use task_results::{
+    TaskResultCall, TaskResultDirection, task_result_call, task_result_payload,
+};
 mod variants;
 use runtime_calls::{resource_free_handle, runtime_call};
 
