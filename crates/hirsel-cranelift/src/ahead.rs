@@ -523,9 +523,9 @@ impl FnEmitter<'_, '_, '_> {
         let environment = self.load_ty(
             types::I64,
             state,
-            hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET as i32,
+            hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET,
         );
-        let ordinal = self.load_ty(types::I64, environment, ordinal_offset as i32);
+        let ordinal = self.load_ty(types::I64, environment, ordinal_offset);
         let (record, _) = self.stack_bytes(88, 8);
         let version = self.b.ins().iconst(types::I32, 1);
         let zero32 = self.b.ins().iconst(types::I32, 0);
@@ -557,7 +557,7 @@ impl FnEmitter<'_, '_, '_> {
             &[state, record],
         )?;
         self.ahead_reload();
-        let refused = self.b.ins().icmp_imm(IntCC::NotEqual, status, 0);
+        let refused = self.b.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
         self.b.ins().trapnz(refused, crate::function::TRAP);
         let grown = self.load_ty(types::I64, record, 16);
         self.store_at(grown, place.ptr, 0);
