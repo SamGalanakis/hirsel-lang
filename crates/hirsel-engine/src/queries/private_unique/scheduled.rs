@@ -155,7 +155,7 @@ impl Inference {
             {
                 continue;
             }
-            if let ReadKey::Signature(id) = key {
+            if let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = key {
                 if let Some(signature) = self.snapshot.signature(id).and_then(Result::ok)
                     && let Some(value) = memos::declared_signature_value(&self.types, signature)
                 {
@@ -299,7 +299,7 @@ impl QueryEngine {
         owner.0.name = "$private-unique".into();
         EntryKey::new(
             ContentHash::of_parts(
-                "hirsel.private-inference.v3",
+                "hirsel.private-inference.v4",
                 [self.environment_value().0.as_slice()],
             ),
             &owner,
@@ -671,11 +671,26 @@ impl QueryEngine {
                         {
                             reads.merge(&signature);
                         }
+                        // Generated text is checked again by this task. The
+                        // generator's verifier receipt is not an inference input.
+                        let mut inherit = |source: &Reads| {
+                            for &(key, value) in source.iter() {
+                                if !matches!(
+                                    key,
+                                    ReadKey::ValidationView(_)
+                                        | ReadKey::ValidationUniverse(_)
+                                        | ReadKey::UniverseErrors
+                                        | ReadKey::FirstHeap
+                                ) {
+                                    reads.record(key, value);
+                                }
+                            }
+                        };
                         if let Some(registration) = registration {
-                            reads.merge(registration.reads());
+                            inherit(registration.reads());
                         }
                         if let Some(generated_reads) = generated_reads {
-                            reads.merge(&generated_reads);
+                            inherit(&generated_reads);
                         }
                         Arc::new(reads.finish().map_err(|_| QueryError::NotImplemented)?)
                     },
