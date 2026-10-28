@@ -54,6 +54,22 @@ pub struct NativeLinkSource {
     metadata_owner: Mutex<Option<Arc<hirsel_engine::runtime::MemoryReservation>>>,
 }
 
+// Bulk collection fills the immutable B-tree nodes. These private maps have
+// no insertions or removals after construction, as required by bulk_tree().
+fn packed<K: Ord, V>(map: BTreeMap<K, V>) -> BTreeMap<K, V> {
+    map.into_iter().collect()
+}
+fn bulk_map<K, V>(
+    weight: &mut hirsel_engine::NativeMetadataWeight,
+    map: &BTreeMap<K, V>,
+    mut visit: impl FnMut(&mut hirsel_engine::NativeMetadataWeight, &K, &V),
+) {
+    weight.bulk_tree::<K, V>(map.len());
+    for (key, value) in map {
+        visit(weight, key, value);
+    }
+}
+
 fn failed(message: impl Into<String>) -> NativeError {
     NativeError::new(StageName::Manifest, message)
 }
@@ -219,19 +235,19 @@ impl NativeLinkSource {
             semantic: facts.semantic,
             types: program.types.clone(),
             operations: facts.operations,
-            functions: facts.entries.clone(),
-            signatures: program.signatures.clone(),
+            functions: packed(facts.entries.clone()),
+            signatures: packed(program.signatures.clone()),
             representations: facts
                 .declarations
                 .iter()
                 .map(|(path, source)| (path.clone(), source.representation.clone()))
                 .collect(),
-            anchors: facts.anchors.clone(),
+            anchors: packed(facts.anchors.clone()),
             sources: facts.roots.sources.clone(),
-            profiles: Arc::new(profiles),
+            profiles: Arc::new(packed(profiles)),
             foreign_links: facts.roots.foreign_links.clone(),
             foreign_unreplayable: facts.roots.foreign_unreplayable,
-            foreign_threads: facts.roots.foreign_threads.clone(),
+            foreign_threads: packed(facts.roots.foreign_threads.clone()),
             callees: facts.callees,
             requested_run: None,
             test_entries: Vec::new(),
@@ -265,20 +281,20 @@ impl NativeLinkSource {
         } = self;
         w.add(size_of::<Self>() + 2 * size_of::<usize>());
         w.add(size_of::<hirsel_engine::runtime::MemoryReservation>() + 2 * size_of::<usize>());
-        w.map(functions, |w, path, _| w.path(path));
-        w.map(signatures, |w, path, _| w.path(path));
-        w.map(representations, |w, path, value| {
+        bulk_map(&mut w, functions, |w, path, _| w.path(path));
+        bulk_map(&mut w, signatures, |w, path, _| w.path(path));
+        bulk_map(&mut w, representations, |w, path, value| {
             w.path(path);
             if let Some(value) = value {
                 w.representation(value);
             }
         });
-        w.map(anchors, |w, path, values| {
+        bulk_map(&mut w, anchors, |w, path, values| {
             w.path(path);
             w.flat_vec(values);
         });
         w.arc(profiles);
-        w.map(profiles, |w, path, profile| {
+        bulk_map(&mut w, profiles, |w, path, profile| {
             w.path(path);
             w.add(profile.path.capacity());
             w.add(profile.file.retained_metadata_bytes() as usize);
@@ -290,7 +306,7 @@ impl NativeLinkSource {
             LinkInput::Library(name) => w.add(name.capacity()),
             LinkInput::File(path) => w.add(path.capacity()),
         });
-        w.map(foreign_threads, |w, package, _| {
+        bulk_map(&mut w, foreign_threads, |w, package, _| {
             w.add(package.name.capacity());
             w.add(package.version.capacity());
         });

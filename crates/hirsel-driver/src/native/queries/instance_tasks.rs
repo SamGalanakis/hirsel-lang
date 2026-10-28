@@ -299,7 +299,35 @@ impl InstanceTasks {
         let charge = output.retained_metadata_bytes();
         let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
         if charge > self.allowance.bytes().saturating_sub(registry.charged) {
-            return Err("native completed descriptor allowance exhausted".into());
+            let declarations = &self.source.declarations;
+            let mut constants = hirsel_engine::NativeMetadataWeight::default();
+            for value in declarations.program.constants.values() {
+                constants.materialized(value);
+            }
+            let mut source_constants = hirsel_engine::NativeMetadataWeight::default();
+            for source in declarations.sources.values() {
+                if let Some(value) = &source.constant {
+                    source_constants.materialized(value);
+                }
+                for (_, value) in &source.materialized {
+                    source_constants.materialized(value);
+                }
+            }
+            return Err(format!(
+                "native completed descriptor allowance exhausted for {}: requested {charge} bytes, retained {}, allowance {}, registered {}, ready {}, seal {}, freedom {}, discharge {}, source metadata {}, program constants {}, source constants {}, front bindings {}",
+                output.seal_demand.owner().0,
+                registry.charged,
+                self.allowance.bytes(),
+                registry.entries.len(),
+                output.ready_source.retained_metadata_bytes(),
+                output.seal_demand.retained_bytes(),
+                output.operation_freedom.retained_bytes(),
+                output.discharge.retained_metadata_bytes(),
+                self.source.retained_metadata_bytes(),
+                constants.bytes(),
+                source_constants.bytes(),
+                self.front.as_ref().map_or(0, |front| front.bindings.len()),
+            ));
         }
         registry.charged += charge;
         Ok(())
