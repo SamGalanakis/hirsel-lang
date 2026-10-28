@@ -7875,6 +7875,30 @@ impl Checker<'_, '_> {
                 if parametric {
                     value.modes.uniqueness = Uniqueness::Unique;
                 }
+                if !*constructor && !replaced
+                    && let Some(root) = self.ty(*expression)
+                    && matches!(self.t.row(root).kind, TypeKind::Named { .. } | TypeKind::Tuple(_))
+                {
+                    for (row, ty) in hirsel_types::unique_summary::result_rows(
+                        self.t,
+                        root,
+                        &self.own.metadata.roles,
+                        &mut |d| self.signatures.cached(d),
+                    ) {
+                        if self.t.row(ty).modes.uniqueness != Uniqueness::Unique {
+                            continue;
+                        }
+                        match row {
+                            UniqueResultRow::Root => value.modes.uniqueness = Uniqueness::Unique,
+                            UniqueResultRow::Tuple(field) => {
+                                value.unique_parts.insert(vec![Projection::Field(field)]);
+                            }
+                            UniqueResultRow::Payload { variant, field } => {
+                                value.unique_parts.insert(vec![Projection::VariantField { variant, field }]);
+                            }
+                        }
+                    }
+                }
                 if let Some(path) = self.callee_definition(*callee)
                     && hirsel_types::unique_summary::same_module(path, self.own.definition.path())
                     && let Some(header) = self.signatures.cached(DefId::intern(path))
