@@ -72,6 +72,18 @@ class Capped(unittest.TestCase):
         self.assertEqual(self.properties(),
                          ['MemoryMax=512M', 'MemorySwapMax=0', 'OOMPolicy=continue', 'CPUQuota=300%'])
 
+    def test_an_unavailable_python_executable_keeps_the_capped_scope(self):
+        copied = self.root / 'capped'
+        copied.write_text(CAPPED.read_text())
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(capped, '__file__', str(copied)), \
+                patch.object(capped.sys, 'argv', [str(CAPPED), 'true']), \
+                patch.object(capped.sys, 'executable', ''):
+            result = capped.main()
+        self.assertEqual(result, 0)
+        self.assertEqual(self.properties(),
+                         ['MemoryMax=4G', 'MemorySwapMax=0', 'OOMPolicy=continue', 'CPUQuota=200%'])
+
     def test_without_a_user_manager_process_limits_apply(self):
         result = self.capped('sh', '-c', 'ulimit -d; nproc; echo "$HIRSEL_MEMORY_LIMIT $HIRSEL_JOBS"',
                              env={'CAPPED_NO_BUS': '1', 'HIRSEL_MEMORY_LIMIT': '512M'})

@@ -240,7 +240,7 @@ def main() -> int:
         scope = ['systemd-run', '--user', '--scope', '--quiet', '--collect',
                  '-p', f'MemoryMax={limit}', '-p', 'MemorySwapMax=0', '-p', 'OOMPolicy=continue',
                  '-p', f'CPUQuota={int(jobs) * 100}%',
-                 '--', sys.executable, os.path.abspath(__file__), '--inside', '--timeout', str(args.timeout),
+                 '--', sys.executable or 'python3', os.path.abspath(__file__), '--inside', '--timeout', str(args.timeout),
                  *(['--long'] if args.long else []), '--', *command]
         try:
             return subprocess.run(scope, env=env).returncode
