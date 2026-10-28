@@ -1281,7 +1281,7 @@ pub(super) fn install(
             ),
             matches!(request.operation, CompileOperation::CheckedProducts { .. }),
             artifacts,
-            matches!(request.operation, CompileOperation::NativeSources { .. }),
+            !matches!(request.operation, CompileOperation::Expand),
             matches!(request.operation, CompileOperation::TirBatch { .. }),
             footprint,
             run_input_bytes,
@@ -1500,7 +1500,7 @@ pub(super) fn install(
             .install_carry(carry.lower.clone())
             .map_err(|_| uninstalled())?;
     }
-    let storage_allowance = if matches!(request.operation, CompileOperation::NativeSources { .. }) {
+    let storage_allowance = if !matches!(request.operation, CompileOperation::Expand) {
         let share = growth.bytes() / 3;
         Some((
             growth.split(share).ok_or_else(|| uninstalled())?,
