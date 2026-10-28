@@ -302,31 +302,40 @@ fn head_and_nonhead_allocation_prefixes_record_identical_charges_at_every_runtim
 
 #[test]
 fn compiler_reads_the_original_worker_environment() {
-    let environment = std::ptr::dangling_mut::<Header>();
-    let certificate = super::super::native::Certificate {
-        entry: unused,
-        stack_bytes: 256,
-        host: std::ptr::null(),
-        resume: None,
-        cpu: true,
-        preclaimed: false,
-        live: std::ptr::null_mut(),
-        mask: 0,
-        source: std::ptr::null_mut(),
-    };
-    let native = Native::new(std::ptr::null_mut(), environment, 0, certificate);
-    let offset = hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET as usize;
-    // Native's compile-time prefix assertions make byte 40 an initialized
-    // pointer. Reject an invalid compiler offset before reading that prefix.
-    assert_eq!(offset, 40);
-    // SAFETY: the repr(C) physical record starts Native; the asserted prefix
-    // stores the constructor's live environment pointer here. No pointee is read.
-    let actual = unsafe {
-        (&raw const native.physical)
-            .cast::<u8>()
-            .add(offset)
-            .cast::<*mut Header>()
-            .read()
-    };
-    assert_eq!(actual, environment);
+    let mut run = crate::host::BodyRun::new(1, false);
+    let outcome = run.run(
+        |_| {},
+        |ctx| {
+            let environment = std::ptr::dangling_mut::<Header>();
+            let certificate = super::super::native::Certificate {
+                entry: unused,
+                stack_bytes: 256,
+                host: std::ptr::null(),
+                resume: None,
+                cpu: true,
+                preclaimed: false,
+                live: std::ptr::null_mut(),
+                mask: 0,
+                source: std::ptr::null_mut(),
+            };
+            let native = Native::new(ctx, environment, 0, certificate);
+            let offset = hirsel_lir::runtime_abi::AHEAD_WORKER_ENVIRONMENT_OFFSET as usize;
+            // Native's compile-time prefix assertions make byte 40 an initialized
+            // pointer. Reject an invalid compiler offset before reading that prefix.
+            assert_eq!(offset, 40);
+            // SAFETY: the repr(C) physical record starts Native; the asserted prefix
+            // stores the constructor's live environment pointer here. No pointee is read.
+            let actual = unsafe {
+                (&raw const native.physical)
+                    .cast::<u8>()
+                    .add(offset)
+                    .cast::<*mut Header>()
+                    .read()
+            };
+            assert_eq!(actual, environment);
+            crate::STATUS_OK
+        },
+    );
+    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    assert_eq!(outcome.pending, 0);
 }
