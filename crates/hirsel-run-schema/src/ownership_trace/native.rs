@@ -93,6 +93,15 @@ pub enum Row {
         direction: ChannelDirection,
         status: u32,
     },
+    /// Cancellation checked before touching FIFO state. No payload moves.
+    QueueCanceled {
+        task: u64,
+        frame: u64,
+        marker: u32,
+        queue: u64,
+        layout: u32,
+        status: u32,
+    },
     Enter {
         task: u64,
         frame: u64,
@@ -595,7 +604,8 @@ fn decode(
             | Row::QueuePublished { task, .. }
             | Row::QueueReceived { task, .. }
             | Row::QueueDetached { task, .. }
-            | Row::QueueTransfer { task, .. } => task,
+            | Row::QueueTransfer { task, .. }
+            | Row::QueueCanceled { task, .. } => task,
             Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
         };
         let identity = tasks.get(&task).ok_or(Error::UnsupportedTask(task))?;
@@ -693,6 +703,29 @@ fn decode(
         let task = &identity.path;
         let operation = identity.operation.unwrap_or(0);
         match row {
+            Row::QueueCanceled {
+                frame,
+                marker,
+                queue,
+                layout,
+                status,
+                ..
+            } => {
+                let current = frames.last_mut().ok_or(Error::InvalidFrame(frame))?;
+                if current.id != frame {
+                    return Err(Error::InvalidFrame(frame));
+                }
+                let intent = current.channel.take().ok_or(Error::InvalidMarker(marker))?;
+                if intent.marker != marker
+                    || intent.binding.direction != ChannelDirection::Receive
+                    || intent.binding.descriptor != layout
+                    || status < 2
+                {
+                    return Err(Error::InvalidMarker(marker));
+                }
+                queues.known(queue, layout)?;
+                intent.commit(&mut tracker, queue, 0, status, operation)?;
+            }
             Row::QueueTransfer {
                 task: issuer,
                 frame,

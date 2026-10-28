@@ -313,3 +313,59 @@ fn queue_transfer_cannot_overwrite_a_live_receive_destination() {
         Error::InvalidMarker(2)
     );
 }
+
+#[test]
+fn queue_cancellation_binds_the_known_receiver_without_consuming_a_fifo_receipt() {
+    let (mut log, units) = fixture();
+    let expected = decode(&mut log, &units).unwrap();
+    log.rows.splice(
+        6..6,
+        [
+            event(2, 8, SECOND, ARGUMENT),
+            Row::QueueCanceled {
+                task: 0,
+                frame: 1,
+                marker: 2,
+                queue: 1,
+                layout: 99,
+                status: 2,
+            },
+        ],
+    );
+    assert_eq!(decode(&mut log, &units).unwrap(), expected);
+    for field in 0..5 {
+        let mut changed = log.clone();
+        let Row::QueueCanceled {
+            marker,
+            queue,
+            layout,
+            frame,
+            status,
+            ..
+        } = &mut changed.rows[7]
+        else {
+            unreachable!()
+        };
+        match field {
+            0 => *marker = 1,
+            1 => *queue = 2,
+            2 => *layout = 100,
+            3 => *frame = 2,
+            _ => *status = 0,
+        }
+        assert!(decode(&mut changed, &units).is_err());
+    }
+    let mut sender = fixture().0;
+    sender.rows[4] = Row::QueueCanceled {
+        task: 0,
+        frame: 1,
+        marker: 1,
+        queue: 1,
+        layout: 99,
+        status: 2,
+    };
+    assert_eq!(
+        decode(&mut sender, &units).unwrap_err(),
+        Error::InvalidMarker(1)
+    );
+}

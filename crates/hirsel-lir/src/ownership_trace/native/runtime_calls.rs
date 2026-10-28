@@ -160,22 +160,39 @@ pub(super) fn channel_call<S>(
     call: &CallSite,
 ) -> Option<ChannelCall> {
     use crate::layout_types::{HandleKind, ScalarKind, ScanStep};
-    let Callee::Operation(operation) = call.callee else { return None; };
+    let Callee::Operation(operation) = call.callee else {
+        return None;
+    };
     let definition = &unit.tables.operations.get(operation.index())?.definition;
-    let send = if definition.is_core("$intrinsic.ChannelSend") { true }
-        else if definition.is_core("$intrinsic.ChannelReceive") { false }
-        else { return None; };
-    if call.pretransfer_failure.is_some() { return None; }
+    let send = if definition.is_core("$intrinsic.ChannelSend") {
+        true
+    } else if definition.is_core("$intrinsic.ChannelReceive") {
+        false
+    } else {
+        return None;
+    };
+    if call.pretransfer_failure.is_some() {
+        return None;
+    }
     let result = call.result?;
     let result_layout = unit.types[unit.values[result.index()].ty.index()].layout;
-    if layouts.layout(result_layout)?.kind != LayoutKind::Scalar(ScalarKind::U32) { return None; }
+    if layouts.layout(result_layout)?.kind != LayoutKind::Scalar(ScalarKind::U32) {
+        return None;
+    }
     let arguments = call.arguments.get(&unit.pools.call_arguments)?;
-    if arguments.len() != 2 { return None; }
+    if arguments.len() != 2 {
+        return None;
+    }
     let address = |parameter| {
-        let argument = arguments.iter().find(|argument| argument.parameter == parameter)?;
+        let argument = arguments
+            .iter()
+            .find(|argument| argument.parameter == parameter)?;
         match argument.value {
             ArgumentValue::Address { address, .. }
-                if argument.passing == hirsel_core_contract::Passing::Mut => Some(address),
+                if argument.passing == hirsel_core_contract::Passing::Mut =>
+            {
+                Some(address)
+            }
             _ => None,
         }
     };
@@ -185,7 +202,9 @@ pub(super) fn channel_call<S>(
     let layout = unit.types[unit.addresses[message.index()].ty.index()].layout;
     if !channel_handle(layouts, endpoint)
         || !static_resource_tree(layouts, layout, Selection::Resources, &mut BTreeSet::new())
-    { return None; }
+    {
+        return None;
+    }
     let record = layouts.layout(layout)?;
     let tag = record.tag.as_ref()?;
     if record.kind != LayoutKind::Variant || record.finalizer.is_some() || tag.variants.len() != 2 {
@@ -193,23 +212,42 @@ pub(super) fn channel_call<S>(
     }
     let none = tag.variants.iter().find(|variant| variant.ordinal == 0)?;
     let some = tag.variants.iter().find(|variant| variant.ordinal == 1)?;
-    let [field] = some.fields.as_slice() else { return None; };
-    if !none.fields.is_empty() || field.ordinal != 0 { return None; }
-    let [ScanStep::Handle { kind, obtains, .. }] = layouts.layout(endpoint)?.scan.as_slice() else { return None; };
+    let [field] = some.fields.as_slice() else {
+        return None;
+    };
+    if !none.fields.is_empty() || field.ordinal != 0 {
+        return None;
+    }
+    let [ScanStep::Handle { kind, obtains, .. }] = layouts.layout(endpoint)?.scan.as_slice() else {
+        return None;
+    };
     if (send && (*kind != HandleKind::Sender || obtains.is_some()))
         || (!send && (*kind != HandleKind::Receiver || *obtains != Some(field.layout)))
-    { return None; }
-    Some(ChannelCall { send, address: message, layout })
+    {
+        return None;
+    }
+    Some(ChannelCall {
+        send,
+        address: message,
+        layout,
+    })
 }
 
 pub(super) fn channel_alias<S>(
-    unit: &LirUnit<S>, layouts: &LayoutTable, observation: &Observation,
+    unit: &LirUnit<S>,
+    layouts: &LayoutTable,
+    observation: &Observation,
 ) -> Option<ChannelCall> {
-    if observation.marker.kind != Kind::Alias || observation.marker.owner != Location::Parameter(1) {
+    if observation.marker.kind != Kind::Alias || observation.marker.owner != Location::Parameter(1)
+    {
         return None;
     }
-    let Point::CallEntered(block) = observation.point else { return None; };
-    let Terminator::Call { call, .. } = *unit.terminators.get(block.index())? else { return None; };
+    let Point::CallEntered(block) = observation.point else {
+        return None;
+    };
+    let Terminator::Call { call, .. } = *unit.terminators.get(block.index())? else {
+        return None;
+    };
     let call = channel_call(unit, layouts, unit.tables.calls.get(call.index())?)?;
     (observation.marker.token == Location::Address(call.address)).then_some(call)
 }
@@ -302,7 +340,8 @@ pub(super) fn runtime_call<S>(
             && !resource_free_handle(layouts, unit.types[info.ty.index()].layout)
     };
     let channel = (selection == Selection::Resources)
-        .then(|| channel_call(unit, layouts, call)).flatten();
+        .then(|| channel_call(unit, layouts, call))
+        .flatten();
     if call.pretransfer_failure.is_some() || call.result.is_some_and(carried) {
         return Err(format!(
             "native ownership tracing: runtime result transport in {}",

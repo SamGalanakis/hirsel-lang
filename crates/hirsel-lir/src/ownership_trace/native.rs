@@ -231,7 +231,12 @@ impl LeafPlan {
                             Kind::Move => 1,
                             Kind::Drop if carrier_move => 4,
                             Kind::Drop => 2,
-                            Kind::Alias if runtime_calls::channel_alias(unit, layouts, &observation).is_some() => 8,
+                            Kind::Alias
+                                if runtime_calls::channel_alias(unit, layouts, &observation)
+                                    .is_some() =>
+                            {
+                                8
+                            }
                             Kind::Alias if matches!(from, Location::Address(_)) => 6,
                             Kind::Alias => 3,
                         },
@@ -632,8 +637,13 @@ impl LeafPlan {
                             && let Some(channel) = runtime_calls::channel_call(unit, layouts, call)
                             && selection.tracks_layout(layouts, channel.layout)
                         {
-                            push(Point::CallEntered(b), Kind::Alias,
-                                Location::Address(channel.address), Location::Parameter(1), channel.layout)?;
+                            push(
+                                Point::CallEntered(b),
+                                Kind::Alias,
+                                Location::Address(channel.address),
+                                Location::Parameter(1),
+                                channel.layout,
+                            )?;
                         }
                         if let Some(value) = runtime_calls::spawn_parameter(unit, call) {
                             push(
@@ -1136,7 +1146,11 @@ impl LeafPlan {
                         4
                     }
                     Kind::Drop => 2,
-                    Kind::Alias if runtime_calls::channel_alias(body, layouts, observation).is_some() => 8,
+                    Kind::Alias
+                        if runtime_calls::channel_alias(body, layouts, observation).is_some() =>
+                    {
+                        8
+                    }
                     Kind::Alias if matches!(marker.token, Location::Address(_)) => 6,
                     Kind::Alias => 3,
                 },
@@ -1860,17 +1874,34 @@ impl LeafPlan {
     }
 
     pub fn channel_binding(
-        &self, unit: &LirUnit<Ready>, layouts: &LayoutTable, id: MarkerId,
+        &self,
+        unit: &LirUnit<Ready>,
+        layouts: &LayoutTable,
+        id: MarkerId,
     ) -> Result<Option<NativeChannelBinding>, String> {
-        let (_, marker) = self.commits.iter().find(|(_, marker)| marker.id == id)
+        let (_, marker) = self
+            .commits
+            .iter()
+            .find(|(_, marker)| marker.id == id)
             .ok_or("channel marker has no committed operation")?;
-        if marker.kind != 8 { return Ok(None); }
-        let observation = self.plan.observations.iter().find(|observation| observation.marker.id == id)
+        if marker.kind != 8 {
+            return Ok(None);
+        }
+        let observation = self
+            .plan
+            .observations
+            .iter()
+            .find(|observation| observation.marker.id == id)
             .ok_or("channel marker lost its checked alias")?;
         let channel = runtime_calls::channel_alias(unit, layouts, observation)
             .ok_or("channel marker has no exact checked intrinsic payload")?;
-        if channel.layout != marker.layout { return Err("channel payload layout differs".into()); }
-        Ok(Some(NativeChannelBinding { send: channel.send, payload: channel.layout }))
+        if channel.layout != marker.layout {
+            return Err("channel payload layout differs".into());
+        }
+        Ok(Some(NativeChannelBinding {
+            send: channel.send,
+            payload: channel.layout,
+        }))
     }
 
     /// A statically known function reference or resource-free environment has

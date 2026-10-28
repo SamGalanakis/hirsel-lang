@@ -327,7 +327,8 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
             | Row::QueuePublished { .. }
             | Row::QueueReceived { .. }
             | Row::QueueDetached { .. }
-            | Row::QueueTransfer { .. } => unreachable!(),
+            | Row::QueueTransfer { .. }
+            | Row::QueueCanceled { .. } => unreachable!(),
         }
     }
     log.rows.splice(2..2, child);

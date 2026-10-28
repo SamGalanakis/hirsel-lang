@@ -22,6 +22,13 @@ pub(super) struct Receipt {
     pub status: u32,
 }
 impl Queues {
+    pub(super) fn known(&self, queue: u64, layout: u32) -> Result<(), Error> {
+        let state = self.0.get(&queue).ok_or(Error::InvalidQueue(queue))?;
+        if state.layout != layout || state.detached {
+            return Err(Error::InvalidQueue(queue));
+        }
+        Ok(())
+    }
     pub(super) fn bind(&mut self, queue: u64, receipt: Receipt) -> Result<(), Error> {
         let state = self.0.get_mut(&queue).ok_or(Error::InvalidQueue(queue))?;
         if state.receipt.take() != Some(receipt) {
