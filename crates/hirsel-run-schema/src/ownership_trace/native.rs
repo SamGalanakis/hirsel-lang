@@ -231,6 +231,7 @@ pub enum Error {
     InvalidOperation { task: u64, ordinal: u64 },
     InvalidFrame(u64),
     InvalidQueue(u64),
+    UnsupportedQueueCleanup(u64),
     UnknownUnit([u8; 32]),
     InvalidMarker(u32),
     InvalidLocation(u64),
@@ -617,6 +618,17 @@ fn decode(
         }
         if ended_tasks.contains(&task) {
             return Err(Error::InvalidTask(task));
+        }
+        if let Row::QueueDetached {
+            queue, first, end, ..
+        } = row
+            && tracker.inventory().owners.keys().any(|owner| {
+                matches!(&owner.storage, Storage::Object { name, id, item }
+                    if name == "native.channel" && *id == queue && (first..end).contains(item))
+            })
+        {
+            // Raw detachment is not proof that a Resource finalizer completed.
+            return Err(Error::UnsupportedQueueCleanup(queue));
         }
         if queues.observe(row)? {
             continue;

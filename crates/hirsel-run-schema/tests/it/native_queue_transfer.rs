@@ -369,3 +369,22 @@ fn queue_cancellation_binds_the_known_receiver_without_consuming_a_fifo_receipt(
         Error::InvalidMarker(1)
     );
 }
+
+#[test]
+fn queue_detachment_cannot_invent_completion_of_queued_resource_finalizers() {
+    let (mut log, units) = fixture();
+    log.rows.insert(
+        6,
+        Row::QueueDetached {
+            task: 0,
+            queue: 1,
+            layout: 99,
+            first: 0,
+            end: 1,
+        },
+    );
+    assert_eq!(
+        decode(&mut log, &units).unwrap_err(),
+        Error::UnsupportedQueueCleanup(1)
+    );
+}

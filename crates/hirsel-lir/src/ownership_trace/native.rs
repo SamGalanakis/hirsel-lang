@@ -175,11 +175,15 @@ impl LeafPlan {
                 matches!(record.kind, LayoutKind::Resource)
                     && static_resource_tree(layouts, layout, selection, &mut BTreeSet::new())
             });
+            let channel_alias = kind == Kind::Alias
+                && selection == Selection::Resources
+                && runtime_calls::channel_alias_at(unit, layouts, point, from, to).is_some();
             if !leaf(layouts, layout)
                 && !resource_tree
                 && !carrier_move
                 && !source_aggregate
                 && !aggregate_move
+                && !channel_alias
             {
                 return Err(format!(
                     "native ownership tracing: nested ownership in {} at {point:?}: {kind:?}, layout {layout:?} {:?}",

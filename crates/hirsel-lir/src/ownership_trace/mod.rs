@@ -32,7 +32,7 @@ mod finalizer;
 pub mod native;
 mod staged;
 
-pub const VERSION: u32 = 12;
+pub const VERSION: u32 = 13;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]

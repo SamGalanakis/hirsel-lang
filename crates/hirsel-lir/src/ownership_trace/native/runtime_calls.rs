@@ -238,18 +238,36 @@ pub(super) fn channel_alias<S>(
     layouts: &LayoutTable,
     observation: &Observation,
 ) -> Option<ChannelCall> {
-    if observation.marker.kind != Kind::Alias || observation.marker.owner != Location::Parameter(1)
-    {
+    if observation.marker.kind != Kind::Alias {
         return None;
     }
-    let Point::CallEntered(block) = observation.point else {
+    channel_alias_at(
+        unit,
+        layouts,
+        observation.point,
+        observation.marker.token,
+        observation.marker.owner,
+    )
+}
+
+pub(super) fn channel_alias_at<S>(
+    unit: &LirUnit<S>,
+    layouts: &LayoutTable,
+    point: Point,
+    token: Location,
+    owner: Location,
+) -> Option<ChannelCall> {
+    if owner != Location::Parameter(1) {
+        return None;
+    }
+    let Point::CallEntered(block) = point else {
         return None;
     };
     let Terminator::Call { call, .. } = *unit.terminators.get(block.index())? else {
         return None;
     };
     let call = channel_call(unit, layouts, unit.tables.calls.get(call.index())?)?;
-    (observation.marker.token == Location::Address(call.address)).then_some(call)
+    (token == Location::Address(call.address)).then_some(call)
 }
 
 // Only a complete program request can additionally prove the callback's code
