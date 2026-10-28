@@ -148,3 +148,50 @@ fn newline_statement_ranges_stay_item_local_after_a_prefix() {
     let prefixed = snapshot(&format!("fn earlier() {{}}\n{item}"));
     assert_eq!(alone, prefixed);
 }
+
+#[test]
+fn reanchoring_an_opaque_decode_check_moves_all_association_spans() {
+    let source = "@format(date.format_into)\n@serializable(check = decoded_date)\npub opaque type Date: plain + key + sendable + inert + noalloc_drop uses {} { year: i32, month: u8, day: u8 }\n";
+    let (output, _) = support::parse(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let mut item = (*output.syntax.items[0]).clone();
+    let original = item.anchor;
+    let moved = hirsel_span::Anchor(original.0 + 1000);
+    let associations: Vec<_> = item
+        .item
+        .attributes
+        .iter()
+        .flat_map(|a| a.arguments.iter())
+        .map(|arg| match arg {
+            AttributeArgument::Format(a) => (a.function.clone(), a.origin.span),
+            AttributeArgument::SerializableCheck(a) => (a.function.clone(), a.origin.span),
+            _ => panic!("unexpected association"),
+        })
+        .collect();
+    item.reanchor(moved);
+    let remapped: Vec<_> = item
+        .item
+        .attributes
+        .iter()
+        .flat_map(|a| a.arguments.iter())
+        .map(|arg| match arg {
+            AttributeArgument::Format(a) => (a.function.clone(), a.origin.span),
+            AttributeArgument::SerializableCheck(a) => (a.function.clone(), a.origin.span),
+            _ => panic!("unexpected association"),
+        })
+        .collect();
+    assert_eq!(associations.len(), 2);
+    for ((expected_function, expected_span), (function, span)) in
+        associations.into_iter().zip(remapped)
+    {
+        assert_eq!(function, expected_function);
+        assert_eq!(
+            (span.start, span.end),
+            (expected_span.start, expected_span.end)
+        );
+        assert_eq!(
+            span.anchor, moved,
+            "association kept its previous source generation"
+        );
+    }
+}
