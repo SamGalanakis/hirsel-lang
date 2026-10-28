@@ -1541,6 +1541,23 @@ adds the two exports without changing existing signatures. Like Rust std's
 slice. Hirsel additionally checks capability ownership and cancellation and
 journals the accepted bytes through its existing Print/PrintStderr events.
 
+### Startup and physical capacity
+
+An unobserved production run discovers host CPU capacity at its first scoped
+claim or ordinary child spawn. Its first Tasks projection installs the Ordered
+objects while preserving the root's held memory and remaining fuel. Scalar
+execution needs neither discovery nor Ordered objects. Replay uses its recorded
+logical contract without discovering the current host. Explicit placement
+sidecars and event traces retain their startup admission snapshots.
+
+Production workers grow with runnable work when every started worker is busy,
+up to the resolved width. An Ordered root starts on the caller. Explicit
+physical-worker test and embedding requests retain their requested topology.
+A scoped claim reserves its full width and storage, runs destination zero on
+the caller, and starts other destinations only when they have prepared jobs.
+The caller returns its ordinary credit before reserving the batch and takes
+it back after the joined drain. All started workers join before normal teardown.
+
 ### Spawn hints and the worker stack pool
 
 `TaskSpawn` carries a trailing `u64 flags` (runtime ABI 36). Bit 0 is a compiler

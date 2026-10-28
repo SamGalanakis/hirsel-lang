@@ -610,7 +610,7 @@ impl Drop for ReadyBatch {
 /// The one shared transport for Any-owned continuations: a single
 /// injection and a single wake decision for every entry.
 fn inject(execs: &Execs, entries: impl ExactSizeIterator<Item = Saved>) {
-    if home_computes(execs) {
+    if !execs.demand && home_computes(execs) {
         for saved in entries {
             execs.home.post(Post::Saved(saved), None);
         }
@@ -676,7 +676,21 @@ fn wake_ready(execs: &Execs) {
     {
         return;
     }
-    let compute = execs.compute.lock().unwrap();
+    let mut compute = execs.compute.lock().unwrap();
+    // Go 1.25 runtime/proc.go:5144-5157 readies work before wakep.
+    // Membership grows only if every existing worker is occupied. The
+    // requested width remains in control; this is just native thread lifetime.
+    if execs.demand
+        && !execs.home.inbox.lock().unwrap().closed
+        && compute.active.iter().all(|exec| exec.busy())
+    {
+        let width = unsafe { (&(*execs.run.0).control).width.load(Ordering::Acquire) };
+        let active = compute.active.len();
+        if active < width as usize {
+            grow(execs.run.0, execs, &mut compute, active as u32 + 1);
+            set_width(execs, compute.active.len());
+        }
+    }
     let width = compute.active.len();
     if width == 0 {
         return;

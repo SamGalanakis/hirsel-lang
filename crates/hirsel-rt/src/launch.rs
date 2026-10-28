@@ -2400,7 +2400,11 @@ pub(crate) unsafe fn execute(
     // A sole root needs no physical capacity or Ordered objects. Explicit
     // observers retain their admission snapshot before they can accept requests.
     let deferred_placement = placement_run
-        .filter(|_| ordered_enabled && replay.is_none() && options.trace_events.is_none())
+        .filter(|_| {
+            (ordered_enabled || production_free)
+                && replay.is_none()
+                && options.trace_events.is_none()
+        })
         .map(|run| run.record().placement.clone().unwrap_or_default())
         .filter(|p| p.metrics.is_none() && p.control.is_none());
     if deferred_placement.is_some() {
@@ -2752,7 +2756,9 @@ pub(crate) unsafe fn execute(
     {
         // SAFETY: the root context, on the admission thread, before the run's code runs.
         if ordered_enabled {
-            unsafe { crate::pool::start_ordered(ctx, width, migrate) };
+            unsafe { crate::pool::start_ordered_demand(ctx, width, migrate) };
+        } else if production_free {
+            unsafe { crate::pool::start_demand(ctx, width, migrate) };
         } else {
             unsafe { crate::pool::start(ctx, width, migrate) };
         }

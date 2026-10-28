@@ -495,6 +495,8 @@ pub(crate) fn holders(run: &RunShared) -> Option<Arc<Holders>> {
 /// A run's threads beyond the one that admitted it: its compute workers from its start at
 /// width > 1, else from its first pool dispatch.
 pub(crate) struct Execs {
+    run: RunPtr,
+    demand: bool,
     home: Arc<Exec>,
     /// The home thread's idle fiber at width 1, prepared when home first waits.
     home_idle: Mutex<Option<Stack>>,
@@ -922,6 +924,8 @@ unsafe fn init_execs(ctx: *mut TaskCtx) -> &'static mut Execs {
                 fault("a run's first dispatch came from a pool thread");
             }
             Box::new(Execs {
+                run: RunPtr(run),
+                demand: false,
                 home: Exec::new(Kind::Home, (*ctx).worker_ptr(), false),
                 home_idle: Mutex::new(None),
                 compute: Mutex::new(ComputeWorkers::default()),
@@ -1377,7 +1381,7 @@ fn worker_main_reserved(
 /// `width` is 1 to [`MAX_WIDTH`]. Physical executor reference tests can
 /// use one compute worker beside home; ordinary width1 stays on home.
 pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
-    unsafe { start_with_home(ctx, width, migrate, false) };
+    unsafe { start_with_home(ctx, width, migrate, false, false) };
 }
 
 /// Production Ordered keeps the width-one caller on home, using the same
@@ -1385,7 +1389,26 @@ pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
 /// # Safety
 /// As for start, before root publication.
 pub(crate) unsafe fn start_ordered(ctx: *mut TaskCtx, width: u32, migrate: bool) {
-    unsafe { start_with_home(ctx, width, migrate, true) };
+    unsafe { start_with_home(ctx, width, migrate, true, false) };
+}
+
+/// Production Ordered starts additional workers only for runnable work.
+/// # Safety
+/// As for start, before root publication.
+pub(crate) unsafe fn start_ordered_demand(ctx: *mut TaskCtx, width: u32, migrate: bool) {
+    let demand = !unsafe { (*ctx).run_ref().capacity.as_ref() }
+        .is_some_and(crate::managed_cores::Service::observed);
+    unsafe { start_with_home(ctx, width, migrate, true, demand) };
+}
+
+/// Production Free keeps home available for stop/service work while the
+/// first runnable root uses one compute thread. Further workers follow ready work.
+/// # Safety
+/// As for start, before root publication.
+pub(crate) unsafe fn start_demand(ctx: *mut TaskCtx, width: u32, migrate: bool) {
+    let demand = !unsafe { (*ctx).run_ref().capacity.as_ref() }
+        .is_some_and(crate::managed_cores::Service::observed);
+    unsafe { start_with_home(ctx, width, migrate, false, demand) };
 }
 
 fn home_computes(execs: &Execs) -> bool {
@@ -1398,7 +1421,13 @@ fn home_computes(execs: &Execs) -> bool {
         .is_some_and(|e| e.kind == Kind::Home)
 }
 
-unsafe fn start_with_home(ctx: *mut TaskCtx, width: u32, migrate: bool, home_at_one: bool) {
+unsafe fn start_with_home(
+    ctx: *mut TaskCtx,
+    width: u32,
+    migrate: bool,
+    home_at_one: bool,
+    demand: bool,
+) {
     if unsafe { (*ctx).run_ref().deferred_capacity.is_none() } {
         ensure_compute_grant();
     }
@@ -1411,16 +1440,17 @@ unsafe fn start_with_home(ctx: *mut TaskCtx, width: u32, migrate: bool, home_at_
     execs.home.held.store(false, Ordering::Release);
     execs.migrate = migrate;
     execs.home_at_one = home_at_one;
+    execs.demand = demand;
     // Live topology and thread handles are published under the compute lock.
     // No exclusive Execs borrow crosses the first thread spawn.
     let execs: &Execs = execs;
     unsafe { (&(*run).control).width.store(width, Ordering::Release) };
     let mut compute = execs.compute.lock().unwrap();
-    if home_at_one && width == 1 {
+    if home_at_one && (width == 1 || demand) {
         compute.active.push(Arc::clone(&execs.home));
         unsafe { (&(*run).control).live_width.fetch_add(1, Ordering::AcqRel) };
     } else {
-        grow(run, execs, &mut compute, width);
+        grow(run, execs, &mut compute, if demand { 1 } else { width });
     }
     drop(compute);
     // SAFETY: as above.
@@ -1432,7 +1462,9 @@ unsafe fn start_with_home(ctx: *mut TaskCtx, width: u32, migrate: bool, home_at_
     };
 }
 
-/// Grow only under the run token. Worker::create re-adopts orphaned heaps.
+/// The compute lock serializes membership and thread creation. Worker::create
+/// uses the shared heap registry; all other run fields read here are immutable
+/// after startup. The run remains owned until these handles have joined.
 fn grow(run: *mut RunShared, execs: &Execs, compute: &mut ComputeWorkers, width: u32) {
     for index in compute.active.len()..width as usize {
         // SAFETY: the run outlives each thread, and this thread holds its run token.
@@ -1478,7 +1510,7 @@ fn resize(ctx: *mut TaskCtx) {
         return;
     }
     let before = compute.active.len();
-    if execs.home_at_one {
+    if execs.home_at_one && !execs.demand {
         let on_home = compute.active[0].kind == Kind::Home;
         if on_home && width > 1 {
             compute.active.clear();
@@ -1522,7 +1554,9 @@ fn resize(ctx: *mut TaskCtx) {
             }
         }
     }
-    grow(run, execs, &mut compute, width);
+    if !execs.demand {
+        grow(run, execs, &mut compute, width);
+    }
     if compute.active.len() != before {
         free::set_width(execs, compute.active.len());
     }

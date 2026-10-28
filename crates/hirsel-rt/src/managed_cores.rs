@@ -270,6 +270,13 @@ impl Service {
             diagnostics: OnceLock::new(),
         }
     }
+    pub(crate) fn observed(&self) -> bool {
+        self.pending
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|pending| pending.writer.is_some() || pending.socket.is_some())
+    }
     pub(crate) fn refresh(&self) -> bool {
         self.diagnostics.get_or_init(|| {
             let pending = self.pending.lock().unwrap().take().unwrap();

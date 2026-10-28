@@ -31,6 +31,8 @@ pub(super) fn topology(width: u16) -> Topology {
     let cell = std::sync::OnceLock::new();
     assert!(cell.set(dispatch).is_ok());
     Topology(Execs {
+        run: RunPtr(std::ptr::null_mut()),
+        demand: false,
         home,
         home_idle: Mutex::new(None),
         compute: Mutex::new(ComputeWorkers {
