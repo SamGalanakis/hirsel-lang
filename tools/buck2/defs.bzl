@@ -273,6 +273,11 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         visibility = ["PUBLIC"],
     )
     isolated = ISOLATED_TEST_CASES.get(name, [])
+    extra_env = {"HIRSEL_TEST_ISOLATED_CASES": " ".join(isolated)} if isolated else {}
+    # Each width-eight body owns this action's CPU grant. Parallel libtest
+    # bodies launch independent runtimes and compete for the same eight CPUs.
+    if name == "hirsel-cli-test-cpu_pool_8":
+        extra_env["RUST_TEST_THREADS"] = "1"
     for shard in range(shards):
         _rust_test(
             name = name if shards == 1 else "{}-shard-{}".format(name, shard + 1),
@@ -282,7 +287,7 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
             labels = [],
             exec_compatible_with = _test_platform(name),
             pool = not TESTS_ON_HOST,
-            extra_env = {"HIRSEL_TEST_ISOLATED_CASES": " ".join(isolated)} if isolated else {},
+            extra_env = extra_env,
             **common
         )
     isolated_common = {key: value for key, value in common.items() if key != "args"}
