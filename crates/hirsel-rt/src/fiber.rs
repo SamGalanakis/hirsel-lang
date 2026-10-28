@@ -267,7 +267,7 @@ pub(crate) unsafe fn switch(save: *mut *mut u8, to: *mut u8) {
     unsafe {
         #[cfg(test)]
         TSAN_SWITCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        tsan::__tsan_switch_to_fiber(tsan::target(to), 0)
+        tsan::__tsan_switch_to_fiber(tsan::target(to, &raw const to as usize), 0)
     };
     // SAFETY: caller contract.
     unsafe { fiber_switch(save, to) }
@@ -334,8 +334,7 @@ mod tsan {
 
     /// The fiber suspended at `to`, after registering the calling thread's own stack when it
     /// runs there.
-    pub(super) fn target(to: *mut u8) -> *mut c_void {
-        let here = std::ptr::addr_of!(to) as usize;
+    pub(super) fn target(to: *mut u8, here: usize) -> *mut c_void {
         if find(&MAPPINGS, here).is_none() {
             // SAFETY: the calling thread's attributes describe its own live stack.
             unsafe {
@@ -375,10 +374,15 @@ fn initial_frame(entry: Entry, first: *mut u8, second: *mut u8) -> [u64; 8] {
 }
 
 #[cfg(all(target_arch = "x86_64", feature = "tsan"))]
-pub(crate) unsafe extern "C" fn tsan_switch_target(to: *mut u8) -> *mut std::ffi::c_void {
+pub(crate) unsafe extern "C" fn tsan_switch_target(
+    to: *mut u8,
+    from: usize,
+) -> *mut std::ffi::c_void {
     #[cfg(test)]
     TSAN_SWITCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    tsan::target(to)
+    // The bridge executes on idle even when the logical fiber is private.
+    // Register a thread stack only from the original physical caller's SP.
+    tsan::target(to, from)
 }
 
 #[cfg(all(target_arch = "x86_64", feature = "tsan"))]

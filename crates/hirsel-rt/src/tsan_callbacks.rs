@@ -81,7 +81,7 @@ hirsel_core_contract::tsan_callbacks!(callbacks);
 bridge!(
     hirsel_tsan_switch_target,
     crate::fiber::tsan_switch_target,
-    ""
+    "mov rsi, rsp"
 );
 bridge!(
     hirsel_tsan_switch_to_fiber,
