@@ -22,6 +22,13 @@ def command(case, environment):
     missing = [key for key in home['inputs'] if not environment.get(key)]
     if missing:
         raise ValueError('required retained inputs: ' + ', '.join(missing))
+    if 'cpu_overlap' in home:
+        return [str(ROOT / 'tools/cpu-overlap'),
+                '--run', environment['HIRSEL_CPU_OVERLAP_COMMANDS'],
+                '--cpus', environment['HIRSEL_CPU_OVERLAP_CPUS'],
+                '--slice', environment['HIRSEL_CPU_OVERLAP_SLICE'],
+                '--uid', environment['HIRSEL_CPU_OVERLAP_UID'],
+                '--only', home['cpu_overlap']]
     return [str(ROOT / '.buck2/bin/buck2'), 'test', '-c', 'hirsel.tests=host',
             home.get('target', '//:hirsel-cli-test-cli-shard-1'),
             *[argument for value in home.get('config', []) for argument in ['-c', value]], '--',

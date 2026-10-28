@@ -603,5 +603,41 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "cpu_pool_4::ordered_allocating_mappers_overlap_and_replay": {
+    "source": "crates/hirsel-cli/tests/cpu_pool_4.rs",
+    "inputs": [
+      "HIRSEL_CPU_OVERLAP_COMMANDS",
+      "HIRSEL_CPU_OVERLAP_CPUS",
+      "HIRSEL_CPU_OVERLAP_SLICE",
+      "HIRSEL_CPU_OVERLAP_UID"
+    ],
+    "target": "//:hirsel-cli-test-cpu_pool_4",
+    "standalone": true,
+    "cpu_overlap": "ordered-4"
+  },
+  "cpu_pool_8::ordered_allocating_mappers_overlap_and_replay": {
+    "source": "crates/hirsel-cli/tests/cpu_pool_8.rs",
+    "inputs": [
+      "HIRSEL_CPU_OVERLAP_COMMANDS",
+      "HIRSEL_CPU_OVERLAP_CPUS",
+      "HIRSEL_CPU_OVERLAP_SLICE",
+      "HIRSEL_CPU_OVERLAP_UID"
+    ],
+    "target": "//:hirsel-cli-test-cpu_pool_8",
+    "standalone": true,
+    "cpu_overlap": "ordered-8"
+  },
+  "cpu_pool_16::ordered_allocating_mappers_overlap_and_replay": {
+    "source": "crates/hirsel-cli/tests/cpu_pool_16.rs",
+    "inputs": [
+      "HIRSEL_CPU_OVERLAP_COMMANDS",
+      "HIRSEL_CPU_OVERLAP_CPUS",
+      "HIRSEL_CPU_OVERLAP_SLICE",
+      "HIRSEL_CPU_OVERLAP_UID"
+    ],
+    "target": "//:hirsel-cli-test-cpu_pool_16",
+    "standalone": true,
+    "cpu_overlap": "ordered-16"
   }
 }

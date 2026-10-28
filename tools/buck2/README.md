@@ -908,6 +908,21 @@ worker placement, samples and full overlap, then refuses P qualification with
 Failures remain failures. The three ignored Ordered bodies stay ignored because
 libtest cannot report a dynamic host skip without counting the body as passed.
 
+The explicit gate homes are
+`tools/ignored-tests cpu_pool_4::ordered_allocating_mappers_overlap_and_replay`,
+with `cpu_pool_8` and `cpu_pool_16` selecting the other widths. These run
+`tools/cpu-overlap --only ordered-4|ordered-8|ordered-16` against prepared
+commands, require exactly one passing body, and propagate host-blocked failures.
+All three remain ignored in ordinary test runs. After preparation and fencing,
+run each home as root with the original user's UID, for example:
+
+```sh
+sudo -n env HIRSEL_CPU_OVERLAP_COMMANDS=/tmp/cpu-overlap-commands \
+  HIRSEL_CPU_OVERLAP_CPUS=0-7,16-23 HIRSEL_CPU_OVERLAP_SLICE=timing.slice \
+  HIRSEL_CPU_OVERLAP_UID=1000 \
+  tools/ignored-tests cpu_pool_4::ordered_allocating_mappers_overlap_and_replay
+```
+
 After fencing other top-level cgroups, the orchestrator can run
 `sudo -n tools/cpu-overlap --run /tmp/cpu-overlap-commands --cpus 0-7,16-23 --slice timing.slice --uid 1000`.
 Each command gets its own system scope in the named top-level slice and drops

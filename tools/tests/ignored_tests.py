@@ -322,23 +322,42 @@ class IgnoredTests(unittest.TestCase):
             if home.get('standalone', False):
                 self.assertEqual(source.parent.name, 'tests')
                 self.assertEqual(home['target'], f'//:{source.parents[1].name}-test-{source.stem}')
-                self.assertNotIn('::', case)
+                if 'cpu_overlap' in home:
+                    self.assertEqual(case.split('::')[0], source.stem)
+                else:
+                    self.assertNotIn('::', case)
             else:
                 registry = home.get('module_registry', str(source.parent / 'modules.rs'))
                 self.assertIn(f'mod {source.stem};', (ROOT / registry).read_text())
-            environment = {key: '/retained/input with spaces' for key in home['inputs']}
+            environment = {key: f'/retained/{key} with spaces' for key in home['inputs']}
             command = runner['command'](case, environment)
-            self.assertEqual(command[-5:], ['--test-arg=--exact', f'--test-arg={case}',
-                                           '--test-arg=--ignored', '--test-arg=--test-threads=1',
-                                           '--test-arg=--nocapture'])
-            self.assertEqual(command[1:command.index('--') + 1], ['test', '-c', 'hirsel.tests=host',
-                                           home.get('target', '//:hirsel-cli-test-cli-shard-1'),
-                                           *[argument for value in home.get('config', []) for argument in ['-c', value]], '--'])
+            if 'cpu_overlap' in home:
+                overlap = runpy.run_path(str(ROOT / 'tools/cpu-overlap'))
+                row = next(row for row in overlap['ROWS'] if row[0] == home['cpu_overlap'])
+                width = int(source.stem.rsplit('_', 1)[-1])
+                self.assertEqual(row, (f'ordered-{width}', width, False, case.rsplit('::', 1)[-1]))
+                self.assertEqual(overlap['target'](row[1], row[2]), home['target'] + '[host-command]')
+                self.assertEqual(command, [str(ROOT / 'tools/cpu-overlap'),
+                                          '--run', environment['HIRSEL_CPU_OVERLAP_COMMANDS'],
+                                          '--cpus', environment['HIRSEL_CPU_OVERLAP_CPUS'],
+                                          '--slice', environment['HIRSEL_CPU_OVERLAP_SLICE'],
+                                          '--uid', environment['HIRSEL_CPU_OVERLAP_UID'],
+                                          '--only', home['cpu_overlap']])
+            else:
+                self.assertEqual(command[-5:], ['--test-arg=--exact', f'--test-arg={case}',
+                                               '--test-arg=--ignored', '--test-arg=--test-threads=1',
+                                               '--test-arg=--nocapture'])
+                self.assertEqual(command[1:command.index('--') + 1], ['test', '-c', 'hirsel.tests=host',
+                                               home.get('target', '//:hirsel-cli-test-cli-shard-1'),
+                                               *[argument for value in home.get('config', []) for argument in ['-c', value]], '--'])
             for value in home.get('config', []):
                 self.assertIn(value, command)
                 self.assertEqual(command[command.index(value) - 1], '-c')
             for key in home['inputs']:
-                self.assertIn(f'{key}={environment[key]}', command)
+                if 'cpu_overlap' in home:
+                    self.assertIn(environment[key], command)
+                else:
+                    self.assertIn(f'{key}={environment[key]}', command)
                 with self.assertRaises(ValueError):
                     runner['command'](case, environment | {key: ''})
             # Registration never covers an adjacent ignored case in the same file.
@@ -400,19 +419,25 @@ class IgnoredTests(unittest.TestCase):
 
     def test_explicit_runner_refuses_zero_execution_and_propagates_failures(self):
         runner = runpy.run_path(str(ROOT / 'tools/ignored-tests'))
-        case = next(case for case, home in EXPLICIT.items() if not home['inputs'])
-        for status, output, expected in [
-                (0, 'test result: ok. 1 passed; 0 failed; 0 ignored;', 0),
-                (0, 'test result: ok. 0 passed; 0 failed; 0 ignored;', 1),
-                (0, 'test result: ok. 0 passed; 0 failed; 1 ignored;', 1),
-                (0, '', 1),
-                (32, 'test result: FAILED. 0 passed; 1 failed; 0 ignored;', 32)]:
-            with patch('sys.argv', ['ignored-tests', case]), \
-                 patch.object(subprocess, 'run', return_value=types.SimpleNamespace(
-                     returncode=status, stdout=output)) as run, \
-                 patch('builtins.print'):
-                self.assertEqual(runner['main'](), expected)
-                self.assertEqual(run.call_args.args[0], runner['command'](case, {}))
+        cases = [next(case for case, home in EXPLICIT.items() if not home['inputs'])]
+        cases += [case for case, home in EXPLICIT.items() if 'cpu_overlap' in home]
+        for case in cases:
+            environment = {key: f'/retained/{key} with spaces' for key in EXPLICIT[case]['inputs']}
+            for status, output, expected in [
+                    (0, 'test result: ok. 1 passed; 0 failed; 0 ignored;', 0),
+                    (0, 'test result: ok. 0 passed; 0 failed; 0 ignored;', 1),
+                    (0, 'test result: ok. 0 passed; 0 failed; 1 ignored;', 1),
+                    (0, '', 1),
+                    (32, 'test result: FAILED. 0 passed; 1 failed; 0 ignored;', 32),
+                    (101, 'host-blocked: not exclusive', 101)]:
+                with self.subTest(case=case, status=status, output=output), \
+                     patch('sys.argv', ['ignored-tests', case]), \
+                     patch.dict('os.environ', environment), \
+                     patch.object(subprocess, 'run', return_value=types.SimpleNamespace(
+                         returncode=status, stdout=output)) as run, \
+                     patch('builtins.print'):
+                    self.assertEqual(runner['main'](), expected)
+                    self.assertEqual(run.call_args.args[0], runner['command'](case, environment))
 
     def test_ignored_macro_templates_name_invocations_instead_of_the_next_helper(self):
         text = '\n'.join([
