@@ -673,7 +673,17 @@ fn lower<T>(
                 Aliasing::of(inputs.callbacks),
             )?;
             if inputs.alternate {
-                module.add_attribute(function, AttributeSlot::Function, Attribute::NoInline);
+                // These helpers have the same checked storage handoffs as
+                // their caller. Inlining preserves every save boundary and
+                // lets the mapper keep its sequence fields in registers.
+                let attribute = if unit.header.definition.is_core("list.push")
+                    || unit.header.definition.is_core("$native.list_push_spare")
+                {
+                    Attribute::AlwaysInline
+                } else {
+                    Attribute::NoInline
+                };
+                module.add_attribute(function, AttributeSlot::Function, attribute);
                 module.add_attribute(function, AttributeSlot::Function, Attribute::NoRedZone);
                 module.string_attribute(function, "disable-tail-calls", "true");
                 module.string_attribute(function, "frame-pointer", "all");
