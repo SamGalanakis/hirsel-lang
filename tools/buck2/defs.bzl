@@ -151,6 +151,11 @@ def _rust(rule, name, **attrs):
         attrs["features"] = attrs.get("features", []) + ["native-tsan"]
     # Runtime diagnostic features are explicit build selections. Ordinary
     # archives omit ownership hooks and their private observer state.
+    if attrs.get("crate") == "hirsel_free":
+        attrs["features"] = attrs.get("features", []) + select({
+            "root//tools/buck2:sanitizer_thread": ["tsan"],
+            "DEFAULT": [],
+        })
     if attrs.get("crate") == "hirsel_rt":
         if read_root_config("hirsel", "operation_latency", "false") == "true":
             attrs["features"] = attrs.get("features", []) + ["operation-latency"]

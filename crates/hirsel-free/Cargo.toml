@@ -5,5 +5,9 @@ edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Native TSan qualification only. Never selected by ordinary runtime builds.
+tsan = []
+
 [dependencies]
 hirsel-guard = { path = "../hirsel-guard" }

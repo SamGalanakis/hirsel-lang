@@ -69,6 +69,16 @@ impl<T> Notification<T> {
 }
 
 impl<T> Queued<T> {
+    /// Borrow the image without the exclusive claim, for the native TSan mutant.
+    /// # Safety
+    /// The token is still queued. The caller must end the process before either
+    /// duplicate returns, saves, or destroys this image.
+    #[cfg(feature = "tsan")]
+    pub unsafe fn tsan_unclaimed(&self) -> *const T {
+        let frame = self.0.as_ref().expect("one queue token");
+        unsafe { frame.saved.with(|saved| saved.as_ref().expect("a saved frame") as *const T) }
+    }
+
     /// Consume publication ownership before touching the image. The successful
     /// state transition acquires everything written by its previous worker.
     pub fn start(mut self) -> Running<T> {

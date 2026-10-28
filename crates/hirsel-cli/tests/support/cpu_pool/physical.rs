@@ -148,6 +148,16 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
                 });
             }
         }
+        #[cfg(feature = "native-tsan")]
+        if std::env::var_os("HIRSEL_TSAN_CAMPAIGN_MUTANT").is_some() {
+            command.env("HIRSEL_TSAN_DOUBLE_CLAIM", "1");
+            let output = command.output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("MUTANT {provider} {backend} W{width}\n{stderr}");
+            assert_eq!(output.status.code(), Some(66), "{output:?}");
+            assert!(stderr.contains("ThreadSanitizer: data race"), "{stderr}");
+            continue;
+        }
         // Place this test's fresh workers on distinct admitted CPUs. Affinity
         // alone does not establish that the job holds those CPUs exclusively.
         let mut allowed = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };

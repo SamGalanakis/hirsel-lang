@@ -1158,6 +1158,11 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
         wake(&execs.home);
         return;
     }
+    #[cfg(all(feature = "tsan", target_arch = "x86_64"))]
+    if matches!(exec.kind, Kind::Scoped(_)) {
+        // The mutant copies a queued image before start's exclusive claim/take.
+        unsafe { double_claim::dispatch(&queued) };
+    }
     let running = queued.start();
     let image = running.value();
     let (ctx, task, sp) = (image.ctx, image.task, image.sp);
@@ -1311,3 +1316,6 @@ mod dispatch_tests;
 #[cfg(test)]
 #[path = "free/modules.rs"]
 mod audit_modules;
+
+#[cfg(all(feature = "tsan", target_arch = "x86_64"))]
+pub(crate) mod double_claim;

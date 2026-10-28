@@ -17,7 +17,7 @@ system-allocator = []
 # Valgrind memcheck client requests for the memcheck campaign; no inline fast paths.
 memcheck = []
 # ThreadSanitizer fiber annotations, for builds with `-Zsanitizer=thread`.
-tsan = []
+tsan = ["hirsel-free/tsan"]
 measurement = []
 # Original-execution operation sidecars; absent from shipping archives.
 operation-latency = []
