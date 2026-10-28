@@ -50,6 +50,11 @@ fn hash<K, V>(weight: &mut crate::NativeMetadataWeight, capacity: usize) {
 }
 impl QueryEngine {
     fn source_types(&self) -> Result<hirsel_types::TypeProjection, QueryError> {
+        // Immutable base rows already have their original owner. A base-only
+        // context has no local closure to collect, including during inspection.
+        if self.types.stats().rows == 0 {
+            return Ok(self.types.project_reachable([]));
+        }
         let (encoded, roots) = hirsel_types::with_table_collection(|| {
             bincode::serialize_into(std::io::sink(), &self.builtins)?;
             for entry in self.signatures.values() {
