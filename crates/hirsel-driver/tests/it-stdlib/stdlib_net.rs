@@ -76,6 +76,9 @@ pub(super) fn execute_tir(prepared: &hirsel_driver::requests::TirExecution, sour
 }
 
 fn ip_vectors(texts: &[&str], operation: &str) {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_source/main.hir");
+    let mut fixture = TirFixture::new(&path).unwrap();
     for chunk in texts.chunks(12) {
         let mut body = String::new();
         for &text in chunk {
@@ -110,7 +113,7 @@ fn ip_vectors(texts: &[&str], operation: &str) {
             };
             body += &format!("match std@1/net.{operation}({text:?}) {{ {check} }}\n");
         }
-        execute(&body);
+        execute_in(&mut fixture, &body);
     }
 }
 
@@ -356,24 +359,25 @@ fn rust_display_vectors_with_padding() {
         let source = std::fs::read_to_string(fixture).unwrap();
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/std_source/main.hir");
-        let mut program = load_program_source(&path, Some(&source)).unwrap();
-        program.check_for_execution().unwrap();
-        program.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
-            limits: hirsel_interp::Limits {
-                steps: Some(10_000_000),
-                call_depth: 256,
-                source: None,
-            },
-            ..Default::default()
-        }));
+        let prepared = crate::source_std::tir(&path, Some(&source), None).unwrap();
+        let limits = hirsel_interp::Limits {
+            steps: Some(10_000_000),
+            call_depth: 256,
+            source: None,
+        };
         let config = RunConfiguration {
-            entry: program.entry.clone(),
+            entry: prepared.entry.clone(),
             hash_seed: 0,
             inputs: vec![],
         };
-        let snapshot =
-            run_observed_snapshot(&mut program.engine, &config, SimulationConfig::default())
-                .unwrap();
+        let snapshot = testing::observe_tir(
+            &prepared,
+            &config,
+            SimulationConfig::default(),
+            limits,
+            false,
+        )
+        .unwrap();
         assert!(
             matches!(
                 snapshot.outcome,
@@ -382,9 +386,14 @@ fn rust_display_vectors_with_padding() {
             "{:?}",
             snapshot.outcome
         );
-        let checked =
-            run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
-                .unwrap();
+        let checked = testing::observe_tir(
+            &prepared,
+            &config,
+            SimulationConfig::default(),
+            limits,
+            true,
+        )
+        .unwrap();
         assert!(
             matches!(
                 checked.outcome,
