@@ -36,7 +36,7 @@ pub(super) fn materialize(
         checked_runtime: facts.checked_runtime.clone(),
         code: facts.code.clone(),
         callees: facts.callees.clone(),
-        entries: facts.entries.clone(),
+        entries: (*facts.entries).clone(),
         revision: facts.revision.clone(),
         foreign_unreplayable: facts.semantic.foreign_unreplayable(),
         foreign: facts.foreign.clone(),

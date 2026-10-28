@@ -16,9 +16,31 @@ pub struct NativeSemanticProgram {
     foreign_unreplayable: bool,
 }
 impl NativeSemanticProgram {
-    pub(crate) fn metadata_weight(&self, weight: &mut crate::NativeMetadataWeight) {
+    pub(crate) fn shared_node(
+        &self,
+        definition: Option<DefId>,
+    ) -> Option<Arc<hirsel_run_schema::ProgramNode>> {
+        let identity = definition.map_or_else(
+            || "$hirsel/runtime@1".to_owned(),
+            |definition| definition.path().to_string(),
+        );
+        self.program
+            .nodes
+            .binary_search_by(|node| node.identity.cmp(&identity))
+            .ok()
+            .map(|index| self.program.nodes[index].clone())
+    }
+    pub(crate) fn metadata_weight(
+        &self,
+        weight: &mut crate::NativeMetadataWeight,
+        nodes: &mut std::collections::BTreeSet<usize>,
+    ) {
         weight.add(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>());
         weight.vec(&self.program.nodes, |weight, node| {
+            if !nodes.insert(Arc::as_ptr(node) as usize) {
+                return;
+            }
+            weight.arc(node);
             weight.add(node.identity.capacity());
             weight.vec(&node.content, |weight, bytes| weight.flat_vec(bytes));
             weight.vec(&node.dependencies, |weight, name| {
@@ -51,7 +73,7 @@ impl NativeSemanticProgram {
     }
 
     pub(crate) fn new(
-        program: crate::queries::SemanticProgram,
+        mut program: crate::queries::SemanticProgram,
         escapes: BTreeMap<DefPath, Escape>,
         foreign_threads: BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads>,
         signatures: Arc<SignatureSnapshot>,
@@ -59,6 +81,9 @@ impl NativeSemanticProgram {
         foreign_links: Vec<LinkInput>,
         foreign_unreplayable: bool,
     ) -> Self {
+        program
+            .nodes
+            .sort_by(|left, right| left.identity.cmp(&right.identity));
         Self {
             program,
             escapes,

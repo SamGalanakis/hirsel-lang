@@ -14,7 +14,7 @@ fn operational(message: impl Into<String>) -> QueryError {
 
 #[derive(Clone)]
 pub(crate) struct SemanticProgram {
-    pub(crate) nodes: Vec<ProgramNode>,
+    pub(crate) nodes: Vec<Arc<ProgramNode>>,
     /// Every definition the closure visited.
     pub(crate) definitions: BTreeSet<DefPath>,
     /// Each visited definition's direct dependencies.
@@ -42,8 +42,11 @@ pub(super) fn runtime_node() -> ProgramNode {
 
 impl SemanticProgram {
     pub(crate) fn revision(&self, entry: &DefPath) -> Result<ProgramRevision, QueryError> {
-        ProgramRevision::encode(&entry.to_string(), self.nodes.clone())
-            .map_err(|e| operational(e.to_string()))
+        ProgramRevision::encode(
+            &entry.to_string(),
+            self.nodes.iter().map(|node| (**node).clone()),
+        )
+        .map_err(|e| operational(e.to_string()))
     }
 }
 
@@ -67,18 +70,19 @@ impl QueryEngine {
         &mut self,
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<Vec<ProgramNode>, QueryError> {
-        Ok(self.semantic_program(roots)?.nodes)
+        Ok(self
+            .semantic_program(roots)?
+            .nodes
+            .into_iter()
+            .map(|node| Arc::unwrap_or_clone(node))
+            .collect())
     }
 
     pub(crate) fn semantic_program(
         &mut self,
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<SemanticProgram, QueryError> {
-        let mut nodes = vec![ProgramNode {
-            identity: "$hirsel/runtime@1".into(),
-            content: vec![RUNTIME_REVISION.to_vec()],
-            dependencies: vec![],
-        }];
+        let mut nodes = vec![Arc::new(runtime_node())];
         let mut visited = BTreeSet::new();
         let mut uses = BTreeMap::new();
         let mut pending: Vec<_> = roots.into_iter().collect();
@@ -105,7 +109,7 @@ impl QueryEngine {
         pending: &mut Vec<DefPath>,
         visited: &mut BTreeSet<DefPath>,
         uses: &mut BTreeMap<DefPath, BTreeSet<DefPath>>,
-        nodes: &mut Vec<ProgramNode>,
+        nodes: &mut Vec<Arc<ProgramNode>>,
     ) -> Result<(), QueryError> {
         while let Some(path) = pending.pop() {
             if !visited.insert(path.clone()) {
@@ -116,11 +120,11 @@ impl QueryEngine {
             uses.insert(path.clone(), dependencies.clone());
             let mut dependencies: Vec<_> = dependencies.iter().map(ToString::to_string).collect();
             dependencies.push("$hirsel/runtime@1".into());
-            nodes.push(ProgramNode {
+            nodes.push(Arc::new(ProgramNode {
                 identity: path.to_string(),
                 content,
                 dependencies,
-            });
+            }));
         }
         Ok(())
     }

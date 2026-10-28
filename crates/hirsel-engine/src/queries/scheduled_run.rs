@@ -21,7 +21,7 @@ pub struct FrontRunOutput {
     pub foreign: ForeignUse,
     pub semantic: Arc<crate::NativeSemanticProgram>,
     pub callees: BTreeMap<String, CalleeFacts>,
-    pub entries: BTreeMap<String, (CalleeFacts, CallForm)>,
+    pub entries: Arc<BTreeMap<String, (CalleeFacts, CallForm)>>,
     pub runtime: Arc<hirsel_interp::aggregate::RuntimeTypes>,
     pub checked_runtime: Arc<hirsel_interp::checked::CheckedRuntime>,
     pub(crate) _owner: Arc<dyn Send + Sync>,
@@ -782,10 +782,25 @@ impl Task {
                 break;
             }
         }
-        let mut nodes = vec![super::program_revision::runtime_node()];
+        let shared = |definition| {
+            self.queries
+                .completed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .values()
+                .find_map(|(_, output)| output.semantic.shared_node(definition))
+        };
+        let runtime =
+            shared(None).unwrap_or_else(|| Arc::new(super::program_revision::runtime_node()));
+        let mut nodes = vec![runtime];
         for path in &definitions {
-            if let Some(node) = self.entries.get(&DefId::intern(path)) {
-                nodes.push(node.node.program(&self.queries, path)?);
+            let definition = DefId::intern(path);
+            if let Some(node) = self.entries.get(&definition) {
+                let node = match shared(Some(definition)) {
+                    Some(node) => node,
+                    None => Arc::new(node.node.program(&self.queries, path)?),
+                };
+                nodes.push(node);
             }
         }
         Ok(SemanticProgram {
@@ -875,6 +890,8 @@ impl Task {
         weight.tree::<ContentHash, (ProductRef, Arc<FrontRunOutput>)>(roots.len());
         weight.add(std::mem::size_of::<FrontRunBatchOutput>() + 2 * std::mem::size_of::<usize>());
         let result = (|| {
+            let mut nodes = BTreeSet::new();
+            let mut entries_seen = BTreeSet::new();
             let mut products = Vec::with_capacity(roots.len());
             let mut outputs = BTreeMap::new();
             for root in roots {
@@ -899,11 +916,14 @@ impl Task {
                 weight.code_reach(&output.code);
                 weight.foreign_use(&output.foreign);
                 weight.callees(&output.callees);
-                weight.map(&output.entries, |weight, name, (facts, _)| {
-                    weight.add(name.capacity());
-                    weight.code_reach(&facts.reach);
-                });
-                output.semantic.metadata_weight(&mut weight);
+                if entries_seen.insert(Arc::as_ptr(&output.entries) as usize) {
+                    weight.arc(&output.entries);
+                    weight.map(&output.entries, |weight, name, (facts, _)| {
+                        weight.add(name.capacity());
+                        weight.code_reach(&facts.reach);
+                    });
+                }
+                output.semantic.metadata_weight(&mut weight, &mut nodes);
                 if weight.bytes() > queries.weight.retained {
                     return Err(operational("Run batch outputs exceed retained admission"));
                 }
@@ -960,7 +980,7 @@ impl Task {
         query: QueryId,
         hashes: Arc<BTreeMap<DefPath, ContentHash>>,
         checked_runtime: Arc<hirsel_interp::checked::CheckedRuntime>,
-        package_entries: Option<&BTreeMap<String, (CalleeFacts, CallForm)>>,
+        package_entries: Option<&Arc<BTreeMap<String, (CalleeFacts, CallForm)>>>,
     ) -> Result<ProductRef, QueryError> {
         let queries = &self.queries;
         let snapshot = queries.lower.signatures();
@@ -1052,7 +1072,7 @@ impl Task {
                     entries.insert(path.to_string(), facts);
                 }
             }
-            entries
+            Arc::new(entries)
         };
         let foreign = foreign_use(&program, &queries.inputs);
         // PROG-4: C called outside a deterministic wrapper makes every run of
