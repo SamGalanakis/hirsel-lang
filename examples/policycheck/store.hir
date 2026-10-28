@@ -67,12 +67,14 @@ fn batch(
   let decisions = evaluate.batch(tasks, snapshot, take queries, jobs)?
   text.append(mut output, f"{{\"revision\":{state.revision},\"decisions\":[")
   let mut first = true
+  let mut previous: List[String] = []
+  let mut escaped: Bytes = b"[]"
   for decision in take decisions {
     if !first {
       text.append(mut output, ",")
     }
     first = false
-    evaluate.encode(decision, mut output)
+    evaluate.encode(decision, mut output, mut previous, mut escaped)
     output_limit(output)?
   }
   text.append(mut output, "]}")

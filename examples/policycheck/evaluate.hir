@@ -36,16 +36,77 @@ fn fold(policy: model.Policy, query: model.Query) -> model.Decision uses {} {
   )
 }
 
-fn decide(snapshot: Option[Shared[model.Policy]], query: model.Query) -> model.Decision uses {} {
-  match snapshot {
-    None() => model.Decision(id: unique query.id, allow: false, rules: []),
-    Some(policy) => shared.with(
-      policy,
-      fn(value: model.Policy) -> unique model.Decision uses {} {
-        fold(value, query)
+type Answer {
+  principal: String,
+  action: String,
+  path: String,
+  owner: String,
+  allow: bool,
+  rules: List[String],
+}
+
+fn same_query(answer: Answer, query: model.Query) -> bool uses {} {
+  answer.principal == query.principal && answer.action == query.action && answer.path == query.target.path && answer.owner == query.target.owner
+}
+
+// The admitted batch has at most32 queries and fixes one policy revision.
+// Reuse pure decisions by every matcher input. Each job still owns its ID
+// and an independent explanation, including when queries share an answer.
+fn prepare(snapshot: Option[Shared[model.Policy]], queries: List[model.Query]) -> unique List[
+  Answer
+] uses {} {
+  let mut answers: unique List[Answer] = []
+  for query in queries {
+    let mut found = false
+    for answer in answers {
+      if same_query(answer, query) {
+        found = true
+        break
       }
-    ),
+    }
+    if found {
+      continue
+    }
+    let decision = match snapshot {
+      None() => model.Decision(id: unique query.id, allow: false, rules: []),
+      Some(policy) => shared.with(
+        policy,
+        fn(value: model.Policy) -> unique model.Decision uses {} {
+          fold(value, query)
+        }
+      ),
+    }
+    list.push(
+      mut answers,
+      Answer(
+        principal: unique query.principal,
+        action: unique query.action,
+        path: unique query.target.path,
+        owner: unique query.target.owner,
+        allow: decision.allow,
+        rules: unique decision.rules
+      )
+    )
   }
+  take answers
+}
+
+fn decide(answers: Shared[List[Answer]], query: model.Query) -> unique model.Decision uses {} {
+  shared.with(
+    answers,
+    fn(values: List[Answer]) -> unique model.Decision uses {} {
+      for answer in values {
+        if same_query(answer, query) {
+          return model.Decision(
+            id: unique query.id,
+            allow: answer.allow,
+            rules: unique answer.rules
+          )
+        }
+      }
+      model.Decision(id: unique query.id, allow: false, rules: [])
+    }
+  )
 }
 
 // Independent jobs each own a unique explanation; borrowed shared policy and
@@ -56,6 +117,7 @@ pub fn batch(
   take queries: unique List[model.Query],
   jobs: u64
 ) -> Result[unique List[unique model.Decision], model.Problem] {
+  let answers = shared.freeze(prepare(snapshot, queries))
   let count = list.len(queries)
   let input = shared.freeze(take queries)
   task.scope(
@@ -80,7 +142,7 @@ pub fn batch(
                   shared.with(
                     input,
                     fn(rows: List[model.Query]) -> unique model.Decision uses {} {
-                      decide(snapshot, rows[index])
+                      decide(answers, rows[index])
                     }
                   )
                 )
@@ -107,17 +169,30 @@ pub fn batch(
   )
 }
 
-pub fn encode(value: model.Decision, mut output: unique List[u8]) -> () uses {} {
+pub fn encode(
+  value: model.Decision,
+  mut output: unique List[u8],
+  mut previous: List[String],
+  mut escaped: Bytes
+) -> () uses {} {
   text.append(mut output, "{\"id\":")
   json.write_text_into(value.id, mut output)
-  text.append(mut output, f",\"allow\":{value.allow},\"rules\":[")
-  let mut first = true
-  for id in value.rules {
-    if !first {
-      text.append(mut output, ",")
+  text.append(mut output, f",\"allow\":{value.allow},\"rules\":")
+  if value.rules != previous {
+    let mut builder: List[u8] = []
+    text.append(mut builder, "[")
+    let mut first = true
+    for id in value.rules {
+      if !first {
+        text.append(mut builder, ",")
+      }
+      first = false
+      json.write_text_into(id, mut builder)
     }
-    first = false
-    json.write_text_into(id, mut output)
+    text.append(mut builder, "]")
+    escaped = bytes.from_list(take builder)
+    previous = unique value.rules
   }
-  text.append(mut output, "]}")
+  bytes.append(mut output, escaped)
+  text.append(mut output, "}")
 }

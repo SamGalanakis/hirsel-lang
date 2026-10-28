@@ -96,7 +96,7 @@ pub fn object(value: json.Value, keys: List[String]) -> Result[
     return Error(Shape())
   }
   for key in keys {
-    if map.get(entries, key) == None() {
+    if !map.contains(entries, key) {
       return Error(Shape())
     }
   }
