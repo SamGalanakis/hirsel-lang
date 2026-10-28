@@ -70,6 +70,49 @@ fn context(name: &str, text: &str) -> (NativeRecordContext, Anchor, hirsel_types
     let ty = engine.types().intern(hirsel_types::Type::unit());
     (NativeRecordContext::capture(&engine), anchor, ty)
 }
+
+#[test]
+fn identical_generated_sources_rebind_old_sites_but_changed_text_stays_unowned() {
+    let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
+    let path = DefPath::core("generated");
+    let logical = "<generated:core@1/generated>";
+    let text = "    fn()->u8 {3u8}";
+    let mut placed = |text: &str| {
+        let file = engine
+            .sources
+            .add_logical(logical, logical, text.into())
+            .unwrap();
+        let anchor = engine.sources.item_anchor(file, 4);
+        (file, anchor)
+    };
+    let (_, old) = placed(text);
+    let (_, changed) = placed("    fn()->u8 {4u8}");
+    let (file, current) = placed(text);
+    engine.generated.insert(
+        path,
+        crate::queries::generation::GeneratedSource {
+            file,
+            text: text.into(),
+            site: hirsel_span::Span::default(),
+        },
+    );
+    let ty = engine.types().intern(hirsel_types::Type::unit());
+    let context = NativeRecordContext::capture(&engine);
+    let records = NativeRecords::new(
+        engine.types().clone(),
+        Arc::new(crate::store::MemStore::default()),
+    );
+    let row = |anchor| Row {
+        origin: hirsel_span::Span::new(anchor, 0, 4).unwrap(),
+        ty,
+    };
+    let encoded = records.encode(&context, &row(old)).unwrap();
+    assert_eq!(encoded, records.encode(&context, &row(current)).unwrap());
+    let decoded: Row = records.decode(&context, &encoded).unwrap();
+    assert_eq!(decoded.origin.anchor, current);
+    assert!(context.record_owner(changed).is_none());
+    assert!(records.encode(&context, &row(changed)).is_none());
+}
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Row {
     origin: hirsel_span::Span,

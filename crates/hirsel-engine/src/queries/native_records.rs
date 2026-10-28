@@ -78,6 +78,34 @@ impl NativeRecordContext {
                 )
             });
         }
+        // Registration can repeat identical text while inferred headers still
+        // cite its earlier placed source. Only the same logical source and
+        // exact bytes may share its content-bound codec owner.
+        let mut generations = BTreeMap::new();
+        for (file, binding) in &generated {
+            if let Some(source) = engine.sources.file(*file) {
+                generations
+                    .entry((source.logical_path(), source.text()))
+                    .or_insert_with(|| binding.clone());
+            }
+        }
+        let mut current_anchors = BTreeMap::new();
+        for (anchor, file, base) in engine.sources.anchors() {
+            if let Some((owner, _)) = generated.get(&file) {
+                current_anchors.insert((owner.clone(), base), anchor);
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (_, file, _) in engine.sources.anchors() {
+            if generated.contains_key(&file) || !seen.insert(file) {
+                continue;
+            }
+            if let Some(source) = engine.sources.file(file)
+                && let Some(binding) = generations.get(&(source.logical_path(), source.text()))
+            {
+                generated.insert(file, binding.clone());
+            }
+        }
         for (anchor, file, base) in engine.sources.anchors() {
             let owner = owners.get(&anchor).cloned().or_else(|| {
                 generated
@@ -93,6 +121,7 @@ impl NativeRecordContext {
                         .and_then(|items| items.iter().find(|item| item.occurrence == owner.1))
                         .map(|item| item.anchor)
                         .or_else(|| engine.catalog.anchor(&owner.0, owner.1))
+                        .or_else(|| current_anchors.get(&owner).copied())
                         .unwrap_or(anchor)
                 });
                 let declaration = generated
