@@ -220,6 +220,16 @@ impl FrontLowerQueries {
                 .iter()
                 .filter(|(_, declaration)| selected.contains(&declaration.owner))
         };
+        if values().next().is_none() && declarations().next().is_none() {
+            return Ok((
+                crate::NativeStaticInputs {
+                    constants: BTreeMap::new(),
+                    definitions: vec![],
+                    generated_signatures: BTreeMap::new(),
+                },
+                0,
+            ));
+        }
         let mut metadata = crate::NativeMetadataWeight::default();
         metadata.tree::<DefPath, Materialized>(values().count());
         metadata.tree::<DefPath, hirsel_types::SignatureRef>(declarations().count());
