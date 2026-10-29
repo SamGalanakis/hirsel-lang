@@ -2750,7 +2750,7 @@ pub(crate) fn header_span(syntax: &ItemSyntax) -> Span {
     }
 }
 
-fn runtime_type_catalog(
+pub(crate) fn runtime_type_catalog(
     types: Arc<hirsel_types::TypeInterner>,
     views: Vec<(hirsel_types::SignatureRef, ContentHash)>,
     mut finalizer: impl FnMut(&DefPath) -> Result<Option<(DefPath, hirsel_tir::BodyId)>, QueryError>,

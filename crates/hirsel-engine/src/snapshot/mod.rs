@@ -497,13 +497,6 @@ impl SignatureSnapshot {
         })
         .map(Arc::new)
     }
-    pub(crate) fn opaque_definitions(&self) -> impl Iterator<Item = DefId> + '_ {
-        self.definitions().into_iter().filter(|d| {
-            self.signature(*d).is_some_and(|s| {
-                s.is_ok_and(|s| s.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque)
-            })
-        })
-    }
     /// `d`'s view in its own package (an opaque type's private view) with
     /// V's digest of it: what compile-time reflection of `d` reads.
     pub fn representation(
