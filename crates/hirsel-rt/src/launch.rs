@@ -2410,6 +2410,14 @@ pub(crate) unsafe fn execute(
     if deferred_placement.is_some() {
         width = 1;
     }
+    // A program whose linked closure cannot project Tasks needs no physical
+    // dispatcher for its sole root. Observed placement and explicit harness
+    // topology still use the complete admission path.
+    let scalar = deferred_placement.is_some()
+        && !production_free
+        && cpu_fixture.is_none()
+        && options.workers.is_none()
+        && !crate::runtime_roots::tasks();
     // Replay validates placement syntax but never captures topology or opens a sidecar.
     let managed = if replay.is_none() && deferred_placement.is_none() {
         placement_run
@@ -2678,55 +2686,46 @@ pub(crate) unsafe fn execute(
             }
         }
     }
-    let mut runner_config = crate::runners::Config {
-        runners: runners.clone(),
-        fault_seed,
-        callees,
-        request_schemas: program
-            .callees
-            .as_ref()
-            .and_then(|m| m.request_schemas.clone()),
-        entries: program.entries.clone(),
-        tape: runner_tape.or_else(|| {
-            std::env::var_os("HIRSEL_RT_TAPE")
-                .filter(|_| requested.is_none() && real.is_some())
-                .map(std::path::PathBuf::from)
-        }),
-        stdout: Some(sinks.stdout.clone()),
-        runtime: config,
-        failure_table: program.failure_table,
-    };
-    // The home owner stays on admission, outside RunShared: a detached worker
-    // can destroy only the Send transport slot, never Rc adapters or sinks.
-    let _runners_home = if production_free && !runners.is_empty() {
-        let home = if let Some(io) = &free_adapter {
-            let slot = crate::runners::native::Slot::new(io.clone())
-                .map_err(|error| format!("native runners: {error:?}"))?;
-            unsafe { (*ctx).run().runner_home = Some(slot.clone()) };
-            Some(unsafe { crate::runners::native::Home::new(slot, runner_config.clone()) })
-        } else {
-            None
+    let runner_launch = crate::runtime_roots::runners();
+    let (_runners_home, free_adapter) = if let Some(provider) = runner_launch {
+        let runner_config = crate::runners::Config {
+            runners: runners.clone(),
+            fault_seed,
+            callees,
+            request_schemas: program
+                .callees
+                .as_ref()
+                .and_then(|m| m.request_schemas.clone()),
+            entries: program.entries.clone(),
+            tape: runner_tape.or_else(|| {
+                std::env::var_os("HIRSEL_RT_TAPE")
+                    .filter(|_| requested.is_none() && real.is_some())
+                    .map(std::path::PathBuf::from)
+            }),
+            stdout: Some(sinks.stdout.clone()),
+            runtime: config,
+            failure_table: program.failure_table,
         };
-        runner_config.stdout = None;
-        home
+        unsafe {
+            (provider.admit)(
+                ctx,
+                runner_config,
+                runner_instance,
+                production_free,
+                free_adapter,
+            )
+        }?
     } else {
-        None
+        (
+            None,
+            free_adapter
+                .map(|io| io as std::sync::Arc<dyn crate::io_concurrent::ConcurrentAdapter>),
+        )
     };
-    unsafe { crate::runners::configure(ctx, runner_config) };
-    if let Some(instance) = runner_instance {
-        unsafe { crate::runners::set_instance(ctx, instance) };
-    }
     crate::tasks::free::record::bind_terminal(unsafe { &*ctx });
-    if let Some(io) = free_adapter.take()
-        && let Err(error) = unsafe {
-            let io: std::sync::Arc<dyn crate::io_concurrent::ConcurrentAdapter> =
-                if let Some(slot) = (*ctx).run_ref().runner_home.as_ref() {
-                    crate::runners::native::wrap(slot)
-                } else {
-                    io
-                };
-            crate::tasks::free::host::concurrent::Service::install(ctx, io)
-        }
+    if let Some(io) = free_adapter
+        && let Err(error) =
+            unsafe { crate::tasks::free::host::concurrent::Service::install(ctx, io) }
     {
         unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
         control.finish(0);
@@ -2745,12 +2744,13 @@ pub(crate) unsafe fn execute(
     // The free-mode test channel decides one worker's interleavings: it runs on one.
     // An execution of several runs (RUN-10) switches between their roots on one thread: a run
     // with runners runs on one worker too.
-    if (ordered_enabled
-        || cpu_fixture.is_some()
-        || production_free
-        || width > 1
-        || (options.workers.is_some()
-            && control.width.load(std::sync::atomic::Ordering::Acquire) != 0))
+    if !scalar
+        && (ordered_enabled
+            || cpu_fixture.is_some()
+            || production_free
+            || width > 1
+            || (options.workers.is_some()
+                && control.width.load(std::sync::atomic::Ordering::Acquire) != 0))
         && unsafe { &mut *ctx }.run().free.is_none()
         && (runners.is_empty() || production_free)
     {
@@ -2777,7 +2777,9 @@ pub(crate) unsafe fn execute(
     if let Some(ordered) = ordered {
         // SAFETY: fresh root, after topology/budgets and before root publication.
         if deferred_placement.is_some() {
-            unsafe { crate::pool::free::enable(ctx) };
+            if !scalar {
+                unsafe { crate::pool::free::enable(ctx) };
+            }
             unsafe { (*ctx).run().deferred_ordered = Some(ordered) };
         } else {
             unsafe { ordered.install(ctx) };
@@ -2864,7 +2866,10 @@ pub(crate) unsafe fn execute(
     // run's concurrent service: blocking built-in calls then run as owned jobs,
     // never on a compute worker or home. Replay keeps its home tape.
     let mut ordered_live = None;
-    if ordered_enabled && let Some(io) = real.take() {
+    if ordered_enabled
+        && !scalar
+        && let Some(io) = real.take()
+    {
         // The home binding's alias goes first; OrderedHome replaces it.
         drop(adapter);
         let moved = Rc::try_unwrap(io)
@@ -3007,7 +3012,11 @@ pub(crate) unsafe fn execute(
         unsafe { crate::stop::LaunchFrame::new(root, IO_HANDLE, ARGS_HANDLE, roots, &mut report) };
     let mut ran = unsafe { crate::stop::run_root(ctx, frame) };
     if callee_replay && matches!(ran, Ok(STATUS_OK)) {
-        match unsafe { crate::runners::native::finish_replay(ctx) } {
+        match unsafe {
+            (runner_launch
+                .expect("callee replay without runner roots")
+                .finish_replay)(ctx)
+        } {
             Ok(code) => unsafe {
                 (*ctx).run().launch.as_mut().unwrap().words.result[0] = u128::from(code);
             },

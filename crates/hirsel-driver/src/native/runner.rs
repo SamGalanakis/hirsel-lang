@@ -138,7 +138,9 @@ pub(crate) fn export_manifest(runtime: &Path, builtins: &Path) -> Result<Vec<Str
     let names: BTreeSet<String> = defined
         .iter()
         .filter(|name| {
-            name.starts_with("hirsel_rt") || imported.contains(*name) && !supported.contains(*name)
+            name.starts_with("hirsel_rt")
+                || name.starts_with("hirsel.runtime.") && name.ends_with(".provider")
+                || imported.contains(*name) && !supported.contains(*name)
         })
         .cloned()
         .collect();

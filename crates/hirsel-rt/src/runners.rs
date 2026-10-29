@@ -49,6 +49,62 @@ use crate::{Header, STATUS_OK, TaskCtx, fault};
 
 pub(crate) mod native;
 
+type Concurrent = std::sync::Arc<dyn crate::io_concurrent::ConcurrentAdapter>;
+type HomeOwner = Box<dyn std::any::Any>;
+type Admitted = (Option<HomeOwner>, Option<Concurrent>);
+type Admit = unsafe fn(
+    *mut TaskCtx,
+    Config,
+    Option<[u8; 16]>,
+    bool,
+    Option<std::sync::Arc<crate::io_real::ConcurrentIo>>,
+) -> Result<Admitted, String>;
+
+/// The launcher names this provider only when its program reaches runner entries.
+/// Embedding hosts retain the complete provider through the weak default root.
+pub(crate) struct Launch {
+    pub(crate) admit: Admit,
+    pub(crate) finish_replay: unsafe fn(*mut TaskCtx) -> Stopped<u8>,
+}
+
+#[unsafe(export_name = "hirsel.runtime.runners.provider")]
+static LAUNCH: Launch = Launch {
+    admit,
+    finish_replay: native::finish_replay,
+};
+
+unsafe fn admit(
+    ctx: *mut TaskCtx,
+    mut config: Config,
+    instance: Option<[u8; 16]>,
+    production_free: bool,
+    io: Option<std::sync::Arc<crate::io_real::ConcurrentIo>>,
+) -> Result<Admitted, String> {
+    // The owner stays on admission. Detached workers hold only Slot's Send
+    // transport, and never destroy Home's Rc adapters or sinks.
+    let mut home: Option<HomeOwner> = None;
+    let adapter = if production_free && !config.runners.is_empty() {
+        let adapter = if let Some(io) = io {
+            let slot =
+                native::Slot::new(io).map_err(|error| format!("native runners: {error:?}"))?;
+            unsafe { (*ctx).run().runner_home = Some(slot.clone()) };
+            home = Some(unsafe { native::Home::new(slot.clone(), config.clone()) });
+            Some(native::wrap(&slot))
+        } else {
+            None
+        };
+        config.stdout = None;
+        adapter
+    } else {
+        io.map(|io| io as Concurrent)
+    };
+    unsafe { configure(ctx, config) };
+    if let Some(instance) = instance {
+        unsafe { set_instance(ctx, instance) };
+    }
+    Ok((home, adapter))
+}
+
 /// `RunnerWait`'s outcome codes, `kind << 4 | detail`, which the compiled bodies turn into
 /// `Result[R, RunError[E]]`: `Ok`, `Failed` and `Faulted` (their bytes from `RunnerTake`),
 /// then `NotRun(reason)`, `InDoubt(reason)` and `Canceled(cause)` by their variants' ordinals.
@@ -103,6 +159,7 @@ struct RunnerGrant {
 
 /// One execution: its runs, the root first, in the order they started.
 pub(crate) struct Execution {
+    idle: unsafe fn(*mut TaskCtx) -> Stopped<()>,
     config: Config,
     runs: Vec<Run>,
     /// The run executing now.
@@ -203,6 +260,7 @@ enum End {
 impl Execution {
     fn new(config: Config, root: *mut TaskCtx) -> Self {
         Execution {
+            idle: drive_idle,
             config,
             runs: vec![Run {
                 root,
@@ -310,6 +368,15 @@ pub(crate) unsafe fn driving(ctx: *mut TaskCtx) -> bool {
 /// `ctx` is the running task's, which is parked or holding, and the caller holds nothing a
 /// stop must drop.
 pub(crate) unsafe fn idle(ctx: *mut TaskCtx) -> Stopped<()> {
+    // The launcher or a runner entry installed this driver. Merely reaching
+    // a scheduling point must not root the code that starts callee runs.
+    let idle = unsafe { (*root_run(ctx)).runners.as_ref() }
+        .expect("runner idle without an execution")
+        .idle;
+    unsafe { idle(ctx) }
+}
+
+unsafe fn drive_idle(ctx: *mut TaskCtx) -> Stopped<()> {
     let me = execution(ctx).active;
     // SAFETY: the context is live.
     unsafe {

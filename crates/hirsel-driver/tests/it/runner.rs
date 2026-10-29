@@ -24,6 +24,17 @@ const PARTIAL: &str = "pub fn main(rt: Io, args: Args) -> Result[(), GrantError]
   Ok(())
 }
 ";
+const RUNNERS: &str = "fn half(n: u64) -> Result[u64, String] {
+  if n % 2u64 == 1u64 { return Error(\"odd\") }
+  Ok(n / 2u64)
+}
+pub fn main(t: Test) -> Result[(), ()] {
+  let worker = test.runner(t)
+  failure.check(runner.compute(worker, half, 8u64) == Ok(4u64), Arithmetic())
+  failure.check(runner.compute(worker, half, 3u64) == Error(Failed(\"odd\")), Arithmetic())
+  Ok(())
+}
+";
 const FAILS: &str = "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let _ = out.print(io.stdout(rt)?, \"before\\n\")
   let xs: List[u8] = [7u8]
@@ -184,6 +195,7 @@ fn images_run_in_runners_as_their_executables_do_on_both_targets_and_backends() 
             for backend in [Backend::Llvm, Backend::Cranelift] {
                 for (name, source) in [
                     ("partial", PARTIAL),
+                    ("runners", RUNNERS),
                     ("fails", FAILS),
                     ("wide", WIDE),
                     ("blocks", BLOCKS),
@@ -231,6 +243,112 @@ fn images_run_in_runners_as_their_executables_do_on_both_targets_and_backends() 
                         );
                     }
                 }
+            }
+        }
+    });
+}
+
+#[test]
+fn a_standalone_scalar_preserves_events_with_and_without_dispatch_observers() {
+    with_compiler_stack(|| {
+        let tools = toolchain();
+        for target in [x86(), arm()] {
+            for backend in [Backend::Llvm, Backend::Cranelift] {
+                let dir = scratch(&format!("scalar-roots/{}-{backend:?}", target.triple));
+                let compiled = compiled(PARTIAL, &target, backend);
+                let executable = hirsel_driver::native::link_standalone_objects(
+                    &compiled.program,
+                    &compiled.entry,
+                    &compiled.objects,
+                    &tools,
+                    &dir,
+                )
+                .unwrap();
+                for width in [1, 4] {
+                    let grants = format!(
+                        r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]}},"placement":{{"cores":{width},"commit":"shared","reorder":"auto"}}}}"#
+                    );
+                    let mut events = None;
+                    for observing in [false, true] {
+                        let tape = dir.join(format!("w{width}-{observing}.tape"));
+                        let mut command = if target.triple.starts_with("aarch64") {
+                            let mut command =
+                                std::process::Command::new(tools.qemu_aarch64.as_ref().unwrap());
+                            command.arg(&executable);
+                            command
+                        } else {
+                            std::process::Command::new(&executable)
+                        };
+                        command
+                            .env_clear()
+                            .env("HIRSEL_RT_WORKERS", width.to_string())
+                            .arg("--hirsel-record")
+                            .arg(&tape)
+                            .args(["--hirsel-grants", &grants]);
+                        if observing {
+                            command
+                                .arg("--hirsel-trace-events")
+                                .arg(dir.join(format!("w{width}.jsonl")));
+                        }
+                        let output = command.output().unwrap();
+                        assert!(output.status.success(), "{command:?}: {output:?}");
+                        assert_eq!(output.stdout, b"line\npartial");
+                        assert!(output.stderr.is_empty(), "{output:?}");
+                        let recording = hirsel_rt::launch::parse_recording_bytes(
+                            &std::fs::read(&tape).unwrap(),
+                        )
+                        .unwrap();
+                        if let Some(expected) = &events {
+                            assert_eq!(&recording.events, expected);
+                        } else {
+                            events = Some(recording.events);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn a_missing_runtime_feature_provider_refuses_the_link_on_both_targets_and_backends() {
+    with_compiler_stack(|| {
+        let tools = toolchain();
+        for target in [x86(), arm()] {
+            let dir = scratch(&format!("runner-missing-provider/{}", target.triple));
+            let archive = dir.join("missing-provider.a");
+            let renamed =
+                std::process::Command::new(tools.clang.parent().unwrap().join("llvm-objcopy"))
+                    .args([
+                        "--redefine-sym",
+                        "hirsel.runtime.runners.provider=missing.runner.provider",
+                    ])
+                    .arg(tools.archive(&target.triple).unwrap())
+                    .arg(&archive)
+                    .output()
+                    .unwrap();
+            assert!(renamed.status.success(), "{renamed:?}");
+            let mut tools = tools.clone();
+            tools
+                .runtime
+                .insert((target.triple.clone(), RuntimeBuild::default()), archive);
+            for backend in [Backend::Llvm, Backend::Cranelift] {
+                let compiled = compiled(RUNNERS, &target, backend);
+                let error = link_objects(
+                    &compiled.program,
+                    &compiled.entry,
+                    &compiled.objects,
+                    &tools,
+                    &dir,
+                )
+                .unwrap_err();
+                assert!(
+                    error
+                        .message
+                        .contains("undefined symbol: hirsel.runtime.runners.provider"),
+                    "{} {backend:?}: {error:?}",
+                    target.triple,
+                );
             }
         }
     });

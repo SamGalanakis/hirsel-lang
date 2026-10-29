@@ -2106,7 +2106,7 @@ fn executable_objects(
     )?;
     let main = write(directory, "main.o", &main)?;
     check_link_manifest(program, entry, objects)?;
-    let mut inputs = write_link_objects(directory, objects, &[main])?;
+    let mut inputs = write_link_objects(program, directory, objects, &[main])?;
     inputs.extend(data_abi_object(program, directory)?);
     Ok(inputs)
 }
@@ -2257,11 +2257,41 @@ fn check_link_manifest(
 }
 
 fn write_link_objects(
+    program: &ReadyProgram,
     dir: &Path,
     objects: &[hirsel_lir::stage::ObjectArtifact],
     launchers: &[PathBuf],
 ) -> Result<Vec<PathBuf>, NativeError> {
     let mut inputs = launchers.to_vec();
+    // The objects are the actual linked closure, including cached units and
+    // generated registrations. A runtime feature's direct provider reference
+    // must be present here, so a missing provider fails in the linker.
+    let runners = !program.entries.is_empty()
+        || !program.foreign_links.is_empty()
+        || objects
+            .iter()
+            .flat_map(|o| &o.imports)
+            .any(|import| import.name.contains("_runner_") || import.name.ends_with("_runner"));
+    let root = if runners {
+        "@hirsel.runtime.runners.provider = external constant i8\n\
+         @hirsel.runtime.runners = hidden constant ptr @hirsel.runtime.runners.provider\n"
+    } else {
+        "@hirsel.runtime.runners = hidden constant ptr null\n"
+    };
+    let tasks = runners
+        || objects.iter().flat_map(|o| &o.imports).any(|import| {
+            import.name.contains("_io_tasks")
+                || import.name.contains("_test_tasks")
+                || import.name.contains("_task_")
+                || import.name.contains("_cpu_")
+        });
+    let root = format!(
+        "{root}@hirsel.runtime.tasks = hidden constant i8 {}\n",
+        u8::from(tasks)
+    );
+    let root = hirsel_llvm::compile_ir(&root, &program.target, OptLevel::None)
+        .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
+    inputs.push(write(dir, "runtime-roots.o", &root.bytes)?);
     for (index, object) in objects.iter().enumerate() {
         inputs.push(write(dir, &format!("unit-{index}.o"), &object.bytes)?);
     }
@@ -2291,7 +2321,7 @@ fn link_launcher(
     })?;
     let executable = dir.join("program");
     let kit = super::kit::Kit::load(&toolchain.kit)?;
-    let inputs = write_link_objects(dir, objects, launchers)?;
+    let inputs = write_link_objects(program, dir, objects, launchers)?;
     if let Output::Image(runner) = output {
         let image = match executable_reason(program, objects, toolchain) {
             Some(reason) => Err(reason),
@@ -2546,7 +2576,7 @@ refuse:\n ret i32 3\n}}\n",
     for (entry, _) in tests {
         check_link_manifest(program, entry, objects)?;
     }
-    let mut objects = write_link_objects(dir, objects, &launchers)?;
+    let mut objects = write_link_objects(program, dir, objects, &launchers)?;
     objects.extend(data_abi_object(program, dir)?);
     inputs
         .platform

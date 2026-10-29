@@ -7,14 +7,21 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 pub(crate) struct Slot {
     pub(super) transport: Arc<Transport>,
     home: AtomicPtr<Home>,
+    poll: unsafe fn(*mut Home, *mut RunShared) -> Stopped<bool>,
 }
 impl Slot {
     pub(crate) fn new(io: Arc<crate::io_real::ConcurrentIo>) -> Result<Arc<Self>, AdapterError> {
         Ok(Arc::new(Self {
             transport: Transport::new(io)?,
             home: AtomicPtr::new(std::ptr::null_mut()),
+            poll: poll_home,
         }))
     }
+}
+
+unsafe fn poll_home(home: *mut Home, run: *mut RunShared) -> Stopped<bool> {
+    // SAFETY: only the admission owner calls the slot's poll hook.
+    unsafe { (*home).poll(run) }
 }
 
 struct Child {
@@ -325,7 +332,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     if home.is_null() {
         return false;
     }
-    match unsafe { (*home).poll(run) } {
+    match unsafe { (slot.poll)(home, run) } {
         Ok(changed) => changed,
         Err(stop) => {
             unsafe { (*run).control.request(stop) };
