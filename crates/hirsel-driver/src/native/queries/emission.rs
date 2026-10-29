@@ -7,7 +7,7 @@ use hirsel_lir::{
 };
 use hirsel_syntax::DefPath;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::OnceLock};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EmissionFacts {
@@ -22,7 +22,18 @@ pub struct InlineInstances(Option<Arc<InlineOwner>>);
 struct InlineOwner {
     values: Box<[ContentHash]>,
     _grant: Option<Arc<hirsel_engine::runtime::MemoryReservation>>,
+    archive: OnceLock<Result<InlineArchive, String>>,
 }
+struct InlineArchive {
+    reference: Reference,
+    bytes: Vec<u8>,
+}
+const MAX_INLINE_MEMBERS: usize =
+    hirsel_rc::instance::MAX_INSTANCES + hirsel_rc::closure_calls::MAX_SPECIALIZATIONS;
+const INLINE_SELECTION: hirsel_engine::store::Domain = hirsel_engine::store::Domain {
+    kind: 0x4e00_0034,
+    schema: 1,
+};
 impl InlineInstances {
     pub(super) fn new(
         values: impl IntoIterator<Item = ContentHash>,
@@ -35,6 +46,7 @@ impl InlineInstances {
             Self(Some(Arc::new(InlineOwner {
                 values,
                 _grant: grant,
+                archive: OnceLock::new(),
             })))
         }
     }
@@ -54,7 +66,145 @@ impl InlineInstances {
     }
     pub(super) fn retained_bytes(&self) -> u64 {
         self.0.as_ref().map_or(0, |owner| {
-            (size_of::<InlineOwner>() + 2 * size_of::<usize>() + size_of_val(&*owner.values)) as u64
+            let archive = owner
+                .archive
+                .get()
+                .and_then(|archive| archive.as_ref().ok())
+                .map_or(0, |archive| archive.bytes.capacity());
+            (size_of::<InlineOwner>()
+                + 2 * size_of::<usize>()
+                + size_of_val(&*owner.values)
+                + archive) as u64
+        })
+    }
+    fn archive(&self) -> Result<Option<&InlineArchive>, String> {
+        let Some(owner) = &self.0 else {
+            return Ok(None);
+        };
+        owner
+            .archive
+            .get_or_init(|| {
+                if owner.values.len() > MAX_INLINE_MEMBERS
+                    || owner.values.windows(2).any(|pair| pair[0] >= pair[1])
+                {
+                    return Err("noncanonical inline selection".into());
+                }
+                let bytes = serde_json::to_vec(&owner.values).map_err(|error| error.to_string())?;
+                let reference = INLINE_SELECTION
+                    .reference(&bytes)
+                    .ok_or("inline selection archive exceeds the record limit")?;
+                Ok(InlineArchive { reference, bytes })
+            })
+            .as_ref()
+            .map(Some)
+            .map_err(Clone::clone)
+    }
+    fn archived_reference(&self) -> Option<Reference> {
+        self.0
+            .as_ref()?
+            .archive
+            .get()?
+            .as_ref()
+            .ok()
+            .map(|archive| archive.reference)
+    }
+    pub(super) fn publish(
+        &self,
+        store: &dyn hirsel_engine::store::ResultStore,
+    ) -> Result<Option<Reference>, String> {
+        let Some(archive) = self.archive()? else {
+            return Ok(None);
+        };
+        if store.put_content(INLINE_SELECTION, &archive.bytes) != Some(archive.reference) {
+            return Err("inline selection publication differs".into());
+        }
+        Ok(Some(archive.reference))
+    }
+    fn read(
+        reference: Reference,
+        store: &dyn hirsel_engine::store::ResultStore,
+        grant: Option<Arc<hirsel_engine::runtime::MemoryReservation>>,
+    ) -> Result<Self, String> {
+        // A JSON hash array has at most 129 bytes per member plus its
+        // separating comma, with one extra outer bracket byte.
+        if reference.domain != INLINE_SELECTION
+            || reference.len
+                > (MAX_INLINE_MEMBERS as u64)
+                    .saturating_mul(130)
+                    .saturating_add(1)
+        {
+            return Err("foreign or oversized inline selection component".into());
+        }
+        let bytes = store
+            .get_content(reference)
+            .ok_or("missing inline selection component")?;
+        if INLINE_SELECTION.reference(&bytes) != Some(reference) {
+            return Err("inline selection component integrity differs".into());
+        }
+        let values: Box<[ContentHash]> = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("inline selection component: {error}"))?;
+        if values.is_empty()
+            || values.len() > MAX_INLINE_MEMBERS
+            || values.windows(2).any(|pair| pair[0] >= pair[1])
+            || serde_json::to_vec(&values).map_err(|error| error.to_string())? != bytes.as_ref()
+        {
+            return Err("noncanonical inline selection component".into());
+        }
+        Ok(Self(Some(Arc::new(InlineOwner {
+            values,
+            _grant: grant,
+            archive: OnceLock::from(Ok(InlineArchive {
+                reference,
+                bytes: bytes.to_vec(),
+            })),
+        }))))
+    }
+}
+
+/// Durable discovery carries an ordered child reference, not a second copy of
+/// the scope's complete inline list. A child is checked before its first use.
+#[derive(Serialize, Deserialize)]
+pub(super) struct EmissionRecord {
+    callbacks: Vec<DefPath>,
+    tracking: bool,
+    inline: Option<Reference>,
+}
+impl EmissionRecord {
+    pub(super) fn new(facts: &EmissionFacts, inline: Option<Reference>) -> Result<Self, String> {
+        if !facts.canonical() || facts.inline.archive()?.map(|archive| archive.reference) != inline
+        {
+            return Err("emission inline component differs from its complete selection".into());
+        }
+        Ok(Self {
+            callbacks: facts.callbacks.clone(),
+            tracking: facts.tracking,
+            inline,
+        })
+    }
+    pub(super) fn canonical(&self) -> bool {
+        !self.callbacks.windows(2).any(|pair| pair[0] >= pair[1])
+            && self
+                .inline
+                .is_none_or(|reference| reference.domain == INLINE_SELECTION && reference.len > 0)
+    }
+    pub(super) fn read(
+        self,
+        store: &dyn hirsel_engine::store::ResultStore,
+        cached: &InlineInstances,
+        grant: Option<Arc<hirsel_engine::runtime::MemoryReservation>>,
+    ) -> Result<EmissionFacts, String> {
+        if !self.canonical() {
+            return Err("noncanonical emission component".into());
+        }
+        let inline = match self.inline {
+            None => InlineInstances::default(),
+            Some(reference) if cached.archived_reference() == Some(reference) => cached.clone(),
+            Some(reference) => InlineInstances::read(reference, store, grant)?,
+        };
+        Ok(EmissionFacts {
+            callbacks: self.callbacks,
+            tracking: self.tracking,
+            inline,
         })
     }
 }
@@ -179,5 +329,104 @@ mod tests {
         assert_eq!(budget.reserved(), 0);
         assert_eq!(restored.as_ref(), values);
         assert_eq!(InlineInstances::default().retained_bytes(), 0);
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    use hirsel_engine::store::{Bytes, EntryKey, MemStore, ResultStore};
+
+    struct ChangedBytes(Vec<u8>);
+    impl ResultStore for ChangedBytes {
+        fn get(&self, _: &EntryKey) -> Option<Bytes> {
+            None
+        }
+        fn put(&self, _: &EntryKey, _: &[u8]) {}
+        fn get_content(&self, _: Reference) -> Option<Bytes> {
+            Some(self.0.clone().into())
+        }
+        fn name(&self) -> &'static str {
+            "changed-inline-child"
+        }
+    }
+
+    #[test]
+    fn inline_child_is_archived_once_and_fresh_readers_refuse_corruption_and_noncanonical_members()
+    {
+        let budget = hirsel_engine::runtime::ProcessBudget::new(1 << 20);
+        let grant = Arc::new(budget.reserve(1 << 20).unwrap());
+        let values = [
+            ContentHash::of_bytes(b"first"),
+            ContentHash::of_bytes(b"second"),
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        let facts = EmissionFacts {
+            callbacks: Vec::new(),
+            tracking: true,
+            inline: InlineInstances::new(values.clone(), Some(grant.clone())),
+        };
+        let before = facts.inline.retained_bytes();
+        let store = MemStore::default();
+        let reference = facts.inline.publish(&store).unwrap().unwrap();
+        let archive = facts.inline.archive().unwrap().unwrap();
+        assert_eq!(archive.reference, reference);
+        assert_eq!(archive.bytes, serde_json::to_vec(&values).unwrap());
+        assert_eq!(
+            facts.inline.retained_bytes() - before,
+            archive.bytes.capacity() as u64
+        );
+        let archived_bytes = archive.bytes.as_ptr();
+        assert_eq!(
+            facts.inline.archive().unwrap().unwrap().bytes.as_ptr(),
+            archived_bytes
+        );
+        let record = || EmissionRecord::new(&facts, Some(reference)).unwrap();
+        let loaded = record()
+            .read(&store, &Default::default(), Some(grant.clone()))
+            .unwrap();
+        assert_eq!(loaded, facts);
+        let mut corrupted = archive.bytes.clone();
+        corrupted[1] ^= 1;
+        let changed = ChangedBytes(corrupted);
+        assert!(
+            record()
+                .read(&changed, &Default::default(), Some(grant.clone()))
+                .is_err()
+        );
+        let retained = record()
+            .read(&changed, &loaded.inline, Some(grant.clone()))
+            .unwrap();
+        assert_eq!(retained.inline.identity(), loaded.inline.identity());
+        let mut crossed = record();
+        crossed.inline.as_mut().unwrap().output.0.0[0] ^= 1;
+        assert!(
+            crossed
+                .read(&store, &Default::default(), Some(grant.clone()))
+                .is_err()
+        );
+        let mut foreign = record();
+        foreign.inline.as_mut().unwrap().domain.schema += 1;
+        assert!(
+            foreign
+                .read(&store, &Default::default(), Some(grant.clone()))
+                .is_err()
+        );
+        for bytes in [
+            serde_json::to_vec(&[values.first().unwrap(); 2]).unwrap(),
+            [b" ".as_slice(), archive.bytes.as_slice()].concat(),
+        ] {
+            let reference = store.put_content(INLINE_SELECTION, &bytes).unwrap();
+            assert!(InlineInstances::read(reference, &store, Some(grant.clone())).is_err());
+        }
+        let escaped = loaded.inline.clone();
+        drop(grant);
+        drop(facts);
+        drop(loaded);
+        drop(retained);
+        assert_eq!(budget.reserved(), 1 << 20);
+        drop(escaped);
+        assert_eq!(budget.reserved(), 0);
     }
 }

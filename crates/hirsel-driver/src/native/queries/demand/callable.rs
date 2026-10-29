@@ -111,16 +111,12 @@ impl DemandInstances {
         }
         let mut outputs = Vec::new();
         let mut inline = super::super::emission::InlineInstances::default();
-        for (key, candidate, mut discovery) in candidates.into_values() {
-            if discovery.emission.inline == inline {
-                discovery.emission.inline = inline.clone();
-            } else {
-                inline = discovery
-                    .emission
-                    .inline
-                    .with_grant(self.retained_owner.clone());
-                discovery.emission.inline = inline.clone();
-            }
+        for (key, candidate, discovery) in candidates.into_values() {
+            let emission = discovery
+                .emission
+                .read(self.store.as_ref(), &inline, self.retained_owner.clone())
+                .ok()?;
+            inline = emission.inline.clone();
             let request = requests.get(key.instance.encoding())?;
             let (_, original) = originals.iter().find(|(original, _)| {
                 let input = &self.requests[original.instance.encoding()];
@@ -193,7 +189,7 @@ impl DemandInstances {
                         dependencies,
                         templates: discovery.templates,
                         operation_freedom: discovery.operation_freedom,
-                        emission: discovery.emission,
+                        emission,
                         _owner: self.retained_owner.clone(),
                     },
                     Some(original),
@@ -337,6 +333,7 @@ impl DemandInstances {
             specialized.inline.iter().copied(),
             self.retained_owner.clone(),
         );
+        let inline_reference = inline.publish(self.store.as_ref())?;
         let mut outputs = Vec::new();
         for ((unit, key), origin) in units.into_iter().zip(&keys).zip(&specialized.origins) {
             let original = &originals[origin.index()].1;
@@ -390,7 +387,10 @@ impl DemandInstances {
                     constant_reads: original.facts.source.constant_reads.clone(),
                     templates: templates.clone(),
                     operation_freedom: freedom.clone(),
-                    emission: emission.clone(),
+                    emission: super::super::emission::EmissionRecord::new(
+                        &emission,
+                        inline_reference,
+                    )?,
                     discharge: original.facts.source.discharge.clone(),
                 })
                 .map_err(|e| e.to_string())?,

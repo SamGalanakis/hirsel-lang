@@ -127,7 +127,7 @@ struct Discovery {
     constant_reads: Vec<hirsel_syntax::DefPath>,
     templates: super::optimizer::TemplateFacts,
     operation_freedom: hirsel_rc::closure_calls::OperationFreedom,
-    emission: super::emission::EmissionFacts,
+    emission: super::emission::EmissionRecord,
     discharge: super::discharge::NativeDischargeFacts,
 }
 
@@ -1029,7 +1029,11 @@ impl DemandInstances {
                 dependencies,
                 templates: discovery.templates,
                 operation_freedom: discovery.operation_freedom,
-                emission: discovery.emission,
+                emission: discovery.emission.read(
+                    self.store.as_ref(),
+                    &Default::default(),
+                    self.retained_owner.clone(),
+                )?,
                 _owner: self.retained_owner.clone(),
             },
             None,
@@ -1518,7 +1522,10 @@ impl DemandInstances {
                 operation_freedom: hirsel_rc::closure_calls::OperationFreedom::extract(
                     &unit, &table,
                 ),
-                emission: super::emission::EmissionFacts::extract(&unit, []),
+                emission: super::emission::EmissionRecord::new(
+                    &super::emission::EmissionFacts::extract(&unit, []),
+                    None,
+                )?,
                 discharge: super::discharge::NativeDischargeFacts::checked(&removed),
             })
             .map_err(|e| e.to_string())?,
