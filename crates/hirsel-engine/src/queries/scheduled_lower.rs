@@ -516,7 +516,10 @@ impl FrontLowerQueries {
     }
     pub fn runtime_types(&self) -> Result<Arc<hirsel_interp::aggregate::RuntimeTypes>, QueryError> {
         self.runtime
-            .get_or_init(|| self.snapshot.comptime_runtime_types(&*self.lowering))
+            .get_or_init(|| {
+                let lowering = self.lowering.as_deref().ok_or(QueryError::NotImplemented)?;
+                self.snapshot.comptime_runtime_types(lowering)
+            })
             .clone()
     }
     pub fn signatures(&self) -> Arc<SignatureSnapshot> {
