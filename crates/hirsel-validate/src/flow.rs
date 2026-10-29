@@ -5946,6 +5946,7 @@ impl Checker<'_> {
                             && !state.shared[root]
                             && state.must[root].has(MustFacts::FRESH_RECEIPT)
                     });
+                let protocol_receipt = !protocol || protocol_unique || protocol_fresh;
                 // A diverging call has no result: only its argument effects
                 // and its failure edge are modeled.
                 let destination = returns.map(|r| r.destination);
@@ -6485,11 +6486,7 @@ impl Checker<'_> {
                     return;
                 };
                 self.reset_unique(state, destination);
-                self.set_fresh_receipt(
-                    state,
-                    destination,
-                    !protocol || protocol_unique || protocol_fresh,
-                );
+                self.set_fresh_receipt(state, destination, protocol_receipt);
                 // MODE-2: a `@preserves_unique` taken input passes its
                 // uniqueness on to the result.
                 let promised = unique_inputs
@@ -6562,6 +6559,7 @@ impl Checker<'_> {
                     },
                 };
                 if let Some((root, roles)) = declared
+                    && protocol_receipt
                     && matches!(
                         self.t.row(root).kind,
                         TypeKind::Named { .. } | TypeKind::Tuple(_)
@@ -6589,7 +6587,7 @@ impl Checker<'_> {
                 self.set_current_unique(
                     state,
                     destination,
-                    inferred.results.contains(&hirsel_types::UniqueResultRow::Root) || promised
+                    protocol_receipt && (inferred.results.contains(&hirsel_types::UniqueResultRow::Root) || promised
                         || parametric
                         || awaited_unique
                         // An owning core cursor transfers parts of its
@@ -6603,7 +6601,7 @@ impl Checker<'_> {
                             .unwrap()
                             .modes
                             .uniqueness
-                            == hirsel_types::Uniqueness::Unique,
+                            == hirsel_types::Uniqueness::Unique),
                 );
                 self.set_current_global(
                     state,
@@ -6629,6 +6627,10 @@ impl Checker<'_> {
                         == hirsel_types::Sendability::Sendable,
                 );
                 self.write(model, state, destination, true, false, report);
+                if !protocol_receipt {
+                    let root = self.body.places[destination.0 as usize].root.0 as usize;
+                    share_root(state, root);
+                }
                 self.set_authority(model, state, destination, authority);
                 self.install_tags(model, state, destination, tags::Parts::new());
                 let locality = self.lifetime(
