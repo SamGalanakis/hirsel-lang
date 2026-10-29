@@ -270,6 +270,10 @@ def main() -> int:
         print(f'capped: CPU pool width {width} exceeds {grant:g} granted CPUs; '
               f'raise HIRSEL_JOBS to {width} and provide at least {width} CPUs', file=sys.stderr)
         return 2
+    # Pass the inherited whole-CPU grant through scope re-entry for defaults.
+    # The injected HIRSEL_JOBS must preserve the serial command's grant.
+    if not os.environ.get('HIRSEL_JOBS'):
+        jobs = str(min(int(jobs), int(grant)))
     if args.inside:
         return inside(args.timeout, limit, command)
     try:

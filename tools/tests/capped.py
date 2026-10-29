@@ -92,6 +92,18 @@ class Capped(unittest.TestCase):
         self.assertEqual(refused.returncode, 2, refused.stderr)
         self.assertIn('raise HIRSEL_JOBS to 4', refused.stderr)
 
+    def test_default_quota_keeps_a_serial_command_runnable_under_one_inherited_cpu(self):
+        allowed = os.sched_getaffinity(0) - set(range(12, 16)) - set(range(28, 32))
+        if not allowed:
+            self.skipTest('requires a non-timing CPU')
+        result = subprocess.run(['taskset', '-c', str(min(allowed)), str(CAPPED),
+                                 'sh', '-c', 'printf %s "$HIRSEL_JOBS"'],
+                                env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '1')
+        self.assertEqual(self.properties(),
+                         ['MemoryMax=4G', 'MemorySwapMax=0', 'OOMPolicy=continue', 'CPUQuota=100%'])
+
     def test_inside_also_refuses_a_pool_wider_than_inherited_affinity(self):
         with patch.object(capped.os, 'sched_getaffinity', return_value={0, 1}), \
                 patch.object(capped, 'own_cgroup', return_value=None), \
