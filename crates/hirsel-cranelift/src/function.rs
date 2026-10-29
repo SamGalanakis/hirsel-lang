@@ -154,6 +154,8 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     /// Per block, whether it charges fuel (`hirsel_lir::fuel`); empty without `inputs.fuel`.
     fuel_points: Vec<bool>,
     pub(crate) instruction_index: usize,
+    pub(crate) root_facts: Vec<Option<cranelift_frontend::Variable>>,
+    pub(crate) read_roots: Vec<Option<cranelift_frontend::Variable>>,
     pub(crate) ahead_state: Option<Value>,
     pub(crate) ahead_counter: Option<cranelift_frontend::Variable>,
     pub(crate) ownership: Option<&'a hirsel_lir::ownership_trace::native::LeafPlan>,
@@ -246,6 +248,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             globals: HashMap::new(),
             fuel_points,
             instruction_index: 0,
+            root_facts: vec![None; unit.slots.len()],
+            read_roots: vec![None; unit.values.len()],
             ahead_state: None,
             ahead_counter: None,
             ownership: None,
@@ -750,6 +754,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.create_params()?;
         self.allocate_slots()?;
         self.bind_parameters()?;
+        self.root_facts_init()?;
         let entry = self.blocks[self.unit.entry.index()];
         if self.params[self.unit.entry.index()]
             .iter()
@@ -1892,6 +1897,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.ahead_point(false)?;
         self.ahead_flush();
         let status = self.b.ins().iconst(types::I8, status);
+        let mut returned = Vec::new();
         match self.sig.value {
             Some(kind) => {
                 let word = match value {
@@ -1899,12 +1905,26 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     Some(_) => return self.invalid("a register result of another shape"),
                     None => self.b.ins().iconst(types::I64, 0),
                 };
-                self.b.ins().return_(&[word, status]);
+                returned.extend([word, status]);
             }
             None => {
-                self.b.ins().return_(&[status]);
+                returned.push(status);
             }
         }
+        if self.sig.unique.is_some() {
+            let root = self
+                .unit
+                .slots
+                .iter()
+                .position(|slot| slot.kind == SlotKind::Parameter(0));
+            let fact = root.and_then(|slot| self.root_facts[slot]);
+            let fact = match fact {
+                Some(var) => self.b.use_var(var),
+                None => self.b.ins().iconst(types::I8, 0),
+            };
+            returned.push(fact);
+        }
+        self.b.ins().return_(&returned);
         Ok(())
     }
 
@@ -2456,8 +2476,47 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
         }
         let receipt_result = self.receipt_call_arguments(site, &mut args)?;
+        let root_fact = if signature.unique.is_some() {
+            arguments.iter().find_map(|arg| match arg.value {
+                ArgumentValue::Address { address, .. } if arg.parameter == 0 => self
+                    .whole_slot(address)
+                    .and_then(|slot| self.root_facts[slot.index()]),
+                _ => None,
+            })
+        } else {
+            None
+        };
         if signature.ahead.is_some() {
             args.push(self.ahead_state.expect("a private job state"));
+        }
+        if signature.unique.is_some() {
+            args.push(match root_fact {
+                Some(var) => self.b.use_var(var),
+                None => self.b.ins().iconst(types::I8, 0),
+            });
+        }
+        self.read_facts_invalidate();
+        let plain =
+            |id| {
+                self.em.inputs.unit().layouts.layout(id).is_some_and(|r| {
+                    r.scan.is_empty() && r.drop.is_empty() && r.finalizer.is_none()
+                })
+            };
+        let isolated = signature.unique.is_some()
+            && !abi.environment
+            && !abi.destination
+            && abi.result.is_none()
+            && abi
+                .parameters
+                .iter()
+                .enumerate()
+                .all(|(i, p)| i == 0 || plain(p.layout));
+        let referenceless = !abi.environment
+            && !abi.destination
+            && abi.parameters.iter().all(|p| plain(p.layout))
+            && abi.result.as_ref().is_none_or(|r| plain(r.layout));
+        if !isolated && !referenceless {
+            self.root_facts_invalidate();
         }
         if args.len() != signature.ir.params.len() {
             return self.invalid("a call whose arguments differ from its signature");
@@ -2613,6 +2672,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             (None, None) => return self.invalid("a call without a callee"),
         };
         self.ahead_reload();
+        if let (Some(var), Some((_, index))) = (root_fact, signature.unique) {
+            self.b.def_var(var, returned[index]);
+        }
         let status = returned[usize::from(signature.value.is_some())];
         if suspends {
             self.resume_propagate(status)?;

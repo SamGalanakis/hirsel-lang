@@ -623,8 +623,21 @@ impl FnEmitter<'_, '_, '_> {
         self.b.ins().trapnz(refused, crate::function::TRAP);
         let grown = self.load_ty(types::I64, record, 16);
         match recipe.place {
-            CpuGrowthPlace::Copy { result, .. } => self.define1(result, grown)?,
-            CpuGrowthPlace::Address(_) => self.store_at(grown, place.unwrap().ptr, 0),
+            CpuGrowthPlace::Copy { result, .. } => {
+                self.define1(result, grown)?;
+            }
+            CpuGrowthPlace::Address(address) => {
+                self.store_at(grown, place.unwrap().ptr, 0);
+                if recipe.capacity.is_some() {
+                    if let Some(var) = self
+                        .whole_slot(address)
+                        .and_then(|slot| self.root_facts[slot.index()])
+                    {
+                        let yes = self.b.ins().iconst(types::I8, 1);
+                        self.b.def_var(var, yes);
+                    }
+                }
+            }
         }
         if let Some(done) = done {
             self.b.ins().jump(done, &[]);

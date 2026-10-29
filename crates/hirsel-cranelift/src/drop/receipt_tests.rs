@@ -255,6 +255,7 @@ fn probe(target: &TargetSpec, malformed: bool, nested: bool) -> Vec<u8> {
                 first: vec![1],
                 value: None,
                 ahead: None,
+                unique: None,
             },
         );
         f.define1(ValueId(0), f.entry_params[1]).unwrap();

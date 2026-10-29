@@ -344,6 +344,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
                 first: vec![],
                 value: None,
                 ahead: None,
+                unique: None,
             },
         );
         let base = f.entry_params[1];
@@ -366,6 +367,45 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
             .unwrap()
         };
         f.b.ins().return_(&[status]);
+        f.b.seal_all_blocks();
+        f.b.finalize(f.em.module.target_config());
+        em.define(name, id, &mut ctx).unwrap();
+    }
+    for (name, invalidate) in [("root_known", false), ("root_invalidated", true)] {
+        let mut sig = ir::Signature::new(em.call_conv);
+        sig.params.extend([
+            AbiParam::new(PTR),
+            AbiParam::new(PTR),
+            AbiParam::new(types::I8),
+        ]);
+        sig.returns.push(AbiParam::new(types::I8).uext());
+        let id = em.declare_function(name, Linkage::Export, &sig).unwrap();
+        let mut ctx = Context::new();
+        ctx.func = ir::Function::with_name_signature(ir::UserFuncName::default(), sig.clone());
+        let mut bc = FunctionBuilderContext::new();
+        let b = FunctionBuilder::new(&mut ctx.func, &mut bc);
+        let mut f = FnEmitter::new(
+            &mut em,
+            &unit,
+            b,
+            Sig {
+                abi: &abi,
+                ir: sig,
+                hidden: vec![Hidden::Context],
+                first: vec![],
+                value: None,
+                ahead: None,
+                unique: None,
+            },
+        );
+        let fact = f.b.declare_var(types::I8);
+        f.b.def_var(fact, f.entry_params[2]);
+        f.read_roots[0] = Some(fact);
+        if invalidate {
+            f.root_facts_invalidate();
+        }
+        let result = f.root_unique(ValueId(0), f.entry_params[1], false);
+        f.b.ins().return_(&[result]);
         f.b.seal_all_blocks();
         f.b.finalize(f.em.module.target_config());
         em.define(name, id, &mut ctx).unwrap();
@@ -449,6 +489,8 @@ const HARNESS: &str = r#"
 #include <stdio.h>
 #include <string.h>
 extern const hirsel_rt_v2_layout *registry[] __asm__("REGISTRY_NAME");
+extern uint8_t root_known(void *, void *, uint8_t);
+extern uint8_t root_invalidated(void *, void *, uint8_t);
 extern uint8_t record_mask(void *, void *, uint64_t);
 extern uint8_t variant_mask(void *, void *, uint64_t);
 extern uint8_t variant_static(void *, void *, uint64_t);
@@ -478,6 +520,14 @@ int main(void) {
     cfg.layouts = registry; cfg.layout_count = REGISTRY_COUNT;
     hirsel_rt_v2_ctx *ctx = NULL;
     assert(hirsel_rt_v2_ctx_create(&cfg, &ctx) == 0);
+    assert(root_known(ctx, NULL, 1) == 1);
+    hirsel_rt_v2_header *owned = fresh(ctx);
+    assert(root_known(ctx, owned, 0) == 1);
+    assert(root_invalidated(ctx, owned, 1) == 1);
+    hirsel_rt_v2_dup(ctx, owned);
+    assert(root_known(ctx, owned, 0) == 0);
+    assert(root_invalidated(ctx, owned, 1) == 0);
+    release(ctx, owned); release(ctx, owned);
     hirsel_rt_v2_header *a = fresh(ctx), *b = fresh(ctx);
     void *pair[] = {a, b};
     assert(record_mask(ctx, pair, 1) == 0); assert(live(ctx) == 1); release(ctx, b);

@@ -35,6 +35,7 @@ mod profile;
 mod program;
 mod receipt;
 mod resume;
+mod root_facts;
 mod scalar;
 mod sealed;
 mod soa;

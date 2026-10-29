@@ -81,12 +81,16 @@ pub(crate) struct Sig<'a> {
     /// The plain scalar result returned in the value word.
     pub(crate) value: Option<ScalarKind>,
     pub(crate) ahead: Option<usize>,
+    pub(crate) unique: Option<(usize, usize)>,
 }
 
 impl<'a> Sig<'a> {
     pub(crate) fn with_ahead(mut self) -> Self {
         self.ahead = Some(self.ir.params.len());
         self.ir.params.push(ir::AbiParam::new(PTR));
+        self.unique = Some((self.ir.params.len(), self.ir.returns.len()));
+        self.ir.params.push(ir::AbiParam::new(types::I8));
+        self.ir.returns.push(ir::AbiParam::new(types::I8));
         self
     }
     pub(crate) fn hidden_index(&self, which: Hidden) -> Option<usize> {
@@ -151,6 +155,7 @@ pub(crate) fn signature<'a>(
         first,
         value,
         ahead: None,
+        unique: None,
     })
 }
 

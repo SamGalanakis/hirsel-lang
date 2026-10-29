@@ -48,7 +48,7 @@ Invariants:
   holding bytes are stack slots per block and parameter, and edges copy into them,
   through temporaries when one parameter's source is another's slot.
 - Counts, allocations and releases always go through the runtime: no inlined fast paths,
-  no deferred count stores, no uniqueness facts, no specialized release glue
+  no deferred count stores, no ordinary uniqueness facts, no specialized release glue
   (`hirsel_rt_v2_release` with the header's descriptor), no adopted builder blocks.
   Arena blocks always call `hirsel_rt_v2_arena_alloc` after the bounded-arena charge.
   In a program that opens a bounded arena, a List or Array an arena holds is a tracked
@@ -56,7 +56,13 @@ Invariants:
   `IsWritable` reads the count, and `Share` marks the tracked blocks a copy holds shared.
 - Library and inline-instance bodies are weak (`Preemptible`) in every object that
   references them, as are layout descriptors and the descriptor registry; source units
-  are exported once. No `available_externally` copies: Private ahead objects inline their validated spare-push bodies with Cranelift's inliner; ordinary unit calls remain out of line.
+  are exported once. Private ahead objects inline their validated spare-push bodies
+  with Cranelift's inliner; ordinary unit calls remain out of line.
+  Checked CPU list helpers additionally carry one must-unique bit for their first
+  mutable root. A completed reserve establishes it; copying, sharing, replacing
+  or exposing an owner invalidates it. Borrowed reads keep separate facts that
+  calls also invalidate. A valid bit skips the header test in the ordinary
+  lowered body. No runtime ABI or externally callable signature changes.
 - Checked arithmetic and conversions follow `hirsel-llvm`: overflow, division by zero,
   shifts and float-to-int range checks are guarded before the instruction. i128
   division and i128-to-float conversion call compiler-rt (`__divti3`, `__floattidf`, ...),

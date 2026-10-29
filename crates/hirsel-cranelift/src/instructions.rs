@@ -17,6 +17,7 @@ use crate::module::{Emitted, PTR};
 
 impl FnEmitter<'_, '_, '_> {
     pub(crate) fn instruction(&mut self, inst: &Inst) -> Emitted {
+        self.root_facts_before(inst)?;
         if self.host_instruction(inst)? {
             return Ok(());
         }
@@ -61,17 +62,18 @@ impl FnEmitter<'_, '_, '_> {
             }
             // The same bits; only the copy recipe changes.
             Inst::Weaken { result, value } => {
+                self.read_roots[result.index()] = self.read_roots[value.index()];
                 let value = self.get(value)?;
                 self.define(result, value)
             }
             Inst::IsUnique { result, value } => {
                 let block = self.get1(value)?;
-                let unique = self.is_unique(block);
+                let unique = self.root_unique(value, block, false);
                 self.define1(result, unique)
             }
             Inst::IsWritable { result, value } => {
                 let block = self.get1(value)?;
-                let writable = self.is_writable(block);
+                let writable = self.root_unique(value, block, true);
                 self.define1(result, writable)
             }
             Inst::Share { value } => self.share(value),
@@ -217,6 +219,16 @@ impl FnEmitter<'_, '_, '_> {
             Inst::Read {
                 result, address, ..
             } => {
+                if let Some(output) = self.read_roots[result.index()] {
+                    let fact = match self
+                        .whole_slot(address)
+                        .and_then(|slot| self.root_facts[slot.index()])
+                    {
+                        Some(input) => self.b.use_var(input),
+                        None => self.b.ins().iconst(types::I8, 0),
+                    };
+                    self.b.def_var(output, fact);
+                }
                 let place = self.place(address)?;
                 let shape = self.value_shape(result)?;
                 let place = self.gather(place)?;
@@ -235,6 +247,7 @@ impl FnEmitter<'_, '_, '_> {
                 Ok(())
             }
             Inst::Store { address, value, .. } => {
+                self.root_store(address);
                 let place = self.place(address)?;
                 let stored = if self.whole_slot(address).is_some() {
                     self.get(value)?
