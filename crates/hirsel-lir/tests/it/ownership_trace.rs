@@ -6232,43 +6232,61 @@ fn ownership_trace_early_owned_release_covers_every_ready_take_and_retirement() 
     use hirsel_lir::stage::Value;
     use support::Undo;
     for layout in [l::BLK, l::SLICE] {
-        let mut t = Lir::<Value>::new(&[(Passing::Take, layout)], None);
-        let data = t.slot(layout, SlotKind::Parameter(0), ROOT);
-        let version = t.version_of(data);
-        t.param(version);
-        let address = t.at(ENTRY, data, &[], &[Undo::Drop(data)]);
-        let taken = t.read(ENTRY, address, version, ReadMode::Take, None);
-        t.store(ENTRY, address, taken, data);
-        let exit = t.cleanup_exit(&[Undo::Drop(data)], None);
-        t.builder.jump(ENTRY, exit, &[]);
-        let (before, table, _) = t.finish();
-        let before = checked_native_fixture(before, &table);
-        let input = native::LeafPlan::prepare_value_for_program(&before, &table).unwrap();
-        let index = hirsel_lir::LayoutIndex::new(&table);
-        let lowered = hirsel_rc::observed::lower(
-            before.into_raw(),
-            &input,
-            &index,
-            &hirsel_rc::observed::Options {
-                placement: &hirsel_rc::placement::Options {
-                    regions: false,
-                    noalloc: false,
+        for count in [1, 2] {
+            let parameters = vec![(Passing::Take, layout); count];
+            let mut t = Lir::<Value>::new(&parameters, None);
+            let mut owners = Vec::new();
+            for index in 0..count {
+                let slot = t.slot(layout, SlotKind::Parameter(index as u32), ROOT);
+                let version = t.version_of(slot);
+                t.param(version);
+                owners.push((slot, version));
+            }
+            let undo = owners
+                .iter()
+                .rev()
+                .map(|&(slot, _)| Undo::Drop(slot))
+                .collect::<Vec<_>>();
+            let (data, version) = owners[0];
+            let address = t.at(ENTRY, data, &[], &undo);
+            if let Some(&(other, version)) = owners.get(1) {
+                let address = t.at(ENTRY, other, &[], &undo);
+                let taken = t.read(ENTRY, address, version, ReadMode::Take, None);
+                t.store(ENTRY, address, taken, other);
+            }
+            let taken = t.read(ENTRY, address, version, ReadMode::Take, None);
+            t.store(ENTRY, address, taken, data);
+            let exit = t.cleanup_exit(&undo, None);
+            t.builder.jump(ENTRY, exit, &[]);
+            let (before, table, _) = t.finish();
+            let before = checked_native_fixture(before, &table);
+            let input = native::LeafPlan::prepare_value_for_program(&before, &table).unwrap();
+            let index = hirsel_lir::LayoutIndex::new(&table);
+            let lowered = hirsel_rc::observed::lower(
+                before.into_raw(),
+                &input,
+                &index,
+                &hirsel_rc::observed::Options {
+                    placement: &hirsel_rc::placement::Options {
+                        regions: false,
+                        noalloc: false,
+                    },
+                    proofs: &Default::default(),
+                    elide: true,
+                    reuse: &hirsel_rc::reuse::Options { reuse: true },
+                    finalizers: &Default::default(),
                 },
-                proofs: &Default::default(),
-                elide: true,
-                reuse: &hirsel_rc::reuse::Options { reuse: true },
-                finalizers: &Default::default(),
-            },
-        )
-        .unwrap();
-        assert_eq!(lowered.recipes.len(), 10);
-        let ready = checked_native_fixture(lowered.unit, &table);
-        let plan = native::LeafPlan::from_relocated(&ready, &table, &lowered.plan).unwrap();
-        assert!(plan.markers().any(|marker| marker.kind == 2));
-        assert!(plan.markers().any(|marker| marker.kind == 7));
-        let mut missing = lowered.plan.clone();
-        assert!(!missing.cleanups.is_empty());
-        missing.cleanups.clear();
-        assert!(native::LeafPlan::from_relocated(&ready, &table, &missing).is_err());
+            )
+            .unwrap();
+            assert_eq!(lowered.recipes.len(), 10);
+            let ready = checked_native_fixture(lowered.unit, &table);
+            let plan = native::LeafPlan::from_relocated(&ready, &table, &lowered.plan).unwrap();
+            assert!(plan.markers().any(|marker| marker.kind == 2));
+            assert!(plan.markers().any(|marker| marker.kind == 7));
+            let mut missing = lowered.plan.clone();
+            assert!(!missing.cleanups.is_empty());
+            missing.cleanups.clear();
+            assert!(native::LeafPlan::from_relocated(&ready, &table, &missing).is_err());
+        }
     }
 }
