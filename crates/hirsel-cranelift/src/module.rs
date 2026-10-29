@@ -85,12 +85,14 @@ pub(crate) struct Sig<'a> {
 }
 
 impl<'a> Sig<'a> {
-    pub(crate) fn with_ahead(mut self) -> Self {
+    pub(crate) fn with_ahead(mut self, unique: bool) -> Self {
         self.ahead = Some(self.ir.params.len());
         self.ir.params.push(ir::AbiParam::new(PTR));
-        self.unique = Some((self.ir.params.len(), self.ir.returns.len()));
-        self.ir.params.push(ir::AbiParam::new(types::I8));
-        self.ir.returns.push(ir::AbiParam::new(types::I8));
+        if unique {
+            self.unique = Some((self.ir.params.len(), self.ir.returns.len()));
+            self.ir.params.push(ir::AbiParam::new(types::I8));
+            self.ir.returns.push(ir::AbiParam::new(types::I8));
+        }
         self
     }
     pub(crate) fn hidden_index(&self, which: Hidden) -> Option<usize> {
@@ -412,15 +414,18 @@ pub(crate) fn emit(
             return Err(CodegenError::DuplicateSymbol { name });
         }
         let sig = emitter.entry_signature(abi, &header.definition)?;
-        let sig = if inputs.alternate
-            && (header.definition.is_core("list.push")
-                || header.definition.is_core("list.reserve")
-                || header.definition.is_core("$native.list_push_spare"))
-        {
-            sig.with_ahead()
-        } else {
-            sig
-        };
+        let sig =
+            if inputs.alternate
+                && (header.definition.is_core("list.push")
+                    || header.definition.is_core("list.reserve")
+                    || header.definition.is_core("$native.list_push_spare"))
+            {
+                sig.with_ahead(inputs.ahead.is_some_and(|plan| {
+                    plan.cpu_ordinal(header.instance, inputs.layouts).is_some()
+                }))
+            } else {
+                sig
+            };
         let library = !inputs.alternate
             && (header.origin == UnitOrigin::Library
                 || inputs.inline_instances.contains(&header.instance));

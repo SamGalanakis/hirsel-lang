@@ -155,6 +155,7 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     fuel_points: Vec<bool>,
     pub(crate) instruction_index: usize,
     pub(crate) root_facts: Vec<Option<cranelift_frontend::Variable>>,
+    pub(crate) root_facts_active: bool,
     pub(crate) read_roots: Vec<Option<cranelift_frontend::Variable>>,
     pub(crate) ahead_state: Option<Value>,
     pub(crate) ahead_counter: Option<cranelift_frontend::Variable>,
@@ -249,6 +250,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             fuel_points,
             instruction_index: 0,
             root_facts: vec![None; unit.slots.len()],
+            root_facts_active: false,
             read_roots: vec![None; unit.values.len()],
             ahead_state: None,
             ahead_counter: None,
@@ -2350,7 +2352,13 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                         })
                     })
             }) {
-            signature.with_ahead()
+            let unique = helper.and_then(|symbol| symbol.instance).is_some_and(|id| {
+                self.em.inputs.unit().ahead.is_some_and(|plan| {
+                    plan.cpu_ordinal(id, self.em.inputs.unit().layouts)
+                        .is_some()
+                })
+            });
+            signature.with_ahead(unique)
         } else {
             signature
         };

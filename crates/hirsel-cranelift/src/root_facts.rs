@@ -89,6 +89,7 @@ impl FnEmitter<'_, '_, '_> {
             };
             self.b.def_var(var, initial);
             self.root_facts[i] = Some(var);
+            self.root_facts_active = true;
         }
         for inst in &self.unit.instructions {
             if let Inst::Read {
@@ -124,6 +125,9 @@ impl FnEmitter<'_, '_, '_> {
     }
 
     pub(crate) fn root_facts_before(&mut self, inst: &Inst) -> Emitted {
+        if !self.root_facts_active {
+            return Ok(());
+        }
         let invalidates = match *inst {
             Inst::Dup { .. }
             | Inst::Copy { .. }
