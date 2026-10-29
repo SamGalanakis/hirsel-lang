@@ -94,7 +94,11 @@ fn metadata_bound(
         .checked_add(usize::from(extra.is_some()))?;
     let mut weight = crate::NativeMetadataWeight::default();
     weight.add(size_of::<FrontInstanceBootstrap>() + size_of::<FrontInstanceBootstrapAdmission>());
-    weight.add(4 * size_of::<Vec<DefPath>>() + size_of::<Vec<crate::runtime::QueryId>>());
+    weight.add(
+        5 * size_of::<Vec<DefPath>>()
+            + size_of::<Vec<(FileId, u32, DefPath)>>()
+            + size_of::<Vec<crate::runtime::QueryId>>(),
+    );
     // At growth, old/new cursor allocations can coexist with the current front
     // inventory. Each path has at most these three owned copies.
     for path in ordinary.iter().chain(generators).chain(extra) {
@@ -103,6 +107,11 @@ fn metadata_bound(
             weight.path(path);
         }
     }
+    weight.add(
+        generators
+            .len()
+            .checked_mul(size_of::<(FileId, u32, DefPath)>() - size_of::<DefPath>())?,
+    );
     weight.add(count.checked_mul(size_of::<crate::runtime::QueryId>())?);
     weight.add(
         generators
@@ -218,7 +227,7 @@ impl QueryEngine {
                 .filter(|p| !generators.contains(p))
                 .cloned(),
         );
-        let mut selected = Vec::with_capacity(generators.len());
+        let mut ordered = Vec::with_capacity(generators.len());
         for path in generators {
             self.materialize(path).map_err(admission_error)?;
             let snapshot = self.snapshot(path).map_err(admission_error)?;
@@ -231,66 +240,102 @@ impl QueryEngine {
                 ordinary.reserve_exact(1);
                 ordinary.push(path.clone());
             } else {
-                selected.push(path.clone());
+                let span = snapshot.item.name_span;
+                let (file, base) = self
+                    .sources
+                    .anchor(span.anchor)
+                    .ok_or_else(|| refused("generator source anchor unavailable"))?;
+                let start = base
+                    .checked_add(span.start)
+                    .ok_or_else(|| refused("generator source position overflow"))?;
+                ordered.push((file, start, path.clone()));
             }
         }
+        ordered.sort_unstable();
+        let mut selected: Vec<_> = ordered.into_iter().map(|(_, _, path)| path).collect();
         selected.shrink_to_fit();
         let runtime_bytes = runtime.bytes();
         let mut accepted = Vec::new();
         let mut stats = RuntimeStats::default();
         // Same finite selection walk bound as discover_front_instances. Every
         // unfinished iteration must add a canonical instance or missing body.
-        for round in 1..=65536 {
+        'round: for round in 1..=65536 {
             runtime = self
                 .prepare_private_inference(runtime)
                 .map_err(admission_error)?;
             accepted.clear();
             if !selected.is_empty() {
-                let front = self
-                    .front_body_queries(&ordinary, weight, borrow(&front_pool)?, errors)
-                    .map_err(admission_error)?;
-                let lower = self
-                    .front_lower_queries(
-                        &ordinary,
-                        front.clone(),
-                        weight,
-                        max_reads,
-                        borrow(&lower_pool)?,
-                        errors,
-                    )
-                    .map_err(admission_error)?;
-                let registration = self
-                    .front_registration_queries(
-                        &selected,
-                        lower.clone(),
-                        weight,
-                        borrow(&text_pool)?,
-                        errors,
-                    )
-                    .map_err(admission_error)?;
-                let capacity =
-                    FrontRegistrationBootstrap::required_queries(ordinary.len(), selected.len())
-                        .ok_or_else(|| refused("query inventory overflow"))?;
-                let grant = runtime
-                    .split(runtime_bytes)
-                    .ok_or_else(|| refused("runtime partition unavailable"))?;
-                let mut executor =
-                    AdmittedRuntime::with_query_capacity(jobs, grant, errors, capacity)
-                        .map_err(|e| refused(e.to_string()))?;
-                executor
-                    .register(FRONT_BODY_KIND, front.factory())
-                    .map_err(refused)?;
-                executor
-                    .register_local(FRONT_LOWER_KIND, lower.factory())
-                    .map_err(refused)?;
-                executor
-                    .register_local(FRONT_EVALUATE_KIND, lower.factory())
-                    .map_err(refused)?;
-                executor
-                    .register_local(FRONT_REGISTRATION_KIND, registration.factory())
-                    .map_err(refused)?;
                 accepted.reserve_exact(selected.len());
                 for path in &selected {
+                    runtime = self
+                        .prepare_private_inference_with_registrations(runtime, &accepted)
+                        .map_err(admission_error)?;
+                    if accepted
+                        .iter()
+                        .any(|registration| registration.validate(self).is_err())
+                    {
+                        continue 'round;
+                    }
+                    let bound = metadata_bound(&ordinary, &selected, None)
+                        .ok_or_else(|| refused("frontier metadata overflow"))?;
+                    if bound > metadata.bytes() {
+                        return Err(refused("frontier cursors exceed metadata partition"));
+                    }
+                    let count = ordinary
+                        .len()
+                        .checked_add(accepted.len())
+                        .ok_or_else(|| refused("frontier metadata overflow"))?;
+                    let mut paths = Vec::with_capacity(count);
+                    paths.extend(ordinary.iter().cloned());
+                    paths.extend(accepted.iter().map(|a| a.definition().clone()));
+                    let front = self
+                        .front_body_queries_with_registrations(
+                            &paths,
+                            &accepted,
+                            weight,
+                            borrow(&front_pool)?,
+                            errors,
+                        )
+                        .map_err(admission_error)?;
+                    let lower = self
+                        .front_lower_queries(
+                            &paths,
+                            front.clone(),
+                            weight,
+                            max_reads,
+                            borrow(&lower_pool)?,
+                            errors,
+                        )
+                        .map_err(admission_error)?;
+                    let registration = self
+                        .front_registration_queries(
+                            std::slice::from_ref(path),
+                            lower.clone(),
+                            weight,
+                            borrow(&text_pool)?,
+                            errors,
+                        )
+                        .map_err(admission_error)?;
+                    let capacity = FrontRegistrationBootstrap::required_queries(paths.len(), 1)
+                        .ok_or_else(|| refused("query inventory overflow"))?;
+                    let grant = runtime
+                        .split(runtime_bytes)
+                        .ok_or_else(|| refused("runtime partition unavailable"))?;
+                    let mut executor =
+                        AdmittedRuntime::with_query_capacity(jobs, grant, errors, capacity)
+                            .map_err(|e| refused(e.to_string()))?;
+                    executor
+                        .register(FRONT_BODY_KIND, front.factory())
+                        .map_err(refused)?;
+                    executor
+                        .register_local(FRONT_LOWER_KIND, lower.factory())
+                        .map_err(refused)?;
+                    executor
+                        .register_local(FRONT_EVALUATE_KIND, lower.factory())
+                        .map_err(refused)?;
+                    executor
+                        .register_local(FRONT_REGISTRATION_KIND, registration.factory())
+                        .map_err(refused)?;
                     let query = registration.query(path).ok_or_else(|| {
                         refused("selected generator is outside the registration view")
                     })?;
@@ -321,14 +366,14 @@ impl QueryEngine {
                         self.accept_front_registration(output, borrow(&syntax_pool)?)
                             .map_err(acceptance)?,
                     );
+                    finish(&mut executor, &mut runtime, &mut stats)?;
+                    // Opaque outputs own only Data's measured reservation; all
+                    // completed producer inputs return before the discovery front.
+                    drop(executor);
+                    drop(registration);
+                    drop(lower);
+                    drop(front);
                 }
-                finish(&mut executor, &mut runtime, &mut stats)?;
-                // Opaque outputs own only Data's measured reservation; all
-                // completed producer inputs return before the discovery front.
-                drop(executor);
-                drop(registration);
-                drop(lower);
-                drop(front);
             }
             let bound = metadata_bound(&ordinary, &selected, None)
                 .ok_or_else(|| refused("frontier metadata overflow"))?;
