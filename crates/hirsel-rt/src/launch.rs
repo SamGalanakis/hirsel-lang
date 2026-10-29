@@ -2936,6 +2936,9 @@ pub(crate) unsafe fn execute(
         });
         match moved {
             Ok(io) => {
+                if let Some(receipts) = crate::io_real::CpuReceipts::admit(&io) {
+                    assert!(unsafe { (*ctx).run_ref().ordered_cpu_receipts.set(receipts) }.is_ok());
+                }
                 adapter = Box::new(OrderedHome {
                     io: io.clone(),
                     current: crate::io_real::HOME_TOKEN,

@@ -289,6 +289,9 @@ pub(super) fn record_summary(ctx: *mut TaskCtx, summary: &crate::io::CpuSummary)
     if unsafe { (*ctx).io_data() }.is_null() {
         return Ok(());
     }
+    if let Some(receipts) = unsafe { (*ctx).run_ref().ordered_cpu_receipts.get() } {
+        return receipts.summary(ctx, summary);
+    }
     let mut result = Ok(());
     unsafe {
         crate::pool::call_home(ctx, &mut || {
@@ -307,6 +310,9 @@ fn receipt(
 ) -> Stopped<Option<u32>> {
     if unsafe { (*ctx).io_data() }.is_null() {
         return Ok(value);
+    }
+    if let Some(receipts) = unsafe { (*ctx).run_ref().ordered_cpu_receipts.get() } {
+        return receipts.control(ctx, width, action, count, value);
     }
     let mut result = Ok(None);
     unsafe {

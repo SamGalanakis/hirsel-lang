@@ -452,6 +452,8 @@ pub(crate) struct RunShared {
     pub(crate) profile_output: RoleCell<Option<std::fs::File>>,
     /// Trace admission only: concurrent Shared-root provenance, never a role lookup.
     pub(crate) ordered_roots: std::sync::OnceLock<crate::ordered::root_ids::Registry>,
+    /// The bounded CPU service is published only for a core without a journal.
+    pub(crate) ordered_cpu_receipts: std::sync::OnceLock<crate::io_real::CpuReceipts>,
     /// Ordered concurrent requests retain their adapter through saved waits.
     pub(crate) ordered_io:
         std::sync::OnceLock<std::sync::Arc<crate::tasks::ordered::host::concurrent::Service>>,
@@ -1124,6 +1126,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         #[cfg(feature = "measurement")]
         profile_output: RoleCell::new(None),
         ordered_roots: Default::default(),
+        ordered_cpu_receipts: Default::default(),
         ordered_io: Default::default(),
         ordered_commit: Default::default(),
         ordered_home_results: Default::default(),

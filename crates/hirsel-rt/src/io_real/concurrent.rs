@@ -7,6 +7,9 @@ use crate::io_concurrent::ConcurrentAdapter;
 use crate::io_keys::{Key, KeySet, KeyTable, Kind, Registry};
 use std::sync::Mutex;
 
+mod cpu_receipts;
+pub(crate) use cpu_receipts::CpuReceipts;
+
 /// The bit a live Ordered run's home binding sets on its tokens; service
 /// request tokens stay below 2^48 and readiness run tags occupy bits 48 through 61.
 /// Bit 62 belongs to Free scope timers, which the service must receive intact.

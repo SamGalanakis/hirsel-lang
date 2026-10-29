@@ -1214,7 +1214,7 @@ unsafe fn resume(run: *mut RunShared, exec: &Exec, task: u32, permit: bool) {
     }
 }
 
-/// Run a [`Call`] on the home thread and signal its caller.
+/// Claim a synchronous [`Call`], run it, and signal its caller.
 ///
 /// # Safety
 /// `call` came from a live [`call_home`].
@@ -1805,7 +1805,35 @@ pub(crate) unsafe fn call_home(ctx: *mut TaskCtx, call: &mut dyn FnMut()) -> Sto
 
 /// As call_home, with an explicit run for a facade whose caller may be home.
 pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -> Stopped<()> {
-    crate::tasks::role::unlent("a home call");
+    unsafe {
+        call_in(run, call, |run, execs, call| {
+            if !execs.home.post(Post::Call(call), None) {
+                return false;
+            }
+            run.role.notify_home_call();
+            true
+        })
+    }
+}
+
+/// The same synchronous claim/withdraw loan, executed by a bounded CPU receipt owner.
+/// # Safety
+/// The live caller retains the run and its compute permit; the call cannot suspend.
+pub(crate) unsafe fn call_local_in(run: *mut RunShared, call: &mut dyn FnMut()) -> Stopped<()> {
+    unsafe {
+        call_in(run, call, |_, _, call| {
+            run_call(call);
+            true
+        })
+    }
+}
+
+unsafe fn call_in(
+    run: *mut RunShared,
+    call: &mut dyn FnMut(),
+    route: impl FnOnce(&RunShared, &Execs, Call) -> bool,
+) -> Stopped<()> {
+    crate::tasks::role::unlent("a synchronous call");
     // SAFETY: the facade is owned by this live run.
     let run = unsafe { &*run };
     let caller = own_exec();
@@ -1820,23 +1848,22 @@ pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -
     let id = execs.next_call.fetch_add(1, Relaxed);
     let claim = execs.calls.prepare(id, Done::default());
     let done = claim.buffers();
-    // SAFETY: this frame waits until the home thread signals `done`, so the closure outlives
-    // its run there.
+    // SAFETY: this frame waits until its claimed call signals `done`, so the
+    // closure stays live whether home or the bounded local service runs it.
     let call: *mut (dyn FnMut() + 'static) = unsafe { std::mem::transmute(call) };
-    let home = &run.execs.as_deref().unwrap().home;
-    if !home.post(
-        Post::Call(Call {
+    let exec = unsafe { &*current(execs) };
+    let held = exec.held.load(Ordering::Relaxed);
+    if !route(
+        run,
+        execs,
+        Call {
             claim: claim.clone(),
             run: call,
-        }),
-        None,
+        },
     ) {
         execs.calls.retire(id);
         return Err(run.control.stopped().unwrap_or(Stop::Requested));
     }
-    run.role.notify_home_call();
-    let exec = unsafe { &*current(execs) };
-    let held = exec.held.load(Ordering::Relaxed);
     // The caller can lend R and scheduler borrows to this synchronous loan.
     // Returning C here would require R -> C on return, while another selected
     // worker can hold C waiting for R. Keep the existing permit, as for the

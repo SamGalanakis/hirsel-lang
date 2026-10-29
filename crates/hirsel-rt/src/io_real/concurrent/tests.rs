@@ -774,3 +774,57 @@ fn free_scope_timers_keep_their_token_when_home_polls_first() {
         }
     }
 }
+
+#[test]
+fn cpu_receipt_authority_validates_on_the_issuing_worker() {
+    let (_temp, io, _) = adapter();
+    let io = Arc::new(io);
+    let receipts = CpuReceipts::admit(&io).expect("an absent journal is bounded");
+    let caller = std::thread::current().id();
+    std::thread::spawn(move || {
+        assert_ne!(std::thread::current().id(), caller);
+        let outcome = crate::host::BodyRun::new(1, false).run(
+            move |ctx| {
+                let invalid = CpuSummary {
+                    version: 0,
+                    retirement: 0,
+                    ordinal: 0,
+                    value: Vec::new(),
+                    stop: None,
+                    native: None,
+                };
+                assert_eq!(
+                    receipts.summary(ctx, &invalid),
+                    Err(crate::stop::Stop::refusal(AdapterError::InvalidCompletion))
+                );
+                assert_eq!(receipts.control(ctx, 4, 2, 0, Some(0)), Ok(Some(0)));
+            },
+            |_| crate::STATUS_OK,
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn a_send_journal_does_not_authorize_worker_cpu_receipts() {
+    struct Journal;
+    impl crate::journal::Journal for Journal {
+        fn event(&mut self, _: Option<u64>, _: &Event) -> std::io::Result<()> {
+            panic!("admission must not invoke the unqualified journal")
+        }
+        fn end(&mut self, _: &hirsel_run_schema::RunOutcome) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let mut real = RealIo::grant(temp.path()).unwrap();
+    real.send_journal_to(Box::new(Journal));
+    let io = Arc::new(
+        real.into_concurrent()
+            .unwrap_or_else(|_| panic!("Send journal")),
+    );
+    assert!(CpuReceipts::admit(&io).is_none());
+}
