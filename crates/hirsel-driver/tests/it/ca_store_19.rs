@@ -1255,19 +1255,21 @@ fn staged_lower_products_restore_own_declarations_before_admission_without_modes
             store::ResultStore::put(&*copied, &key, &bytes);
             store::ResultStore::put(&*store, &key, &bytes);
         }
-        for (provider, text, message) in [
+        for (provider, text, normalize, message) in [
             (
                 copied as Arc<dyn store::ResultStore>,
                 source.to_owned(),
+                false,
                 "declaration bytes cannot transfer V completion",
             ),
             (
                 store.clone(),
                 source.replace("field:u32", "field:u64"),
+                true,
                 "private V universe changes invalidate completion",
             ),
         ] {
-            let mut invalid = signature_session(provider, &text, false);
+            let mut invalid = signature_session(provider, &text, normalize);
             invalid.adapters.modes = None;
             invalid.adapters.lowering = None;
             let accepted = match StagedProducts::capture(&mut invalid, 1) {
