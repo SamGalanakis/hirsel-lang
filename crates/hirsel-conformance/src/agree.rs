@@ -2011,6 +2011,25 @@ pub fn run_native_with_hash_seed(
 ) -> Result<Report, String> {
     let mut paths = vec![];
     crate::discover(&root.join("conformance"), &mut paths)?;
+    let mut fixtures = Vec::new();
+    if native.is_some() {
+        crate::discover(&root.join("native-tests/regressions"), &mut fixtures)?;
+        fixtures.sort();
+    }
+    let unmatched: Vec<_> = only
+        .iter()
+        .filter(|prefix| {
+            !paths.iter().chain(&fixtures).any(|path| {
+                path.strip_prefix(root)
+                    .is_ok_and(|path| path.to_string_lossy().starts_with(prefix.as_str()))
+            })
+        })
+        .collect();
+    if !unmatched.is_empty() {
+        return Err(format!(
+            "--path prefixes matched no agreement files globally: {unmatched:?}"
+        ));
+    }
     paths.retain(|path| {
         path.strip_prefix(root).is_ok_and(|relative| {
             let relative = relative.display().to_string();
@@ -2068,9 +2087,6 @@ pub fn run_native_with_hash_seed(
         // catalogues. Pinning a path in the cover alone would never execute a
         // fixture outside conformance/. Give it one identity edit so it uses
         // the same classification, clustering and stable shard partition.
-        let mut fixtures = Vec::new();
-        crate::discover(&root.join("native-tests/regressions"), &mut fixtures)?;
-        fixtures.sort();
         for fixture in fixtures {
             let path = fixture
                 .strip_prefix(root)
@@ -2105,6 +2121,26 @@ pub fn run_native_with_hash_seed(
     report.programs = programs.len();
     variants.sort();
     variants.truncate(sample.limit);
+    let unmatched: Vec<_> = sample
+        .within
+        .iter()
+        .filter(|prefix| {
+            !programs
+                .iter()
+                .any(|program| program.path.starts_with(prefix.as_str()))
+        })
+        .collect();
+    if !unmatched.is_empty() {
+        return Err(format!(
+            "--sample-path prefixes matched no agreement programs globally: {unmatched:?}"
+        ));
+    }
+    if variants.is_empty() {
+        return Err(format!(
+            "agreement selection {only:?} contains no variants globally (limit {})",
+            sample.limit
+        ));
+    }
     variants.retain(|(rank, program, _)| {
         in_sample_shard(*rank, shard)
             && (sample.within.is_empty()
@@ -2216,6 +2252,67 @@ pub fn run_native_with_hash_seed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unmatched_agreement_selectors_refuse_before_shard_assignment() {
+        let root = std::env::temp_dir().join(format!("hirsel-agree-empty-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("conformance/LANG")).unwrap();
+        std::fs::create_dir_all(root.join(crate::SPEC_DIR)).unwrap();
+        std::fs::write(
+            root.join(crate::SPEC_DIR).join("language.md"),
+            "### LANG-7: Types\n",
+        )
+        .unwrap();
+        let fixture = "conformance/LANG/LANG-7-fixture.hir";
+        std::fs::write(root.join(fixture), "// rule: LANG-7\n// expect: accept\nfn probe(mut x: u64) -> u64 { let y = x; x = y; x }\n").unwrap();
+        for shard in [None, Some(crate::Shard { index: 2, count: 4 })] {
+            for only in [
+                vec!["removed_case".into()],
+                vec![fixture.into(), "removed_case".into()],
+            ] {
+                let error = run_native_with_hash_seed(
+                    &root,
+                    1,
+                    Sample {
+                        limit: 8,
+                        per_program: Some(8),
+                        within: &[],
+                    },
+                    None,
+                    0,
+                    &only,
+                    shard,
+                )
+                .err()
+                .expect("stale selector must fail");
+                assert!(
+                    error.contains("--path") && error.contains("removed_case"),
+                    "{error}"
+                );
+            }
+            let within = ["removed_case".into()];
+            let error = run_native_with_hash_seed(
+                &root,
+                1,
+                Sample {
+                    limit: 8,
+                    per_program: Some(8),
+                    within: &within,
+                },
+                None,
+                0,
+                &[],
+                shard,
+            )
+            .err()
+            .expect("stale sample selector must fail");
+            assert!(
+                error.contains("--sample-path") && error.contains("removed_case"),
+                "{error}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn a_streamed_cluster_is_one_line_of_the_report_fields() {
         let line = streamed_cluster(
