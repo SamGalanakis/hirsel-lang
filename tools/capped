@@ -200,6 +200,48 @@ def inside(timeout: int, limit: str, command: list[str], limits=None) -> int:
     return status
 
 
+def requested_width(command: list[str], environ) -> int:
+    """Read the existing launch surface, including env overrides and run records."""
+    width = int(environ.get('HIRSEL_JOBS') or '1')
+    for index, argument in enumerate(command):
+        if argument.startswith('HIRSEL_JOBS='):
+            value = argument.split('=', 1)[1]
+            if value.isdigit():
+                width = max(width, int(value))
+        flag, equal, value = argument.partition('=')
+        if not equal and index + 1 < len(command):
+            value = command[index + 1]
+        if flag == '--cores' and value.isdigit():
+            width = max(width, int(value))
+        if flag in ('--run', '--grants', '--hirsel-run', '--hirsel-grants'):
+            try:
+                cores = json.loads(Path(value).read_text()).get('placement', {}).get('cores', 1)
+            except (OSError, ValueError, AttributeError):
+                continue  # The binary owns malformed launch-input diagnostics.
+            if type(cores) is int:
+                width = max(width, cores)
+            elif isinstance(cores, dict) and type(cores.get('max')) is int:
+                width = max(width, cores['max'])
+    return width
+
+
+def granted_cpus(jobs: int) -> float:
+    """The wrapper quota, inherited affinity and all visible ancestor quotas."""
+    grant = float(min(jobs, len(os.sched_getaffinity(0))))
+    group = own_cgroup()
+    while group is not None and group.is_relative_to('/sys/fs/cgroup'):
+        try:
+            quota, period = (group / 'cpu.max').read_text().split()
+            if quota != 'max':
+                grant = min(grant, int(quota) / int(period))
+        except (OSError, ValueError):
+            pass
+        if group == Path('/sys/fs/cgroup'):
+            break
+        group = group.parent
+    return grant
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description='Run one command under the HIRSEL_MEMORY_LIMIT cap, a HIRSEL_JOBS CPU quota and a timeout.')
@@ -219,11 +261,17 @@ def main() -> int:
     limit = os.environ.get('HIRSEL_MEMORY_LIMIT') or DEFAULT_LIMIT
     if not LIMIT.fullmatch(limit):
         parser.error(f'HIRSEL_MEMORY_LIMIT={limit!r}: expected bytes or a K, M, G or T count, for example 4G')
-    if args.inside:
-        return inside(args.timeout, limit, command)
     jobs = os.environ.get('HIRSEL_JOBS') or DEFAULT_JOBS
     if not jobs.isdigit() or int(jobs) < 1:
         parser.error(f'HIRSEL_JOBS={jobs!r}: expected a positive count of CPUs')
+    width = requested_width(command, os.environ)
+    grant = granted_cpus(int(jobs))
+    if width > grant:
+        print(f'capped: CPU pool width {width} exceeds {grant:g} granted CPUs; '
+              f'raise HIRSEL_JOBS to {width} and provide at least {width} CPUs', file=sys.stderr)
+        return 2
+    if args.inside:
+        return inside(args.timeout, limit, command)
     try:
         slots = slot_count(limit_bytes(limit), os.environ)
     except ValueError as error:

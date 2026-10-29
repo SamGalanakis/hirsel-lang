@@ -72,6 +72,37 @@ class Capped(unittest.TestCase):
         self.assertEqual(self.properties(),
                          ['MemoryMax=512M', 'MemorySwapMax=0', 'OOMPolicy=continue', 'CPUQuota=300%'])
 
+    def test_parallel_launch_refuses_under_quota_and_runs_unchanged_at_width(self):
+        program = self.root / 'launch'
+        program.write_text('#!/bin/sh\nprintf "%s\\n" "$HIRSEL_JOBS" "$@"\n')
+        program.chmod(0o755)
+        record = self.root / 'run.json'
+        record.write_text(json.dumps({'placement': {'cores': 4}}))
+        for flags in (['--cores', '4'], ['--cores=4'], ['--hirsel-grants', str(record)],
+                      ['--run', str(record)]):
+            with self.subTest(flags=flags):
+                refused = self.capped(str(program), *flags, env={'HIRSEL_JOBS': '2'})
+                self.assertEqual(refused.returncode, 2, refused.stderr)
+                self.assertIn('raise HIRSEL_JOBS to 4', refused.stderr)
+                self.assertEqual(refused.stdout, '')
+                accepted = self.capped(str(program), *flags, env={'HIRSEL_JOBS': '4'})
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                self.assertEqual(accepted.stdout.splitlines(), ['4', *flags])
+        refused = self.capped('env', 'HIRSEL_JOBS=4', str(program))
+        self.assertEqual(refused.returncode, 2, refused.stderr)
+        self.assertIn('raise HIRSEL_JOBS to 4', refused.stderr)
+
+    def test_inside_also_refuses_a_pool_wider_than_inherited_affinity(self):
+        with patch.object(capped.os, 'sched_getaffinity', return_value={0, 1}), \
+                patch.object(capped, 'own_cgroup', return_value=None), \
+                patch.dict(os.environ, {'HIRSEL_JOBS': '4'}), \
+                patch.object(capped.sys, 'argv', [str(CAPPED), '--inside', 'true']), \
+                patch.object(capped, 'inside') as inside, \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(capped.main(), 2)
+        inside.assert_not_called()
+        self.assertIn('width 4 exceeds 2 granted CPUs', stderr.getvalue())
+
     def test_an_unavailable_python_executable_keeps_the_capped_scope(self):
         copied = self.root / 'capped'
         copied.write_text(CAPPED.read_text())
