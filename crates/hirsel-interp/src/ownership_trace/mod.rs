@@ -161,7 +161,39 @@ pub fn run_resources(
     operations: &mut impl Operations,
     runtime: &crate::aggregate::RuntimeTypes,
 ) -> Result<ResourceExecution, ExecutionError> {
-    let mut observer = reference::Resources::new(runtime.forget.clone(), request.event_limit);
+    run_selected::<false>(
+        provider, sources, request, arguments, limits, operations, runtime,
+    )
+}
+
+/// Observe Resources and owned String/Bytes leaves through their actual moves
+/// and releases. Copies and unobserved library producers refuse the trace.
+/// The source outcome and the ordinary execution limits remain independent.
+pub fn run_owned(
+    provider: &mut (impl TirProvider + ?Sized),
+    sources: &SourceMap,
+    request: ResourceRequest<'_>,
+    arguments: Vec<Value>,
+    limits: Limits,
+    operations: &mut impl Operations,
+    runtime: &crate::aggregate::RuntimeTypes,
+) -> Result<ResourceExecution, ExecutionError> {
+    run_selected::<true>(
+        provider, sources, request, arguments, limits, operations, runtime,
+    )
+}
+
+fn run_selected<const OWNED: bool>(
+    provider: &mut (impl TirProvider + ?Sized),
+    sources: &SourceMap,
+    request: ResourceRequest<'_>,
+    arguments: Vec<Value>,
+    limits: Limits,
+    operations: &mut impl Operations,
+    runtime: &crate::aggregate::RuntimeTypes,
+) -> Result<ResourceExecution, ExecutionError> {
+    let mut observer =
+        reference::Resources::<OWNED>::new(runtime.forget.clone(), request.event_limit);
     let execution = crate::eval::run_observed(
         provider,
         sources,

@@ -910,3 +910,134 @@ fn ownership_reference_finalizer_local_cleanup_precedes_queued_aggregate_sibling
         );
     }
 }
+
+fn observed_owned(definitions: Vec<Definition>, checked: bool) -> ResourceExecution {
+    let mut runtime = runtime();
+    assert_fixtures(&definitions, &runtime);
+    if checked {
+        runtime.checked = Some(hirsel_interp::checked::CheckedRuntime {
+            operations: fixture_signatures(&definitions, &runtime)
+                .into_iter()
+                .map(|(path, signature)| (path, std::sync::Arc::new(signature)))
+                .collect(),
+            ..Default::default()
+        });
+    }
+    let configuration = RunConfiguration {
+        entry: definitions[0].path.path().clone(),
+        hash_seed: 71,
+        inputs: vec![],
+    };
+    let ordinary = run_with_runtime(
+        &mut Provider {
+            definitions: definitions.clone(),
+            queries: vec![],
+        },
+        &sources(),
+        &configuration,
+        vec![],
+        Limits::default(),
+        &mut NoOperations,
+        &runtime,
+    )
+    .unwrap();
+    let traced = hirsel_interp::ownership_trace::run_owned(
+        &mut Provider {
+            definitions,
+            queries: vec![],
+        },
+        &sources(),
+        ResourceRequest {
+            configuration: &configuration,
+            program: [71; 32],
+            event_limit: 100,
+        },
+        vec![],
+        Limits::default(),
+        &mut NoOperations,
+        &runtime,
+    )
+    .unwrap();
+    assert_eq!(traced.execution, ordinary);
+    traced
+}
+
+#[test]
+fn ownership_owned_strings_and_bytes_keep_equal_values_distinct_through_calls_and_cleanup() {
+    for (kind, constant) in [
+        (
+            hirsel_types::Primitive::String,
+            Constant::String("equal".into()),
+        ),
+        (
+            hirsel_types::Primitive::Bytes,
+            Constant::Bytes(vec![0, 255]),
+        ),
+    ] {
+        let kind = TypeKind::Primitive(kind);
+        let mut identity = Builder::new();
+        let parameter = identity.parameter(kind.clone());
+        let identity = identity.finish("identity", parameter);
+        let mut builder = Builder::new();
+        let first = builder.local(kind.clone(), Storage::Local);
+        builder.assign(first, Rvalue::Constant(constant.clone()), 2, CleanupId(0));
+        let second = builder.local(kind.clone(), Storage::Local);
+        builder.assign(second, Rvalue::Constant(constant), 3, CleanupId(0));
+        call(&mut builder, "identity", take(first), kind);
+        let result = builder.unit();
+        let definitions = vec![builder.finish("main", result), identity];
+        let mut traces = vec![];
+        for checked in [false, true] {
+            let traced = observed_owned(definitions.clone(), checked);
+            let trace = traced.trace.unwrap();
+            let analysis = trace.analyze([71; 32], 100).unwrap();
+            assert_eq!(
+                (analysis.created, analysis.dropped, analysis.live.len()),
+                (2, 2, 0)
+            );
+            let tokens: std::collections::BTreeSet<_> = trace
+                .events
+                .iter()
+                .map(|event| event.action.token())
+                .collect();
+            assert_eq!(tokens.len(), 2);
+            assert!(
+                trace
+                    .events
+                    .iter()
+                    .any(|event| matches!(event.action, Action::Move { .. }))
+            );
+            traces.push(trace);
+        }
+        assert_eq!(traces[0], traces[1]);
+    }
+}
+
+#[test]
+fn ownership_owned_copies_refuse_lineage_without_changing_valid_source_execution() {
+    let mut builder = Builder::new();
+    let kind = TypeKind::Primitive(hirsel_types::Primitive::String);
+    let first = builder.local(kind.clone(), Storage::Local);
+    builder.assign(
+        first,
+        Rvalue::Constant(Constant::String("copied".into())),
+        2,
+        CleanupId(0),
+    );
+    let second = builder.local(kind, Storage::Local);
+    builder.assign(second, Rvalue::Use(copy(first)), 3, CleanupId(0));
+    let result = builder.unit();
+    let definitions = vec![builder.finish("main", result)];
+    for checked in [false, true] {
+        let traced = observed_owned(definitions.clone(), checked);
+        assert!(matches!(traced.execution.outcome, Outcome::Returned { .. }));
+        assert!(matches!(traced.trace, Err(TraceError::Unsupported(_))));
+    }
+    let resources = observed(definitions, &runtime());
+    let trace = resources.trace.unwrap();
+    let analysis = trace.analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (0, 0, 0)
+    );
+}

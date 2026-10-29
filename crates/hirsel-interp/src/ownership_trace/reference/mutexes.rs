@@ -24,7 +24,7 @@ pub(super) fn owner(id: u64) -> Owner {
         path: vec![],
     }
 }
-impl Resources {
+impl<const OWNED: bool> Resources<OWNED> {
     pub(super) fn mutex_created(
         &mut self,
         call: CallState,
@@ -53,7 +53,7 @@ impl Resources {
             self.unsupported("unsupported mutex creation transport");
             return;
         }
-        let count = resources_in(value);
+        let count = resources_in::<OWNED>(value);
         let destination = owner(root.id());
         if count != 0 {
             let [(1, UseKind::Take, from)] = call.arguments.as_slice() else {
@@ -94,7 +94,7 @@ impl Resources {
             self.unsupported("mutex callback payload unavailable");
             return None;
         };
-        let count = resources_in(actual);
+        let count = resources_in::<OWNED>(actual);
         let expected = self.mutexes.payloads.get(&id).copied().unwrap_or(0);
         if count != expected {
             self.unsupported("mutex callback payload inventory differs from committed storage");
@@ -117,12 +117,14 @@ impl Resources {
             return;
         };
         // The evaluator writes this exact local back after retiring the frame.
-        self.mutexes.payloads.insert(id, resources_in(payload));
+        self.mutexes
+            .payloads
+            .insert(id, resources_in::<OWNED>(payload));
         self.mutexes.completed.insert(parent, (id, context));
     }
     fn release_mutex_payload(&mut self, id: u64, values: &[Value], context: &Context) {
         let expected = self.mutexes.payloads.remove(&id).unwrap_or(0);
-        let count = values.iter().map(resources_in).sum::<u64>();
+        let count = values.iter().map(resources_in::<OWNED>).sum::<u64>();
         if count != expected || values.len() > 1 {
             self.unsupported("mutex cleanup payload inventory differs");
             return;
@@ -193,7 +195,7 @@ impl Resources {
             return;
         };
         let Some((id, _)) = self.mutexes.completed.remove(&frame) else {
-            if values.iter().any(|value| resources_in(value) != 0) {
+            if values.iter().any(|value| resources_in::<OWNED>(value) != 0) {
                 self.unsupported("unattributed abandoned callback payload");
             }
             return;

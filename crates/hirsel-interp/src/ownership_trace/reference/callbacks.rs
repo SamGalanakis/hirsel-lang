@@ -25,7 +25,7 @@ struct Output {
     context: Context,
     count: u64,
 }
-impl Resources {
+impl<const OWNED: bool> Resources<OWNED> {
     pub(super) fn callback_called(
         &mut self,
         call: CallState,
@@ -94,7 +94,7 @@ impl Resources {
                     captures.iter().zip(&environment.owned_captures).enumerate()
                 {
                     let Some(value) = value else { continue };
-                    let count = resources_in(value);
+                    let count = resources_in::<OWNED>(value);
                     if !owned || count == 0 {
                         continue;
                     }
@@ -166,7 +166,7 @@ impl Resources {
                 .slots
                 .iter()
                 .flatten()
-                .any(|value| resources_in(value) != 0)
+                .any(|value| resources_in::<OWNED>(value) != 0)
             {
                 self.unsupported("unobserved resource callback input");
             }
@@ -236,7 +236,7 @@ impl Resources {
                 .slots
                 .get(local as usize)
                 .and_then(Option::as_ref)
-                .map_or(0, resources_in);
+                .map_or(0, resources_in::<OWNED>);
             if actual != expected || aliases.contains_key(&local) {
                 self.unsupported("owned callback capture inventory changed");
                 return;
@@ -253,7 +253,9 @@ impl Resources {
             owned.insert(local, expected);
         }
         if callee.slots.iter().enumerate().any(|(local, value)| {
-            value.as_ref().is_some_and(|value| resources_in(value) != 0)
+            value
+                .as_ref()
+                .is_some_and(|value| resources_in::<OWNED>(value) != 0)
                 && !aliases.contains_key(&(local as u32))
                 && !owned.contains_key(&(local as u32))
         }) {
@@ -292,7 +294,7 @@ impl Resources {
                     self.unsupported("callback result lost its operation custody");
                     return;
                 };
-                output.count = resources_in(value);
+                output.count = resources_in::<OWNED>(value);
             }
             Ending::Failed => {
                 self.callbacks.outputs.remove(&parent);
@@ -307,7 +309,7 @@ impl Resources {
         let Some(output) = self.callbacks.outputs.remove(&frame) else {
             return false;
         };
-        if resources_in(value) != output.count {
+        if resources_in::<OWNED>(value) != output.count {
             self.unsupported("library callback changed the returned resource inventory");
             return true;
         }

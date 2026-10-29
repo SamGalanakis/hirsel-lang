@@ -1,4 +1,4 @@
-use super::closure_support::{children, resources_in};
+use super::closure_support::{children, owned_data, resources_in};
 use super::{Observer, TraceError};
 use crate::frame::Frame;
 use crate::{OperationResult, Value};
@@ -102,7 +102,7 @@ struct TaskState {
     call: Option<CallState>,
 }
 
-pub(super) struct Resources {
+pub(super) struct Resources<const OWNED: bool> {
     current_task: u64,
     current_path: TaskPath,
     paths: BTreeMap<u64, TaskPath>,
@@ -127,7 +127,7 @@ pub(super) struct Resources {
     call: Option<CallState>,
     error: Option<TraceError>,
 }
-impl Resources {
+impl<const OWNED: bool> Resources<OWNED> {
     pub fn new(forget: Option<DefPath>, event_limit: usize) -> Self {
         Self {
             current_task: 0,
@@ -256,10 +256,12 @@ impl Resources {
         }
     }
     fn resource(value: &Value) -> bool {
-        matches!(
-            value,
-            Value::Resource { .. } | Value::ResourceVariant { .. }
-        ) || matches!(value, Value::Handle { kind, .. } if kind == "Region")
+        OWNED && owned_data(value)
+            || matches!(
+                value,
+                Value::Resource { .. } | Value::ResourceVariant { .. }
+            )
+            || matches!(value, Value::Handle { kind, .. } if kind == "Region")
     }
     fn capture_local(frame: &Frame, capture: u32) -> Option<u32> {
         frame
@@ -272,6 +274,13 @@ impl Resources {
             .map(|(local, _)| local as u32)
     }
     fn type_name(value: &Value) -> Option<String> {
+        if OWNED {
+            match value {
+                Value::String(_) => return Some("core@1::String".into()),
+                Value::Bytes(_) => return Some("core@1::Bytes".into()),
+                _ => (),
+            }
+        }
         if matches!(value, Value::Handle { kind, .. } if kind == "Region") {
             return Some("core@1::Region".into());
         }
@@ -317,10 +326,12 @@ impl Resources {
     fn supported_tree(value: &Value) -> bool {
         let mut work = vec![value];
         while let Some(value) = work.pop() {
-            if resources_in(value) == 0 {
+            if resources_in::<OWNED>(value) == 0 {
                 continue;
             }
-            if matches!(value, Value::Handle { kind, .. } if kind == "Region") {
+            if OWNED && owned_data(value)
+                || matches!(value, Value::Handle { kind, .. } if kind == "Region")
+            {
                 continue;
             }
             if Self::field(value, 0).is_none() {
@@ -361,7 +372,7 @@ impl Resources {
         let mut fields = vec![];
         children(value, |index, child| fields.push((index, child)));
         for (index, child) in fields {
-            if resources_in(child) == 0 {
+            if resources_in::<OWNED>(child) == 0 {
                 continue;
             }
             let Some(step) = Self::field(value, index as u32) else {
@@ -395,7 +406,7 @@ impl Resources {
             .map_err(TraceError::Consistency)
     }
 }
-impl Observer for Resources {
+impl<const OWNED: bool> Observer for Resources<OWNED> {
     const ENABLED: bool = true;
     fn run(&mut self, index: usize) {
         if index != 0 {
@@ -448,7 +459,7 @@ impl Observer for Resources {
                     .slots
                     .get(local)
                     .and_then(Option::as_ref)
-                    .map(resources_in)
+                    .map(resources_in::<OWNED>)
                     != Some(count)
                 {
                     self.unsupported(
@@ -473,7 +484,14 @@ impl Observer for Resources {
                 }
                 expected += count;
             }
-            if frame.slots.iter().flatten().map(resources_in).sum::<u64>() != expected {
+            if frame
+                .slots
+                .iter()
+                .flatten()
+                .map(resources_in::<OWNED>)
+                .sum::<u64>()
+                != expected
+            {
                 self.unsupported("unattributed resource in spawned child slots");
                 return;
             }
@@ -488,7 +506,7 @@ impl Observer for Resources {
             .slots
             .iter()
             .flatten()
-            .any(|value| resources_in(value) != 0)
+            .any(|value| resources_in::<OWNED>(value) != 0)
         {
             self.unsupported("spawned resource capture transport");
             return;
@@ -549,7 +567,12 @@ impl Observer for Resources {
                 let context = self.context(anchor.definition, anchor.body, anchor.site, sources);
                 let result = self.tracker.move_tree(&context, &from, &to);
                 self.checked(result);
-            } else if frame.slots.iter().flatten().any(|v| resources_in(v) > 0) {
+            } else if frame
+                .slots
+                .iter()
+                .flatten()
+                .any(|v| resources_in::<OWNED>(v) > 0)
+            {
                 self.unsupported("externally supplied resource root");
                 return;
             }
@@ -575,6 +598,17 @@ impl Observer for Resources {
         match instruction {
             Some(InstructionKind::Assign { destination, value }) => {
                 match frame.body().rvalues.get(value.0 as usize) {
+                    Some(Rvalue::Constant(
+                        hirsel_tir::Constant::String(_) | hirsel_tir::Constant::Bytes(_),
+                    )) if OWNED => {
+                        self.pending = Some(Pending::Create {
+                            destination: *destination,
+                            fields: vec![],
+                            borrowed: vec![],
+                            views: vec![],
+                            context,
+                        });
+                    }
                     Some(Rvalue::Construct { fields, .. }) => {
                         let mut incoming = vec![];
                         let mut views = vec![];
@@ -593,7 +627,7 @@ impl Observer for Resources {
                                     field.value.usage != UseKind::Take,
                                 ));
                             }
-                            let count = resources_in(value);
+                            let count = resources_in::<OWNED>(value);
                             if count == 0 {
                                 continue;
                             }
@@ -634,7 +668,7 @@ impl Observer for Resources {
                                     operand.usage != UseKind::Take,
                                 ));
                             }
-                            let count = resources_in(value);
+                            let count = resources_in::<OWNED>(value);
                             if count == 0 {
                                 continue;
                             }
@@ -665,7 +699,7 @@ impl Observer for Resources {
                             self.unsupported("unavailable resource operand");
                             return;
                         };
-                        if resources_in(value) == 0 {
+                        if resources_in::<OWNED>(value) == 0 {
                             if let (Some(from), Some(to)) = (
                                 self.place(frame, operand.place),
                                 self.destination(frame, *destination),
@@ -729,7 +763,7 @@ impl Observer for Resources {
                 let old = frame.observe(*destination).ok();
                 if !Self::supported_tree(incoming)
                     || old.is_some_and(|value| !Self::supported_tree(value))
-                    || (resources_in(incoming) > 0 && value.usage != UseKind::Take)
+                    || (resources_in::<OWNED>(incoming) > 0 && value.usage != UseKind::Take)
                 {
                     self.unsupported("unsupported replacement resource tree or copied input");
                     return;
@@ -746,8 +780,8 @@ impl Observer for Resources {
                     from,
                     destination,
                     displaced,
-                    incoming: resources_in(incoming),
-                    outgoing: old.map_or(0, resources_in),
+                    incoming: resources_in::<OWNED>(incoming),
+                    outgoing: old.map_or(0, resources_in::<OWNED>),
                     copy: value.usage != UseKind::Take,
                     context,
                 });
@@ -833,14 +867,16 @@ impl Observer for Resources {
                                         from.path.push(Step::Field {
                                             field: index as u32,
                                         });
-                                        if resources_in(value) == 0 && self.has_borrows(&from) {
+                                        if resources_in::<OWNED>(value) == 0
+                                            && self.has_borrows(&from)
+                                        {
                                             capture_views.push((
                                                 index as u32,
                                                 from.clone(),
                                                 *owned,
                                             ));
                                         }
-                                        if resources_in(value) == 0 {
+                                        if resources_in::<OWNED>(value) == 0 {
                                             continue;
                                         }
                                         if !owned {
@@ -873,13 +909,13 @@ impl Observer for Resources {
                                 self.unsupported("call argument is unavailable");
                                 return;
                             };
-                            if resources_in(value) == 0
+                            if resources_in::<OWNED>(value) == 0
                                 && let Some(owner) = self.place(frame, argument.value.place)
                                 && self.has_borrows(&owner)
                             {
                                 views.push((argument.parameter.0, argument.value.usage, owner));
                             }
-                            if resources_in(value) == 0 {
+                            if resources_in::<OWNED>(value) == 0 {
                                 continue;
                             }
                             if !Self::supported_tree(value) {
@@ -942,7 +978,7 @@ impl Observer for Resources {
                                     && captures
                                         .iter()
                                         .flatten()
-                                        .all(|value| resources_in(value) == 0) =>
+                                        .all(|value| resources_in::<OWNED>(value) == 0) =>
                                 {
                                     definition = callback.path().clone();
                                     body = Some(*callback_body);
@@ -970,7 +1006,7 @@ impl Observer for Resources {
                     }
                 } else if let Terminator::Return { value, .. } = terminator
                     && frame.observe(value.place).is_ok_and(|v| {
-                        resources_in(v) > 0
+                        resources_in::<OWNED>(v) > 0
                             || self
                                 .place(frame, value.place)
                                 .is_some_and(|owner| self.has_borrows(&owner))
@@ -983,7 +1019,7 @@ impl Observer for Resources {
                     if value.usage != UseKind::Take
                         && frame
                             .observe(value.place)
-                            .is_ok_and(|v| resources_in(v) > 0)
+                            .is_ok_and(|v| resources_in::<OWNED>(v) > 0)
                     {
                         self.unsupported("borrowed resource return");
                         return;
@@ -1236,7 +1272,7 @@ impl Observer for Resources {
             let Some(value) = value else {
                 continue;
             };
-            let count = resources_in(value);
+            let count = resources_in::<OWNED>(value);
             if count == 0 {
                 continue;
             }
@@ -1314,7 +1350,7 @@ impl Observer for Resources {
     ) {
         if abandoned {
             self.mutex_abandoned(values, anchor, sources);
-        } else if values.iter().any(|value| resources_in(value) != 0) {
+        } else if values.iter().any(|value| resources_in::<OWNED>(value) != 0) {
             self.unsupported("unattributed callback writeback cleanup");
         }
     }
@@ -1341,7 +1377,7 @@ impl Observer for Resources {
             self.checked(created);
             return;
         }
-        let count = resources_in(value);
+        let count = resources_in::<OWNED>(value);
         if self.channel_returned(value) || self.callback_returned(value) {
             return;
         }
@@ -1381,7 +1417,7 @@ impl Observer for Resources {
         }
     }
     fn return_discarded(&mut self, _task: u64, _frame: &Frame, value: &Value) {
-        if self.error.is_some() || resources_in(value) == 0 {
+        if self.error.is_some() || resources_in::<OWNED>(value) == 0 {
             return;
         }
         let Some((from, context)) = self
@@ -1395,7 +1431,7 @@ impl Observer for Resources {
         let to = self.scratch();
         let result = self.tracker.move_tree(&context, &from, &to);
         if let Some(tokens) = self.checked(result) {
-            if tokens.len() as u64 != resources_in(value) {
+            if tokens.len() as u64 != resources_in::<OWNED>(value) {
                 self.unsupported("discarded result lineage inventory differs");
                 return;
             }
@@ -1410,7 +1446,7 @@ impl Observer for Resources {
             .work
             .iter()
             .filter_map(|work| match work {
-                crate::resources::Work::Release(value, ..) if resources_in(value) != 0 => {
+                crate::resources::Work::Release(value, ..) if resources_in::<OWNED>(value) != 0 => {
                     Some(value)
                 }
                 _ => None,
@@ -1423,7 +1459,9 @@ impl Observer for Resources {
             self.unsupported("task rest has no observed retained result");
             return;
         };
-        if self.current_task != task || values.len() != 1 || resources_in(values[0]) != result.count
+        if self.current_task != task
+            || values.len() != 1
+            || resources_in::<OWNED>(values[0]) != result.count
         {
             self.unsupported("task rest differs from retained result custody");
             return;
@@ -1460,7 +1498,7 @@ impl Observer for Resources {
                     self.unsupported("construction has no committed result");
                     return;
                 };
-                let count = resources_in(value);
+                let count = resources_in::<OWNED>(value);
                 if !Self::supported_tree(value)
                     || count
                         != fields.iter().map(|f| f.2).sum::<u64>()
@@ -1583,7 +1621,7 @@ impl Observer for Resources {
         site: Span,
         sources: &SourceMap,
     ) {
-        if self.error.is_some() || resources_in(value) == 0 {
+        if self.error.is_some() || resources_in::<OWNED>(value) == 0 {
             return;
         }
         if !Self::supported_tree(value) {
@@ -1657,7 +1695,7 @@ impl Observer for Resources {
             {
                 caller.aliases.remove(slot);
             }
-            if resources_in(value) == 0 {
+            if resources_in::<OWNED>(value) == 0 {
                 if let Some((from, _)) = returned
                     && self.has_borrows(&from)
                 {
@@ -1689,7 +1727,7 @@ impl Observer for Resources {
                         .insert(
                             self.current_task,
                             ResultState {
-                                count: resources_in(value),
+                                count: resources_in::<OWNED>(value),
                                 context: context.clone(),
                             },
                         )
@@ -1722,7 +1760,7 @@ impl Observer for Resources {
         site: Span,
         sources: &SourceMap,
     ) {
-        if self.error.is_some() || resources_in(value) == 0 {
+        if self.error.is_some() || resources_in::<OWNED>(value) == 0 {
             return;
         }
         if !Self::supported_tree(value) {

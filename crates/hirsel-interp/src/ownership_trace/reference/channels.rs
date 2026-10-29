@@ -45,7 +45,7 @@ fn owner(channel: u64, item: u64) -> Owner {
         path: vec![],
     }
 }
-impl Resources {
+impl<const OWNED: bool> Resources<OWNED> {
     pub(super) fn channel_entered(
         &mut self,
         call: CallState,
@@ -72,7 +72,7 @@ impl Resources {
                 self.unsupported("send has no payload");
                 return;
             };
-            let count = resources_in(payload);
+            let count = resources_in::<OWNED>(payload);
             if count == 0 {
                 if !call.arguments.is_empty() {
                     self.unsupported("send has unattributed resource arguments");
@@ -156,7 +156,7 @@ impl Resources {
         if let Some(send) = pending.send {
             let count = send.as_ref().map_or(0, |(_, count)| *count);
             if *variant == 0 {
-                if resources_in(value) != 0 {
+                if resources_in::<OWNED>(value) != 0 {
                     self.unsupported("successful send retained its payload");
                     return;
                 }
@@ -181,8 +181,8 @@ impl Resources {
                     self.checked(moved);
                 }
             } else if let Some((from, _)) = send {
-                if resources_in(value) != count
-                    || !matches!(value, Value::Tuple(fields) if fields.len() == 2 && fields[0].as_ref().is_some_and(|v| resources_in(v) == count) && fields[1].as_ref().is_some_and(|v| resources_in(v) == 0))
+                if resources_in::<OWNED>(value) != count
+                    || !matches!(value, Value::Tuple(fields) if fields.len() == 2 && fields[0].as_ref().is_some_and(|v| resources_in::<OWNED>(v) == count) && fields[1].as_ref().is_some_and(|v| resources_in::<OWNED>(v) == 0))
                 {
                     self.unsupported("failed send did not return its payload");
                     return;
@@ -200,7 +200,7 @@ impl Resources {
                         Step::Field { field: 0 },
                     ],
                 );
-            } else if resources_in(value) != 0 {
+            } else if resources_in::<OWNED>(value) != 0 {
                 self.unsupported("failed plain send returned unattributed resources");
             }
         } else if *variant == 0 {
@@ -213,7 +213,7 @@ impl Resources {
                 self.unsupported("received payload has no observed FIFO send");
                 return;
             };
-            if resources_in(value) != message.count {
+            if resources_in::<OWNED>(value) != message.count {
                 self.unsupported("received payload differs from FIFO custody");
                 return;
             }
@@ -229,7 +229,7 @@ impl Resources {
                     }],
                 );
             }
-        } else if resources_in(value) != 0 {
+        } else if resources_in::<OWNED>(value) != 0 {
             self.unsupported("failed receive returned unattributed resources");
         }
     }
@@ -272,7 +272,7 @@ impl Resources {
         let Some(output) = self.channels.outputs.remove(&frame) else {
             return false;
         };
-        if resources_in(value) != output.count {
+        if resources_in::<OWNED>(value) != output.count {
             self.unsupported("assigned channel result inventory differs");
             return true;
         }
@@ -320,7 +320,7 @@ impl Resources {
                 self.unsupported("channel cleanup has no observed queued payload");
                 return;
             };
-            if resources_in(value) != message.count {
+            if resources_in::<OWNED>(value) != message.count {
                 self.unsupported("channel cleanup payload inventory differs");
                 return;
             }

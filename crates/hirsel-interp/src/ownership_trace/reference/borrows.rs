@@ -1,7 +1,7 @@
 //! Borrowed environments name the existing owner. They never create, move or
 //! destroy a resource token merely because the evaluator copied a borrow view.
 use super::{Owner, Resources, Storage};
-impl Resources {
+impl<const OWNED: bool> Resources<OWNED> {
     pub(super) fn has_borrows(&self, owner: &Owner) -> bool {
         self.borrows.keys().any(|at| {
             at.task == owner.task && at.storage == owner.storage && at.path.starts_with(&owner.path)
