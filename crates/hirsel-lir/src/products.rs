@@ -131,7 +131,14 @@ impl LayoutClosure {
                 abi_ids.push(id);
             }
         }
-        let closure = Self::select(table, inputs.target, &direct_layouts, &abi_ids)?;
+        let closure = Self::select_indexed(
+            table,
+            inputs.target,
+            &direct_layouts,
+            &abi_ids,
+            &keys,
+            &index,
+        )?;
         // Numeric aliases are not semantic identities. Canonicalize direct
         // operands by content before encoding, so equal ABI/layout rows remain
         // byte-identical after products share a temporary binding table.
@@ -186,6 +193,20 @@ impl LayoutClosure {
         }
         let keys = LayoutKeys::new(table);
         let index = LayoutIndex::new(table);
+        Self::select_indexed(table, target, layout_roots, abi_ids, &keys, &index)
+    }
+
+    fn select_indexed(
+        table: &LayoutTable,
+        target: &TargetSpec,
+        layout_roots: &[LayoutId],
+        abi_ids: &[FnAbiId],
+        keys: &LayoutKeys,
+        index: &LayoutIndex<'_>,
+    ) -> Result<Self, String> {
+        if table.target != target.digest() {
+            return Err("native layout selection target differs".into());
+        }
         // The passes select their synthetic rows by first match. Preserve the
         // source table's selected rows ahead of same-kind source type layouts,
         // including when several closures share a temporary binding table.
