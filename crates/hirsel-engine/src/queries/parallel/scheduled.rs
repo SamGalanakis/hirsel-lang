@@ -28,11 +28,7 @@ const FAILURE: Domain = Domain {
     schema: 1,
 };
 type Key = ContentHash;
-type CheckedProduct = Option<(
-    Arc<CheckedSummary>,
-    Arc<Reads>,
-    Arc<Vec<SignatureDependency>>,
-)>;
+type CheckedProduct = Option<(Arc<CheckedSummary>, Arc<Reads>, Arc<OrderedSignatureReads>)>;
 enum FrontSummary {
     Checked {
         definition: DefId,
@@ -215,7 +211,7 @@ pub struct FrontBodyOutput {
 pub struct FrontCheckedOutput {
     pub(crate) table_keys: Arc<crate::table_keys::TableKeyUse>,
     pub summary: Arc<CheckedSummary>,
-    pub(crate) dependencies: Arc<Vec<SignatureDependency>>,
+    pub(crate) dependencies: Arc<OrderedSignatureReads>,
     pub reads: Arc<Reads>,
     _snapshot: Arc<FrontBodyQueries>,
 }

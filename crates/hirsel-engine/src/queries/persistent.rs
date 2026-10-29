@@ -749,7 +749,7 @@ pub(super) struct FrozenMode {
     pub(super) checked: Option<(
         Arc<CheckedSummary>,
         Arc<Reads>,
-        Arc<Vec<SignatureDependency>>,
+        Arc<parallel::OrderedSignatureReads>,
     )>,
     pub(super) table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
     /// The package lint's facts of the checked body, under `signature`.
@@ -799,7 +799,7 @@ pub(super) fn restore_frozen_mode(
         (
             Arc::new(CheckedSummary { summary, growth }),
             reads.clone(),
-            Arc::new(checked.dependencies),
+            Arc::new(parallel::OrderedSignatureReads::new(&checked.dependencies)),
         )
     });
     let result = record.output.map(|output| {

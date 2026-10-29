@@ -117,7 +117,7 @@ impl FrontLowerQueries {
             .checked_definition(path)
             .ok_or(QueryError::NotImplemented)?;
         (size_of::<FrontLowerDependencies>() as u64)
-            .checked_add(size_of_val(output.dependencies.as_slice()) as u64)
+            .checked_add((output.dependencies.len() * size_of::<SignatureDependency>()) as u64)
             .ok_or(QueryError::NotImplemented)
     }
     pub fn settled_checked_dependencies(
@@ -136,7 +136,10 @@ impl FrontLowerQueries {
             .checked_definition(path)
             .ok_or(QueryError::NotImplemented)?;
         Ok(FrontLowerDependencies {
-            dependencies: output.dependencies.as_ref().clone(),
+            dependencies: output
+                .dependencies
+                .values()
+                .ok_or(QueryError::NotImplemented)?,
             _owner: self.clone(),
             _allowance: allowance,
         })

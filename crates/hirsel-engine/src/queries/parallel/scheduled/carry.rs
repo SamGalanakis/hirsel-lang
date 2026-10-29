@@ -318,7 +318,9 @@ impl FactsRef<'_> {
         if let Some((summary, reads, dependencies)) = self.checked {
             w.arc(summary, retained::checked);
             w.reads(reads);
-            w.arc(dependencies, |w, dependencies| w.flat_vec(dependencies));
+            w.arc(dependencies, |w, dependencies| {
+                w.add(dependencies.retained_bytes())
+            });
         }
         w.vec(self.diagnostics, Weight::diagnostic);
         w.vec(self.diagnostic_phases, |w, (diagnostic, phase)| {
@@ -858,7 +860,7 @@ mod tests {
                         reads: reads.clone(),
                         text: Default::default(),
                     })),
-                    checked: Some((checked, reads, Arc::new(Vec::new()))),
+                    checked: Some((checked, reads, Arc::new(OrderedSignatureReads::new(&[])))),
                     dead_arms: None,
                     diagnostics: vec![Diagnostic::error(
                         const { hirsel_diag::RuleId::of("CARRY-1") },

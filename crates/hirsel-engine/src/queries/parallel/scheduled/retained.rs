@@ -87,7 +87,7 @@ fn metadata_inner(
         weight.arc(summary, checked);
         weight.reads(reads);
         weight.arc(dependencies, |weight, dependencies| {
-            weight.flat_vec(dependencies)
+            weight.add(dependencies.retained_bytes())
         });
     }
     if let Some(keys) = table_keys {
@@ -134,7 +134,7 @@ mod tests {
         let reads = Arc::new(Reads::empty());
         let mut short = outcome(reads.clone(), checked.clone());
         short.summary = None;
-        let selected = Some((checked, reads, Arc::new(Vec::new())));
+        let selected = Some((checked, reads, Arc::new(OrderedSignatureReads::new(&[]))));
         let mut long = short.clone();
         long.definition = DefPath::core(&"long".repeat(4096));
         assert_eq!(
@@ -169,7 +169,11 @@ mod tests {
         });
         let reads = Arc::new(Reads::empty());
         let output = outcome(reads.clone(), checked.clone());
-        let selected = Some((checked.clone(), reads.clone(), Arc::new(Vec::new())));
+        let selected = Some((
+            checked.clone(),
+            reads.clone(),
+            Arc::new(OrderedSignatureReads::new(&[])),
+        ));
         let original = output.summary.as_ref().unwrap().clone();
         let compact = FrontSummary::capture(original.clone(), &selected, &reads);
         assert!(matches!(compact, FrontSummary::Checked { .. }));
@@ -211,11 +215,15 @@ mod tests {
         let empty = Arc::new(Reads::empty());
         let first = outcome(empty.clone(), checked.clone());
         let base = metadata(&first, &None, None, &[]).unwrap()
-            + crate::memo::retained_arc_bytes(&Vec::<SignatureDependency>::new());
+            + crate::memo::retained_arc_bytes(&OrderedSignatureReads::new(&[]));
         assert_eq!(
             metadata(
                 &first,
-                &Some((checked.clone(), empty.clone(), Arc::new(Vec::new()))),
+                &Some((
+                    checked.clone(),
+                    empty.clone(),
+                    Arc::new(OrderedSignatureReads::new(&[]))
+                )),
                 None,
                 &[(key, empty)]
             ),
@@ -231,7 +239,11 @@ mod tests {
         let second = outcome(reads.clone(), checked.clone());
         let bytes = metadata(
             &second,
-            &Some((checked.clone(), reads.clone(), Arc::new(Vec::new()))),
+            &Some((
+                checked.clone(),
+                reads.clone(),
+                Arc::new(OrderedSignatureReads::new(&[])),
+            )),
             None,
             &[(key, reads)],
         )
@@ -246,7 +258,11 @@ mod tests {
         let independent = Arc::new((*checked).clone());
         let distinct = metadata(
             &second,
-            &Some((independent, second.reads.clone(), Arc::new(Vec::new()))),
+            &Some((
+                independent,
+                second.reads.clone(),
+                Arc::new(OrderedSignatureReads::new(&[])),
+            )),
             None,
             &[],
         )
