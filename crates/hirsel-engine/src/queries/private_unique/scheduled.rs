@@ -785,7 +785,12 @@ impl QueryEngine {
                         .unwrap_or_else(|| Arc::new(crate::store::NoneStore)),
                 ),
             };
-            let facts = crate::with_compiler_stack(|| inference.produce())?;
+            let facts = if selected.is_some() {
+                // Immutable demand runs on its already admitted compiler worker.
+                inference.produce()?
+            } else {
+                crate::with_compiler_stack(|| inference.produce())?
+            };
             for input in &inference.inputs {
                 *self
                     .recomputes
