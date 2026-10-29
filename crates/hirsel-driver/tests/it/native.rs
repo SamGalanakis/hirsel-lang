@@ -1763,7 +1763,7 @@ fn generated_request_products(
     let directory = tempfile::tempdir().unwrap();
     let manifest = directory.path().join("hirsel.json");
     std::fs::write(directory.path().join("native.hir"), source).unwrap();
-    std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"native.hir","module":[]}],"dependencies":[]}"#).unwrap();
+    std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"native.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
     let config = hirsel_engine::CompileConfig {
         store,
         jobs: hirsel_intern::jobs::Jobs::new(2),
