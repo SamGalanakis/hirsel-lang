@@ -378,7 +378,7 @@ fn ordered_replay_width_mode(width: usize, allocating: bool) {
                 ordered_allocation_memory_fixture(width, backend, root);
             }
             for (ordinal, summary) in summaries.iter().enumerate() {
-                assert_eq!(summary.version, 2);
+                assert_eq!(summary.version, 3);
                 assert_eq!(summary.ordinal, ordinal as u64);
                 let encoded = if allocating {
                     let values: Vec<u64> = expected[ordinal]

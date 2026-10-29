@@ -111,7 +111,9 @@ fn cpu_interpreter_matrix_grant(
         );
         eprintln!("Ordered/Free={free} W{width} {backend}: native recording complete");
         let canonical = fs::read(&events).unwrap();
-        if !free {
+        // W1 has no cooperative child history. W4 retains this complete
+        // queue/rest projection law; W1 still runs every execution/replay below.
+        if !free && width > 1 {
             let expected = cpu_ordered_boundaries(&canonical);
             let expected = expected
                 .iter()

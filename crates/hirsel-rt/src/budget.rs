@@ -73,6 +73,12 @@ impl Meter {
         self.held.store(bytes, Ordering::Relaxed);
     }
     fn ordered_charge(&self, bytes: u64) -> bool {
+        let ctx = crate::stop::running();
+        if !ctx.is_null() && crate::tasks::ordered::cpu::serial::on(ctx) {
+            crate::tasks::ordered::cpu::serial::charged(ctx, bytes);
+            self.ops.fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
         let run = self.ordered.load(Ordering::Acquire);
         if run.is_null() {
             return false;
@@ -148,6 +154,12 @@ impl Meter {
     #[inline]
     pub(crate) fn credit(&self, bytes: u64) {
         if self.metered() {
+            let ctx = crate::stop::running();
+            if !ctx.is_null() && crate::tasks::ordered::cpu::serial::on(ctx) {
+                crate::tasks::ordered::cpu::serial::freed(ctx, bytes);
+                self.ops.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
             let run = self.ordered.load(Ordering::Acquire);
             if !run.is_null() {
                 let ctx = crate::stop::running();
@@ -358,6 +370,9 @@ pub(crate) unsafe fn charge_primitive(
 
 unsafe fn refill(ctx: *mut TaskCtx) -> crate::stop::Stopped<()> {
     crate::stop::observe(ctx)?;
+    if crate::tasks::ordered::cpu::serial::on(ctx) {
+        return crate::tasks::ordered::cpu::serial::refill(ctx);
+    }
     if unsafe { (*ctx).run_ref().ordered_mode.load(Ordering::Acquire) } {
         let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
         return crate::tasks::ordered::engine::fuel_refill(ctx);

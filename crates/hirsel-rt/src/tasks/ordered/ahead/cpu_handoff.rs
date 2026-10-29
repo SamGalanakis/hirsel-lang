@@ -75,6 +75,11 @@ const _: () = {
 /// result layout. This entry is not called from a private alternate.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_cpu_publish(ctx: *mut TaskCtx, summary: *mut Summary) -> u8 {
+    if super::super::cpu::serial::on(ctx) {
+        return unsafe {
+            crate::stop::check(ctx, super::super::cpu::serial::publish(ctx, summary))
+        };
+    }
     if !super::super::engine::on(ctx) {
         return ACCEPTED;
     }

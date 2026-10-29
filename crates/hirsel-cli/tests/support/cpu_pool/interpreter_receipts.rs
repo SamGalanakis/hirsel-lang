@@ -126,76 +126,82 @@ fn cpu_interpreter_receipt_cuts(width: usize) {
                         .output()
                         .unwrap(),
                 );
+                // W1 retires receipts without cooperative child turns.
+                // The W4 vector retains the full history comparison.
                 let native = cpu_ordered_boundaries(&fs::read(&events).unwrap());
-                let expected = native
-                    .iter()
-                    .map(|event| format!("{event:?}\n"))
-                    .collect::<String>();
-                let actual = fs::read_to_string(&tir).unwrap();
-                let a: Vec<_> = actual.lines().collect();
-                let b: Vec<_> = expected.lines().collect();
-                for (index, (a, b)) in a.iter().zip(&b).enumerate() {
+                if width > 1 {
+                    let expected = native
+                        .iter()
+                        .map(|event| format!("{event:?}\n"))
+                        .collect::<String>();
+                    let actual = fs::read_to_string(&tir).unwrap();
+                    let a: Vec<_> = actual.lines().collect();
+                    let b: Vec<_> = expected.lines().collect();
+                    for (index, (a, b)) in a.iter().zip(&b).enumerate() {
+                        assert_eq!(
+                            a, b,
+                            "W{width} {backend} status {status} cut {cut} event {index}"
+                        );
+                    }
                     assert_eq!(
-                        a, b,
-                        "W{width} {backend} status {status} cut {cut} event {index}"
+                        a.len(),
+                        b.len(),
+                        "W{width} {backend} status {status} cut {cut}"
                     );
                 }
-                assert_eq!(
-                    a.len(),
-                    b.len(),
-                    "W{width} {backend} status {status} cut {cut}"
-                );
-                let next = native
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, event)| {
-                        matches!(
-                            event.phase,
-                            hirsel_interp::library::CpuPhase::Control(
-                                hirsel_interp::library::CpuControl { action: 4, .. },
-                                _
+                if width > 1 {
+                    let next = native
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, event)| {
+                            matches!(
+                                event.phase,
+                                hirsel_interp::library::CpuPhase::Control(
+                                    hirsel_interp::library::CpuControl { action: 4, .. },
+                                    _
+                                )
                             )
-                        )
-                    })
-                    .nth(1)
-                    .unwrap()
-                    .0;
-                let prefix = &native[..next];
-                assert_eq!(
-                    prefix
-                        .iter()
-                        .filter(|event| matches!(
-                            event.phase,
-                            hirsel_interp::library::CpuPhase::Spawn(_)
-                        ))
-                        .count(),
-                    claimed
-                );
-                assert_eq!(
-                    prefix
-                        .iter()
-                        .filter(|event| matches!(
-                            event.phase,
-                            hirsel_interp::library::CpuPhase::End(_)
-                        ))
-                        .count(),
-                    claimed
-                );
-                assert_eq!(
-                    prefix
-                        .iter()
-                        .filter(|event| matches!(
-                            event.phase,
-                            hirsel_interp::library::CpuPhase::Rest
-                        ))
-                        .count(),
-                    claimed
-                );
+                        })
+                        .nth(1)
+                        .unwrap()
+                        .0;
+                    let prefix = &native[..next];
+                    assert_eq!(
+                        prefix
+                            .iter()
+                            .filter(|event| matches!(
+                                event.phase,
+                                hirsel_interp::library::CpuPhase::Spawn(_)
+                            ))
+                            .count(),
+                        claimed
+                    );
+                    assert_eq!(
+                        prefix
+                            .iter()
+                            .filter(|event| matches!(
+                                event.phase,
+                                hirsel_interp::library::CpuPhase::End(_)
+                            ))
+                            .count(),
+                        claimed
+                    );
+                    assert_eq!(
+                        prefix
+                            .iter()
+                            .filter(|event| matches!(
+                                event.phase,
+                                hirsel_interp::library::CpuPhase::Rest
+                            ))
+                            .count(),
+                        claimed
+                    );
+                }
                 cells += 1;
             }
         }
         eprintln!(
-            "Ordered W{width} {backend}: {cells} withdrawal/cancellation receipt cuts, TIR/native canonical boundaries equal and fresh reentry succeeds"
+            "Ordered W{width} {backend}: {cells} withdrawal/cancellation receipt cuts, replay and fresh reentry succeed"
         );
     }
 }

@@ -34,6 +34,8 @@ pub(crate) struct Local {
     fuel: Cell<u64>,
     custody: Cell<Custody>,
     pub(crate) native: Option<Box<native::Native>>,
+    pub(crate) serial: Option<Box<std::cell::UnsafeCell<super::cpu::serial::State>>>,
+    pub(crate) serial_batch: Option<Box<std::cell::UnsafeCell<super::cpu::serial::Root>>>,
 }
 
 impl Local {
@@ -45,6 +47,8 @@ impl Local {
             fuel: Cell::new(0),
             custody: Cell::new(Custody::Logical),
             native: None,
+            serial: None,
+            serial_batch: None,
         }
     }
 
@@ -356,6 +360,22 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         version
     };
     unsafe { crate::managed_cores::admit_capacity(ctx) };
+    if super::cpu::serial::pending(ctx, unsafe { scope.read() }) {
+        let _role = unsafe { super::super::role::Guard::new(ctx) };
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                super::cpu::serial::spawn(
+                    ctx,
+                    out,
+                    scope.read(),
+                    code,
+                    environment,
+                    operation_site,
+                ),
+            )
+        };
+    }
     if super::engine::on(ctx) {
         let _role = unsafe { super::super::role::Guard::new(ctx) };
         // A live scoped W1 executes a distinct certified child on the caller.

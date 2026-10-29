@@ -505,6 +505,9 @@ impl Guard {
     /// # Safety
     /// As for enter. The guard stays on this task's own stack.
     pub(crate) unsafe fn new(ctx: *mut TaskCtx) -> Self {
+        if super::ordered::cpu::serial::on(ctx) {
+            return Self(std::ptr::null_mut());
+        }
         unsafe { super::ordered::ahead::barrier(ctx) };
         unsafe { Self::physical(ctx) }
     }

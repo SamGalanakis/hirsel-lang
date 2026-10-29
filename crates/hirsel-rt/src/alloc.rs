@@ -2361,6 +2361,12 @@ pub(crate) unsafe fn cpu_allocation_done(ctx: *mut TaskCtx) {
 /// charge mirrors Heap::allocate, including the optional bare-system path.
 /// No worker reference may survive this call, since it may migrate the task.
 pub(crate) unsafe fn ordered_preflight(ctx: *mut TaskCtx, _index: u32, extent: u64, align: u64) {
+    if crate::tasks::ordered::cpu::serial::on(ctx) {
+        check_request(extent, align);
+        let bytes = unsafe { allocation_charge(ctx, _index, extent, align) };
+        unsafe { ordered_reserve(ctx, bytes) };
+        return;
+    }
     if !unsafe {
         (*ctx)
             .run_ref()
@@ -2406,6 +2412,11 @@ pub(crate) unsafe fn allocation_charge(
 }
 
 pub(crate) unsafe fn ordered_reserve(ctx: *mut TaskCtx, bytes: u64) {
+    if crate::tasks::ordered::cpu::serial::on(ctx) {
+        let result = crate::tasks::ordered::cpu::serial::reserve(ctx, bytes);
+        unsafe { crate::stop::check(ctx, result) };
+        return;
+    }
     if !unsafe {
         (*ctx)
             .run_ref()

@@ -487,7 +487,7 @@ fn placement_header_is_diagnostic_validated_and_not_replayed() {
 fn settled_cpu_summary() -> hirsel_rt::io::CpuSummary {
     use hirsel_rt::io::{CpuPiece, CpuSummary};
     CpuSummary {
-        version: 2,
+        version: 3,
         retirement: 0,
         ordinal: 1,
         value: 42u64.to_le_bytes().to_vec(),

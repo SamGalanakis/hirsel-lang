@@ -373,7 +373,12 @@ pub(crate) unsafe fn check<T>(ctx: *mut TaskCtx, result: Stopped<T>) -> T {
 /// # Safety
 /// As [`check`].
 #[cold]
-pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
+pub(crate) unsafe fn raise(ctx: *mut TaskCtx, mut stop: Stop) -> ! {
+    let ctx = if crate::tasks::ordered::cpu::serial::on(ctx) {
+        unsafe { crate::tasks::ordered::cpu::serial::stop_context(ctx, &mut stop) }
+    } else {
+        ctx
+    };
     // A rejected replay phase has unwound its temporary runtime owners. End
     // this task at its admitted cut without requesting an external run stop.
     // Keep this scheduler transition at the executor's terminal boundary.

@@ -47,6 +47,25 @@ pub(in crate::tasks::ordered) fn partial(
     }
 }
 
+/// Serial CPU calls settle the exact optional witness without a child turn.
+/// A successful receipt consumes its diagnostic prefix immediately.
+pub(in crate::tasks::ordered) fn serial(
+    ctx: *mut TaskCtx,
+    task: TaskId,
+    before: &Stretch,
+    result: Result<(), BudgetKind>,
+) {
+    partial(ctx, task, before, result);
+    if result.is_ok() {
+        let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+        if let Logical::Ordered(driver) = &mut s.logical
+            && let Some(observer) = driver.events.as_mut().and_then(|log| log.charges.as_mut())
+        {
+            observer.take(task);
+        }
+    }
+}
+
 pub(in crate::tasks::ordered) fn stopped(
     ctx: *mut TaskCtx,
     task: TaskId,

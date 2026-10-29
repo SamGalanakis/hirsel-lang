@@ -515,6 +515,14 @@ pub(crate) unsafe fn issue(
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
     if matches!(request, Request::Tasks { .. } | Request::TestTasks { .. })
+        && unsafe {
+            (*ctx).run_ref().cpu_grant.is_some() && (*ctx).run_ref().deferred_ordered.is_some()
+        }
+    {
+        unsafe { crate::tasks::ordered::cpu::serial::enable_meter(ctx) };
+    }
+    if (matches!(request, Request::Tasks { .. } | Request::TestTasks { .. })
+        && unsafe { (*ctx).run_ref().cpu_grant.is_none() })
         || (may_park(&request) && unsafe { crate::pool::wide((*ctx).run_ref()) })
     {
         // A deferred run must use its admitted wait/retirement protocol at

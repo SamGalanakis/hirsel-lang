@@ -400,7 +400,7 @@ struct HostWait {
 impl HostLibrary {
     fn cpu_summary(&mut self, receipt: hirsel_interp::library::CpuRetirement) -> Result<(), Error> {
         let summary = hirsel_rt::io::CpuSummary {
-            version: 2,
+            version: 3,
             retirement: receipt.retirement,
             ordinal: receipt.ordinal,
             value: receipt.value,

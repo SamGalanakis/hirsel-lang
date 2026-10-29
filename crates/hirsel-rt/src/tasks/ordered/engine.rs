@@ -18,6 +18,9 @@ use super::driver::Driver;
 use super::{Command, Objects, Outcome, Returned};
 
 pub(crate) fn on(ctx: *mut TaskCtx) -> bool {
+    if super::cpu::serial::on(ctx) {
+        return false;
+    }
     // Admission publishes this immutable mode before dispatch. A mode query
     // must not create Scheduler, acquire its role or observe a stop: sole-root
     // borrowed host paths depend on their allocation-free fast path.
@@ -301,6 +304,15 @@ fn stretch(ctx: *mut TaskCtx) -> Stretch {
     before
 }
 
+/// CPU preclaim retains the publisher's head until all closures are installed.
+/// Its serial child does not enter or step that head; retire only the parent's
+/// intervening allocation/fuel prefix before lending its ordinary stack.
+pub(super) fn serial_cpu_prefix(ctx: *mut TaskCtx) -> Stopped<()> {
+    assert!(with_current_driver(ctx, |task, d| d.head_ready(task)));
+    let before = stretch(ctx);
+    settle_head(ctx, &before)
+}
+
 #[inline]
 fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
     with_commit(ctx, || settle_head_here(ctx, before))
@@ -489,6 +501,10 @@ pub(crate) fn reserve_allocation(
 /// These callbacks execute with a worker heap/pool borrowed. They touch only
 /// the originating task's disjoint cells: no policy, role, stop or switch.
 pub(crate) fn memory_charged(ctx: *mut TaskCtx, bytes: u64) {
+    if super::cpu::serial::on(ctx) {
+        super::cpu::serial::charged(ctx, bytes);
+        return;
+    }
     assert_eq!(
         unsafe { (*ctx).ordered_allocation.replace(0) },
         bytes,
@@ -497,6 +513,10 @@ pub(crate) fn memory_charged(ctx: *mut TaskCtx, bytes: u64) {
 }
 
 pub(crate) fn memory_freed(ctx: *mut TaskCtx, bytes: u64) {
+    if super::cpu::serial::on(ctx) {
+        super::cpu::serial::freed(ctx, bytes);
+        return;
+    }
     unsafe {
         let word = (*ctx).view.compiled.fuel;
         (*ctx).ordered_charge_trace.free(word, bytes);

@@ -48,7 +48,7 @@ impl CpuSummary {
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.version != 2
+        if self.version != 3
             || self.ordinal >= 32
             || self.value.len() > super::super::tasks::ordered::values::BYTES_MAX
             || self.native.as_ref().is_some_and(|native| !native.valid())
@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn cpu_summary_decoder_enforces_version_and_original_summary_bounds() {
         let summary = CpuSummary {
-            version: 2,
+            version: 3,
             retirement: 0,
             ordinal: 0,
             value: 42u64.to_le_bytes().to_vec(),

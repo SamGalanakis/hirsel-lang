@@ -664,7 +664,20 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
         workers.caller = Some(old);
         workers.caller_task = unsafe { (*ctx).task_id };
     }
-    unsafe { migrate(ctx) };
+    let inline = width == 1
+        && execs
+            .scoped
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .calling
+            .is_some();
+    if inline {
+        super::acquire_permit(ctx);
+    } else {
+        unsafe { migrate(ctx) };
+    }
     Ok(())
 }
 
@@ -717,6 +730,12 @@ pub(crate) fn width(ctx: *mut TaskCtx) -> Option<u32> {
 pub(crate) unsafe fn leave(ctx: *mut TaskCtx) {
     let run = unsafe { (*ctx).run_ptr() };
     let execs = super::execs(ctx);
+    let inline = execs
+        .scoped
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|workers| workers.execs.len() == 1 && workers.calling.is_some());
     let old = execs
         .scoped
         .lock()
@@ -734,7 +753,9 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) {
     // the original topology. Its old CPU worker then returns its reserved
     // credit, allowing the original worker to reacquire without a W+1 holder.
     request_exit(execs);
-    unsafe { migrate(ctx) };
+    if !inline {
+        unsafe { migrate(ctx) };
+    }
     unsafe { finish(run) };
     {
         let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
@@ -775,6 +796,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
     // The independently checked worker certificate permits these two calls
     // on a private native frame. Its immutable job handle was installed at spawn.
     if matches!(action, 6 | 7) {
+        if let Some(state) = crate::tasks::ordered::cpu::serial::get(ctx) {
+            if let Some(job) = unsafe { (*state).probe.as_ref() } {
+                if action == 6 {
+                    job.enter(width, count);
+                } else {
+                    job.event("claim");
+                }
+            }
+            unsafe { out.write(0) };
+            return crate::STATUS_OK;
+        }
         let native =
             unsafe { (*ctx).ahead_physical }.cast::<crate::tasks::ordered::ahead::native::Native>();
         if !native.is_null() {
@@ -795,6 +827,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
         }
         unsafe { out.write(0) };
         return crate::STATUS_OK;
+    }
+    let serial = crate::tasks::ordered::cpu::serial::root_start(ctx, width, action);
+    if !serial {
+        unsafe { crate::tasks::ordered::admission::Admission::activate(ctx) };
     }
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     if action > 5 {
@@ -885,7 +921,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
             _ => unreachable!(),
         }
     };
-    let result = if crate::tasks::ordered::engine::on(ctx) {
+    let result = if serial {
+        crate::tasks::ordered::cpu::serial::control(ctx, width, action, count, live)
+    } else if crate::tasks::ordered::engine::on(ctx) {
         crate::tasks::ordered::cpu::control(ctx, width, action, count, live)
     } else {
         crate::tasks::free::record::cpu_control(ctx, width, action, count, live)

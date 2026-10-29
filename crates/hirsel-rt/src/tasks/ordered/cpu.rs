@@ -7,6 +7,7 @@ use crate::ordered::footprint::TaskId;
 use crate::stop::{Stop, Stopped};
 
 mod claims;
+pub(crate) mod serial;
 mod withdrawal;
 pub(in crate::tasks::ordered) use claims::Frozen;
 pub(crate) use claims::{ClaimIdentity, bind_frame};
@@ -259,7 +260,7 @@ impl Batch {
         unsafe { (*summary).phase = super::ahead::cpu_handoff::SUMMARY_RETIRED };
         let settled = self.jobs.settled();
         let record = crate::io::CpuSummary {
-            version: 2,
+            version: 3,
             retirement: self.retirement,
             ordinal: job as u64,
             value,
@@ -365,7 +366,7 @@ pub(super) fn record_summary(ctx: *mut TaskCtx, summary: &crate::io::CpuSummary)
     result.map_err(Stop::refusal)
 }
 
-fn receipt(
+pub(super) fn receipt(
     ctx: *mut TaskCtx,
     width: u32,
     action: u32,
@@ -485,6 +486,9 @@ pub(crate) fn control(
         engine::continue_after_read(ctx, progress)?;
     } else {
         engine::continue_at_head(ctx, progress)?;
+    }
+    if width == 1 && action == 5 && value != 0 {
+        serial::finish_prepared(ctx)?;
     }
     Ok(value)
 }

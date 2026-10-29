@@ -74,19 +74,23 @@ fn cpu_interpreter_fuel_cuts(width: usize) {
     let mut authority = serde_json::json!({"budgets":{"provider":"budgets.limits@2","fuel":100000},"io":{"dirs":[],"tasks":"tasks.cooperative@1","stdout":"stdout.bytes@1","cpu":{"provider":"cpu.scoped@1","max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}});
     fs::write(&grants, authority.to_string()).unwrap();
     let tir_report = root.join("tir.fuel");
-    checked(
-        cpu_interpreter_cli(width, true)
-            .arg("run")
-            .arg(&manifest)
-            .arg("--grants")
-            .arg(&grants)
-            .env("HIRSEL_TIR_CPU_FUEL", &tir_report)
-            .output()
-            .unwrap(),
-    );
+    let mut tir = cpu_interpreter_cli(width, true);
+    tir.arg("run")
+        .arg(&manifest)
+        .arg("--grants")
+        .arg(&grants)
+        .env("HIRSEL_TIR_CPU_FUEL", &tir_report);
+    if width == 1 {
+        tir.arg("--record").arg(root.join("tir-baseline.tape"));
+    }
+    checked(tir.output().unwrap());
     let tir_reference =
         cpu_tir_fuel_ends(&serde_json::from_slice(&fs::read(&tir_report).unwrap()).unwrap());
     assert_eq!(tir_reference.len(), 4 * width);
+    if width == 1 {
+        cpu_serial_fuel_cuts(root, &manifest, &grants, authority, &tir_reference);
+        return;
+    }
     let tape = root.join("cut.tape");
     let events = root.join("native.events");
     let mut native_reference = None;
@@ -222,5 +226,151 @@ fn cpu_interpreter_fuel_cuts(width: usize) {
             "Ordered W{width} {backend}: {} exact source completion fuel cuts across TIR/native, record/replay, using each engine's specified charge count",
             2 * width * 2 * 2 * 2
         );
+    }
+}
+
+fn cpu_serial_receipts(path: &std::path::Path) -> Vec<hirsel_rt::io::CpuSummary> {
+    let (_, tape) = hirsel_rt::tape_binary::Tape::read(fs::read(path).unwrap().into()).unwrap();
+    tape.events()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.request {
+            hirsel_rt::io::Request::CpuSummary(summary) => Some(summary),
+            _ => None,
+        })
+        .collect()
+}
+
+// W1 has no cooperative child End/Rest rows. Its completion boundary is the
+// accepted per-job receipt; a rejected job records its ordinal without a value.
+fn cpu_serial_fuel_cuts(
+    root: &std::path::Path,
+    manifest: &std::path::Path,
+    grants: &std::path::Path,
+    mut authority: serde_json::Value,
+    tir_ends: &[(Vec<u32>, u64, String)],
+) {
+    let reference = cpu_serial_receipts(&root.join("tir-baseline.tape"));
+    assert_eq!(reference.len(), 4);
+    assert!(reference.iter().all(|summary| summary.stop.is_none()));
+    let tape = root.join("cut.tape");
+    let events = root.join("native.events");
+    let mut native_reference = None;
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        checked(
+            cpu_interpreter_cli(1, true)
+                .args(["build", "--fuel", "--validate-stages", "--backend", backend])
+                .arg(manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        authority["budgets"]["fuel"] = serde_json::json!(100000);
+        fs::write(grants, authority.to_string()).unwrap();
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-grants")
+                .arg(grants)
+                .arg("--hirsel-record")
+                .arg(&tape)
+                .arg("--hirsel-trace-events")
+                .arg(&events)
+                .output()
+                .unwrap(),
+        );
+        let baseline = cpu_serial_receipts(&tape);
+        assert_eq!(baseline.len(), reference.len());
+        for (native, tir) in baseline.iter().zip(&reference) {
+            assert_eq!(native.ordinal, tir.ordinal);
+            assert_eq!(native.retirement, tir.retirement);
+            assert_eq!(native.value, tir.value);
+            assert_eq!(native.stop, tir.stop);
+        }
+        if let Some(expected) = &native_reference {
+            assert_eq!(&baseline, expected, "{backend}");
+        } else {
+            native_reference = Some(baseline.clone());
+        }
+        for ordinal in 0..2 {
+            let cost = 100000 - baseline[ordinal].native.as_ref().unwrap().fuel;
+            for admitted in [false, true] {
+                for (native, endpoint) in [(false, tir_ends[ordinal].1), (true, cost)] {
+                    let budget = endpoint - u64::from(!admitted);
+                    assert!(budget > 0);
+                    authority["budgets"]["fuel"] = serde_json::json!(budget);
+                    fs::write(grants, authority.to_string()).unwrap();
+                    for replay in [false, true] {
+                        let mut command = if native {
+                            let mut command = Command::new(&executable);
+                            command.env("HIRSEL_RT_BOUNDED_STOP_TRACE", "1");
+                            command.arg("--hirsel-trace-events").arg(&events);
+                            command
+                        } else {
+                            let mut command = cpu_interpreter_cli(1, true);
+                            command.arg("run").arg(manifest);
+                            command
+                        };
+                        if replay {
+                            command
+                                .arg(if native {
+                                    "--hirsel-replay"
+                                } else {
+                                    "--replay"
+                                })
+                                .arg(&tape);
+                        } else {
+                            command
+                                .arg(if native {
+                                    "--hirsel-grants"
+                                } else {
+                                    "--grants"
+                                })
+                                .arg(grants);
+                            command
+                                .arg(if native {
+                                    "--hirsel-record"
+                                } else {
+                                    "--record"
+                                })
+                                .arg(&tape);
+                        }
+                        let output = command.output().unwrap();
+                        assert_eq!(
+                            output.status.code(),
+                            Some(hirsel_run_schema::exit::BUDGET_EXCEEDED),
+                            "W1 {backend} native={native} job={ordinal} budget={budget} admitted={admitted} replay={replay}: {output:?}"
+                        );
+                        assert!(output.stdout.is_empty());
+                        let receipts = cpu_serial_receipts(&tape);
+                        let accepted: Vec<_> = receipts
+                            .iter()
+                            .filter(|summary| summary.stop.is_none())
+                            .map(|summary| (summary.ordinal, summary.value.clone()))
+                            .collect();
+                        let expected: Vec<_> = reference[..ordinal + usize::from(admitted)]
+                            .iter()
+                            .map(|summary| (summary.ordinal, summary.value.clone()))
+                            .collect();
+                        assert_eq!(
+                            accepted, expected,
+                            "W1 {backend} native={native} job={ordinal} admitted={admitted} replay={replay}"
+                        );
+                        if !admitted {
+                            let stopped: Vec<_> = receipts
+                                .iter()
+                                .filter(|summary| summary.stop.is_some())
+                                .collect();
+                            assert_eq!(stopped.len(), 1);
+                            assert_eq!(stopped[0].ordinal, ordinal as u64);
+                            assert_eq!(stopped[0].retirement, ordinal as u64);
+                            assert_eq!(stopped[0].stop, Some(hirsel_run_schema::BudgetKind::Fuel));
+                            assert!(stopped[0].value.is_empty());
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -1349,6 +1349,9 @@ pub(crate) fn wake_retrying(ctx: *mut TaskCtx) {
 
 /// The running task's spawn path.
 pub(crate) fn current_path(ctx: *mut TaskCtx) -> Vec<u32> {
+    if let Some(state) = ordered::cpu::serial::get(ctx) {
+        return unsafe { (*state).path.clone() };
+    }
     role::with_role(ctx, |t| {
         let current = t.current;
         t.task(current).path.clone()
@@ -3139,6 +3142,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
     out: *mut u64,
     _tasks: *const u64,
 ) -> u8 {
+    if let Some(root) = ordered::cpu::serial::root(ctx)
+        && unsafe { (*root).scope.is_none() }
+    {
+        return unsafe { ordered::cpu::serial::scope_enter(ctx, out) };
+    }
+    unsafe { ordered::admission::Admission::activate(ctx) };
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -3204,6 +3213,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
     _tasks: *const u64,
     deadline: *const [u64; 2],
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -3277,10 +3288,27 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     scope: *const u64,
     error: u8,
 ) -> u8 {
+    if ordered::cpu::serial::owns_scope(ctx, unsafe { scope.read() }) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::cpu::serial::scope_exit(ctx, scope.read(), caller_site),
+            )
+        };
+    }
+    unsafe { ordered::admission::Admission::activate(ctx) };
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit");
+    if ordered::engine::on(ctx) && ordered::cpu::serial::selected(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::cpu::serial::drain(ctx, scope.read(), caller_site),
+            )
+        };
+    }
     if ordered::engine::on(ctx) {
         let binding = unsafe { crate::continuation::binding::take_bound(ctx, 18) };
         let status = unsafe {
@@ -3321,6 +3349,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
     scope: *const u64,
     error: u8,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -3469,6 +3499,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     environment: *mut Header,
     flags: u64,
 ) -> u8 {
+    if ordered::cpu::serial::pending(ctx, unsafe { scope.read() }) {
+        let _role = unsafe { role::Guard::new(ctx) };
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::cpu::serial::spawn(
+                    ctx,
+                    out,
+                    scope.read(),
+                    code,
+                    environment,
+                    operation_site,
+                ),
+            )
+        };
+    }
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::managed_cores::admit_capacity(ctx) };
@@ -3733,6 +3781,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     size: u64,
     descriptor: u32,
 ) -> u8 {
+    if ordered::cpu::serial::on(ctx) {
+        return unsafe { ordered::cpu::serial::finish(ctx, slot, none, size, descriptor) };
+    }
+    unsafe { ordered::admission::Admission::activate(ctx) };
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -3823,6 +3875,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     slot: *mut u8,
     size: u64,
 ) -> u8 {
+    if ordered::cpu::serial::root(ctx).is_some()
+        && ordered::cpu::serial::child(ctx, unsafe { task.read() })
+    {
+        let _role = unsafe { role::Guard::new(ctx) };
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::cpu::serial::join(ctx, scope.read(), task.read(), slot, size, caller_site),
+            )
+        };
+    }
+    unsafe { ordered::admission::Admission::activate(ctx) };
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -3831,6 +3895,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     unsafe {
         ownership_result_join(ctx, task.read())
     };
+    if (ordered::cpu::serial::root(ctx).is_some() || ordered::engine::on(ctx))
+        && ordered::cpu::serial::child(ctx, unsafe { task.read() })
+    {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::cpu::serial::join(ctx, scope.read(), task.read(), slot, size, caller_site),
+            )
+        };
+    }
     if ordered::engine::on(ctx) {
         let status = unsafe {
             crate::stop::check(
@@ -3947,6 +4021,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
     scope: *const u64,
     task: *const u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -3984,10 +4060,26 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     scope: *const u64,
     task: *mut u64,
 ) -> u8 {
+    if ordered::cpu::serial::root(ctx).is_some()
+        && ordered::cpu::serial::child(ctx, unsafe { task.read() })
+    {
+        let _role = unsafe { role::Guard::new(ctx) };
+        let (_, child) = unsafe { child_handle(ctx, scope.read(), task.read()) };
+        role::with_role(ctx, |s| s.task(child).detached = true);
+        return STATUS_OK;
+    }
+    unsafe { ordered::admission::Admission::activate(ctx) };
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_detach");
+    if (ordered::cpu::serial::root(ctx).is_some() || ordered::engine::on(ctx))
+        && ordered::cpu::serial::child(ctx, unsafe { task.read() })
+    {
+        let (_, child) = unsafe { child_handle(ctx, scope.read(), task.read()) };
+        role::with_role(ctx, |s| s.task(child).detached = true);
+        return STATUS_OK;
+    }
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::lifecycle::detach(ctx, scope, task)) };
     }
@@ -4072,6 +4164,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
     out: *mut u64,
     scope: *const u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4118,6 +4212,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_add(
     set: *mut u64,
     task: *mut u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4173,6 +4269,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
     scope: *const u64,
     set: *const u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4289,6 +4387,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
     set: *const u64,
     index: u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4333,6 +4433,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
     set: *mut u64,
     index: u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4379,6 +4481,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
     scope: *const u64,
     set: *mut u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4426,6 +4530,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
     scope: *const u64,
     set: *mut u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4506,6 +4612,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
     out: *mut u32,
     _scope: *const u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4619,6 +4727,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
     none: *const u8,
     descriptor: u32,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4673,6 +4783,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
     _tasks: *const u64,
     sender: *const u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4717,6 +4829,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     sender: *mut u64,
     message: *mut u8,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: caller contract; a resolved immediate send needs no role. A
     // reissued send continues its replay wait under the role.
     if !unsafe { (*ctx).wait_left }
@@ -4803,6 +4917,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     receiver: *mut u64,
     message: *mut u8,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // A replay may stop at the receive, before the ordinary wait stores
     // caller_site. Retain the checked operation code in this task's context.
     let previous = unsafe { (*ctx).run_ref().free_replay }
@@ -5090,6 +5206,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
     descriptor: u32,
     wrapper: u32,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -5141,6 +5259,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     m: *const u64,
     payload: *mut u8,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: caller contract; a resolved available take needs no role. A
     // reissued take continues its replay wait under the role.
     if !unsafe { (*ctx).wait_left }
@@ -5215,6 +5335,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     m: *const u64,
     payload: *mut u8,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     if let Some(status) =
         unsafe { free::tail::invoke_mutex(ctx, free::tail::Kind::Put, mutex_word(m), payload) }
     {
@@ -5366,6 +5488,8 @@ fn stack_rss(ctx: &mut TaskCtx) -> u64 {
 /// `ctx` is live, its failure active, and `m` borrows a counted Mutex wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u64) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     if let Some(status) = unsafe {
         free::tail::invoke_mutex(
             ctx,
@@ -5412,6 +5536,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
 /// `ctx` is live and `m` borrows a dead Mutex's wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u64) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     if let Some(status) = unsafe {
         free::tail::invoke_mutex(
             ctx,
@@ -5461,6 +5587,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
     payload_offset: u64,
     payload_size: u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -5508,6 +5636,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
     slot: *mut u8,
     size: u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: caller contract; a resolved load needs no role.
     if let Some(result) = unsafe { free::objects::atomic_load(ctx, a.read(), slot, size) } {
         return unsafe { free::objects::finish(ctx, result) };
@@ -5560,6 +5690,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
     value: *const u8,
     size: u64,
 ) -> u8 {
+    unsafe { ordered::admission::Admission::activate(ctx) };
+
     // SAFETY: caller contract; a resolved store needs no role.
     if let Some(result) = unsafe { free::objects::atomic_store(ctx, a.read(), value, size) } {
         return unsafe { free::objects::finish(ctx, result) };
