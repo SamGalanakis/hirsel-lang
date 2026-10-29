@@ -163,6 +163,7 @@ impl LocalReadyQueries {
         &mut self,
         instances: &DemandInstances,
         key: &InstanceAddress,
+        selection: hirsel_lir::ownership_trace::Selection,
         arena: &SettledArenaGraph,
         options: &crate::native::Options,
         emission_context: Reference,
@@ -178,7 +179,7 @@ impl LocalReadyQueries {
             debug,
             environment,
             None,
-            |queries, key, action, miss| queries.observe_from_value(key, action, miss),
+            |queries, key, action, miss| queries.observe_from_value(key, action, miss, selection),
         )
     }
 

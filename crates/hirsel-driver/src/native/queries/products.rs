@@ -327,10 +327,18 @@ impl DemandProducts {
         &mut self,
         key: &InstanceAddress,
     ) -> Result<super::ready::ObservedReady, String> {
+        self.observe_selected(key, hirsel_lir::ownership_trace::Selection::Resources)
+    }
+    pub fn observe_selected(
+        &mut self,
+        key: &InstanceAddress,
+        selection: hirsel_lir::ownership_trace::Selection,
+    ) -> Result<super::ready::ObservedReady, String> {
         self.local.guard = self.snapshot.guard_selection()?;
         self.local.observe(
             &self.snapshot.instances,
             key,
+            selection,
             &self.snapshot.arena,
             &self.snapshot.options,
             self.snapshot.context,

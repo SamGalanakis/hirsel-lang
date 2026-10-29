@@ -57,6 +57,7 @@ impl Request {
 /// live in the selected result store; C authority is never serialized.
 pub struct OwnershipTasks {
     native: Arc<NativeTasks>,
+    selection: hirsel_lir::ownership_trace::Selection,
     requests: BTreeMap<ContentHash, Request>,
     root: QueryId,
     weight: MemoryWeight,
@@ -65,17 +66,49 @@ pub struct OwnershipTasks {
     pub transformations: AtomicU64,
 }
 impl OwnershipTasks {
+    pub fn native_request<'a>(
+        &self,
+        plans: &'a BTreeMap<ContentHash, Plan>,
+    ) -> hirsel_lir::ownership_trace::native::Request<'a> {
+        match self.selection {
+            hirsel_lir::ownership_trace::Selection::Resources => {
+                hirsel_lir::ownership_trace::native::Request::Resources(plans)
+            }
+            hirsel_lir::ownership_trace::Selection::Owned => {
+                hirsel_lir::ownership_trace::native::Request::Relocated(plans)
+            }
+        }
+    }
     pub fn new(
         native: Arc<NativeTasks>,
         weight: MemoryWeight,
         allowance: MemoryReservation,
     ) -> Result<Arc<Self>, String> {
+        Self::new_selected(
+            native,
+            hirsel_lir::ownership_trace::Selection::Resources,
+            weight,
+            allowance,
+        )
+    }
+    pub fn new_selected(
+        native: Arc<NativeTasks>,
+        selection: hirsel_lir::ownership_trace::Selection,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+    ) -> Result<Arc<Self>, String> {
         let mut requests = BTreeMap::new();
         for (key, owner) in &native.snapshot.owners {
-            let query = QueryId {
+            let mut query = QueryId {
                 kind: OWNERSHIP_READY_KIND,
                 address: owner.address(OWNERSHIP_READY_KIND),
             };
+            if selection == hirsel_lir::ownership_trace::Selection::Owned {
+                query.address = Address(ContentHash::of_parts(
+                    "hirsel.native.ownership-ready.owned.v1",
+                    [query.address.0.0.as_slice()],
+                ));
+            }
             let reads = native.ownership_reads(owner)?;
             if (std::mem::size_of::<Task>()
                 + reads.len() * std::mem::size_of::<(QueryId, Reference)>()) as u64
@@ -112,17 +145,18 @@ impl OwnershipTasks {
                 allowance.bytes()
             ));
         }
-        let selection = requests.keys().copied().collect::<Vec<_>>();
+        let selected = requests.keys().copied().collect::<Vec<_>>();
         let root = QueryId {
             kind: OWNERSHIP_ROOT_KIND,
             address: Address(hirsel_codec::digest(
                 "hirsel.native.ownership-root.v1",
                 "Units",
-                &selection,
+                &selected,
             )),
         };
         Ok(Arc::new(Self {
             native,
+            selection,
             requests,
             root,
             weight,
@@ -225,8 +259,7 @@ impl OwnershipTasks {
         ) -> Result<R, String>,
     ) -> Result<R, String> {
         self.with_bound_ready(root, |units, emit, plans| {
-            hirsel_lir::ownership_trace::native::Request::Resources(plans)
-                .prepare(units, emit.layouts)?;
+            self.native_request(plans).prepare(units, emit.layouts)?;
             use_units(units, emit, plans)
         })
     }
@@ -415,8 +448,7 @@ impl OwnershipTasks {
         ) -> Result<R, String>,
     ) -> Result<R, String> {
         self.with_bound_link_context(root, source, |program, units, emit, plans| {
-            hirsel_lir::ownership_trace::native::Request::Resources(plans)
-                .prepare(units, emit.layouts)?;
+            self.native_request(plans).prepare(units, emit.layouts)?;
             use_context(program, units, emit, plans)
         })
     }
@@ -589,8 +621,7 @@ impl OwnershipTasks {
                         .ok_or_else(|| "missing executable ownership plan".to_owned())
                 })
                 .collect::<Result<BTreeMap<_, _>, _>>()?;
-            hirsel_lir::ownership_trace::native::Request::Resources(&plans)
-                .prepare(&units, emit.layouts)?;
+            self.native_request(&plans).prepare(&units, emit.layouts)?;
             use_context(&executable, &units, emit, &plans)
         })
     }
@@ -791,7 +822,7 @@ impl Task {
             let request = request.unwrap();
             let mut products = DemandProducts::new(owner.native.snapshot.clone());
             let observed = products
-                .observe(request.owner(&owner.native))
+                .observe_selected(request.owner(&owner.native), owner.selection)
                 .map_err(fail)?;
             owner.transformations.fetch_add(
                 products.local.queries.counts.transformations,

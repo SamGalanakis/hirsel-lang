@@ -97,6 +97,7 @@ fn capture_with_tasks(source_text: &str, expected_exit: i32, tasks: &str) {
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();
         let output = session
             .request(CompileOperation::NativeOwnership(OwnershipRequest {
+                selection: hirsel_lir::ownership_trace::Selection::Resources,
                 definition: None,
                 target: target.clone(),
                 validation: native::Validation::EveryStage,

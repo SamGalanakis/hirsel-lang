@@ -90,6 +90,7 @@ fn child_local_source(source_text: &str, expected_tasks: usize, require_spawn_bi
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();
         let output = session
             .request(CompileOperation::NativeOwnership(OwnershipRequest {
+                selection: hirsel_lir::ownership_trace::Selection::Resources,
                 definition: None,
                 target: target.clone(),
                 validation: native::Validation::EveryStage,

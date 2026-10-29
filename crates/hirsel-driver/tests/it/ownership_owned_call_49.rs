@@ -23,6 +23,35 @@ pub(super) fn source_calls_granted_with_log(
     grants: &str,
     observe: impl Fn(&hirsel_run_schema::ownership_trace::native::Log) + Send,
 ) {
+    source_calls_selected(
+        source,
+        created,
+        expected_exit,
+        grants,
+        hirsel_lir::ownership_trace::Selection::Resources,
+        observe,
+    );
+}
+
+pub(super) fn source_owned_leaves(source: &str, created: u64) {
+    source_calls_selected(
+        source,
+        created,
+        0,
+        "{}",
+        hirsel_lir::ownership_trace::Selection::Owned,
+        |_| {},
+    );
+}
+
+fn source_calls_selected(
+    source: &str,
+    created: u64,
+    expected_exit: i32,
+    grants: &str,
+    selection: hirsel_lir::ownership_trace::Selection,
+    observe: impl Fn(&hirsel_run_schema::ownership_trace::native::Log) + Send,
+) {
     hirsel_engine::with_compiler_stack(move || {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
@@ -31,7 +60,12 @@ pub(super) fn source_calls_granted_with_log(
         let mut traces = Vec::new();
         let mut outcomes = Vec::new();
         for checked in [false, true] {
-            let host = hirsel_driver::ownership_trace::run_resources_on_host(
+            let run_host = if selection == hirsel_lir::ownership_trace::Selection::Owned {
+                hirsel_driver::ownership_trace::run_owned_on_host
+            } else {
+                hirsel_driver::ownership_trace::run_resources_on_host
+            };
+            let host = run_host(
                 &manifest,
                 hirsel_driver::HostLaunch::Live {
                     config: hirsel_driver::LaunchConfig::Grants {
@@ -84,6 +118,7 @@ pub(super) fn source_calls_granted_with_log(
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();
         let output = host
             .request(CompileOperation::NativeOwnership(OwnershipRequest {
+                selection,
                 definition: None,
                 target: target.clone(),
                 validation: native::Validation::EveryStage,
@@ -198,7 +233,12 @@ pub(super) fn source_calls_granted_with_log(
                 .filter_map(|event| match &event.action {
                     Action::Create {
                         token, value_type, ..
-                    } => Some((0, token.clone(), Some(value_type.clone()))),
+                    } => Some((
+                        0,
+                        token.clone(),
+                        (selection == hirsel_lir::ownership_trace::Selection::Resources)
+                            .then(|| value_type.clone()),
+                    )),
                     Action::Drop { token, .. } => Some((1, token.clone(), None)),
                     Action::Move { .. } => None,
                 })

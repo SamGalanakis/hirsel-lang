@@ -31,6 +31,7 @@ pub struct OwnershipCompilation {
     instances: Arc<InstanceTasks>,
     arena: Arc<ArenaTasks>,
     emission: EmissionOptions,
+    selection: hirsel_lir::ownership_trace::Selection,
     query: QueryId,
     weight: MemoryWeight,
     allowance: Mutex<Option<MemoryReservation>>,
@@ -47,7 +48,26 @@ impl OwnershipCompilation {
         allowance: MemoryReservation,
         verify_store: hirsel_engine::store::VerifyStore,
     ) -> Result<Arc<Self>, String> {
-        let query = QueryId {
+        Self::new_selected(
+            instances,
+            arena,
+            hirsel_lir::ownership_trace::Selection::Resources,
+            emission,
+            weight,
+            allowance,
+            verify_store,
+        )
+    }
+    pub fn new_selected(
+        instances: Arc<InstanceTasks>,
+        arena: Arc<ArenaTasks>,
+        selection: hirsel_lir::ownership_trace::Selection,
+        emission: EmissionOptions,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        verify_store: hirsel_engine::store::VerifyStore,
+    ) -> Result<Arc<Self>, String> {
+        let mut query = QueryId {
             kind: OWNERSHIP_COMPILATION_KIND,
             address: Address(ContentHash::of_parts(
                 "hirsel.native.ownership-compilation.v1",
@@ -58,6 +78,12 @@ impl OwnershipCompilation {
                 ],
             )),
         };
+        if selection == hirsel_lir::ownership_trace::Selection::Owned {
+            query.address = Address(ContentHash::of_parts(
+                "hirsel.native.ownership-compilation.owned.v1",
+                [query.address.0.0.as_slice()],
+            ));
+        }
         if weight.retained < std::mem::size_of::<Task>() as u64 {
             return Err("ownership compilation continuation exceeds admission".into());
         }
@@ -66,6 +92,7 @@ impl OwnershipCompilation {
             instances,
             arena,
             emission,
+            selection,
             query,
             weight,
             allowance: Mutex::new(Some(allowance)),
@@ -198,7 +225,8 @@ impl OwnershipCompilation {
             .retained_allowances
             .push(Arc::new(dispatch_allowance));
         let guard = native.guard_factory();
-        let ownership = OwnershipTasks::new(native, self.weight, allowance)?;
+        let ownership =
+            OwnershipTasks::new_selected(native, self.selection, self.weight, allowance)?;
         let factory = ownership.factory();
         let mut factories = BTreeMap::from([
             (OWNERSHIP_READY_KIND, factory.clone()),

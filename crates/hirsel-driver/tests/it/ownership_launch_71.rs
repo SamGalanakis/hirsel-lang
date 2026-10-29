@@ -35,6 +35,7 @@ fn ownership_native_granted_args_record_and_replay_keep_the_selected_resource_li
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();
         let output = session
             .request(CompileOperation::NativeOwnership(OwnershipRequest {
+                selection: hirsel_lir::ownership_trace::Selection::Resources,
                 definition: None,
                 target: target.clone(),
                 validation: native::Validation::EveryStage,

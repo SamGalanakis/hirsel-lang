@@ -427,7 +427,12 @@ fn run_provider_on_host(
     }
     let execution = if let Some(capture) = ownership {
         capture.program = Some(run.program());
-        hirsel_interp::ownership_trace::run_resources(
+        let observe = if capture.owned_data {
+            hirsel_interp::ownership_trace::run_owned
+        } else {
+            hirsel_interp::ownership_trace::run_resources
+        };
+        observe(
             provider,
             &sources,
             hirsel_interp::ownership_trace::ResourceRequest {

@@ -50,6 +50,7 @@ pub(super) struct Source {
 }
 pub(super) struct Plan {
     pub options: native::Options,
+    pub selection: hirsel_lir::ownership_trace::Selection,
     pub fuel: bool,
     pub policy: ContentHash,
     pub verify_store: VerifyStore,
@@ -347,9 +348,10 @@ impl OwnershipBootstrap {
             self.weight,
             plan.admission.arena,
         )?;
-        let compilation = OwnershipCompilation::new(
+        let compilation = OwnershipCompilation::new_selected(
             instances,
             arena,
+            plan.selection,
             EmissionOptions::request(
                 input,
                 native::OptLevel::None,

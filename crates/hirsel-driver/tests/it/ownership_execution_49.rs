@@ -35,6 +35,7 @@ fn ownership_selected_source_objects_execute_original_lineage_on_both_backends()
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();
         let output = session
             .request(CompileOperation::NativeOwnership(OwnershipRequest {
+                selection: hirsel_lir::ownership_trace::Selection::Resources,
                 definition: None,
                 target: target.clone(),
                 validation: native::Validation::EveryStage,

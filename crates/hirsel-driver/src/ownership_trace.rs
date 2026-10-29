@@ -14,6 +14,7 @@ pub struct ResourceRun {
 }
 
 pub(crate) struct Capture {
+    pub owned_data: bool,
     pub event_limit: usize,
     pub program: Option<[u8; 32]>,
     pub trace: Option<Result<Trace, TraceError>>,
@@ -30,7 +31,33 @@ pub fn run_resources_on_host(
     checked: bool,
     event_limit: usize,
 ) -> Result<ResourceRun, ToolError> {
+    run_on_host(path, launch, max_steps, verify, checked, event_limit, false)
+}
+
+/// Observe supported owned leaves under the same admitted source, grants and
+/// checked execution as resource tracing. Unobserved producers fail closed.
+pub fn run_owned_on_host(
+    path: &Path,
+    launch: HostLaunch<'_>,
+    max_steps: Option<u64>,
+    verify: hirsel_engine::Verify,
+    checked: bool,
+    event_limit: usize,
+) -> Result<ResourceRun, ToolError> {
+    run_on_host(path, launch, max_steps, verify, checked, event_limit, true)
+}
+
+fn run_on_host(
+    path: &Path,
+    launch: HostLaunch<'_>,
+    max_steps: Option<u64>,
+    verify: hirsel_engine::Verify,
+    checked: bool,
+    event_limit: usize,
+    owned_data: bool,
+) -> Result<ResourceRun, ToolError> {
     let mut capture = Capture {
+        owned_data,
         event_limit,
         program: None,
         trace: None,

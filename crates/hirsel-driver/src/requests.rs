@@ -138,6 +138,7 @@ pub struct NativeSourceText {
 /// Diagnostic compiler policy; execution consumes only its checked products.
 #[derive(Clone, Debug)]
 pub struct OwnershipRequest {
+    pub selection: hirsel_lir::ownership_trace::Selection,
     pub definition: Option<DefPath>,
     pub target: TargetSpec,
     pub validation: Validation,

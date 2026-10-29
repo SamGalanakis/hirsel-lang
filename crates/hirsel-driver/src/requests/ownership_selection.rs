@@ -68,7 +68,7 @@ impl OwnershipExecution {
                     &self.entry,
                     units,
                     inputs,
-                    hirsel_lir::ownership_trace::native::Request::Resources(plans),
+                    self.tasks.native_request(plans),
                     &self.link.sites(),
                     backend,
                 )
@@ -266,6 +266,7 @@ pub(super) struct OwnershipSelection {
 fn request_key(request: &OwnershipRequest) -> Result<ContentHash, ToolError> {
     let bytes = serde_json::to_vec(&(
         &request.definition,
+        format!("{:?}", request.selection),
         request.target.digest(),
         format!("{:?}", request.validation),
         &request.launch,
@@ -343,6 +344,7 @@ impl OwnershipSelection {
             },
             ownership_bootstrap::Plan {
                 options,
+                selection: request.selection,
                 fuel: request.fuel,
                 policy: request_key,
                 verify_store,

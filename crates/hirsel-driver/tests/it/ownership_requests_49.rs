@@ -53,6 +53,7 @@ fn source_request(explicit_manifest: bool) {
         let mut session = ObservedSession::new(path, compiler, config, selector, limits, 3);
         let output = session
             .request(CompileOperation::NativeOwnership(OwnershipRequest {
+                selection: hirsel_lir::ownership_trace::Selection::Resources,
                 definition: None,
                 target: native::TargetSpec::x86_64_unknown_linux_gnu(),
                 validation: native::Validation::EveryStage,

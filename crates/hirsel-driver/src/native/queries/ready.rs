@@ -313,22 +313,32 @@ impl ReadyQueries {
         key: &InstanceAddress,
         source_action: Action,
         miss: ReadyMiss<'_>,
+        selection: hirsel_lir::ownership_trace::Selection,
     ) -> Result<ObservedReady, String> {
         self.check_miss(key, &miss)?;
         let inputs = miss.inputs;
         let value = hirsel_lir::validate::validate_value(miss.value, inputs)
             .map_err(|rejected| format!("ownership Value refused: {:?}", rejected.violations))?;
-        let initial =
-            hirsel_lir::ownership_trace::native::LeafPlan::prepare_resources_value_for_program(
-                &value,
-                inputs.layouts,
-            )
-            .map_err(|error| {
-                format!(
-                    "ownership Value plan for {}: {error}",
-                    value.unit().header.definition
+        let initial = match selection {
+            hirsel_lir::ownership_trace::Selection::Resources => {
+                hirsel_lir::ownership_trace::native::LeafPlan::prepare_resources_value_for_program(
+                    &value,
+                    inputs.layouts,
                 )
-            })?;
+            }
+            hirsel_lir::ownership_trace::Selection::Owned => {
+                hirsel_lir::ownership_trace::native::LeafPlan::prepare_value_for_program(
+                    &value,
+                    inputs.layouts,
+                )
+            }
+        }
+        .map_err(|error| {
+            format!(
+                "ownership Value plan for {}: {error}",
+                value.unit().header.definition
+            )
+        })?;
         let facts = miss.source.local(miss.options.regions);
         self.counts.transformations += 1;
         let lowered = hirsel_rc::observed::lower_validated_with_guard(

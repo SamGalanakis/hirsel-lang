@@ -696,6 +696,7 @@ pub fn run_path_with_launch(
         );
         let target = super::TargetSpec::x86_64_unknown_linux_gnu();
         let output = host.request(CompileOperation::NativeOwnership(OwnershipRequest {
+            selection: hirsel_lir::ownership_trace::Selection::Resources,
             definition,
             target: target.clone(),
             validation: super::Validation::EveryStage,

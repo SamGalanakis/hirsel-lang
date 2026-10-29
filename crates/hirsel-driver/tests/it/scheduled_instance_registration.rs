@@ -1106,6 +1106,7 @@ fn source_requests_install_nested_instance_views_for_check_run_and_native_owners
             }
             let ownership_output = session
                 .request(CompileOperation::NativeOwnership(OwnershipRequest {
+                    selection: hirsel_lir::ownership_trace::Selection::Resources,
                     definition: None,
                     target: native::TargetSpec::x86_64_unknown_linux_gnu(),
                     validation: native::Validation::EveryStage,
