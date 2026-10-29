@@ -22,6 +22,10 @@ impl Scope {
             .iter()
             .map(|facts| Arc::as_ptr(&facts.source))
             .collect::<std::collections::HashSet<_>>();
+        let mut bodies = facts
+            .iter()
+            .map(|facts| Arc::as_ptr(&facts.body))
+            .collect::<std::collections::HashSet<_>>();
         let mut inline = facts
             .iter()
             .filter_map(|facts| facts.emission.inline.identity())
@@ -38,6 +42,9 @@ impl Scope {
             weight.add(output.wrapper_bytes() as usize);
             if facts.insert(Arc::as_ptr(&output.facts)) {
                 weight.add(output.facts.local_metadata_bytes() as usize);
+                if bodies.insert(Arc::as_ptr(&output.facts.body)) {
+                    weight.add(output.facts.body.retained_metadata_bytes() as usize);
+                }
                 if let Some(id) = output.facts.emission.inline.identity()
                     && !inline.insert(id)
                 {
@@ -176,19 +183,29 @@ impl DemandInstances {
                 Arc::new(DiscoveredInstance::with_facts(
                     product,
                     InstanceFacts {
-                        source: Arc::new(InstanceSourceFacts {
-                            ready_source: ReadySourceFacts::decode(&discovery.ready_source).ok()?,
-                            selection_reads: discovery.selection_reads,
-                            constant_reads: discovery.constant_reads,
-                            discharge: discovery.discharge,
-                            adapters: original.facts.source.adapters.clone(),
-                            _owner: self.retained_owner.clone(),
-                        }),
-                        seal_demand: discovery.seal_demand,
-                        callees: discovery.callees,
-                        dependencies,
-                        templates: discovery.templates,
-                        operation_freedom: discovery.operation_freedom,
+                        source: Arc::new(
+                            InstanceSourceFacts {
+                                ready_source: ReadySourceFacts::decode(&discovery.ready_source)
+                                    .ok()?,
+                                selection_reads: discovery.selection_reads,
+                                constant_reads: discovery.constant_reads,
+                                discharge: discovery.discharge,
+                                adapters: original.facts.source.adapters.clone(),
+                                _owner: self.retained_owner.clone(),
+                            }
+                            .packed(),
+                        ),
+                        body: Arc::new(
+                            InstanceBodyFacts {
+                                seal_demand: discovery.seal_demand,
+                                callees: discovery.callees,
+                                dependencies,
+                                templates: discovery.templates,
+                                operation_freedom: discovery.operation_freedom,
+                                _owner: self.retained_owner.clone(),
+                            }
+                            .packed(),
+                        ),
                         emission,
                         _owner: self.retained_owner.clone(),
                     },
@@ -353,6 +370,7 @@ impl DemandInstances {
                 .collect::<Vec<_>>();
             let finalizers = original
                 .facts
+                .body
                 .dependencies
                 .iter()
                 .map(|k| (k.instance.definition().clone(), k.instance.digest()));
@@ -464,11 +482,17 @@ impl DemandInstances {
                     product,
                     InstanceFacts {
                         source: original.facts.source.clone(),
-                        seal_demand,
-                        callees,
-                        dependencies,
-                        templates,
-                        operation_freedom: freedom,
+                        body: Arc::new(
+                            InstanceBodyFacts {
+                                seal_demand,
+                                callees,
+                                dependencies,
+                                templates,
+                                operation_freedom: freedom,
+                                _owner: self.retained_owner.clone(),
+                            }
+                            .packed(),
+                        ),
                         emission,
                         _owner: self.retained_owner.clone(),
                     },
@@ -509,47 +533,56 @@ mod tests {
         });
         let budget = hirsel_engine::runtime::ProcessBudget::new(1 << 20);
         let owner = Arc::new(budget.reserve(1 << 20).unwrap());
-        let source = Arc::new(InstanceSourceFacts {
-            _owner: Some(owner.clone()),
-            selection_reads: Vec::new(),
-            constant_reads: Vec::new(),
-            discharge: Default::default(),
-            adapters: Vec::new(),
-            ready_source: ReadySourceFacts::decode(
-                &serde_json::to_vec(&(
-                    1u32,
-                    &path,
-                    0u32,
-                    key.encoding(),
-                    0u32,
-                    false,
-                    Vec::<u32>::new(),
-                ))
+        let source = Arc::new(
+            InstanceSourceFacts {
+                _owner: Some(owner.clone()),
+                selection_reads: Vec::new(),
+                constant_reads: Vec::new(),
+                discharge: Default::default(),
+                adapters: Vec::new(),
+                ready_source: ReadySourceFacts::decode(
+                    &serde_json::to_vec(&(
+                        1u32,
+                        &path,
+                        0u32,
+                        key.encoding(),
+                        0u32,
+                        false,
+                        Vec::<u32>::new(),
+                    ))
+                    .unwrap(),
+                )
                 .unwrap(),
-            )
-            .unwrap(),
-        });
+            }
+            .packed(),
+        );
         let facts = InstanceFacts {
             _owner: Some(owner.clone()),
             source,
-            seal_demand: serde_json::from_value(serde_json::json!({
-                "schema": 1, "owner": (&path, record.output.0), "values": 0,
-                "parameters": [], "captures": [], "flow": [], "closures": [],
-                "calls": [], "returns": [], "seals": []
-            }))
-            .unwrap(),
-            callees: Vec::new(),
-            dependencies: Vec::new(),
-            templates: super::super::super::optimizer::TemplateFacts {
-                small: true,
-                execution: false,
-                library: false,
-                references: Vec::new(),
-            },
-            operation_freedom: serde_json::from_value(serde_json::json!({
-                "locally_safe": true, "callees": []
-            }))
-            .unwrap(),
+            body: Arc::new(
+                InstanceBodyFacts {
+                    seal_demand: serde_json::from_value(serde_json::json!({
+                        "schema": 1, "owner": (&path, record.output.0), "values": 0,
+                        "parameters": [], "captures": [], "flow": [], "closures": [],
+                        "calls": [], "returns": [], "seals": []
+                    }))
+                    .unwrap(),
+                    callees: Vec::new(),
+                    dependencies: Vec::new(),
+                    templates: super::super::super::optimizer::TemplateFacts {
+                        small: true,
+                        execution: false,
+                        library: false,
+                        references: Vec::new(),
+                    },
+                    operation_freedom: serde_json::from_value(serde_json::json!({
+                        "locally_safe": true, "callees": []
+                    }))
+                    .unwrap(),
+                    _owner: Some(owner.clone()),
+                }
+                .packed(),
+            ),
             emission: super::super::super::emission::EmissionFacts {
                 inline: super::super::super::emission::InlineInstances::new(
                     [record.output.0],
@@ -563,6 +596,13 @@ mod tests {
         let unchanged =
             DiscoveredInstance::with_facts(product.clone(), facts.clone(), Some(&original));
         assert!(Arc::ptr_eq(&original.facts, &unchanged.facts));
+        let mut changed_emission = facts.clone();
+        changed_emission.emission.tracking = true;
+        let emission_only =
+            DiscoveredInstance::with_facts(product.clone(), changed_emission, Some(&original));
+        assert!(!Arc::ptr_eq(&original.facts, &emission_only.facts));
+        assert!(Arc::ptr_eq(&original.facts.body, &emission_only.facts.body));
+        drop(emission_only);
         let mut scope = Scope {
             outputs: vec![(
                 InstanceAddress {
@@ -594,7 +634,10 @@ mod tests {
         );
         let facts_before_edit = original.facts.clone();
         let mut edited = facts;
-        edited.templates.references.push((path, record.output.0));
+        Arc::make_mut(&mut edited.body)
+            .templates
+            .references
+            .push((path, record.output.0));
         let changed = DiscoveredInstance::with_facts(product, edited, Some(&original));
         assert!(!Arc::ptr_eq(&original.facts, &changed.facts));
         assert!(Arc::ptr_eq(&original.facts.source, &changed.facts.source));
@@ -608,9 +651,10 @@ mod tests {
         );
         let changed = scope.outputs[0].1.clone();
         drop(original);
-        assert!(facts_before_edit.templates.references.is_empty());
-        assert_eq!(changed.facts.templates.references.len(), 1);
+        assert!(facts_before_edit.body.templates.references.is_empty());
+        assert_eq!(changed.facts.body.templates.references.len(), 1);
         let retained_source = changed.facts.source.clone();
+        let retained_body = changed.facts.body.clone();
         drop(changed);
         drop(scope);
         drop(facts_before_edit);
@@ -620,6 +664,12 @@ mod tests {
             "the small source view retains its complete original grant"
         );
         drop(retained_source);
+        assert_eq!(
+            budget.reserved(),
+            1 << 20,
+            "the body view also retains the complete grant"
+        );
+        drop(retained_body);
         assert_eq!(budget.reserved(), 0);
     }
 

@@ -127,7 +127,7 @@ impl ArenaTasks {
                     owner: key.clone(),
                     reference: output.product.local_equations,
                 },
-                callees: output.facts.callees.clone(),
+                callees: output.facts.body.callees.clone(),
             })
             .collect::<Vec<_>>();
         let queries = ArenaQueryPlan::new(&nodes, &[], self.facet)?;

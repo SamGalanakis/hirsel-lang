@@ -85,7 +85,7 @@ impl NativeTasks {
                     .map(|(key, output)| super::seal_demand::Input {
                         query: instance_query(key, output.product.product),
                         product: output.product.product,
-                        equations: output.facts.seal_demand.clone(),
+                        equations: output.facts.body.seal_demand.clone(),
                     })
                     .collect::<Vec<_>>();
                 locals.sort_by(|a, b| a.equations.owner().cmp(b.equations.owner()));
@@ -175,7 +175,9 @@ impl NativeTasks {
                 }),
             );
             let mut reads = BTreeMap::new();
-            for member in std::iter::once(owner(key)).chain(output.facts.callees.iter().cloned()) {
+            for member in
+                std::iter::once(owner(key)).chain(output.facts.body.callees.iter().cloned())
+            {
                 let (member_key, input) = by_owner
                     .get(&member)
                     .ok_or("missing Ready instance dependency")?;
@@ -206,7 +208,7 @@ impl NativeTasks {
                     .ok_or("missing component instance")?;
                 let q = instance_query(member, input.product.product);
                 reads.insert(id(q), (q, input.product.product.record));
-                for callee in &input.facts.callees {
+                for callee in &input.facts.body.callees {
                     let component = components
                         .get(&(key.stratum == ArenaStratum::Chosen, callee.clone()))
                         .ok_or("missing outgoing component")?;

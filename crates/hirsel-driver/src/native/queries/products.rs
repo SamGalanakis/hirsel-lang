@@ -202,7 +202,7 @@ impl NativeSnapshot {
         let needs_guard = instances
             .completed_inputs()?
             .iter()
-            .any(|(_, output)| output.facts.seal_demand.has_seal());
+            .any(|(_, output)| output.facts.body.seal_demand.has_seal());
         Ok(Arc::new(Self {
             execution: Default::default(),
             native: super::ready::ReadyQueries::validator(&store),
@@ -258,12 +258,14 @@ impl NativeSnapshot {
             |member| {
                 self.templates
                     .get(member)
-                    .map_or_else(Vec::new, |(_, facts)| facts.templates.references.clone())
+                    .map_or_else(Vec::new, |(_, facts)| {
+                        facts.body.templates.references.clone()
+                    })
             },
             |member| {
                 self.templates.get(member).is_some_and(|(_, facts)| {
-                    facts.templates.library
-                        || facts.templates.small
+                    facts.body.templates.library
+                        || facts.body.templates.small
                         || self.emission.inline_instances.contains(&member.1)
                 })
             },

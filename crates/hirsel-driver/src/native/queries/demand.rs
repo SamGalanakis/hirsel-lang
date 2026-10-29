@@ -141,15 +141,73 @@ pub struct DiscoveredInstance {
 #[derive(Clone)]
 pub struct InstanceFacts {
     pub source: Arc<InstanceSourceFacts>,
-    /// Ordinary physical-capacity equations, never source or C authority.
-    /// These retain no Value body and are bound to this discovery output.
+    pub body: Arc<InstanceBodyFacts>,
+    pub emission: super::emission::EmissionFacts,
+    _owner: Option<Arc<hirsel_engine::runtime::MemoryReservation>>,
+}
+
+/// Complete body-derived facts, shared when only request-wide emission changes.
+/// Neither these equations nor their immutable owner convey native C authority.
+#[derive(Clone)]
+pub struct InstanceBodyFacts {
     pub seal_demand: hirsel_rc::seal_demand::equations::LocalDemandEquations,
     pub callees: Vec<hirsel_rc::arena_credit::equations::Function>,
     pub dependencies: Vec<InstanceAddress>,
     pub templates: super::optimizer::TemplateFacts,
     pub operation_freedom: hirsel_rc::closure_calls::OperationFreedom,
-    pub emission: super::emission::EmissionFacts,
     _owner: Option<Arc<hirsel_engine::runtime::MemoryReservation>>,
+}
+impl InstanceBodyFacts {
+    fn packed(mut self) -> Self {
+        self.seal_demand.compact();
+        self.callees.shrink_to_fit();
+        self.dependencies.shrink_to_fit();
+        self.templates.references.shrink_to_fit();
+        self
+    }
+    fn retained_metadata_bytes(&self) -> u64 {
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.add(size_of::<Self>() + 2 * size_of::<usize>());
+        weight.vec(&self.callees, |w, (path, _)| w.path(path));
+        weight.vec(&self.dependencies, |w, key| {
+            w.path(key.instance.definition());
+            w.add(key.instance.retained_encoding_bytes());
+        });
+        weight.vec(&self.templates.references, |w, (path, _)| w.path(path));
+        weight
+            .bytes()
+            .saturating_add(self.seal_demand.retained_bytes())
+            .saturating_add(self.operation_freedom.retained_bytes())
+    }
+}
+impl PartialEq for InstanceBodyFacts {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            seal_demand,
+            callees,
+            dependencies,
+            templates,
+            operation_freedom,
+            _owner: _,
+        } = self;
+        seal_demand == &other.seal_demand
+            && callees == &other.callees
+            && dependencies == &other.dependencies
+            && templates == &other.templates
+            && operation_freedom == &other.operation_freedom
+    }
+}
+impl Eq for InstanceBodyFacts {}
+impl std::fmt::Debug for InstanceBodyFacts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstanceBodyFacts")
+            .field("seal_demand", &self.seal_demand)
+            .field("callees", &self.callees)
+            .field("dependencies", &self.dependencies)
+            .field("templates", &self.templates)
+            .field("operation_freedom", &self.operation_freedom)
+            .finish()
+    }
 }
 
 /// Original source observations and proofs shared by callable rewrites. These
@@ -169,21 +227,11 @@ impl PartialEq for InstanceFacts {
     fn eq(&self, other: &Self) -> bool {
         let Self {
             source,
-            seal_demand,
-            callees,
-            dependencies,
-            templates,
-            operation_freedom,
+            body,
             emission,
             _owner: _,
         } = self;
-        source == &other.source
-            && seal_demand == &other.seal_demand
-            && callees == &other.callees
-            && dependencies == &other.dependencies
-            && templates == &other.templates
-            && operation_freedom == &other.operation_freedom
-            && emission == &other.emission
+        source == &other.source && body == &other.body && emission == &other.emission
     }
 }
 impl Eq for InstanceFacts {}
@@ -191,11 +239,7 @@ impl std::fmt::Debug for InstanceFacts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InstanceFacts")
             .field("source", &self.source)
-            .field("seal_demand", &self.seal_demand)
-            .field("callees", &self.callees)
-            .field("dependencies", &self.dependencies)
-            .field("templates", &self.templates)
-            .field("operation_freedom", &self.operation_freedom)
+            .field("body", &self.body)
             .field("emission", &self.emission)
             .finish()
     }
@@ -242,6 +286,11 @@ impl DiscoveredInstance {
         {
             facts.source = previous.facts.source.clone();
         }
+        if let Some(previous) = previous
+            && *previous.facts.body == *facts.body
+        {
+            facts.body = previous.facts.body.clone();
+        }
         let facts = match previous {
             Some(previous) if *previous.facts == facts => previous.facts.clone(),
             _ => Arc::new(facts),
@@ -263,25 +312,31 @@ impl InstanceFacts {
     pub(super) fn retained_metadata_bytes(&self) -> u64 {
         self.local_metadata_bytes()
             .saturating_add(self.source.retained_metadata_bytes())
+            .saturating_add(self.body.retained_metadata_bytes())
     }
     fn local_metadata_bytes(&self) -> u64 {
         let mut weight = hirsel_engine::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + 2 * size_of::<usize>());
-        weight.vec(&self.callees, |w, (path, _)| w.path(path));
-        weight.vec(&self.dependencies, |w, key| {
-            w.path(key.instance.definition());
-            w.add(key.instance.retained_encoding_bytes());
-        });
-        weight.vec(&self.templates.references, |w, (path, _)| w.path(path));
         weight.vec(&self.emission.callbacks, |w, path| w.path(path));
         weight.add(self.emission.inline.retained_bytes() as usize);
-        weight
-            .bytes()
-            .saturating_add(self.seal_demand.retained_bytes())
-            .saturating_add(self.operation_freedom.retained_bytes())
+        weight.bytes()
     }
 }
 impl InstanceSourceFacts {
+    fn packed(mut self) -> Self {
+        self.selection_reads.shrink_to_fit();
+        for read in &mut self.selection_reads {
+            if let Some(arguments) = &mut read.arguments {
+                arguments.shrink_to_fit();
+                for argument in arguments {
+                    argument.shrink_to_fit();
+                }
+            }
+        }
+        self.constant_reads.shrink_to_fit();
+        self.adapters.shrink_to_fit();
+        self
+    }
     fn retained_metadata_bytes(&self) -> u64 {
         let mut weight = hirsel_engine::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + 2 * size_of::<usize>());
@@ -558,7 +613,7 @@ impl DemandInstances {
             .ok_or_else(|| format!(
                 "native instance dependency lost current C admission: {} body {} instance {:?}, library={}, action {:?}, record {:?}",
                 key.instance.definition(), key.instance.body(), key.instance.digest(),
-                output.facts.templates.library, output.product.product.action, output.product.product.record,
+                output.facts.body.templates.library, output.product.product.action, output.product.product.record,
             ))?;
         Ok((output.clone(), linkage))
     }
@@ -1016,19 +1071,28 @@ impl DemandInstances {
         let output = Arc::new(DiscoveredInstance::with_facts(
             product,
             InstanceFacts {
-                source: Arc::new(InstanceSourceFacts {
-                    ready_source,
-                    selection_reads: discovery.selection_reads,
-                    constant_reads: discovery.constant_reads,
-                    discharge: discovery.discharge,
-                    adapters,
-                    _owner: self.retained_owner.clone(),
-                }),
-                seal_demand: discovery.seal_demand,
-                callees: discovery.callees,
-                dependencies,
-                templates: discovery.templates,
-                operation_freedom: discovery.operation_freedom,
+                source: Arc::new(
+                    InstanceSourceFacts {
+                        ready_source,
+                        selection_reads: discovery.selection_reads,
+                        constant_reads: discovery.constant_reads,
+                        discharge: discovery.discharge,
+                        adapters,
+                        _owner: self.retained_owner.clone(),
+                    }
+                    .packed(),
+                ),
+                body: Arc::new(
+                    InstanceBodyFacts {
+                        seal_demand: discovery.seal_demand,
+                        callees: discovery.callees,
+                        dependencies,
+                        templates: discovery.templates,
+                        operation_freedom: discovery.operation_freedom,
+                        _owner: self.retained_owner.clone(),
+                    }
+                    .packed(),
+                ),
                 emission: discovery.emission.read(
                     self.store.as_ref(),
                     &Default::default(),

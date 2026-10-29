@@ -339,13 +339,13 @@ impl InstanceTasks {
                 .sum::<u64>();
             return Err(format!(
                 "native completed descriptor allowance exhausted for {}: requested {charge} bytes, retained {}, allowance {}, registered {}, ready {}, seal {}, freedom {}, discharge {}, source metadata {}, program constants {}, source constants {}, front bindings {}, request payloads {requests}, completed descriptors {descriptors}",
-                output.facts.seal_demand.owner().0,
+                output.facts.body.seal_demand.owner().0,
                 registry.charged,
                 self.allowance.bytes(),
                 registry.entries.len(),
                 output.facts.source.ready_source.retained_metadata_bytes(),
-                output.facts.seal_demand.retained_bytes(),
-                output.facts.operation_freedom.retained_bytes(),
+                output.facts.body.seal_demand.retained_bytes(),
+                output.facts.body.operation_freedom.retained_bytes(),
                 output.facts.source.discharge.retained_metadata_bytes(),
                 self.source.retained_metadata_bytes(),
                 constants.bytes(),
@@ -898,6 +898,7 @@ impl DiscoveryTask {
                     frontier.extend(
                         output
                             .facts
+                            .body
                             .dependencies
                             .iter()
                             .map(|key| key.address(INSTANCE_KIND).0),
@@ -925,7 +926,7 @@ impl DiscoveryTask {
             entry
                 .output
                 .get()
-                .is_some_and(|out| out.facts.templates.execution)
+                .is_some_and(|out| out.facts.body.templates.execution)
         });
         if needs_callable {
             match cx.read(self.tasks.callable_id()) {
