@@ -1,5 +1,5 @@
 use hirsel_driver::*;
-use hirsel_engine::*;
+use hirsel_engine::{runtime::QueryRuntime, *};
 use std::sync::Arc;
 fn signature_session(
     store: Arc<dyn store::ResultStore>,

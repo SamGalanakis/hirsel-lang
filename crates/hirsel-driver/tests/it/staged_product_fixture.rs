@@ -6,7 +6,7 @@ pub(super) struct StagedProducts {
     pub runtime: AdmittedRuntime,
     pub front: Arc<FrontBodyQueries>,
     pub lower: Arc<FrontLowerQueries>,
-    pub budget: ProcessBudget,
+    pub budget: Arc<ProcessBudget>,
 }
 impl StagedProducts {
     pub fn capture(engine: &mut QueryEngine, jobs: usize) -> Result<Self, QueryError> {

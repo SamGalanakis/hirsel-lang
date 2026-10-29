@@ -1,6 +1,6 @@
 //! Durable completion consumes compact facts without loading the Modes body.
 use hirsel_driver::*;
-use hirsel_engine::*;
+use hirsel_engine::{runtime::QueryRuntime, *};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
