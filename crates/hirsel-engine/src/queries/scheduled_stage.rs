@@ -441,6 +441,7 @@ impl QueryEngine {
             {
                 continue;
             }
+            self.materialize(path)?;
             let syntax = self.snapshot(path)?;
             if syntax
                 .tree

@@ -930,7 +930,11 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
                         outcome_text(&control, result)
                     })
                     .collect();
-                assert!(expected.iter().all(Result::is_ok), "{expected:?}; jobs={jobs}; source={source}; phase={:?}", control.last_phase);
+                assert!(
+                    expected.iter().all(Result::is_ok),
+                    "{expected:?}; jobs={jobs}; source={source}; phase={:?}",
+                    control.last_phase
+                );
                 use hirsel_driver::requests::{CompileOperation, CompileResult, CompilerRequests};
                 let directory = tempfile::tempdir().unwrap();
                 let manifest = directory.path().join("hirsel.json");

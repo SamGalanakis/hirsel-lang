@@ -1,0 +1,15 @@
+// rule: CT-1
+// expect: reject CT-1 at line 6
+// twin: CT/CT-2-closed-frame-size-run.hir
+fn inverse[n: size](xs: Inline[u8, n]) -> u64 {
+  let _ = xs
+  comptime (12u64 / n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let first: Inline[u8, 2] = [1, 2]
+  let second: Inline[u8, 0] = []
+  test.check(t, inverse(first) == 6u64)
+  let _ = inverse(second)
+  Ok(())
+}

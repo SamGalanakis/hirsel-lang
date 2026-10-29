@@ -120,7 +120,8 @@ impl FrontLowerQueries {
                             continue;
                         }
                         weight.add(
-                            2 * size_of::<Selection>() + declaration.inputs.len() * size_of::<u64>(),
+                            2 * size_of::<Selection>()
+                                + declaration.inputs.len() * size_of::<u64>(),
                         );
                         if weight.bytes() > working_limit {
                             return Err(refused());
@@ -131,8 +132,12 @@ impl FrontLowerQueries {
                             .map(|input| bindings.get(input).copied())
                             .collect::<Option<Vec<_>>>()
                             .ok_or_else(refused)?;
-                        let retained = selected.len().saturating_add(1).max(4)
-                            .saturating_mul(2 * size_of::<Selection>()) as u64;
+                        let retained = selected
+                            .len()
+                            .saturating_add(1)
+                            .max(4)
+                            .saturating_mul(2 * size_of::<Selection>())
+                            as u64;
                         if retained > retained_limit {
                             return Err(refused());
                         }
