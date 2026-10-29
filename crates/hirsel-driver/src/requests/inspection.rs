@@ -12,23 +12,24 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-pub(super) const KINDS: [QueryKind; 6] = [
+pub(super) const KINDS: [QueryKind; 7] = [
     QueryKind::Resolve,
     QueryKind::Signature,
     QueryKind::Check,
     QueryKind::Modes,
     QueryKind::Lower,
     QueryKind::Evaluate,
+    QueryKind::PrivateInference,
 ];
 #[derive(Clone, Copy, Default)]
 pub(super) struct Counters {
-    pub phases: [u64; 6],
+    pub phases: [u64; KINDS.len()],
     pub validations: u64,
     pub lower_calls: u64,
 }
 impl Counters {
     fn since(self, previous: Self) -> Option<Self> {
-        let mut phases = [0; 6];
+        let mut phases = [0; KINDS.len()];
         for (index, count) in phases.iter_mut().enumerate() {
             *count = self.phases[index].checked_sub(previous.phases[index])?;
         }
