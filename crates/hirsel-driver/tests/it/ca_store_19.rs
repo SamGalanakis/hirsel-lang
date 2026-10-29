@@ -2605,51 +2605,6 @@ fn read_only_constant(prefetch: bool) {
 }
 
 #[test]
-fn ordinary_read_only_executed_helper_keeps_its_check_product() {
-    with_compiler_stack(|| {
-        let scratch = tempfile::tempdir().unwrap();
-        let dir = scratch.path();
-        let manifest = dir.join("hirsel.json");
-        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"library","version":"1"},"sources":[{"path":"api.hir","module":[]}],"dependencies":[]}).to_string()).unwrap();
-        std::fs::write(dir.join("api.hir"), "fn alphabet_bytes(x:u32)->u32{x+1u32}\nfn decode_words()->u32{alphabet_bytes(6u32)}\npub const DECODE:u32=comptime decode_words()\n").unwrap();
-        let products = dir.join("products");
-        let compiler = COMPILER.clone().with_config(CompileConfig {
-            jobs: hirsel_intern::jobs::Jobs::new(1),
-            ..CompileConfig::for_memory_cap(None)
-        });
-        compiler.precompute_package(&manifest, &products).unwrap();
-        let mut reader = compiler
-            .with_config(CompileConfig {
-                store: Arc::new(
-                    store::DirStore::new(dir.join("reader")).with_read_only_root(products),
-                ),
-                jobs: hirsel_intern::jobs::Jobs::new(1),
-                ..CompileConfig::for_memory_cap(None)
-            })
-            .load_check_package(&manifest)
-            .unwrap();
-        let mut root = reader.entry.clone();
-        root.0.name = "DECODE".into();
-        assert_eq!(
-            reader.engine.materialize_constant(&root).unwrap(),
-            hirsel_tir::Constant::Integer(7)
-        );
-        for name in ["alphabet_bytes", "decode_words", "DECODE"] {
-            root.0.name = name.into();
-            reader.engine.semantic_program_revision(&root).unwrap();
-            reader.engine.lower_to_tir(&root).unwrap();
-            for phase in [QueryKind::Check, QueryKind::Modes] {
-                assert_eq!(
-                    reader.engine.recompute_count(&root, phase),
-                    0,
-                    "{root}: {phase:?}"
-                );
-            }
-        }
-    });
-}
-
-#[test]
 fn ordinary_generated_package_reopens_without_signature_or_constructor_errors() {
     with_compiler_stack(|| {
         let scratch = tempfile::tempdir().unwrap();

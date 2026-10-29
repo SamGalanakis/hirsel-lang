@@ -1,5 +1,5 @@
 use hirsel_driver::*;
-use hirsel_engine::{runtime::QueryRuntime, *};
+use hirsel_engine::{runtime::*, *};
 use hirsel_tir::TirProvider;
 use std::sync::Arc;
 fn signature_session(
@@ -356,4 +356,97 @@ fn ordinary_staged_registrations_restore_from_heads_without_syntax_or_execution_
             hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4))
         );
     });
+}
+
+#[test]
+fn ordinary_read_only_executed_helper_keeps_its_check_product() {
+    with_compiler_stack(|| {
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let manifest = dir.join("hirsel.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"library","version":"1"},"sources":[{"path":"api.hir","module":[]}],"dependencies":[]}).to_string()).unwrap();
+        std::fs::write(dir.join("api.hir"), "fn alphabet_bytes(x:u32)->u32{x+1u32}\nfn decode_words()->u32{alphabet_bytes(6u32)}\npub const DECODE:u32=comptime decode_words()\n").unwrap();
+        let products = dir.join("products");
+        let compiler = COMPILER.clone().with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        compiler.precompute_package(&manifest, &products).unwrap();
+        let mut reader = compiler
+            .with_config(CompileConfig {
+                store: Arc::new(
+                    store::DirStore::new(dir.join("reader")).with_read_only_root(products),
+                ),
+                jobs: hirsel_intern::jobs::Jobs::new(1),
+                ..CompileConfig::for_memory_cap(None)
+            })
+            .load_check_package(&manifest)
+            .unwrap();
+        let mut root = reader.entry.clone();
+        root.0.name = "DECODE".into();
+        let (front, lower, value) = constant_product(&mut reader.engine, &root).unwrap();
+        assert_eq!(
+            value.root.kind,
+            hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(7))
+        );
+        for name in ["alphabet_bytes", "decode_words", "DECODE"] {
+            root.0.name = name.into();
+            reader.engine.semantic_program_revision(&root).unwrap();
+            let budget = ProcessBudget::new(1 << 30);
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::new(1),
+                budget.reserve(512 << 20).unwrap(),
+                crate::staged_product_fixture::errors(),
+            )
+            .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            runtime
+                .register_local(FRONT_LOWER_KIND, lower.factory())
+                .unwrap();
+            runtime
+                .register_local(FRONT_EVALUATE_KIND, lower.factory())
+                .unwrap();
+            let request = runtime.request(&[lower.query(&root).unwrap()]);
+            runtime.wait(request).unwrap();
+            lower.settled_definition(&root).unwrap();
+            runtime.shutdown();
+            for phase in [QueryKind::Check, QueryKind::Modes] {
+                assert_eq!(
+                    reader.engine.recompute_count(&root, phase),
+                    0,
+                    "scalar semantic reader {root}: {phase:?}"
+                );
+                assert_eq!(front.recompute_count(&root, phase), 0, "{root}: {phase:?}");
+            }
+        }
+    });
+}
+
+fn constant_product(
+    engine: &mut QueryEngine,
+    path: &DefPath,
+) -> Result<
+    (
+        Arc<FrontBodyQueries>,
+        Arc<FrontLowerQueries>,
+        hirsel_tir::MaterializedRef,
+    ),
+    QueryError,
+> {
+    let mut products = crate::staged_product_fixture::StagedProducts::capture(engine, 1)?;
+    let query = products
+        .lower
+        .evaluate_query(path)
+        .ok_or(QueryError::NotImplemented)?;
+    let request = products.runtime.request(&[query]);
+    let result = products.runtime.wait(request).map_err(|reference| {
+        products
+            .lower
+            .failure(reference)
+            .unwrap_or(QueryError::NotImplemented)
+    });
+    products.runtime.shutdown();
+    result?;
+    let value = products.lower.settled_constant(path, &[])?;
+    Ok((products.front, products.lower, value))
 }
