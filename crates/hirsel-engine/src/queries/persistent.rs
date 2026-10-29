@@ -460,12 +460,57 @@ impl Registrations {
     }
 }
 
-#[derive(Serialize, Deserialize)]
 struct LowerRecord {
     selections: Vec<crate::comptime::Selection>,
     depth: crate::memo::DepthEvidence<Span>,
     output: QueryOutput<hirsel_tir::DefinitionRef>,
     detail: DependencyReads,
+}
+#[derive(Serialize, Deserialize)]
+struct StoredLowerRecord {
+    selections: Vec<crate::comptime::Selection>,
+    depth: crate::memo::DepthEvidence<Span>,
+    output: QueryOutput<crate::store::Reference>,
+    detail: DependencyReads,
+}
+#[derive(Serialize)]
+struct LowerOutputWire<'a> {
+    value: crate::store::Reference,
+    diagnostics: &'a [Diagnostic],
+    dependencies: &'a [SignatureDependency],
+}
+#[derive(Serialize)]
+struct LowerRecordWire<'a> {
+    selections: &'a [crate::comptime::Selection],
+    depth: &'a crate::memo::DepthEvidence<Span>,
+    output: LowerOutputWire<'a>,
+    detail: &'a DependencyReads,
+}
+fn archive_lower_record(
+    records: &TypeRecords,
+    owner: impl Fn(Anchor) -> Option<(DefPath, u32)>,
+    store: &dyn crate::store::ResultStore,
+    record: &LowerRecord,
+) -> Option<Vec<u8>> {
+    let bytes = records.encode_tir(&record.output.value, &owner)?;
+    let domain = hirsel_product_codec::CheckedTir::DOMAIN;
+    let body = store.put_content(domain, &bytes)?;
+    if domain.reference(&bytes) != Some(body) {
+        return None;
+    }
+    records.encode_record(
+        &LowerRecordWire {
+            selections: &record.selections,
+            depth: &record.depth,
+            output: LowerOutputWire {
+                value: body,
+                diagnostics: &record.output.diagnostics,
+                dependencies: &record.output.dependencies,
+            },
+            detail: &record.detail,
+        },
+        owner,
+    )
 }
 /// Unassociated canonical bytes from a worker. Only serial prefix admission
 /// may publish the ordinary query association and its local V completion.
@@ -486,19 +531,21 @@ pub(super) fn capture_lower(
     selections: &[crate::comptime::Selection],
     acceptance: Option<hirsel_validate::ExecutionReceipt>,
 ) -> Option<CapturedLower> {
-    let payload = records.encode_record(
+    let payload = archive_lower_record(
+        records,
+        &owner,
+        store,
         &LowerRecord {
             output: output.clone(),
             detail: canonical_detail(detail.clone()),
             depth: depth.clone(),
             selections: selections.to_vec(),
         },
-        owner,
     )?;
     let payload = store.put_content(
         crate::store::Domain {
             kind: 0x4c4f_5752,
-            schema: 1,
+            schema: 2,
         },
         &payload,
     )?;
@@ -1332,6 +1379,35 @@ impl QueryEngine {
     pub(super) fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
         let records = self.type_records()?;
         records.encode_record(record, |anchor| self.record_anchor_owner(anchor))
+    }
+    fn encode_lower_record(&self, record: &LowerRecord) -> Option<Vec<u8>> {
+        let records = self.type_records()?;
+        archive_lower_record(
+            &records,
+            |anchor| self.record_anchor_owner(anchor),
+            self.result_store.as_deref()?,
+            record,
+        )
+    }
+    fn decode_lower_record(&self, bytes: &[u8]) -> Option<LowerRecord> {
+        let record: StoredLowerRecord = self.decode_record(bytes)?;
+        let body = record.output.value;
+        let archive = hirsel_product_codec::CheckedTir::open(
+            self.result_store.as_ref()?.get_content(body)?,
+            body,
+            self.type_records()?,
+            |owner, occurrence| self.record_anchor(owner, occurrence),
+        )?;
+        Some(LowerRecord {
+            selections: record.selections,
+            depth: record.depth,
+            output: QueryOutput {
+                value: Arc::new(archive.materialize()?),
+                diagnostics: record.output.diagnostics,
+                dependencies: record.output.dependencies,
+            },
+            detail: record.detail,
+        })
     }
     pub(super) fn type_records(&self) -> Option<Arc<TypeRecords>> {
         let store = self.result_store.clone()?;
@@ -2416,7 +2492,7 @@ impl QueryEngine {
         self.result_store.as_ref()?;
         self.prepare_lower_generation(path)?;
         let variant = self.stored_variant(path, QueryKind::Lower)?;
-        let record: LowerRecord = self.decode_record(&variant.payload)?;
+        let record = self.decode_lower_record(&variant.payload)?;
         if record.output.value.path != DefId::intern(path)
             || !self.portable_lower_reads(path, &variant.reads, &record.selections)
             || record.depth.first.len() != self.depth_limit() as usize + 1
@@ -2981,7 +3057,7 @@ impl QueryEngine {
         else {
             return Ok(());
         };
-        let Some(record): Option<LowerRecord> = self.decode_record(&bytes) else {
+        let Some(record) = self.decode_lower_record(&bytes) else {
             return Ok(());
         };
         if record.output.value.path.path() != path
@@ -3050,7 +3126,7 @@ impl QueryEngine {
             depth: depth.clone(),
             selections: entry.selections.clone(),
         });
-        let Some(payload) = self.encode_record(&LowerRecord {
+        let Some(payload) = self.encode_lower_record(&LowerRecord {
             selections: entry.selections.clone(),
             depth,
             output,
@@ -4080,7 +4156,9 @@ mod malformed_tests {
                     detail: Default::default(),
                 };
                 engine
-                    .write_record(path, QueryKind::Lower, &Reads::empty(), &record)
+                    .write_encoded(path, QueryKind::Lower, &Reads::empty(), |engine| {
+                        engine.encode_lower_record(&record)
+                    })
                     .unwrap();
                 engine.verify_store = verify;
                 assert!(engine.load_lower(path).is_none());
@@ -4334,6 +4412,50 @@ mod malformed_tests {
             }
         }
     }
+    #[test]
+    fn lower_metadata_requires_its_independently_checked_tir_child() {
+        let (engine, syntax) = fixture();
+        let unit = engine.types.intern(hirsel_types::Type::unit());
+        let definition = Arc::new(hirsel_tir::Definition {
+            path: DefId::intern(&syntax.item.definition),
+            inferred_unique: Default::default(),
+            signature_hash: ContentHash::default(),
+            caller_bodies: vec![],
+            protocol_associations: vec![],
+            types: vec![unit].into(),
+            bodies: vec![],
+            entry: hirsel_tir::BodyId(0),
+            contracts: vec![],
+        });
+        let record = LowerRecord {
+            selections: vec![],
+            depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+            output: output(definition.clone()),
+            detail: Default::default(),
+        };
+        let bytes = engine.encode_lower_record(&record).unwrap();
+        let restored = engine.decode_lower_record(&bytes).unwrap();
+        assert_eq!(restored.output.value, definition);
+        assert_eq!(engine.encode_lower_record(&restored).unwrap(), bytes);
+        let mut metadata: StoredLowerRecord = engine.decode_record(&bytes).unwrap();
+        let original = metadata.output.value;
+        let store = engine.result_store.as_ref().unwrap();
+        let mut malformed = store.get_content(original).unwrap().to_vec();
+        malformed[0] ^= 1;
+        let malformed = store
+            .put_content(hirsel_product_codec::CheckedTir::DOMAIN, &malformed)
+            .unwrap();
+        let mut missing = original;
+        missing.len += 1;
+        let mut wrong_domain = original;
+        wrong_domain.domain.schema += 1;
+        for child in [missing, wrong_domain, malformed] {
+            metadata.output.value = child;
+            let parent = engine.encode_record(&metadata).unwrap();
+            assert!(engine.decode_lower_record(&parent).is_none());
+        }
+    }
+
     #[test]
     fn canonical_type_and_anchor_domains_and_exact_payload_consumption_are_checked() {
         let (engine, syntax) = fixture();
