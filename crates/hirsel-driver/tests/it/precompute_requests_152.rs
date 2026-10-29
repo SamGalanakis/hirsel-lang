@@ -194,7 +194,7 @@ fn precomputed_dependency_readers_preserve_order_admission_and_owner_lifetime() 
 
 #[test]
 fn checked_dependency_readers_preserve_the_complete_generated_signature_sequence() {
-    use hirsel_engine::runtime::ProcessBudget;
+    use hirsel_engine::{DefinitionQueries, runtime::ProcessBudget};
     with_compiler_stack(|| {
         let source = "type Seed {x:u32}\nfn body_text()->String{\"fn()->u32 uses {}{11u32}\"}\nfn make(s:TypeShape[Seed])->Result[Body[fn()->u32 uses {}],String]{Ok(codegen.body(body_text()))}\nfn chosen()->u32 uses {}=comptime make(shape(Seed))\nconst A:u32=comptime chosen()\nconst B:u32=comptime chosen()\n";
         let directory = tempfile::tempdir().unwrap();
