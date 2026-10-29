@@ -5,7 +5,8 @@ type Module = (crate::memo::PackageKey, crate::memo::ModuleKey);
 pub(super) struct ModuleProduct {
     facts: Facts,
     complete: bool,
-    work: hirsel_syntax::DefMap<usize>,
+    work: BTreeMap<(DefId, QueryKind), usize>,
+    pub(super) signatures: hirsel_syntax::DefMap<Arc<Entry<hirsel_types::SignatureRef>>>,
     accounted: AtomicBool,
 }
 pub(super) struct PrivateProducts {
@@ -121,17 +122,39 @@ impl HeaderProducts {
                         weight.add(failure.message.capacity())
                     });
                 }
-                weight.tree::<DefId, usize>(facts.proofs.len());
-                let work = facts
-                    .proofs
+                let signatures: hirsel_syntax::DefMap<_> = engine
+                    .signatures
                     .iter()
-                    .map(|(id, _)| {
-                        (
-                            *id,
-                            engine.recompute_count(id.path(), QueryKind::PrivateInference),
-                        )
+                    .filter(|(definition, entry)| {
+                        complete
+                            && private.candidates.get(definition) == Some(module)
+                            && engine.unmarked_signature(**definition).is_some()
+                            && entry.reads().iter().all(|(read, _)| match read {
+                                ReadKey::PrivateSummary(dependency)
+                                | ReadKey::Signature(dependency)
+                                | ReadKey::ExecutedSignature(dependency)
+                                | ReadKey::FailedSignature(dependency) => private
+                                    .candidates
+                                    .get(dependency)
+                                    .is_none_or(|dependency_module| dependency_module == module),
+                                _ => true,
+                            })
                     })
+                    .map(|(definition, entry)| (*definition, project(entry)))
                     .collect();
+                for entry in signatures.values() {
+                    weight.add(
+                        crate::memo::retained::retained_signature_entry_bytes(entry)
+                            .ok_or_else(private_refusal)? as usize,
+                    );
+                }
+                weight.tree::<DefId, Arc<Entry<hirsel_types::SignatureRef>>>(signatures.len());
+                let work: BTreeMap<_, _> = engine
+                    .recomputes
+                    .iter()
+                    .map(|((path, kind), count)| ((DefId::intern(path), *kind), *count))
+                    .collect();
+                weight.tree::<(DefId, QueryKind), usize>(work.len());
                 if let Some(retention) = private.retention.get() {
                     let mut remaining = retention.lock().unwrap_or_else(|e| e.into_inner());
                     *remaining = remaining
@@ -145,6 +168,7 @@ impl HeaderProducts {
                     facts,
                     complete,
                     work,
+                    signatures,
                     accounted: AtomicBool::new(false),
                 })
             })
@@ -216,10 +240,10 @@ impl HeaderProducts {
                 inferred.insert(*id, proof.clone());
             }
             if !product.accounted.swap(true, Ordering::Relaxed) {
-                for (id, count) in &product.work {
+                for ((id, kind), count) in &product.work {
                     *engine
                         .recomputes
-                        .entry((id.path().clone(), QueryKind::PrivateInference))
+                        .entry((id.path().clone(), *kind))
                         .or_default() += count;
                 }
             }
@@ -244,13 +268,12 @@ impl HeaderProducts {
                 .filter_map(OnceLock::get)
                 .filter_map(|r| r.as_ref().ok())
             {
-                work.extend(product.work.iter().map(|(id, count)| {
-                    (
-                        id.path().clone(),
-                        QueryKind::PrivateInference,
-                        *count as u64,
-                    )
-                }));
+                work.extend(
+                    product
+                        .work
+                        .iter()
+                        .map(|((id, kind), count)| (id.path().clone(), *kind, *count as u64)),
+                );
             }
         }
     }

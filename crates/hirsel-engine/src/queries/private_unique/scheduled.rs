@@ -369,19 +369,7 @@ impl QueryEngine {
                 // module facts have been installed, never as provisional headers.
                 while !self.private_signature_publications.is_empty() {
                     for id in std::mem::take(&mut self.private_signature_publications) {
-                        self.signature_query_id(id)?;
-                        if let Some(entry) = self.signatures.get(&id).cloned() {
-                            if self.verify_store == crate::store::VerifyStore::Recompute {
-                                // A conservative declaration and its settled
-                                // proof have different observed inputs. Select
-                                // the oracle variant in the completed universe.
-                                self.pending_store_checks
-                                    .remove(&(id, QueryKind::Signature));
-                                self.load_signature(id.path());
-                            }
-                            self.store_signature(id.path(), &entry)?;
-                        }
-                        self.private_signature_publications.remove(&id);
+                        self.publish_private_signature(id)?;
                     }
                 }
                 self.private_summary_revision = Some(self.graph.revision());
@@ -407,6 +395,20 @@ impl QueryEngine {
             .err()
             .map(|error| (self.graph.revision(), error.clone()));
         result
+    }
+    fn publish_private_signature(&mut self, id: DefId) -> Result<(), QueryError> {
+        self.signature_query_id(id)?;
+        if let Some(entry) = self.signatures.get(&id).cloned() {
+            if self.verify_store == crate::store::VerifyStore::Recompute {
+                // Select the oracle variant only after the module proof is installed.
+                self.pending_store_checks
+                    .remove(&(id, QueryKind::Signature));
+                self.load_signature(id.path());
+            }
+            self.store_signature(id.path(), &entry)?;
+        }
+        self.private_signature_publications.remove(&id);
+        Ok(())
     }
     fn infer_private(
         &mut self,
@@ -454,6 +456,21 @@ impl QueryEngine {
                         .is_some_and(|facts| facts.generator && !facts.instance_bodied)
             })
             .all(|path| facts.proofs.iter().any(|(id, _)| id.path() == &path));
+        // The inference view contains conservative declared rows. Replace it
+        // before selecting settled signature variants for this module.
+        let headers = header_products::HeaderProducts::capture(self);
+        self.header_products = Some(headers);
+        self.snapshot = None;
+        let publications: Vec<_> = self
+            .private_signature_publications
+            .iter()
+            .copied()
+            .filter(|id| hirsel_types::unique_summary::same_module(id.path(), owner.path()))
+            .collect();
+        for id in publications {
+            self.publish_private_signature(id)?;
+        }
+        self.adopt_completed_headers();
         Ok((facts, complete))
     }
     fn infer_private_modules(

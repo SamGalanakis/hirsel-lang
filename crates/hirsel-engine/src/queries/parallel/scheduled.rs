@@ -749,21 +749,11 @@ impl FrontBodyQueries {
             .collect::<Vec<_>>();
         if let Some(headers) = self.snapshot.header_products() {
             work.extend(headers.work_snapshot());
+            headers.private_work(&mut work);
         }
         work
     }
     pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> u64 {
-        if kind == QueryKind::PrivateInference {
-            let mut work = Vec::new();
-            if let Some(headers) = self.snapshot.header_products() {
-                headers.private_work(&mut work);
-            }
-            return work
-                .into_iter()
-                .filter(|(path, _, _)| path == definition)
-                .map(|(_, _, count)| count)
-                .sum();
-        }
         self.work_snapshot()
             .into_iter()
             .filter(|(path, selected, _)| path == definition && *selected == kind)

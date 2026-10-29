@@ -88,7 +88,8 @@ impl HeaderProducts {
                 let id = DefId::intern(&path);
                 let cell = OnceLock::new();
                 if engine.unmarked_signature(id).is_some()
-                    && (engine.private_summary_revision == Some(engine.graph.revision())
+                    && (engine.private_summary_active
+                        || engine.private_summary_revision == Some(engine.graph.revision())
                         || !engine
                             .source_facts(&path)
                             .is_some_and(|f| (f.body || f.generator) && !f.constant))
@@ -238,7 +239,18 @@ impl HeaderProducts {
         cell.get()
     }
     pub(crate) fn demand(self: &Arc<Self>, engine: &mut QueryEngine, id: DefId) -> SignatureOutput {
-        self.private_product(id)?;
+        let module = self.private_product(id)?;
+        if let Some(entry) = module.and_then(|module| module.signatures.get(&id)) {
+            let cell = &self.rows[&id];
+            let _ = cell.set(HeaderProduct {
+                result: entry.result(),
+                entry: Some(entry.clone()),
+                recomputes: 0,
+                graph_work: 0,
+                origin: Weak::new(),
+                accounted: AtomicBool::new(true),
+            });
+        }
         if engine.header_products.is_none() {
             self.adopt_private_products(engine)?;
         }
