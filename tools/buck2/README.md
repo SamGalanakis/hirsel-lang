@@ -462,6 +462,16 @@ targets, so compiled Hirsel programs still link one self-contained runtime
 archive. `bundle_archive.py` preserves duplicate member names without extracting
 them into a shared directory.
 
+Runtime packages also contain a generated `startup.order` for each target and
+feature set. `startup_order.py` builds the serial and scoped-pool fixtures against
+the unprofiled archives, then ranks code and read-only symbols by first access in
+Lackey instruction/memory traces. It resolves host Rust names against each target
+archive and leaves section garbage collection unchanged. The selected Link
+captures this file with its runtime inputs and hashes its contents into the build
+ID. Profile generation requests four CPUs and 2 GiB; no profile is checked in.
+`test-native-startup-layout` exercises profile identity, both target CRTs and
+link replay after the original profile has been removed.
+
 ## Toolchains and execution
 
 - Rust: the official 1.99.0 components (rustc, std for x86-64 and AArch64,

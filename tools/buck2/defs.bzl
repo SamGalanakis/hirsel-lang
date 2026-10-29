@@ -808,7 +808,9 @@ def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, featu
             configured = "{}-{}".format(library, triple.split("-")[0])
             native.configured_alias(name = configured, actual = ":" + library, platform = RUNTIME_TARGETS[triple])
             archives["{}/{}".format(triple, variant)] = ":" + configured
-    _runtime_archives(name = name, archives = archives, visibility = ["PUBLIC"])
+    _runtime_archives(name = name, archives = archives, capped = "tools/capped",
+                      exec_compatible_with = [budget_constraint(pool_budget_name(4, 2097152))],
+                      visibility = ["PUBLIC"])
 
 def hirsel_tsan_runtime_archives(name):
     """One instrumented native runtime, with its matching sanitizer and std."""
@@ -819,6 +821,7 @@ def hirsel_tsan_runtime_archives(name):
         name = name,
         archives = {"x86_64-unknown-linux-gnu/default": ":" + name + "-runtime"},
         sanitizer_archive = "toolchains//:tsan-runtime",
+        capped = "tools/capped",
         visibility = ["PUBLIC"],
     )
 
@@ -905,6 +908,29 @@ def _runtime_archives_impl(ctx):
         ctx.actions.run(command, category = "runtime_parts", identifier = path.replace("/", "-"))
         entries[path + "/libhirsel_rt.a"] = stripped
         entries[path + "/debug/libhirsel_rt.a"] = archive
+    if not ctx.attrs.sanitizer_archive:
+        # Training links use the same archives without profiles. The compiler
+        # and ordinary std products depend on Rust libraries, never on this
+        # runtime package, so the profile action introduces no build cycle.
+        unprofiled = ctx.actions.symlinked_dir("unprofiled", entries)
+        orders = ctx.actions.declare_output("startup-orders", dir = True)
+        sources = ctx.actions.symlinked_dir("startup-fixtures", ctx.attrs._startup_sources)
+        command = cmd_args(
+            "python3", ctx.attrs._startup_order,
+            "--hirsel", ctx.attrs._startup_compiler[RunInfo],
+            "--products", ctx.attrs._startup_products[DefaultInfo].default_outputs[0],
+            "--archives", unprofiled,
+            "--source", sources,
+            "--output", orders.as_output(),
+            "--llvm", ctx.attrs._profile_llvm[DefaultInfo].default_outputs[0],
+            "--capped", ctx.attrs.capped,
+            "--private-native-inputs", ctx.attrs._private_native_inputs,
+        )
+        for name, dep in ctx.attrs._startup_tools.items():
+            command.add("--" + name.replace("_", "-"), dep[DefaultInfo].default_outputs[0])
+        ctx.actions.run(command, category = "startup_order")
+        for path in ctx.attrs.archives:
+            entries[path + "/startup.order"] = orders.project(path + "/startup.order")
     # Qualification consumers can request one target/variant without building
     # unrelated archives. Each view also carries that target's compiler builtins.
     views = {}
@@ -923,7 +949,21 @@ _runtime_archives = rule(
         "sanitizer_archive": attrs.option(attrs.source(), default = None),
         "_bundler": attrs.source(default = "//tools/buck2:bundle_archive.py"),
         "_parts": attrs.source(default = "//tools/buck2:runtime_parts.py"),
-        "_llvm": attrs.exec_dep(default = "toolchains//:clang"),
+        "_startup_order": attrs.source(default = "//tools/buck2:startup_order.py"),
+        "_private_native_inputs": attrs.source(default = "//tools/buck2:private_native_inputs.py"),
+        "capped": attrs.source(),
+        "_startup_compiler": attrs.dep(default = "root//:hirsel-toolchain"),
+        "_startup_products": attrs.dep(default = "root//:hirsel-std-products"),
+        "_startup_sources": attrs.dict(attrs.string(), attrs.source(), default = {
+            "serial.hir": "root//bench/native/startup:serial.hir",
+            "pool.hir": "root//bench/native/startup:pool.hir",
+        }),
+        "_startup_tools": attrs.dict(attrs.string(), attrs.dep(), default = {
+            name: "root//tools/buck2/native-toolchain:" + name
+            for name in ["kit", "linker", "glibc_floor", "runtime-auditor", "valgrind"]
+        }),
+        "_llvm": attrs.dep(default = "toolchains//:clang"),
+        "_profile_llvm": attrs.dep(default = "toolchains//:llvm"),
     },
 )
 

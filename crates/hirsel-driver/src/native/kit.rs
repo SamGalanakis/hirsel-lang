@@ -270,6 +270,7 @@ pub(crate) struct Link<'a> {
     pub kind: Kind,
     pub objects: &'a [PathBuf],
     pub runtime: Option<&'a Path>,
+    pub startup_order: Option<&'a Path>,
     /// The kit's static unwinder, which the runtime archive's backtrace and
     /// unwind imports need.
     pub unwind: bool,
@@ -374,6 +375,10 @@ impl Link<'_> {
             }
             args.extend(target.end.iter().map(Into::into));
         }
+        if let Some(order) = self.startup_order {
+            args.push(format!("--symbol-ordering-file={}", order.display()).into());
+            args.push("--no-warn-symbol-ordering".into());
+        }
         args.push("--gc-sections".into());
         Ok(args)
     }
@@ -399,6 +404,7 @@ impl Link<'_> {
                 .chain(self.foreign)
                 .map(PathBuf::as_path)
                 .chain(self.runtime)
+                .chain(self.startup_order)
                 .chain(match &self.kind {
                     Kind::Image { script } => Some(script.as_path()),
                     _ => None,
@@ -415,6 +421,7 @@ impl Link<'_> {
             let arg = arg.as_bytes();
             let script = arg
                 .strip_prefix(b"--version-script=")
+                .or_else(|| arg.strip_prefix(b"--symbol-ordering-file="))
                 .map(|script| Path::new(std::ffi::OsStr::from_bytes(script)));
             let bytes = match named.get(script.unwrap_or(path)) {
                 Some(hash) => [b"content:" as &[u8], &hash.0].concat(),
@@ -538,6 +545,7 @@ mod tests {
             kind: kit.executable_kind(&target.triple, true, None).unwrap(),
             objects: &objects,
             runtime: Some(&runtime),
+            startup_order: None,
             unwind: true,
             foreign: &[],
         };
@@ -578,6 +586,36 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_layout_identity_uses_profile_content_instead_of_its_path() {
+        let root = tempfile::tempdir().unwrap();
+        let kit = Kit::load(&input("HIRSEL_LINK_KIT")).unwrap();
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let runtime = input("HIRSEL_RUNTIME_ARCHIVES")
+            .join(&target.triple)
+            .join("default/libhirsel_rt.a");
+        let objects = [object(&target, root.path())];
+        let first = root.path().join("first.order");
+        let copied = root.path().join("copied.order");
+        std::fs::write(&first, b"main\nhirsel_rt_v2_launch\n").unwrap();
+        std::fs::copy(&first, &copied).unwrap();
+        let mut link = Link {
+            kit: &kit,
+            triple: &target.triple,
+            kind: kit.executable_kind(&target.triple, true, None).unwrap(),
+            objects: &objects,
+            runtime: Some(&runtime),
+            startup_order: Some(&first),
+            unwind: true,
+            foreign: &[],
+        };
+        let original = link.invocation().unwrap().1;
+        link.startup_order = Some(&copied);
+        assert_eq!(link.invocation().unwrap().1, original);
+        std::fs::write(&copied, b"hirsel_rt_v2_launch\nmain\n").unwrap();
+        assert_ne!(link.invocation().unwrap().1, original);
     }
 
     #[test]
@@ -641,6 +679,7 @@ int main(void) {
                 kind: kit.executable_kind(&target.triple, true, None).unwrap(),
                 objects: &objects,
                 runtime: Some(&runtime),
+                startup_order: None,
                 unwind: true,
                 foreign: &[],
             };
@@ -936,6 +975,7 @@ int main(void) {
                     kind: Kind::Executable { loader: None },
                     objects: &objects,
                     runtime: Some(&runtime),
+                    startup_order: None,
                     unwind: true,
                     foreign: &[],
                 };

@@ -525,9 +525,15 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
                 limits,
             )
             .unwrap();
-            let archive = selected_path("HIRSEL_RUNTIME_ARCHIVES")
+            let original_archive = selected_path("HIRSEL_RUNTIME_ARCHIVES")
                 .join(&target.triple)
                 .join("default/libhirsel_rt.a");
+            let package = directory.path().join("profiled-runtime");
+            std::fs::create_dir(&package).unwrap();
+            let archive = package.join("libhirsel_rt.a");
+            std::os::unix::fs::symlink(original_archive, &archive).unwrap();
+            let order = package.join("startup.order");
+            std::fs::write(&order, b"hirsel_rt_v2_main\n").unwrap();
             use object_queries::{
                 platform::{CapturedPlatform, PlatformCaptureInputs, RuntimeSelection},
                 runtime::RuntimeLimits,
@@ -560,6 +566,9 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
                 },
             )
             .unwrap();
+            // The selected platform owns layout too: code generation, Link and
+            // restoration must not reopen the now-removed orderfile.
+            std::fs::remove_file(order).unwrap();
             let platform = FrozenPlatform::new(
                 store.clone(),
                 LinkInputs {

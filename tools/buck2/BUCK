@@ -137,6 +137,7 @@ export_file(name = "test_launcher.sh", src = "test_launcher.sh", visibility = ["
 export_file(name = "test_report.py", visibility = ["PUBLIC"])
 export_file(name = "bundle_archive.py", src = "bundle_archive.py", visibility = ["PUBLIC"])
 export_file(name = "runtime_parts.py", src = "runtime_parts.py", visibility = ["PUBLIC"])
+export_file(name = "startup_order.py", visibility = ["PUBLIC"])
 export_file(name = "link_hosts.py", src = "link_hosts.py", visibility = ["PUBLIC"])
 export_file(name = "sync.py", src = "sync.py", mode = "reference", visibility = ["PUBLIC"])
 export_file(name = "action_sizes_from_log.py", src = "action_sizes_from_log.py", mode = "reference", visibility = ["PUBLIC"])

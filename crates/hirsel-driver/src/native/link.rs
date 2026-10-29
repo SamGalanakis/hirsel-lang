@@ -1512,6 +1512,7 @@ pub fn link_host(
         },
         objects: &[object],
         runtime: Some(archive),
+        startup_order: None,
         unwind: true,
         foreign: &[],
     };
@@ -2203,6 +2204,7 @@ fn kit_plan(
         kind: kit.executable_kind(&target.triple, super::kit::static_inputs(foreign)?, loader)?,
         objects,
         runtime: Some(runtime),
+        startup_order: None,
         unwind: true,
         foreign,
     };
@@ -2386,6 +2388,7 @@ fn link_launcher(
         kind,
         objects: &inputs,
         runtime: Some(runtime),
+        startup_order: None,
         unwind: true,
         foreign: &foreign,
     };
@@ -3880,6 +3883,7 @@ impl Toolchain {
             kind: kit.executable_kind(&target.triple, true, self.loader(target)?)?,
             objects,
             runtime: Some(archive),
+            startup_order: None,
             unwind: true,
             foreign: &[],
         };

@@ -60,10 +60,12 @@ index 51d9e324..115ff718 100644
  
    return v;
  }
-@@ -698,6 +711,29 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
-   {
-     llvm::TimeTraceScope timeScope("ExecuteLinker");
+@@ -670,6 +683,31 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
+   if (args.hasArg(OPT_v) || args.hasArg(OPT_version))
+     Msg(ctx) << getLLDVersion() << " (compatible with GNU linkers)";
  
++    // readConfigs reads file-valued options, including symbol ordering.
++    // Install the closed filesystem before any of those reads.
 +    if (auto *arg = args.getLastArg(OPT_input_overlay)) {
 +      auto buffer = MemoryBuffer::getFile(arg->getValue());
 +      if (!buffer) {
@@ -87,9 +89,9 @@ index 51d9e324..115ff718 100644
 +        return;
 +      }
 +    }
-     initLLVM();
-     createFiles(args);
-     if (errCount(ctx))
+   if (const char *path = getReproduceOption(args)) {
+     // Note that --reproduce is a debug option so you can ignore it
+     // if you are trying to understand the whole picture of the code.
 @@ -3257,6 +3293,11 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
      ctx.symtab->addUnusedUndefined(name)->referenced = true;
  

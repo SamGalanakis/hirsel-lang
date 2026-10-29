@@ -261,6 +261,7 @@ mod tests {
                     kind: crate::native::kit::Kind::Executable { loader: None },
                     objects: &objects,
                     runtime: None,
+                    startup_order: None,
                     unwind: false,
                     foreign: &foreign,
                 };

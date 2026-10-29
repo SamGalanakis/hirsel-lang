@@ -851,6 +851,11 @@ def first_party(meta: dict) -> str:
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
+    out.append("\n" + call("hirsel_script_test", name="test-native-startup-layout",
+                            script="tools/tests/native_startup_layout.py", full=False,
+                            data=Raw('glob(["stdlib/**", "native-tests/**"])'),
+                            runtime_archives=RUNTIME_ARCHIVES, products=PRODUCTS,
+                            files_env={"HIRSEL_STARTUP_DRIVER_TESTS": "//:hirsel-driver-unittest-harness"}))
     out.append("\n" + call("hirsel_script_test", name="test-native-scratch-tools", script="tools/tests/buck2_sync.py", full=False,
                            args=["AtomicScratch"],
                            data=["//tools/buck2:sync.py", "//tools/buck2:generated.py",

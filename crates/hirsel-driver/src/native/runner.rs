@@ -504,6 +504,7 @@ pub fn runner(toolchain: &Toolchain, target: &TargetSpec) -> Result<Runner, Nati
         },
         objects: &[],
         runtime: Some(archive),
+        startup_order: None,
         unwind: true,
         foreign: &[],
     };
@@ -734,6 +735,7 @@ pub(crate) fn link_image(
         kind: Kind::Image { script },
         objects: &objects,
         runtime: Some(builtins),
+        startup_order: None,
         unwind: false,
         foreign: &[],
     };

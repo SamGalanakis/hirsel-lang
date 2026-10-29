@@ -49,6 +49,7 @@ pub struct CapturedPlatform {
     reads: Vec<PlatformRead>,
     captured_inputs: CapturedLink,
     runtime_path: PathBuf,
+    startup_order: Option<PathBuf>,
     foreign_paths: Vec<PathBuf>,
     static_foreign: bool,
 }
@@ -132,6 +133,24 @@ impl CapturedPlatform {
             .skip(1)
             .map(|read| read.path.clone())
             .collect::<Vec<_>>();
+        // The archive package derives this from its own startup trace. Capture
+        // it with the selected platform, so final links never reopen a mutable
+        // profile installation and replay uses the exact captured layout.
+        let order = inputs.runtime_archive.with_file_name("startup.order");
+        let startup_order = if order.try_exists().map_err(error)? {
+            if reads.len().saturating_add(3) > inputs.limits.files {
+                return Err("selected platform inputs exceed admission".into());
+            }
+            let order = std::fs::canonicalize(order).map_err(error)?;
+            let content = snapshot(store, &order, &mut remaining)?;
+            reads.push(PlatformRead {
+                path: order.clone(),
+                content,
+            });
+            Some(order)
+        } else {
+            None
+        };
         let loader_path = std::fs::canonicalize(inputs.runtime.loader).map_err(error)?;
         let auditor_path = std::fs::canonicalize(inputs.runtime.auditor).map_err(error)?;
         let loader = snapshot(store, &loader_path, &mut remaining)?;
@@ -186,6 +205,10 @@ impl CapturedPlatform {
                     .ok_or("non-UTF8 selected link input")?
                     .to_owned(),
             );
+        }
+        if let Some(order) = &startup_order {
+            arguments.push(format!("--symbol-ordering-file={}", order.display()));
+            arguments.push("--no-warn-symbol-ordering".into());
         }
         let probe = inputs
             .linker
@@ -273,6 +296,7 @@ impl CapturedPlatform {
             reads,
             captured_inputs: probe,
             runtime_path,
+            startup_order,
             foreign_paths,
             static_foreign,
         })
@@ -285,6 +309,10 @@ impl CapturedPlatform {
         let mut add = |amount| bytes = bytes.saturating_add(amount);
         add(self.runtime_archive.name.capacity());
         add(self.runtime_path.capacity());
+        add(self
+            .startup_order
+            .as_ref()
+            .map_or(0, |path| path.capacity()));
         add(self
             .foreign_paths
             .capacity()
@@ -336,6 +364,7 @@ impl CapturedPlatform {
                 .map_err(|error| error.to_string())?,
             objects: &objects,
             runtime: Some(&self.runtime_path),
+            startup_order: self.startup_order.as_deref(),
             unwind: true,
             foreign: &self.foreign_paths,
         };
@@ -343,6 +372,11 @@ impl CapturedPlatform {
             .invocation_with(&mut |path| {
                 let selected = if path == self.runtime_path {
                     Some(self.runtime_archive.content)
+                } else if self.startup_order.as_deref() == Some(path) {
+                    self.reads
+                        .iter()
+                        .find(|read| read.path == path)
+                        .map(|read| read.content)
                 } else {
                     self.foreign_paths
                         .iter()

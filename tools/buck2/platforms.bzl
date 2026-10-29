@@ -229,7 +229,8 @@ _platforms_rule = rule(
 def declare_platforms(name, constraints):
     native.constraint_setting(name = "budget")
     budgets = {}
-    requests = [tuple(b) for b in POOL_BUDGETS] + [tuple(CLIPPY_REQUEST), tuple(PRECHECK_REQUEST), tuple(DIST_LINK_REQUEST)]
+    # Startup training peaks at 1.4 GiB and exercises four physical permits.
+    requests = [(4, 2097152, "")] + [tuple(b) for b in POOL_BUDGETS] + [tuple(CLIPPY_REQUEST), tuple(PRECHECK_REQUEST), tuple(DIST_LINK_REQUEST)]
     if PROBE_CPUS:
         requests += [tuple(compile_request(profile, target)) for profile, targets in COMPILE_CLASSES.items() for target in targets]
     # The first platform is what a target without a budget (third-party

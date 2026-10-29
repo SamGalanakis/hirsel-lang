@@ -372,6 +372,7 @@ impl FrozenLinkKit {
             kind: super::super::kit::Kind::Executable { loader: None },
             objects: &[],
             runtime: None,
+            startup_order: None,
             unwind: true,
             foreign: &[],
         };
