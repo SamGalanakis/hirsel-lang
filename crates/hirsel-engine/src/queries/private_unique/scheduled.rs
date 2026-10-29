@@ -296,17 +296,7 @@ impl QueryEngine {
         let key = self.inference_key(path);
         let store = self.result_store.clone()?;
         let entry = StoredEntry::load(&*store, &key);
-        if path.0.package.name == "cross_private" {
-            for variant in &entry.variants {
-                eprintln!("INFERENCE-EXPECTED {path} {:?}", variant.reads);
-            }
-        }
-        let variant = entry
-            .resolve_current(&*store, &key, |key| {
-                let value = self.observe(path, key);
-                eprintln!("INFERENCE-READ {path} {key:?} {value:?}");
-                value
-            })?;
+        let variant = entry.resolve_current(&*store, &key, |key| self.observe(path, key))?;
         let facts: Facts = self.decode_record(&variant.payload)?;
         (facts.reads == variant.reads
             && facts
@@ -735,6 +725,7 @@ impl QueryEngine {
             }
             self.adopt_inference(facts, &mut inferred);
         }
+        self.adopt_completed_headers();
         self.publish_private_summaries(inferred)?;
         self.private_summary_revision = Some(self.graph.revision());
         Ok(reservation)
@@ -746,6 +737,9 @@ impl QueryEngine {
             .as_ref()
             .is_none_or(|modes| !modes.infers_private_unique())
         {
+            return;
+        }
+        if self.private_bootstrap_active {
             return;
         }
         static BUDGET: OnceLock<Arc<ProcessBudget>> = OnceLock::new();
