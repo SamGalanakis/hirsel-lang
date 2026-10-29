@@ -2268,10 +2268,11 @@ fn write_link_objects(
     // must be present here, so a missing provider fails in the linker.
     let runners = !program.entries.is_empty()
         || !program.foreign_links.is_empty()
-        || objects
-            .iter()
-            .flat_map(|o| &o.imports)
-            .any(|import| import.name.contains("_runner_") || import.name.ends_with("_runner"));
+        || objects.iter().flat_map(|o| &o.imports).any(|import| {
+            import.kind == hirsel_lir::stage::ObjectSymbolKind::Foreign
+                || import.name.contains("_runner_")
+                || import.name.ends_with("_runner")
+        });
     let root = if runners {
         "@hirsel.runtime.runners.provider = external constant i8\n\
          @hirsel.runtime.runners = hidden constant ptr @hirsel.runtime.runners.provider\n"

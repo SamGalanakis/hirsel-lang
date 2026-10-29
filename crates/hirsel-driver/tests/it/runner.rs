@@ -310,28 +310,32 @@ fn a_standalone_scalar_preserves_events_with_and_without_dispatch_observers() {
     });
 }
 
+fn without_runner_provider(tools: &Toolchain, target: &TargetSpec, dir: &Path) -> Toolchain {
+    let archive = dir.join("missing-provider.a");
+    let renamed = std::process::Command::new(tools.clang.parent().unwrap().join("llvm-objcopy"))
+        .args([
+            "--redefine-sym",
+            "hirsel.runtime.runners.provider=missing.runner.provider",
+        ])
+        .arg(tools.archive(&target.triple).unwrap())
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert!(renamed.status.success(), "{renamed:?}");
+    let mut tools = tools.clone();
+    tools
+        .runtime
+        .insert((target.triple.clone(), RuntimeBuild::default()), archive);
+    tools
+}
+
 #[test]
 fn a_missing_runtime_feature_provider_refuses_the_link_on_both_targets_and_backends() {
     with_compiler_stack(|| {
         let tools = toolchain();
         for target in [x86(), arm()] {
             let dir = scratch(&format!("runner-missing-provider/{}", target.triple));
-            let archive = dir.join("missing-provider.a");
-            let renamed =
-                std::process::Command::new(tools.clang.parent().unwrap().join("llvm-objcopy"))
-                    .args([
-                        "--redefine-sym",
-                        "hirsel.runtime.runners.provider=missing.runner.provider",
-                    ])
-                    .arg(tools.archive(&target.triple).unwrap())
-                    .arg(&archive)
-                    .output()
-                    .unwrap();
-            assert!(renamed.status.success(), "{renamed:?}");
-            let mut tools = tools.clone();
-            tools
-                .runtime
-                .insert((target.triple.clone(), RuntimeBuild::default()), archive);
+            let tools = without_runner_provider(&tools, &target, &dir);
             for backend in [Backend::Llvm, Backend::Cranelift] {
                 let compiled = compiled(RUNNERS, &target, backend);
                 let error = link_objects(
@@ -577,6 +581,18 @@ pub fn main(rt: Io, u: Unsafe) -> Result[(), GrantError] {
             link_runnable(&program, &loaded.entry, &objects, &toolchain, &dir, None).unwrap();
         assert!(matches!(runnable, Runnable::Executable(_)), "{runnable:?}");
         assert_eq!(counts().fallbacks.get("foreign"), Some(&(before + 1)));
+        assert_eq!(
+            run(&runnable, &target, &toolchain, &dir).stdout,
+            b"called\n"
+        );
+        let missing = without_runner_provider(&toolchain, &target, &dir);
+        let error = link_objects(&program, &loaded.entry, &objects, &missing, &dir).unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("undefined symbol: hirsel.runtime.runners.provider"),
+            "{error:?}",
+        );
     });
 }
 
