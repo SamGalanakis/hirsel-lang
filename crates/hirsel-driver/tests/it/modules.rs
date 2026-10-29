@@ -314,3 +314,4 @@ mod native_preparation_201;
 mod ownership_task_result_71;
 mod scheduled_size_constants_152;
 mod indexed_archives;
+mod staged_product_fixture;
