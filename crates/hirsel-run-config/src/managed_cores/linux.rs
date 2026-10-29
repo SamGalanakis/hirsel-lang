@@ -4,8 +4,9 @@
 use super::{CpuSet, HostLimits, Quota};
 
 mod root_mount;
-use crate::{RunRefusal, invalid};
 use root_mount::root_mount;
+
+use crate::{RunRefusal, invalid};
 use std::{
     fs, io,
     io::BufRead,
@@ -21,9 +22,11 @@ impl LinuxLimits {
     /// Call on the admission thread before any pinning. Rechecks never inspect a
     /// worker's affinity. Replay must never construct this host-only reader.
     pub fn capture() -> Result<Self, RunRefusal> {
-        let mut reader = Self::from_proc(Path::new("/proc"))?;
-        reader.probe_root_mount = true;
-        Ok(reader)
+        Ok(Self {
+            proc_root: PathBuf::from("/proc"),
+            admission_affinity: affinity()?,
+            probe_root_mount: true,
+        })
     }
     /// Alternate proc root for host adapters and deterministic filesystem fixtures.
     pub fn from_proc(proc_root: &Path) -> Result<Self, RunRefusal> {
@@ -34,8 +37,8 @@ impl LinuxLimits {
             .ok_or_else(|| invalid("affinity", "Cpus_allowed_list missing"))?;
         Ok(Self {
             proc_root: proc_root.into(),
-            probe_root_mount: false,
             admission_affinity: CpuSet::parse(affinity)?,
+            probe_root_mount: false,
         })
     }
     pub fn read(&self) -> Result<HostLimits, RunRefusal> {
@@ -55,8 +58,8 @@ impl LinuxLimits {
             return Ok(limits);
         };
         let group = absolute(group)?;
-        // A kernel-proved filesystem root exposes every ancestor. Otherwise
-        // retain full mount discovery, including delegated and escaped mounts.
+        // A complete cgroup2 filesystem root exposes every ancestor. Delegated
+        // roots retain mount discovery, including escaped mount paths.
         let (leaf, root) = match self.probe_root_mount.then(root_mount).flatten() {
             Some(root) => (root.join(group.strip_prefix("/").unwrap()), root),
             None => self.discover_mount(&group)?,
@@ -179,5 +182,50 @@ fn optional(path: &Path) -> Result<Option<String>, RunRefusal> {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(invalid("host limits", &format!("{}: {e}", path.display()))),
+    }
+}
+
+/// Go 1.25 runtime/os_linux.go:106-127 obtains affinity directly from the
+/// kernel. Grow the mask on EINVAL, as glibc's CPU_ALLOC interface permits,
+/// so machines beyond CPU_SETSIZE retain their complete admission view.
+fn affinity() -> Result<CpuSet, RunRefusal> {
+    let mut mask = vec![0 as libc::c_ulong; 16];
+    loop {
+        // SAFETY: mask is aligned and writable for the supplied byte length.
+        // Linux accepts a dynamically sized CPU mask, independently of the
+        // size of libc's cpu_set_t. PID zero selects the calling thread.
+        if unsafe {
+            libc::sched_getaffinity(
+                0,
+                std::mem::size_of_val(mask.as_slice()),
+                mask.as_mut_ptr().cast(),
+            )
+        } == 0
+        {
+            let mut ranges: Vec<(u32, u32)> = Vec::new();
+            for (word, &bits) in mask.iter().enumerate() {
+                let mut bits = bits;
+                while bits != 0 {
+                    let cpu = word * libc::c_ulong::BITS as usize + bits.trailing_zeros() as usize;
+                    let cpu = u32::try_from(cpu)
+                        .map_err(|_| invalid("affinity", "CPU index exceeds u32"))?;
+                    match ranges.last_mut() {
+                        Some((_, hi)) if hi.checked_add(1) == Some(cpu) => *hi = cpu,
+                        _ => ranges.push((cpu, cpu)),
+                    }
+                    bits &= bits - 1;
+                }
+            }
+            return Ok(CpuSet(ranges));
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINVAL) {
+            return Err(invalid("affinity", &error.to_string()));
+        }
+        let length = mask
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| invalid("affinity", "CPU mask size overflow"))?;
+        mask.resize(length, 0);
     }
 }

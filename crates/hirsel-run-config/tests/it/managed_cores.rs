@@ -278,6 +278,19 @@ fn two_and_eight_core_limits_refresh_and_ignore_worker_pinning() {
     assert_eq!(resolve(&fixed(8), &grant(), &l, true).unwrap().target, 2);
     f.put("cg/parent/leaf/cpu.max", "1 0\n");
     assert!(reader.read().is_err());
+    // An I/O failure is not an unlimited quota. A directory is unreadable as
+    // a control file even when these fixtures run under an administrative UID.
+    let path = f.0.join("cg/parent/leaf/cpu.max");
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    let expected = fs::read_to_string(&path).unwrap_err();
+    assert_eq!(
+        reader.read().unwrap_err(),
+        RunRefusal::Invalid {
+            field: "host limits".into(),
+            detail: format!("{}: {expected}", path.display()),
+        }
+    );
 }
 
 #[test]
@@ -468,7 +481,7 @@ fn mount_discovery_rejects_invalid_utf8_after_a_usable_mount() {
 }
 
 #[test]
-fn kernel_mount_query_and_mount_table_resolve_the_same_limits() {
+fn kernel_affinity_and_complete_root_match_proc_discovery() {
     let fast = LinuxLimits::capture().unwrap().read().unwrap();
     let table = LinuxLimits::from_proc(std::path::Path::new("/proc"))
         .unwrap()
