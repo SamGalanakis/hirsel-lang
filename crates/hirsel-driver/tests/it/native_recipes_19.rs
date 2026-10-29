@@ -465,3 +465,79 @@ fn library_recipes_share_a_key_across_erased_actual_modes() {
         );
     });
 }
+
+#[test]
+fn library_recipe_preserves_the_declared_borrowed_result_contract() {
+    use hirsel_driver::native::queries::recipes::LibraryRecipe;
+    use hirsel_rc::instance::Instances;
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone());
+        let file = engine
+            .sources
+            .add("borrowed-recipe.hir", "pub fn main()->u64 {0u64}".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let inputs = crate::native_front_fixture::inputs(&mut engine, &[]);
+        let program = &inputs.declarations.program;
+        let source = inputs.provider();
+        let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+        let owners =
+            hirsel_rc::library::owners(&program.types, &program.signatures).over(&program.owners);
+        let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &owners);
+        layouts.prepare_native_controls();
+        let path = hirsel_syntax::DefPath::core("$intrinsic.SetElements_open");
+        let body = hirsel_rc::library::body_index(&path).unwrap();
+        let scalar = program.types.intern(hirsel_types::Type::with_kind(
+            hirsel_types::TypeKind::Primitive(hirsel_types::Primitive::U64),
+        ));
+        let request = hirsel_rc::library::Request::operation(
+            program,
+            body,
+            &path,
+            vec![hirsel_types::GenericArgument::Type(scalar)],
+        )
+        .unwrap();
+        let mut instances = Instances::new(program.types.clone(), program.memo.clone());
+        let id = hirsel_rc::library::instantiate(&mut layouts, &mut instances, request).unwrap();
+        let table = layouts.finish();
+        assert_eq!(
+            table.fn_abis[instances.abis[id.index()].0 as usize]
+                .result
+                .as_ref()
+                .unwrap()
+                .borrowed_parameters,
+            [0]
+        );
+        let recipe = LibraryRecipe::capture(&instances, id, &table).unwrap();
+        let records = NativeRecords::new(program.types.clone(), store);
+        let bytes = recipe.encode(&records, &source).unwrap();
+        let recipe = LibraryRecipe::decode(&records, &source, &bytes).unwrap();
+        let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &owners);
+        layouts.prepare_native_controls();
+        let (mut restored, id) = recipe.restore(program, &mut layouts).unwrap();
+        assert_eq!(
+            layouts.table().fn_abis[restored.abis[id.index()].0 as usize]
+                .result
+                .as_ref()
+                .unwrap()
+                .borrowed_parameters,
+            [0]
+        );
+        let unit = hirsel_rc::library::build(program, &mut layouts, &mut restored, id).unwrap();
+        let table = layouts.finish();
+        let operations = program.operation_registry();
+        let manifest =
+            hirsel_core_contract::Manifest::skeleton(program.operations.values().cloned());
+        let validation = hirsel_lir::validate::Inputs {
+            memo: Default::default(),
+            target: &target,
+            layouts: &table,
+            operations: &operations,
+            manifest: &manifest,
+            discharge: None,
+        };
+        hirsel_lir::validate::validate_value(unit, &validation).unwrap();
+    });
+}
