@@ -850,6 +850,20 @@ impl FrontBodyQueries {
                 .then(|| QueryError::Diagnostics(outcome.diagnostics.clone()))
         })
     }
+    pub(crate) fn with_settled_summary<T>(
+        &self,
+        path: &DefPath,
+        read: impl FnOnce(&crate::DefinitionSummary) -> T,
+    ) -> Option<T> {
+        let query = self.query(path)?;
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let outcome = outcomes.get(&query.address.0)?;
+        match outcome.summary.as_ref()? {
+            FrontSummary::Owned(summary) => Some(read(&summary.summary)),
+            FrontSummary::Checked { .. } => Some(read(&outcome.checked.as_ref()?.0.summary)),
+        }
+    }
+
     /// An immutable outcome, including exact error-phase and read evidence.
     /// This lookup never adopts a product into a mutable source namespace.
     pub fn outcome(self: &Arc<Self>, reference: Reference) -> Option<FrontBodyOutput> {

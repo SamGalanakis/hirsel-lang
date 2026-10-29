@@ -221,3 +221,65 @@ fn check_size_instances(nested: bool) {
         }
     });
 }
+
+#[test]
+fn runtime_calls_select_staged_sizes_from_settled_summaries_after_restore() {
+    use hirsel_driver::requests::{CompileOperation, CompileResult, CompilerRequests};
+    use hirsel_tir::TirProvider;
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(directory.path().join("main.hir"),
+            "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\npub fn main()->Result[(),()]{let a:Inline[u8,2]=[1,2];let b:Inline[u8,3]=[1,2,3];let _=scaled(a)+scaled(b);Ok(())}\n").unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"runtime_sizes","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        for jobs in [1, 2, 8] {
+            let store = Arc::new(MemStore::default());
+            let config = CompileConfig {
+                store,
+                jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                hold_bytes: 0,
+                ..Default::default()
+            };
+            for warm in [false, true] {
+                let mut requests = CompilerRequests::for_host(
+                    COMPILER.with_config(config.clone()),
+                    config.clone(),
+                );
+                let output = requests
+                    .execute(&manifest, CompileOperation::Tir { definition: None })
+                    .unwrap_or_else(|error| panic!("jobs={jobs} warm={warm}: {error}"));
+                let CompileResult::Tir(input) = &output.result else {
+                    panic!("expected immutable TIR");
+                };
+                let mut provider = input.provider();
+                let mut scaled = input.entry.clone();
+                scaled.0.name = "scaled".into();
+                let definition = provider.definition(&scaled).unwrap();
+                let hidden = definition
+                    .bodies
+                    .iter()
+                    .flat_map(|b| &b.rvalues)
+                    .find_map(|value| match value {
+                        hirsel_tir::Rvalue::ReadConstant {
+                            definition,
+                            arguments,
+                        } if !arguments.is_empty() => Some(definition.clone()),
+                        _ => None,
+                    })
+                    .expect("generic staged read");
+                for n in [2, 3] {
+                    assert_eq!(
+                        provider.constant_instance(&hidden, &[n]).unwrap().root.kind,
+                        hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(u128::from(
+                            n * n
+                        )))
+                    );
+                }
+                assert!(
+                    provider.constant_instance(&hidden, &[4]).is_err(),
+                    "unselected size stays absent"
+                );
+            }
+        }
+    });
+}

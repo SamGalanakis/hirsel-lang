@@ -54,6 +54,7 @@ pub(super) fn create(queries: &Arc<FrontRunQueries>, query: QueryId) -> Option<B
             query,
             root: path,
             checked: false,
+            staged: Default::default(),
             pending: Vec::new(),
             entries: BTreeMap::new(),
             waiting: None,

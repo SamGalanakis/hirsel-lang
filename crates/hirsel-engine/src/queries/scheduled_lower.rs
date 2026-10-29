@@ -12,6 +12,7 @@ mod inspection;
 mod reads;
 mod registration;
 mod staged;
+pub(super) mod staged_runtime;
 mod stored;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
