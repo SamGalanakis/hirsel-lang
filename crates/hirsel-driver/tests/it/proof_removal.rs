@@ -1035,7 +1035,13 @@ fn native_discovery_reports_actual_removals_on_cold_and_body_free_fresh_hits() {
                 Arc::new(InstanceTaskFactory::new(tasks.clone())),
                 trace.clone(),
             ));
-            for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
+            for kind in [
+                INSTANCE_KIND,
+                INSTANCE_INPUT_KIND,
+                DISCOVERY_KIND,
+                hirsel_driver::native::queries::instance_tasks::CALLABLE_GRAPH_KIND,
+                hirsel_driver::native::queries::instance::CALLABLE_VALUE_KIND,
+            ] {
                 runtime.register(kind, factory.clone()).unwrap();
             }
             let request = runtime.request(&[tasks.discovery_id()]);

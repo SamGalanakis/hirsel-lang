@@ -131,7 +131,13 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
             )
             .unwrap();
             let traced = Arc::new(Traced(factory.clone(), trace.clone()));
-            for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
+            for kind in [
+                INSTANCE_KIND,
+                INSTANCE_INPUT_KIND,
+                DISCOVERY_KIND,
+                hirsel_driver::native::queries::instance_tasks::CALLABLE_GRAPH_KIND,
+                hirsel_driver::native::queries::instance::CALLABLE_VALUE_KIND,
+            ] {
                 runtime.register(kind, traced.clone()).unwrap();
             }
             let request = runtime.request(&[tasks.discovery_id()]);
