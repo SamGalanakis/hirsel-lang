@@ -621,10 +621,8 @@ impl Task {
                             let roots = file.input.paths.iter().map(|(path, _)| path.clone());
                             match self.queries.plan.lower.runtime_staged_queries(
                                 roots,
-                                self.queries
-                                    .weight
-                                    .retained
-                                    .min(self.queries.weight.scratch),
+                                self.queries.weight.scratch,
+                                self.queries.weight.retained,
                             ) {
                                 Ok(staged) => self.staged = Some(staged),
                                 Err(error) => {

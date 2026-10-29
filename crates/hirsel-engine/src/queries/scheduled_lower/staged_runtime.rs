@@ -12,7 +12,8 @@ impl FrontLowerQueries {
     pub(crate) fn runtime_staged_queries(
         &self,
         roots: impl IntoIterator<Item = DefPath>,
-        limit: u64,
+        working_limit: u64,
+        retained_limit: u64,
     ) -> Result<Vec<Selection>, QueryError> {
         if self.staged.declarations.is_empty() {
             return Ok(Vec::new());
@@ -24,7 +25,7 @@ impl FrontLowerQueries {
             })
         };
         let mut pending = VecDeque::<Frame>::new();
-        let mut seen = BTreeSet::new();
+        let mut seen = BTreeSet::<(DefId, NameSite, Bindings)>::new();
         let mut selected = Vec::new();
         let mut weight = crate::NativeMetadataWeight::default();
         for path in roots {
@@ -42,23 +43,33 @@ impl FrontLowerQueries {
                 continue;
             };
             if !generic {
-                weight.add(size_of::<Frame>());
-                if weight.bytes() > limit {
+                weight.add(2 * size_of::<Frame>());
+                if weight.bytes() > working_limit {
                     return Err(refused());
                 }
                 pending.push_back((DefId::intern(&path), NameSite::Item, Bindings::new(), None));
             }
         }
         while let Some((path, scope, bindings, site)) = pending.pop_front() {
-            if seen.contains(&(path, scope, bindings.clone())) {
+            // The lookup clone is temporary; insertion retains that same map.
+            let key = (path, scope, bindings.clone());
+            if seen.contains(&key) {
                 continue;
             }
-            weight.add(size_of::<Frame>() + 16 * size_of::<usize>());
-            weight.tree::<SizeParameterRef, u64>(bindings.len());
-            if seen.len() >= 65536 || weight.bytes() > limit {
+            let mut previous = crate::NativeMetadataWeight::default();
+            if !seen.is_empty() {
+                previous.tree::<(DefId, NameSite, Bindings), ()>(seen.len());
+            }
+            let mut next = crate::NativeMetadataWeight::default();
+            next.tree::<(DefId, NameSite, Bindings), ()>(seen.len() + 1);
+            weight.add(next.bytes().saturating_sub(previous.bytes()) as usize);
+            if !bindings.is_empty() {
+                weight.tree::<SizeParameterRef, u64>(bindings.len());
+            }
+            if seen.len() >= 65536 || weight.bytes() > working_limit {
                 return Err(refused());
             }
-            seen.insert((path, scope, bindings.clone()));
+            seen.insert(key);
             self.front
                 .with_settled_summary(path.path(), |summary| -> Result<(), QueryError> {
                     let frames = &summary.frames;
@@ -94,7 +105,7 @@ impl FrontLowerQueries {
                             push(
                                 &mut pending,
                                 &mut weight,
-                                limit,
+                                working_limit,
                                 (path, frame.site, bindings.clone(), site),
                             )?;
                         }
@@ -109,9 +120,9 @@ impl FrontLowerQueries {
                             continue;
                         }
                         weight.add(
-                            size_of::<Selection>() + declaration.inputs.len() * size_of::<u64>(),
+                            2 * size_of::<Selection>() + declaration.inputs.len() * size_of::<u64>(),
                         );
-                        if weight.bytes() > limit {
+                        if weight.bytes() > working_limit {
                             return Err(refused());
                         }
                         let arguments = declaration
@@ -120,6 +131,11 @@ impl FrontLowerQueries {
                             .map(|input| bindings.get(input).copied())
                             .collect::<Option<Vec<_>>>()
                             .ok_or_else(refused)?;
+                        let retained = selected.len().saturating_add(1).max(4)
+                            .saturating_mul(2 * size_of::<Selection>()) as u64;
+                        if retained > retained_limit {
+                            return Err(refused());
+                        }
                         selected.push((self.staged_query(id.path(), &arguments)?, site));
                     }
                     for call in &summary.calls {
@@ -156,7 +172,7 @@ impl FrontLowerQueries {
                         push(
                             &mut pending,
                             &mut weight,
-                            limit,
+                            working_limit,
                             (callee, binder, actuals, Some(call.site)),
                         )?;
                     }
@@ -174,8 +190,10 @@ fn push(
     limit: u64,
     frame: Frame,
 ) -> Result<(), QueryError> {
-    weight.add(size_of::<Frame>());
-    weight.tree::<SizeParameterRef, u64>(frame.2.len());
+    weight.add(2 * size_of::<Frame>());
+    if !frame.2.is_empty() {
+        weight.tree::<SizeParameterRef, u64>(frame.2.len());
+    }
     if weight.bytes() > limit {
         return Err(QueryError::Operational(hirsel_types::OperationalFailure {
             operation: "runtime staged selection".into(),
