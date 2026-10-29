@@ -21,6 +21,109 @@ mod tests {
     use crate::support::{Fixture, owner_sig, path, session};
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[test]
+    fn checked_replay_rows_preserve_identity_and_refuse_changed_or_missing_children() {
+        let fixture = Fixture::unit();
+        let definition = Arc::new(fixture.definition.clone());
+        let cache = VerifierCache::default();
+        let policy = ContentHash::of_bytes(b"checked replay rows");
+        let (report, _, _, evidence) = validate_definition(
+            &definition,
+            session(),
+            |_| Some((path("main"), 0)),
+            &fixture.signatures,
+            policy,
+            Some(&cache),
+        );
+        assert!(report.violations.is_empty());
+        let evidence = evidence.unwrap();
+        let output = cache
+            .definition_output_from_evidence(
+                &definition,
+                session(),
+                policy,
+                &fixture.signatures,
+                &evidence,
+            )
+            .unwrap();
+        let anchor = Anchor::fresh();
+        let archive = cache
+            .read_definition_archive(
+                &output,
+                session(),
+                |_, _| Some(anchor),
+                policy,
+                &fixture.signatures,
+                Arc::new(()),
+            )
+            .unwrap();
+        assert_eq!(archive.header().unwrap().path, definition.path);
+        assert_eq!(archive.body_count() as usize, definition.bodies.len());
+        assert_eq!(
+            archive.body(0).unwrap().local_count() as usize,
+            definition.bodies[0].locals.len()
+        );
+        let accepted = evidence.accepted.as_ref().unwrap();
+        let (_, mut record): (_, ReplayRecord) = cache
+            .load_record(replay_key(accepted.artifact, policy), REPLAY_DOMAIN)
+            .unwrap();
+        let original = record.body;
+        let mut changed = (*definition).clone();
+        changed.entry = hirsel_tir::BodyId(u32::MAX);
+        let changed = cache
+            .records(session())
+            .encode_tir(&changed, |_| Some((path("main"), 0)))
+            .unwrap();
+        let changed = cache
+            .contents()
+            .put_content(hirsel_product_codec::CheckedTir::DOMAIN, &changed)
+            .unwrap();
+        let mut missing = original;
+        missing.len += 1;
+        for child in [missing, changed] {
+            record.body = child;
+            cache.publish(
+                replay_key(accepted.artifact, policy),
+                REPLAY_DOMAIN,
+                &record,
+            );
+            let poisoned = cache
+                .definition_output_from_evidence(
+                    &definition,
+                    session(),
+                    policy,
+                    &fixture.signatures,
+                    &evidence,
+                )
+                .unwrap();
+            assert!(
+                cache
+                    .read_definition_archive(
+                        &poisoned,
+                        session(),
+                        |_, _| Some(anchor),
+                        policy,
+                        &fixture.signatures,
+                        Arc::new(()),
+                    )
+                    .is_none()
+            );
+            assert!(
+                cache
+                    .read_definition(
+                        &poisoned,
+                        session(),
+                        |_, _| Some(anchor),
+                        policy,
+                        &fixture.signatures
+                    )
+                    .is_none()
+            );
+        }
+        // The already checked immutable owner retains the original child.
+        assert_eq!(archive.header().unwrap().entry, definition.entry);
+    }
+
     struct Directory(PathBuf);
     impl Directory {
         fn new() -> Self {
@@ -938,21 +1041,24 @@ impl VerifierCache {
             invocations: Arc::new(record.invocations),
         })
     }
-    /// Materialize only a demanded body, rechecking identity after portable
-    /// type/anchor rebinding. This performs no second lowering or validator.
-    pub fn read_definition(
+    /// Read independently checked rows from a verifier-issued replay output.
+    /// Complete artifact identity is recomputed through the established serde
+    /// contract, without reconstructing a Definition or Body.
+    pub fn read_definition_archive(
         &self,
         output: &VerifiedDefinitionOutput,
         types: Arc<TypeInterner>,
-        mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+        anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
         policy: ContentHash,
         signatures: &dyn SignatureLookup,
-    ) -> Option<hirsel_tir::DefinitionRef> {
-        if output.policy != policy
+        owner: Arc<dyn Send + Sync>,
+    ) -> Option<hirsel_product_codec::CheckedTir> {
+        if output.reference.domain != BODY
+            || output.policy != policy
             || !output
                 .reads
                 .iter()
-                .all(|r| crate::input::read_holds_for_types(&types, r, signatures))
+                .all(|read| crate::input::read_holds_for_types(&types, read, signatures))
         {
             return None;
         }
@@ -966,28 +1072,36 @@ impl VerifierCache {
         if record.artifact != output.artifact || record.policy != output.policy {
             return None;
         }
-        let mut owners = std::collections::BTreeMap::new();
-        let (definition, overlay): (
-            hirsel_tir::DefinitionRef,
-            Option<hirsel_types::SignatureRef>,
-        ) = self
-            .records(types.clone())
-            .decode_record(&record.bytes, |path, occurrence| {
-                let site = anchor(path, occurrence)?;
-                owners.insert(site, (path.clone(), occurrence));
-                Some(site)
-            })?;
-        if overlay.is_some() {
+        let ReplayRows {
+            archive,
+            overlay,
+            owners,
+        } = self.replay_rows(&record, types.clone(), anchor, owner)?;
+        if overlay.is_some() || archive.header()?.path != output.owner {
             return None;
         }
-        output
-            .matches_definition(
-                &definition,
-                types,
-                |anchor| owners.get(&anchor).cloned(),
-                policy,
-                signatures,
-            )
-            .then_some(definition)
+        let bytes = hirsel_product_codec::canonical_bytes(
+            types,
+            &hirsel_product_codec::TirView::Archived(&archive),
+            |anchor| owners.get(&anchor).cloned(),
+        )?;
+        (ContentHash::of_parts("hirsel.validate.artifact.v1", [bytes.as_slice()])
+            == output.artifact)
+            .then_some(archive)
+    }
+    /// Explicit materialization for transforming consumers. Row readers use
+    /// read_definition_archive and retain its immutable checked owner instead.
+    pub fn read_definition(
+        &self,
+        output: &VerifiedDefinitionOutput,
+        types: Arc<TypeInterner>,
+        anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+    ) -> Option<hirsel_tir::DefinitionRef> {
+        Some(Arc::new(
+            self.read_definition_archive(output, types, anchor, policy, signatures, Arc::new(()))?
+                .materialize()?,
+        ))
     }
 }

@@ -630,11 +630,20 @@ impl VerifierCache {
             return;
         }
         let records = self.records(artifact.types.clone());
-        let Some(bytes) = records
-            .encode_record(&(artifact.definition, &artifact.overlay), |anchor| {
+        let Some(body) = records
+            .encode_tir(artifact.definition, |anchor| {
                 artifact.owners.get(&anchor).cloned()
             })
+            .and_then(|bytes| {
+                self.contents()
+                    .put_content(hirsel_product_codec::CheckedTir::DOMAIN, &bytes)
+            })
         else {
+            return;
+        };
+        let Some(bytes) = records.encode_record(&artifact.overlay, |anchor| {
+            artifact.owners.get(&anchor).cloned()
+        }) else {
             return;
         };
         self.publish(
@@ -643,9 +652,39 @@ impl VerifierCache {
             &ReplayRecord {
                 artifact: identity,
                 policy,
+                body,
                 bytes,
             },
         );
+    }
+    fn replay_rows(
+        &self,
+        record: &ReplayRecord,
+        types: Arc<TypeInterner>,
+        mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Option<ReplayRows> {
+        let records = self.records(types);
+        let mut owners = std::collections::BTreeMap::new();
+        let mut bind = |path: &DefPath, occurrence| {
+            let site = anchor(path, occurrence)?;
+            owners.insert(site, (path.clone(), occurrence));
+            Some(site)
+        };
+        let archive = hirsel_product_codec::CheckedTir::open(
+            self.contents()
+                .get_content(record.body)?
+                .retain_owner(owner),
+            record.body,
+            records.clone(),
+            &mut bind,
+        )?;
+        let overlay = records.decode_record(&record.bytes, &mut bind)?;
+        Some(ReplayRows {
+            archive,
+            overlay,
+            owners,
+        })
     }
     /// Read only replay data associated by this verifier after terminal V.
     /// Recompute identity after portable type/anchor decoding before exposing it.
@@ -662,16 +701,12 @@ impl VerifierCache {
         if record.artifact != accepted.artifact || record.policy != accepted.policy {
             return None;
         }
-        let records = self.records(types.clone());
-        let mut owners = std::collections::BTreeMap::new();
-        let (definition, overlay): (
-            hirsel_tir::DefinitionRef,
-            Option<hirsel_types::SignatureRef>,
-        ) = records.decode_record(&record.bytes, |path, occurrence| {
-            let site = anchor(path, occurrence)?;
-            owners.insert(site, (path.clone(), occurrence));
-            Some(site)
-        })?;
+        let ReplayRows {
+            archive,
+            overlay,
+            owners,
+        } = self.replay_rows(&record, types.clone(), &mut anchor, Arc::new(()))?;
+        let definition = Arc::new(archive.materialize()?);
         if overlay
             .as_ref()
             .is_some_and(|s| s.definition != definition.path)
@@ -869,11 +904,11 @@ pub trait ReplayEnvironment {
 
 const REPLAY_DOMAIN: Domain = Domain {
     kind: 0x5600_0004,
-    schema: 2,
+    schema: 3,
 };
 fn replay_key(artifact: ContentHash, policy: ContentHash) -> ContentHash {
     ContentHash::of_parts(
-        "hirsel.validate.replay.v2",
+        "hirsel.validate.replay.v3",
         [artifact.0.as_slice(), policy.0.as_slice()],
     )
 }
@@ -881,11 +916,17 @@ fn replay_key(artifact: ContentHash, policy: ContentHash) -> ContentHash {
 struct ReplayRecord {
     artifact: ContentHash,
     policy: ContentHash,
+    body: hirsel_artifact_store::Reference,
     #[serde(
         serialize_with = "hirsel_product_codec::serialize_payload",
         deserialize_with = "hirsel_product_codec::deserialize_payload"
     )]
     bytes: Vec<u8>,
+}
+struct ReplayRows {
+    archive: hirsel_product_codec::CheckedTir,
+    overlay: Option<hirsel_types::SignatureRef>,
+    owners: std::collections::BTreeMap<Anchor, (DefPath, u32)>,
 }
 /// Construction is verifier-private. These bytes alone are not acceptance.
 struct ReplayArtifact {
@@ -1070,21 +1111,34 @@ mod tests {
     }
 
     #[test]
-    fn replay_record_bulk_bytes_preserve_existing_format_and_decode_limits() {
+    fn replay_record_bulk_overlay_bytes_preserve_sequence_encoding_and_decode_limits() {
         #[derive(Serialize, Deserialize)]
         struct Original {
             artifact: ContentHash,
             policy: ContentHash,
+            body: hirsel_artifact_store::Reference,
             bytes: Vec<u8>,
         }
+        let fixture = Fixture::unit();
+        let cache = VerifierCache::default();
+        let body = cache
+            .records(session())
+            .encode_tir(&fixture.definition, |_| Some((path("main"), 0)))
+            .unwrap();
+        let body = cache
+            .contents()
+            .put_content(hirsel_product_codec::CheckedTir::DOMAIN, &body)
+            .unwrap();
         let original = Original {
             artifact: ContentHash::of_bytes(b"artifact"),
             policy: ContentHash::of_bytes(b"policy"),
+            body,
             bytes: (0..=255).cycle().take(4096).collect(),
         };
         let record = ReplayRecord {
             artifact: original.artifact,
             policy: original.policy,
+            body: original.body,
             bytes: original.bytes.clone(),
         };
         let bytes = bincode::serialize(&original).unwrap();
@@ -1110,7 +1164,9 @@ mod tests {
         assert!(options().deserialize::<ReplayRecord>(&trailing).is_err());
         // An impossible payload length must fail before an allocation/copy.
         let mut invalid = bytes;
-        invalid[64..72].copy_from_slice(&u64::MAX.to_le_bytes());
+        let count_at = bincode::serialized_size(&(record.artifact, record.policy, record.body))
+            .unwrap() as usize;
+        invalid[count_at..count_at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(options().deserialize::<ReplayRecord>(&invalid).is_err());
     }
 
