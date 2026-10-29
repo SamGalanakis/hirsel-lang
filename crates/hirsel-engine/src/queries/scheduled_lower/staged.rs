@@ -242,7 +242,9 @@ impl FrontLowerQueries {
         for (path, _) in declarations() {
             metadata.path(path.path());
         }
-        let retained = metadata.bytes();
+        // Native requirement discovery consumes a second value copy before
+        // publishing its graph. Admit that overlap beside the retained statics.
+        let retained = metadata.bytes().checked_mul(2).ok_or_else(refused)?;
         if retained
             .checked_add(working)
             .is_none_or(|bytes| bytes > allowance)
