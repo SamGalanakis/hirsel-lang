@@ -2126,6 +2126,7 @@ fn unix_http_serves_itself_over_a_real_socket_and_replays_across_cli_backends() 
             .is_socket()
     );
     let narrowed = grants_text.replace("unix_listen_remove_stale", "unix_listen");
+    eprintln!("unix-http phase: stale-listener refusal");
     let refused = run(&[], &narrowed);
     assert!(!refused.status.success());
     assert!(
@@ -2141,6 +2142,7 @@ fn unix_http_serves_itself_over_a_real_socket_and_replays_across_cli_backends() 
         vec!["--native", "--backend", "llvm"],
         vec!["--native", "--backend", "cranelift"],
     ] {
+        eprintln!("unix-http phase: live {args:?}");
         let live = run(&args, &grants_text);
         assert!(
             live.status.success(),
@@ -2154,6 +2156,7 @@ fn unix_http_serves_itself_over_a_real_socket_and_replays_across_cli_backends() 
     std::fs::remove_file(grants).unwrap();
     std::fs::remove_dir(&sockets).unwrap();
     for backend in ["llvm", "cranelift"] {
+        eprintln!("unix-http phase: replay {backend}");
         let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .args(["run", "--native", "--backend", backend])
             .arg(fixture.0.join("hirsel.json"))
