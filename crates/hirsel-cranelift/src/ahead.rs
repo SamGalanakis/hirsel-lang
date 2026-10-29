@@ -628,7 +628,8 @@ impl FnEmitter<'_, '_, '_> {
             }
             CpuGrowthPlace::Address(address) => {
                 self.store_at(grown, place.unwrap().ptr, 0);
-                if recipe.capacity.is_some()
+                if self.root_facts_active
+                    && recipe.capacity.is_some()
                     && let Some(var) = self
                         .whole_slot(address)
                         .and_then(|slot| self.root_facts[slot.index()])

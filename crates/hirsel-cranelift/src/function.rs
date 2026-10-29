@@ -249,9 +249,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             globals: HashMap::new(),
             fuel_points,
             instruction_index: 0,
-            root_facts: vec![None; unit.slots.len()],
+            root_facts: Vec::new(),
             root_facts_active: false,
-            read_roots: vec![None; unit.values.len()],
+            read_roots: Vec::new(),
             ahead_state: None,
             ahead_counter: None,
             ownership: None,
@@ -1919,7 +1919,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 .slots
                 .iter()
                 .position(|slot| slot.kind == SlotKind::Parameter(0));
-            let fact = root.and_then(|slot| self.root_facts[slot]);
+            let fact = root.and_then(|slot| self.root_facts.get(slot).copied().flatten());
             let fact = match fact {
                 Some(var) => self.b.use_var(var),
                 None => self.b.ins().iconst(types::I8, 0),
@@ -2488,7 +2488,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             arguments.iter().find_map(|arg| match arg.value {
                 ArgumentValue::Address { address, .. } if arg.parameter == 0 => self
                     .whole_slot(address)
-                    .and_then(|slot| self.root_facts[slot.index()]),
+                    .and_then(|slot| self.root_facts.get(slot.index()).copied().flatten()),
                 _ => None,
             })
         } else {
@@ -2503,28 +2503,29 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 None => self.b.ins().iconst(types::I8, 0),
             });
         }
-        self.read_facts_invalidate();
-        let plain =
-            |id| {
+        if self.root_facts_active {
+            self.read_facts_invalidate();
+            let plain = |id| {
                 self.em.inputs.unit().layouts.layout(id).is_some_and(|r| {
                     r.scan.is_empty() && r.drop.is_empty() && r.finalizer.is_none()
                 })
             };
-        let isolated = signature.unique.is_some()
-            && !abi.environment
-            && !abi.destination
-            && abi.result.is_none()
-            && abi
-                .parameters
-                .iter()
-                .enumerate()
-                .all(|(i, p)| i == 0 || plain(p.layout));
-        let referenceless = !abi.environment
-            && !abi.destination
-            && abi.parameters.iter().all(|p| plain(p.layout))
-            && abi.result.as_ref().is_none_or(|r| plain(r.layout));
-        if !isolated && !referenceless {
-            self.root_facts_invalidate();
+            let isolated = signature.unique.is_some()
+                && !abi.environment
+                && !abi.destination
+                && abi.result.is_none()
+                && abi
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .all(|(i, p)| i == 0 || plain(p.layout));
+            let referenceless = !abi.environment
+                && !abi.destination
+                && abi.parameters.iter().all(|p| plain(p.layout))
+                && abi.result.as_ref().is_none_or(|r| plain(r.layout));
+            if !isolated && !referenceless {
+                self.root_facts_invalidate();
+            }
         }
         if args.len() != signature.ir.params.len() {
             return self.invalid("a call whose arguments differ from its signature");

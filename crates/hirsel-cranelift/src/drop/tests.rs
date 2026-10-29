@@ -400,7 +400,8 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         );
         let fact = f.b.declare_var(types::I8);
         f.b.def_var(fact, f.entry_params[2]);
-        f.read_roots[0] = Some(fact);
+        f.root_facts_active = true;
+        f.read_roots = vec![Some(fact)];
         if invalidate {
             f.root_facts_invalidate();
         }

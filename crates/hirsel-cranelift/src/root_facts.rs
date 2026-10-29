@@ -21,6 +21,8 @@ impl FnEmitter<'_, '_, '_> {
         {
             return Ok(());
         }
+        self.root_facts = vec![None; self.unit.slots.len()];
+        self.read_roots = vec![None; self.unit.values.len()];
         for (i, slot) in self.unit.slots.iter().enumerate() {
             if matches!(slot.kind, SlotKind::Capture(_)) {
                 continue;
@@ -110,6 +112,9 @@ impl FnEmitter<'_, '_, '_> {
     }
 
     pub(crate) fn read_facts_invalidate(&mut self) {
+        if !self.root_facts_active {
+            return;
+        }
         for var in self.read_roots.iter().flatten().copied() {
             let no = self.b.ins().iconst(types::I8, 0);
             self.b.def_var(var, no);
@@ -117,6 +122,9 @@ impl FnEmitter<'_, '_, '_> {
     }
 
     pub(crate) fn root_facts_invalidate(&mut self) {
+        if !self.root_facts_active {
+            return;
+        }
         self.read_facts_invalidate();
         for var in self.root_facts.iter().flatten().copied() {
             let no = self.b.ins().iconst(types::I8, 0);
@@ -162,7 +170,7 @@ impl FnEmitter<'_, '_, '_> {
     }
 
     pub(crate) fn root_unique(&mut self, value: ValueId, block: Value, writable: bool) -> Value {
-        let Some(var) = self.read_roots[value.index()] else {
+        let Some(var) = self.read_roots.get(value.index()).copied().flatten() else {
             return if writable {
                 self.is_writable(block)
             } else {
@@ -186,6 +194,9 @@ impl FnEmitter<'_, '_, '_> {
     }
 
     pub(crate) fn root_store(&mut self, address: AddressId) {
+        if !self.root_facts_active {
+            return;
+        }
         if let Some(var) = self
             .whole_slot(address)
             .and_then(|slot| self.root_facts[slot.index()])

@@ -62,7 +62,9 @@ impl FnEmitter<'_, '_, '_> {
             }
             // The same bits; only the copy recipe changes.
             Inst::Weaken { result, value } => {
-                self.read_roots[result.index()] = self.read_roots[value.index()];
+                if self.root_facts_active {
+                    self.read_roots[result.index()] = self.read_roots[value.index()];
+                }
                 let value = self.get(value)?;
                 self.define(result, value)
             }
@@ -219,7 +221,9 @@ impl FnEmitter<'_, '_, '_> {
             Inst::Read {
                 result, address, ..
             } => {
-                if let Some(output) = self.read_roots[result.index()] {
+                if self.root_facts_active
+                    && let Some(output) = self.read_roots[result.index()]
+                {
                     let fact = match self
                         .whole_slot(address)
                         .and_then(|slot| self.root_facts[slot.index()])
