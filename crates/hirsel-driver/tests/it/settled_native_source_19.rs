@@ -28,7 +28,7 @@ fn settled_lower_binds_without_eager_bodies_and_independently_refuses_corruption
         let (body, verified) = engine.native_definition_body_with_output(&product).unwrap();
         let records = NativeRecords::new(engine.types().clone(), store.clone());
         let publish = |body: &hirsel_tir::DefinitionRef| {
-            let bytes = records.encode(&engine, body).unwrap();
+            let bytes = records.encode_tir(&engine, body).unwrap();
             store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap()
         };
         let ordinary = publish(&body);
@@ -80,8 +80,25 @@ fn settled_lower_binds_without_eager_bodies_and_independently_refuses_corruption
             .reader([input(revision, signature, verified)], store.clone())
             .unwrap();
         let expected = body.signature_hash;
+        let archived = reader.archive(&main).expect("selected indexed source rows");
+        assert_eq!(archived.reference(), ordinary);
+        assert_eq!(archived.header().unwrap().signature_hash, expected);
+        let entry = body.entry.0;
+        let block = body.bodies[entry as usize].entry.0;
+        let instruction =
+            body.bodies[entry as usize].blocks[block as usize].instructions[0].clone();
         drop(body);
         drop(engine);
+        assert_eq!(
+            archived
+                .body(entry)
+                .unwrap()
+                .block(block)
+                .unwrap()
+                .instruction(0),
+            Some(instruction)
+        );
+        assert!(archived.body(archived.body_count()).is_none());
         assert_eq!(
             reader.read(&main).unwrap().definition().signature_hash,
             expected

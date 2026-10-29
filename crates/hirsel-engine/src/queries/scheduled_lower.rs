@@ -44,7 +44,7 @@ const FAILURE: Domain = Domain {
 };
 const LOWER_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0006,
-    schema: 6,
+    schema: 7,
 };
 // Ordinary immutable substitution bytes, owned by the selected provider like
 // the original body archive. Inspectors decode under their working allowance.
@@ -145,7 +145,13 @@ impl LowerProduct {
     }
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
         let bytes = owner.store.get_content(self.body)?;
-        let definition: DefinitionRef = owner.records.decode(&owner.anchors, &bytes)?;
+        let source = Arc::new(owner.anchors.clone());
+        let definition = Arc::new(
+            owner
+                .records
+                .open_tir(source.clone(), bytes, self.body, source)?
+                .materialize()?,
+        );
         if definition.path != self.definition {
             return None;
         }
@@ -1491,7 +1497,7 @@ impl FrontLowerQueries {
         }
         let (bytes, record_decode_bytes) = self
             .records
-            .encode_with_decode_bytes(&self.anchors, &definition)
+            .encode_tir_with_decode_bytes(&self.anchors, &definition)
             .ok_or(QueryError::NotImplemented)?;
         // Arc/slice decoding can temporarily overlap its construction buffers.
         // Count serialized shared rows independently; source sharing is not a

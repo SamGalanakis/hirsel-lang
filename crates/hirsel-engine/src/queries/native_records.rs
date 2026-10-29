@@ -380,6 +380,17 @@ impl NativeRecords {
         self.records
             .encode_tir(definition, |anchor| source.record_owner(anchor))
     }
+    pub fn encode_tir_with_decode_bytes(
+        &self,
+        source: &(impl NativeRecordSource + ?Sized),
+        definition: &hirsel_tir::Definition,
+    ) -> Option<(Vec<u8>, u64)> {
+        if !Arc::ptr_eq(&self.types, source.record_types()) {
+            return None;
+        }
+        self.records
+            .encode_tir_with_decode_bytes(definition, |anchor| source.record_owner(anchor))
+    }
     /// Bind independently checked rows to this consumer's current sources and
     /// type owner. Content and structural validation do not grant V authority.
     pub fn open_tir(

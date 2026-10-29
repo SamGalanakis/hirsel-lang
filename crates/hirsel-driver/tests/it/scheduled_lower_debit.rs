@@ -347,6 +347,11 @@ fn original_body_decode_admission_precedes_provider_reads_and_preserves_scalar_t
                     .settled_definition_with_allowance(&program.entry, &short)
                     .is_err()
             );
+            assert!(
+                lower
+                    .settled_tir(&program.entry, budget.reserve(needed - 1).unwrap())
+                    .is_err()
+            );
             assert_eq!(
                 store.reads.load(Ordering::Relaxed),
                 before_reads,
@@ -368,6 +373,12 @@ fn original_body_decode_admission_precedes_provider_reads_and_preserves_scalar_t
                 records.encode(&program.engine, &actual).unwrap(),
                 records.encode(&program.engine, &expected.value).unwrap()
             );
+            let archived = lower
+                .settled_tir(&program.entry, budget.reserve(needed).unwrap())
+                .unwrap();
+            assert_eq!(archived.header().unwrap().path, actual.path);
+            assert_eq!(archived.materialize().unwrap(), *actual);
+            assert_eq!(lower.work_snapshot(), before_work);
             runtime.shutdown();
         }
     });

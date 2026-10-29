@@ -286,10 +286,8 @@ struct OrdinarySource {
     implementation_revision: ContentHash,
     signature: ContentHash,
 }
-pub const NATIVE_ORIGINAL_BODY: hirsel_artifact_store::Domain = hirsel_artifact_store::Domain {
-    kind: 0x4e00_0024,
-    schema: 1,
-};
+pub const NATIVE_ORIGINAL_BODY: hirsel_artifact_store::Domain =
+    hirsel_product_codec::CheckedTir::DOMAIN;
 pub struct NativeOriginalReader {
     owner: Option<Arc<dyn Send + Sync>>,
     verified: NativeLowerReader,
@@ -376,6 +374,21 @@ impl NativeOriginalReader {
             input.signature,
         ))
     }
+    /// Checked raw source rows from the selected ordinary Lower publication.
+    /// This grants no V acceptance. Transforming consumers materialize explicitly.
+    pub fn archive(&self, path: &DefPath) -> Option<hirsel_product_codec::CheckedTir> {
+        let source = self.ordinary.get(path)?;
+        let archive = self.records.open_tir(
+            self.verified.anchors.clone(),
+            self.store.get_content(source.reference)?,
+            source.reference,
+            self.owner
+                .clone()
+                .unwrap_or_else(|| self.verified.anchors.clone()),
+        )?;
+        let header = archive.header()?;
+        (header.path.path() == path && header.signature_hash == source.signature).then_some(archive)
+    }
     pub fn has_ordinary(&self) -> bool {
         self.ordinary
             .keys()
@@ -392,10 +405,7 @@ impl NativeOriginalReader {
             });
         }
         let source = self.ordinary.get(path)?;
-        let bytes = self.store.get_content(source.reference)?;
-        let definition: hirsel_tir::DefinitionRef = self
-            .records
-            .decode(self.verified.anchors.as_ref(), &bytes)?;
+        let definition = Arc::new(self.archive(path)?.materialize()?);
         if definition.path.path() != path
             || definition.signature_hash != source.signature
             || !hirsel_validate::validate_instance_uses(
@@ -502,7 +512,7 @@ impl QueryEngine {
                 continue;
             }
             let bytes = records
-                .encode(self, &definition)
+                .encode_tir(self, &definition)
                 .ok_or_else(|| source_transport("ordinary Lower encoding failed"))?;
             let reference = transport
                 .put_content(NATIVE_ORIGINAL_BODY, &bytes)

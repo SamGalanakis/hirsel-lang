@@ -236,7 +236,7 @@ mod tests {
                 store.clone(),
             );
             let bytes = records
-                .encode(reader.record_context().as_ref(), &changed)
+                .encode_tir(reader.record_context().as_ref(), &changed)
                 .unwrap();
             let mut crossed_body = product;
             crossed_body.body = store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap();

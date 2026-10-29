@@ -31,6 +31,61 @@ impl LowerProduct {
 }
 
 impl FrontLowerQueries {
+    /// Read selected source rows without reconstructing a Definition or Body.
+    /// The caller's grant and this exact source generation survive every view.
+    pub fn settled_tir(
+        self: &Arc<Self>,
+        path: &DefPath,
+        allowance: MemoryReservation,
+    ) -> Result<hirsel_product_codec::CheckedTir, QueryError> {
+        let id = self.query(path).ok_or(QueryError::NotImplemented)?;
+        let outcomes = self
+            .outcomes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let (_, outcome, _) = outcomes
+            .get(&(id.kind, id.address.0))
+            .ok_or(QueryError::NotImplemented)?;
+        let lower = match &outcome.result {
+            Ok(Value::Lower(lower)) => lower,
+            Err(error) => return Err(error.clone()),
+            _ => return Err(QueryError::NotImplemented),
+        };
+        if lower
+            .definition_decode_layout
+            .total()
+            .ok_or(QueryError::NotImplemented)?
+            > allowance.bytes()
+        {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "original row inspection".into(),
+                message: "captured decode buffers exceed caller working admission".into(),
+            }));
+        }
+        let reference = lower.body;
+        drop(outcomes);
+        let archive = self
+            .records
+            .open_tir(
+                Arc::new(self.anchors.clone()),
+                self.store
+                    .get_content(reference)
+                    .ok_or(QueryError::NotImplemented)?,
+                reference,
+                Arc::new((self.clone(), allowance)),
+            )
+            .ok_or(QueryError::NotImplemented)?;
+        if archive
+            .header()
+            .ok_or(QueryError::NotImplemented)?
+            .path
+            .path()
+            != path
+        {
+            return Err(QueryError::NotImplemented);
+        }
+        Ok(archive)
+    }
     /// Captured bound for an already settled ordered dependency sequence.
     /// This inspects metadata only, before any provider access or decoding.
     pub fn settled_dependency_decode_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {

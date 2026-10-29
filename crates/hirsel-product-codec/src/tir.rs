@@ -237,6 +237,16 @@ impl TypeRecords {
         definition: &Definition,
         owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
     ) -> Option<Vec<u8>> {
+        self.encode_tir_with_decode_bytes(definition, owner)
+            .map(|(bytes, _)| bytes)
+    }
+    /// Indexed bytes and the envelope/source/type decode workspace. The
+    /// consumer separately admits the typed rows it retains or transforms.
+    pub fn encode_tir_with_decode_bytes(
+        &self,
+        definition: &Definition,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+    ) -> Option<(Vec<u8>, u64)> {
         let mut types = TableBuilder::new(self.types.clone());
         let mut anchors = AnchorCodec::Collect(vec![]);
         // Collect the semantic first-use order before portable-equivalent
@@ -249,7 +259,6 @@ impl TypeRecords {
         self.indexed_record(types.roots(), anchors, owner, || {
             encode_definition(definition)
         })
-        .map(|(bytes, _)| bytes)
     }
 }
 
@@ -478,8 +487,7 @@ impl CheckedTir {
             .count
     }
     pub fn protocol_association(&self, n: u32) -> Option<ProtocolAssociationReceipt> {
-        self.source
-            .decode(self.root().checked_section(2)?.row(n)?)
+        self.source.decode(self.root().checked_section(2)?.row(n)?)
     }
     pub fn contract_count(&self) -> u32 {
         self.root()
@@ -488,8 +496,7 @@ impl CheckedTir {
             .count
     }
     pub fn contract(&self, n: u32) -> Option<(u32, BodyId)> {
-        self.source
-            .decode(self.root().checked_section(5)?.row(n)?)
+        self.source.decode(self.root().checked_section(5)?.row(n)?)
     }
     pub fn caller_bodies(&self) -> Option<Vec<BodyId>> {
         self.collect(self.root().checked_section(1)?)
@@ -568,10 +575,7 @@ impl<'a> TirBodyRows<'a> {
         })
     }
     pub fn rvalue_count(self) -> u32 {
-        self.rows
-            .checked_section(5)
-            .expect("checked rvalues")
-            .count
+        self.rows.checked_section(5).expect("checked rvalues").count
     }
     pub fn rvalue(self, n: u32) -> Option<Rvalue> {
         self.owner
