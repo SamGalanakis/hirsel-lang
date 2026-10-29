@@ -43,15 +43,17 @@ impl FrontLowerQueries {
                 continue;
             };
             if !generic {
-                weight.add(2 * size_of::<Frame>());
-                if weight.bytes() > working_limit {
-                    return Err(refused());
-                }
-                pending.push_back((DefId::intern(&path), NameSite::Item, Bindings::new(), None));
+                push(
+                    &mut pending,
+                    &mut weight,
+                    working_limit,
+                    (DefId::intern(&path), NameSite::Item, Bindings::new(), None),
+                )?;
             }
         }
         while let Some((path, scope, bindings, site)) = pending.pop_front() {
             // The lookup clone is temporary; insertion retains that same map.
+            admit_binding_map(&weight, working_limit, bindings.len())?;
             let key = (path, scope, bindings.clone());
             if seen.contains(&key) {
                 continue;
@@ -102,6 +104,7 @@ impl FrontLowerQueries {
                             && !staged(i)
                             && !frame.generic
                         {
+                            admit_binding_map(&weight, working_limit, bindings.len())?;
                             push(
                                 &mut pending,
                                 &mut weight,
@@ -119,19 +122,21 @@ impl FrontLowerQueries {
                         {
                             continue;
                         }
+                        if selected.capacity() == 0 {
+                            weight.add(size_of::<Selection>());
+                        }
+                        // Include the old and new buffers during Vec growth.
                         weight.add(
-                            2 * size_of::<Selection>()
+                            3 * size_of::<Selection>()
                                 + declaration.inputs.len() * size_of::<u64>(),
                         );
                         if weight.bytes() > working_limit {
                             return Err(refused());
                         }
-                        let arguments = declaration
-                            .inputs
-                            .iter()
-                            .map(|input| bindings.get(input).copied())
-                            .collect::<Option<Vec<_>>>()
-                            .ok_or_else(refused)?;
+                        let mut arguments = Vec::with_capacity(declaration.inputs.len());
+                        for input in &declaration.inputs {
+                            arguments.push(bindings.get(input).copied().ok_or_else(refused)?);
+                        }
                         let retained = selected
                             .len()
                             .saturating_add(1)
@@ -149,13 +154,28 @@ impl FrontLowerQueries {
                         {
                             continue;
                         }
+                        if call.target_frame.is_none()
+                            && !self.inputs.contains_key(call.callee.path())
+                        {
+                            continue;
+                        }
+                        let base = if call.target_frame.is_some() {
+                            bindings.len()
+                        } else {
+                            0
+                        };
+                        let sizes = call
+                            .arguments
+                            .iter()
+                            .filter(|argument| matches!(argument, GenericArgument::Size(_)))
+                            .count();
+                        admit_binding_map(
+                            &weight,
+                            working_limit,
+                            base.checked_add(sizes).ok_or_else(refused)?,
+                        )?;
                         let (callee, binder, mut actuals) = match call.target_frame {
-                            None => {
-                                if !self.inputs.contains_key(call.callee.path()) {
-                                    continue;
-                                }
-                                (call.callee, NameSite::Item, Bindings::new())
-                            }
+                            None => (call.callee, NameSite::Item, Bindings::new()),
                             Some(_) => (path, call.binder.site, bindings.clone()),
                         };
                         for (ordinal, argument) in call.arguments.iter().enumerate() {
@@ -195,7 +215,11 @@ fn push(
     limit: u64,
     frame: Frame,
 ) -> Result<(), QueryError> {
-    weight.add(2 * size_of::<Frame>());
+    if pending.capacity() == 0 {
+        weight.add(size_of::<Frame>());
+    }
+    // Four initial slots, then old and new buffers at each deque growth.
+    weight.add(3 * size_of::<Frame>());
     if !frame.2.is_empty() {
         weight.tree::<SizeParameterRef, u64>(frame.2.len());
     }
@@ -206,5 +230,27 @@ fn push(
         }));
     }
     pending.push_back(frame);
+    Ok(())
+}
+
+fn admit_binding_map(
+    weight: &crate::NativeMetadataWeight,
+    limit: u64,
+    entries: usize,
+) -> Result<(), QueryError> {
+    let mut copied = crate::NativeMetadataWeight::default();
+    if entries != 0 {
+        copied.tree::<SizeParameterRef, u64>(entries);
+    }
+    if weight
+        .bytes()
+        .checked_add(copied.bytes())
+        .is_none_or(|bytes| bytes > limit)
+    {
+        return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+            operation: "runtime staged selection".into(),
+            message: "binding map exceeds working admission".into(),
+        }));
+    }
     Ok(())
 }
