@@ -801,10 +801,11 @@ impl QueryEngine {
     pub fn front_check_input_bytes(
         &self,
         files: &[(FileId, FileContext)],
+        selected: &[DefPath],
         lint_package: Option<&hirsel_syntax::PackageId>,
         weight: MemoryWeight,
     ) -> Option<u64> {
-        let mut definitions = Vec::new();
+        let mut definitions = BTreeSet::new();
         let mut lint = DeadArmLint {
             declarations: BTreeMap::new(),
             bodies: Vec::new(),
@@ -815,11 +816,28 @@ impl QueryEngine {
                     lint.insert(&item);
                 }
                 if item.facts.fact {
-                    definitions.push(hirsel_check_protocol::fact::fact_path(&item.definition));
+                    definitions.insert(hirsel_check_protocol::fact::fact_path(&item.definition));
                 }
-                definitions.push(item.definition);
+                definitions.insert(item.definition);
             }
         }
+        // Match the instance table captured by front_lower_queries. Generated
+        // instance sources are not members of the original package file list.
+        let selected: BTreeSet<_> = selected.iter().map(DefId::intern).collect();
+        for declaration in &selected {
+            if !self.instance_bodied(declaration.path()) {
+                continue;
+            }
+            if let Some(instances) = self.instance_bodies.instances.get(declaration) {
+                definitions.extend(
+                    instances
+                        .values()
+                        .filter(|instance| selected.contains(&instance.definition))
+                        .map(|instance| instance.definition.path().clone()),
+                );
+            }
+        }
+        let definitions: Vec<_> = definitions.into_iter().collect();
         FrontCheckQueries::input_bytes(&definitions, files.len(), weight)?.checked_add(
             if lint.declarations.is_empty() {
                 0

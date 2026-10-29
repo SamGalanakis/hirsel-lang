@@ -1352,6 +1352,7 @@ pub(super) fn install(
                 .engine
                 .front_check_input_bytes(
                     &program.files,
+                    definitions,
                     Some(&program.entry.0.package),
                     MemoryWeight::default(),
                 )

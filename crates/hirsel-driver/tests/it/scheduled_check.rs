@@ -160,7 +160,7 @@ fn check_case(
     };
     let input_bytes = program
         .engine
-        .front_check_input_bytes(&program.files, Some(&root), weight)
+        .front_check_input_bytes(&program.files, &definitions, Some(&root), weight)
         .unwrap();
     assert!(
         program
