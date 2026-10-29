@@ -938,6 +938,12 @@ impl QueryEngine {
         &mut self,
         id: DefId,
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
+        // This engine already owns the declared row and is responsible for
+        // attaching its module proof. A frozen declared view cannot replace
+        // that row again while the final publication pass is settling it.
+        if self.private_summary_active && self.private_signature_publications.contains(&id) {
+            return self.signature_query_local(id);
+        }
         if let Some(headers) = self.header_products.clone() {
             return headers.demand(self, id);
         }
