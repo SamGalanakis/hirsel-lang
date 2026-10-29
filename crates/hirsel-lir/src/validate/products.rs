@@ -234,7 +234,7 @@ impl NativeCache {
 
     fn get(&self, reference: Reference) -> Option<hirsel_artifact_store::Bytes> {
         let bytes = self.contents.get_content(reference)?;
-        (reference.domain.reference(&bytes)? == reference).then_some(bytes)
+        bytes.matches_reference(reference).then_some(bytes)
     }
     fn put(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
         let expected = domain.reference(bytes)?;

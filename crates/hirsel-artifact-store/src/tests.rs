@@ -1280,3 +1280,35 @@ fn small_ranges_charge_the_complete_shared_backing_once() {
         assert_eq!(child[0], expected);
     }
 }
+
+#[test]
+fn payload_integrity_reuse_is_bound_to_the_exact_reference_and_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().to_path_buf());
+    let reference = store.put(DOMAIN, b"checked payload").unwrap();
+    let bytes = store.get(reference).unwrap();
+    assert!(bytes.matches_reference(reference));
+    let retained = bytes.clone().retain_owner(Arc::new(()));
+    drop(bytes);
+    drop(store);
+    assert!(retained.matches_reference(reference));
+    let complete = retained.range(0, reference.len, 1).unwrap();
+    assert!(complete.matches_reference(reference));
+    for n in 0..4 {
+        let mut foreign = reference;
+        match n {
+            0 => foreign.domain.kind += 1,
+            1 => foreign.domain.schema += 1,
+            2 => foreign.len -= 1,
+            _ => foreign.output.0.0[0] ^= 1,
+        }
+        assert!(!retained.matches_reference(foreign));
+    }
+    let child = retained.range(1, reference.len - 1, 1).unwrap();
+    assert!(!child.matches_reference(reference));
+    assert!(child.matches_reference(DOMAIN.reference(&child).unwrap()));
+    let raw = Bytes::from(b"checked payload".as_slice());
+    assert!(raw.matches_reference(reference));
+    let changed = Bytes::from(b"checked payloae".as_slice());
+    assert!(!changed.matches_reference(reference));
+}

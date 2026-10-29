@@ -292,6 +292,23 @@ impl Deref for Bytes {
     }
 }
 impl Bytes {
+    /// Check this exact payload against a content reference. A matching checked
+    /// container range reuses its immutable backing's integrity check. Other
+    /// views, including arbitrary provider bytes, require the complete digest.
+    pub fn matches_reference(&self, reference: Reference) -> bool {
+        if let Some(checks) = self.region.checks() {
+            let slot = &checks.records[reference.output.0.0[0] as usize % checks.records.len()];
+            if let Some(checked) = slot.get()
+                && checked.reference == reference
+                && checked.range.start.checked_add(HEADER) == Some(self.range.start)
+                && checked.range.end == self.range.end
+            {
+                return true;
+            }
+        }
+        reference.domain.reference(self) == Some(reference)
+    }
+
     /// Visit the complete physical backing retained by this view. Identities
     /// are process-local allocation keys for the existing shared-charge policy;
     /// they never enter portable records. A child range retains the same charges.
