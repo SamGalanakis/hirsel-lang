@@ -383,6 +383,7 @@ static bool chunkAhead(Loop &L, LoopInfo &LI, DominatorTree &DT) {
   }
   auto *FastH = cast<BasicBlock>(Map[H]);
   auto *FastLatch = cast<BasicBlock>(Map[Latch]);
+  auto *FastNext = BasicBlock::Create(F->getContext(), "ahead.chunk.next", F);
   auto *Outer = BasicBlock::Create(F->getContext(), "ahead.boundary", F, H);
   SmallVector<PHINode *, 8> Phis;
   for (PHINode &P : H->phis()) Phis.push_back(&P);
@@ -391,15 +392,16 @@ static bool chunkAhead(Loop &L, LoopInfo &LI, DominatorTree &DT) {
     int Entry = FastP->getBasicBlockIndex(PH);
     FastP->setIncomingBlock(Entry, Outer);
     FastP->setIncomingValue(Entry, P);
+    FastP->setIncomingBlock(FastP->getBasicBlockIndex(FastLatch), FastNext);
     Value *Next = P->getIncomingValueForBlock(Latch);
-    P->addIncoming(Map.count(Next) ? static_cast<Value *>(Map[Next]) : Next, FastLatch);
+    P->addIncoming(Map.count(Next) ? static_cast<Value *>(Map[Next]) : Next, FastNext);
     P->moveBefore(*Outer, Outer->end());
   }
   PH->getTerminator()->replaceSuccessorWith(H, Outer);
   Latch->getTerminator()->replaceSuccessorWith(H, Outer);
   IRBuilder<> B(Outer);
   Value *Spent = B.CreateSub(Quota, B.getInt64(K * *PerTrip), "ahead.chunk.remaining");
-  Quota->setIncomingValue(Quota->getBasicBlockIndex(FastLatch), Spent);
+  Quota->setIncomingValue(Quota->getBasicBlockIndex(FastNext), Spent);
   // The original checkpoint may diverge before the source bound is read.
   // As in LoopUnrollRuntime.cpp:847-860, speculative guards must not turn
   // a not-yet-observed poison into immediate branch UB.
@@ -425,12 +427,11 @@ static bool chunkAhead(Loop &L, LoopInfo &LI, DominatorTree &DT) {
   B.SetInsertPoint(FastH, FastH->begin());
   auto *Trips = B.CreatePHI(B.getInt64Ty(), 2, "ahead.chunk.trip");
   Trips->addIncoming(B.getInt64(0), Outer);
-  Instruction *Old = FastLatch->getTerminator();
-  B.SetInsertPoint(Old);
+  FastLatch->getTerminator()->replaceSuccessorWith(FastH, FastNext);
+  B.SetInsertPoint(FastNext);
   Value *NextTrip = B.CreateAdd(Trips, B.getInt64(1));
-  Trips->addIncoming(NextTrip, FastLatch);
+  Trips->addIncoming(NextTrip, FastNext);
   auto *Backedge = B.CreateCondBr(B.CreateICmpULT(NextTrip, B.getInt64(K)), FastH, Outer);
-  Old->eraseFromParent();
   auto &C = F->getContext();
   Metadata *Unroll[] = {MDString::get(C, "llvm.loop.unroll.count"),
                        ConstantAsMetadata::get(B.getInt32(4))};

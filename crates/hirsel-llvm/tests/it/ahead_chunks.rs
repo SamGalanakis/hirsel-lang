@@ -110,11 +110,13 @@ int main(void) {
   const uint64_t sizes[] = {0,1,31,32,33,34,63,64,65,1023,1024,1025,4097};
   const uint64_t quotas[] = {1,2,31,32,33,34,63,64,65,1023,1024,INT64_MAX};
   const uint64_t stops[] = {0,1,31,32,33,63,64,65,1023,1024,UINT64_MAX};
+  const uint64_t initial[] = {7,UINT64_MAX / 64};
   unsigned cells = 0;
+  for (unsigned v = 0; v < sizeof initial / sizeof *initial; ++v)
   for (unsigned n = 0; n < sizeof sizes / sizeof *sizes; ++n)
     for (unsigned q = 0; q < sizeof quotas / sizeof *quotas; ++q)
       for (unsigned s = 0; s < sizeof stops / sizeof *stops; ++s) {
-        for (unsigned i = 0; i < 4097; ++i) rows[i] = expected_rows[i] = 7;
+        for (unsigned i = 0; i < 4097; ++i) rows[i] = expected_rows[i] = initial[v];
         uint64_t expected = quotas[q], total = 0;
         expected_calls = 0;
         for (uint64_t i = 0;; ++i) {
@@ -128,7 +130,9 @@ int main(void) {
             expected = grant(++expected_calls);
           }
           if (i == stops[s]) break;
-          total += expected_rows[i] += i;
+          uint64_t value = expected_rows[i] += i;
+          if (UINT64_MAX - total < value) break;
+          total += value;
         }
         uint64_t state = quotas[q];
         calls = 0;
@@ -160,7 +164,7 @@ int main(void) {
         );
         assert_eq!(
             run(&target, &executable),
-            "1716 memory chunk boundaries passed\n"
+            "3432 memory chunk boundaries passed\n"
         );
     }
 }

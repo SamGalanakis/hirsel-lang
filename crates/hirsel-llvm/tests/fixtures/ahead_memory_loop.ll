@@ -1,5 +1,6 @@
 target triple = "x86_64-unknown-linux-gnu"
 declare void @hirsel_rt_v2_ahead_handoff(ptr, i32)
+declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)
 define i64 @reserved_ahead(ptr %state, ptr %rows, i64 %n, i64 %stop) {
 entry:
  %quota = load i64, ptr %state, align 8
@@ -38,12 +39,14 @@ write:
  %old = load i64, ptr %at, align 8
  %value = add i64 %old, %i
  store i64 %value, ptr %at, align 8
- %total = add i64 %sum, %value
+ %added = call {i64, i1} @llvm.uadd.with.overflow.i64(i64 %sum, i64 %value)
+ %total = extractvalue {i64, i1} %added, 0
+ %overflow = extractvalue {i64, i1} %added, 1
  %next = add i64 %i, 1
- br label %header
+ br i1 %overflow, label %exit, label %header
 exit:
- %result = phi i64 [%sum, %test], [%sum, %check]
- %rest = phi i64 [%remaining, %test], [%remaining2, %check]
+ %result = phi i64 [%sum, %test], [%sum, %check], [%sum, %write]
+ %rest = phi i64 [%remaining, %test], [%remaining2, %check], [%remaining2, %write]
  store i64 %rest, ptr %state, align 8
  ret i64 %result
 }
