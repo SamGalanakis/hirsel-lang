@@ -3,7 +3,9 @@
 //! leaf-only reader, this walks every visible ancestor, as required by DET-3.
 use super::{CpuSet, HostLimits, Quota};
 
+mod directory;
 mod root_mount;
+use directory::Directory;
 use root_mount::root_mount;
 
 use crate::{RunRefusal, invalid};
@@ -60,9 +62,16 @@ impl LinuxLimits {
         let group = absolute(group)?;
         // A complete cgroup2 filesystem root exposes every ancestor. Delegated
         // roots retain mount discovery, including escaped mount paths.
-        let (leaf, root) = match self.probe_root_mount.then(root_mount).flatten() {
-            Some(root) => (root.join(group.strip_prefix("/").unwrap()), root),
-            None => self.discover_mount(&group)?,
+        let (leaf, root, opened) = match self.probe_root_mount.then(root_mount).flatten() {
+            Some((root, directory)) => (
+                root.join(group.strip_prefix("/").unwrap()),
+                root,
+                Some(directory),
+            ),
+            None => {
+                let (leaf, root) = self.discover_mount(&group)?;
+                (leaf, root, None)
+            }
         };
         if !leaf.is_dir() {
             return Err(invalid(
@@ -70,26 +79,23 @@ impl LinuxLimits {
                 "membership disappeared during resolution",
             ));
         }
+        let levels = Directory::walk(&root, &leaf, opened)?;
         let mut cpuset_found = false;
-        for directory in leaf.ancestors() {
-            if let Some(text) = optional(&directory.join("cpu.max"))?
+        for directory in levels.iter().rev() {
+            if let Some(text) = directory.read(c"cpu.max")?
                 && let Some(q) = Quota::parse(&text)?
             {
                 limits.quota = Some(limits.quota.map_or(q, |old| old.minimum(q)));
             }
-            if !cpuset_found && let Some(text) = optional(&directory.join("cpuset.cpus.effective"))?
-            {
+            if !cpuset_found && let Some(text) = directory.read(c"cpuset.cpus.effective")? {
                 if text.trim().is_empty() {
                     return Err(invalid("cpuset", "empty effective cpuset"));
                 }
                 limits.effective_cpuset = CpuSet::parse(&text)?;
                 cpuset_found = true;
             }
-            if directory == root {
-                break;
-            }
         }
-        if let Some(stat) = optional(&leaf.join("cpu.stat"))? {
+        if let Some(stat) = levels.last().unwrap().read(c"cpu.stat")? {
             for line in stat.lines() {
                 if let Some(value) = line.strip_prefix("throttled_usec ") {
                     limits.throttled_usec = value
@@ -176,13 +182,6 @@ fn unescape(text: &str) -> Result<String, RunRefusal> {
 fn read(path: &Path) -> Result<String, RunRefusal> {
     fs::read_to_string(path)
         .map_err(|e| invalid("host limits", &format!("{}: {e}", path.display())))
-}
-fn optional(path: &Path) -> Result<Option<String>, RunRefusal> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(invalid("host limits", &format!("{}: {e}", path.display()))),
-    }
 }
 
 /// Go 1.25 runtime/os_linux.go:106-127 obtains affinity directly from the

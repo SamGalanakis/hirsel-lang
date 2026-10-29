@@ -1,15 +1,12 @@
 //! Scheduler-role ownership, separate from a worker's compute permit.
 //!
-//! The mutex protects only the owner predicate. No MutexGuard crosses a fiber
-//! switch, a wait, or user code. This is Rust std Condvar's predicate-under-lock
-//! protocol (`library/std/src/sync/poison/condvar.rs`, wait_while), with a task's
-//! stable context address as the owner so migration keeps ownership explicit.
-//! The W1 run token remains the default; concurrent drivers enable this role
-//! before starting workers, after installing boundary coverage.
+//! An atomic owner word publishes the scheduler tables across role transfers.
+//! A task's stable context address preserves ownership across migration. Home
+//! serves synchronous bridges while waiting on the same event as role release.
 
+use crate::parking::Event;
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::{TaskCtx, context::RunShared};
 
@@ -19,22 +16,15 @@ use super::Scheduler;
 // This marker is used only by acquire_idle, which never permits re-entry.
 // The marker is even but not aligned like TaskCtx, and claims are odd.
 const IDLE_OWNER: usize = usize::MAX - 1;
-/// The `held` word of an unowned role; no owner uses it.
-const UNOWNED: usize = usize::MAX;
 
 pub(crate) mod cell;
+mod owner;
+use owner::Owner;
 
 pub(crate) struct Role {
     enabled: AtomicBool,
-    owner: Mutex<Option<usize>>,
-    /// The owner word, written only under `owner`. Only the owning task moves
-    /// ownership away from itself, so a task that reads its own word here
-    /// already owns the role and re-enters without the predicate lock.
-    held: AtomicUsize,
-    available: Condvar,
-    /// Task and idle acquirers blocked on `available`, changed under `owner`.
-    /// Home's wait is `home_waiting`; a release with neither skips the wake.
-    waiting: AtomicUsize,
+    held: Owner,
+    available: Event,
     home_waiting: AtomicBool,
     /// Ownership transitions into a task, claim or idle owner. Re-entry by
     /// the current owner is not an acquisition.
@@ -57,10 +47,8 @@ impl Default for Role {
     fn default() -> Self {
         Self {
             enabled: AtomicBool::new(false),
-            owner: Mutex::new(None),
-            held: AtomicUsize::new(UNOWNED),
-            available: Condvar::new(),
-            waiting: AtomicUsize::new(0),
+            held: Owner::default(),
+            available: Event::default(),
             home_waiting: AtomicBool::new(false),
             acquisitions: AtomicU64::new(0),
         }
@@ -78,88 +66,66 @@ impl Role {
         self.acquisitions.load(Ordering::Relaxed)
     }
 
-    /// Record `task` as the new owner; the caller holds `owner`.
-    fn acquired(&self, owner: &mut Option<usize>, task: usize) {
-        *owner = Some(task);
-        self.held.store(task, Ordering::Relaxed);
+    fn acquired(&self) {
         self.acquisitions.fetch_add(1, Ordering::Relaxed);
         #[cfg(test)]
         THREAD_ACQUISITIONS.with(|count| count.set(count.get() + 1));
     }
 
-    /// Whether `task` already owns the role, read without the predicate lock.
     #[inline(always)]
     fn reentered(&self, task: usize) -> bool {
-        self.held.load(Ordering::Relaxed) == task
+        self.held.is(task)
+    }
+
+    fn try_acquire(&self, task: usize) -> bool {
+        if !self.held.try_acquire(task) {
+            return false;
+        }
+        self.acquired();
+        true
     }
 
     fn acquire(&self, task: usize) {
-        if self.reentered(task) {
-            return;
+        if !self.reentered(task) {
+            self.acquire_unowned(task);
         }
-        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
-        if *owner == Some(task) {
-            return;
-        }
-        owner = self.wait_unowned(owner);
-        self.acquired(&mut owner, task);
     }
 
-    fn wait_unowned<'a>(
-        &self,
-        mut owner: std::sync::MutexGuard<'a, Option<usize>>,
-    ) -> std::sync::MutexGuard<'a, Option<usize>> {
-        if owner.is_some() {
-            self.waiting.fetch_add(1, Ordering::Relaxed);
-            while owner.is_some() {
-                owner = self
-                    .available
-                    .wait(owner)
-                    .unwrap_or_else(|e| e.into_inner());
+    fn acquire_unowned(&self, task: usize) {
+        loop {
+            let ticket = self.available.ticket();
+            for _ in 0..64 {
+                if self.try_acquire(task) {
+                    return;
+                }
+                std::hint::spin_loop();
             }
-            self.waiting.fetch_sub(1, Ordering::Relaxed);
+            self.available.wait(ticket);
         }
-        owner
     }
 
     fn acquire_idle(&self) {
-        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
-        // Unlike task acquisition, even the same marker must wait. Distinct
-        // idle workers have no task identity and cannot share ownership.
-        owner = self.wait_unowned(owner);
-        self.acquired(&mut owner, IDLE_OWNER);
+        self.acquire_unowned(IDLE_OWNER);
     }
 
-    /// Like std Condvar::wait_while (rust-lang/rust a7c37f9f0ee5,
-    /// library/std/src/sync/poison/condvar.rs:182-193), check the complete
-    /// predicate under the notification lock. Hirsel's home thread must also
-    /// run synchronous bridges: the role owner may be waiting for one.
     unsafe fn acquire_home(&self, run: *mut RunShared, task: usize) {
         if task != IDLE_OWNER && self.reentered(task) {
             return;
         }
-        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
-        // Same-task reentry owns R already and must not service another loan.
-        // Idle callbacks remain nonreentrant even for the same marker.
-        if task != IDLE_OWNER && *owner == Some(task) {
-            return;
-        }
         self.home_waiting.store(true, Ordering::Relaxed);
-        while owner.is_some() {
+        loop {
+            let ticket = self.available.ticket();
+            if self.try_acquire(task) {
+                self.home_waiting.store(false, Ordering::Relaxed);
+                return;
+            }
             if let Some(call) = unsafe { crate::pool::take_home_call(run) } {
-                drop(owner);
                 // No role or adapter borrow crosses this callback.
                 unsafe { crate::pool::run_call(call) };
-                owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
             } else {
-                owner = self
-                    .available
-                    .wait(owner)
-                    .unwrap_or_else(|e| e.into_inner());
+                self.available.wait(ticket);
             }
         }
-        self.home_waiting.store(false, Ordering::Relaxed);
-        self.acquired(&mut owner, task);
     }
 
     #[cfg(test)]
@@ -167,28 +133,16 @@ impl Role {
         self.home_waiting.load(Ordering::Relaxed)
     }
 
-    /// A caller publishes its bridge before taking this predicate lock, so
-    /// home cannot miss the call between checking the queue and waiting.
+    /// Queue publication precedes the event, so home cannot miss a bridge
+    /// between its last queue check and parking, even without owning the role.
     pub(crate) fn notify_home_call(&self) {
         if self.enabled.load(Ordering::Acquire) {
-            let _owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
-            if self.home_waiting.load(Ordering::Relaxed) {
-                self.available.notify_all();
-            }
+            self.available.notify();
         }
     }
 
     fn try_acquire_idle(&self) -> bool {
-        let mut owner = match self.owner.try_lock() {
-            Ok(owner) => owner,
-            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
-            Err(std::sync::TryLockError::WouldBlock) => return false,
-        };
-        if owner.is_some() {
-            return false;
-        }
-        self.acquired(&mut owner, IDLE_OWNER);
-        true
+        self.try_acquire(IDLE_OWNER)
     }
 
     fn release(&self, task: usize) {
@@ -196,20 +150,13 @@ impl Role {
     }
 
     fn release_with(&self, task: usize, before: impl FnOnce()) -> bool {
-        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
-        if *owner == Some(task) {
-            before();
-            *owner = None;
-            self.held.store(UNOWNED, Ordering::Relaxed);
-            if self.home_waiting.load(Ordering::Relaxed) {
-                self.available.notify_all();
-            } else if self.waiting.load(Ordering::Relaxed) != 0 {
-                self.available.notify_one();
-            }
-            true
-        } else {
-            false
+        if !self.reentered(task) {
+            return false;
         }
+        before();
+        self.held.release();
+        self.available.notify();
+        true
     }
 }
 
@@ -221,7 +168,7 @@ impl Role {
     pub(crate) const IDLE: usize = IDLE_OWNER;
 
     pub(crate) fn driven_owner(&self) -> Option<usize> {
-        *self.owner.lock().unwrap()
+        self.held.current()
     }
 
     /// A task's semantic entry (`enter`), or its owner's re-entry.
@@ -449,7 +396,7 @@ pub unsafe fn enable(ctx: *mut TaskCtx) {
 }
 
 /// Claim a suspended task by id, before even borrowing the moving task table.
-/// The temporary owner is replaced under the same predicate lock, without a
+/// The temporary owner is replaced while the claim owns the role, without a
 /// gap in which another worker can mutate the table.
 ///
 /// # Safety
@@ -472,10 +419,7 @@ pub(crate) unsafe fn claim(run: *mut crate::context::RunShared, task: u32) -> *m
             .task(task)
             .ctx;
         if role.enabled.load(Ordering::Acquire) {
-            let mut owner = role.owner.lock().unwrap_or_else(|e| e.into_inner());
-            assert_eq!(*owner, Some(claim));
-            *owner = Some(ctx.addr());
-            role.held.store(ctx.addr(), Ordering::Relaxed);
+            role.held.replace(claim, ctx.addr());
         }
         ctx
     }
@@ -756,10 +700,7 @@ mod tests {
                                 ),
                                 crate::STATUS_OK
                             );
-                            assert_eq!(
-                                *(*run.shared()).role.owner.lock().unwrap(),
-                                Some(ctx.addr())
-                            );
+                            assert_eq!((*run.shared()).role.driven_owner(), Some(ctx.addr()));
                             assert_eq!((*ctx).role_depth, 0);
                             assert_eq!((*source.owner).count, 1);
                             let shown = |s: Slice| {
@@ -822,7 +763,7 @@ mod tests {
                 });
             }
         });
-        assert_eq!(unsafe { *(*run.shared()).role.owner.lock().unwrap() }, None);
+        assert_eq!(unsafe { (*run.shared()).role.driven_owner() }, None);
     }
 
     #[test]
@@ -837,10 +778,10 @@ mod tests {
             }
             {
                 let _segment = unsafe { Segment::new(run.0) };
-                assert_eq!(unsafe { *(*run.shared()).role.owner.lock().unwrap() }, None);
+                assert_eq!(unsafe { (*run.shared()).role.driven_owner() }, None);
                 assert_eq!(unsafe { (*run.0).role_depth }, 0);
             }
-            let restored = unsafe { *(*run.shared()).role.owner.lock().unwrap() };
+            let restored = unsafe { (*run.shared()).role.driven_owner() };
             unsafe { release(run.0) };
             assert_eq!(restored, held.then_some(run.0.addr()));
             assert_eq!(unsafe { (*run.0).role_depth }, 0);
@@ -862,7 +803,7 @@ mod tests {
                 .clear();
         }
         drop(guard);
-        assert_eq!(unsafe { *(*run.shared()).role.owner.lock().unwrap() }, None);
+        assert_eq!(unsafe { (*run.shared()).role.driven_owner() }, None);
     }
 
     #[test]
@@ -928,6 +869,6 @@ mod tests {
                 });
             }
         });
-        assert_eq!(*role.owner.lock().unwrap(), None);
+        assert_eq!(role.driven_owner(), None);
     }
 }

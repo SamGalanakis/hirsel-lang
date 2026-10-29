@@ -38,7 +38,6 @@ pub mod queue;
 // The runtime channel module uses the same primitive facade as the kernel.
 // Normal library builds expose the model fixture; excluding it from the
 // library unit harness avoids compiling unrelated runtime descriptor tests.
-#[cfg(not(test))]
 extern crate self as hirsel_free;
 #[cfg(not(test))]
 pub mod channel_models;
@@ -84,3 +83,7 @@ pub mod parking;
 pub mod parking_sync;
 #[cfg(test)]
 mod queue_arena_tests;
+
+#[path = "../../../../crates/hirsel-rt/src/tasks/role/owner.rs"]
+#[allow(dead_code)]
+mod role_owner;

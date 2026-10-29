@@ -247,7 +247,9 @@ fn cycle(callback: bool, contract: Contract) -> Vec<(&'static str, u32)> {
                 while !inbox.posts.iter().any(|(post, _)| {
                     matches!(post, Post::Call(call) if call.claim.state() == hirsel_free::claim::Claim::Prepared)
                 }) {
-                    inbox = home.bell.wait(inbox).unwrap();
+                    drop(inbox);
+                home.bell.wait();
+                inbox = home.inbox.lock().unwrap();
                 }
                 drop(inbox);
                 assert_eq!(compute_permits(), (2, 2, 0));

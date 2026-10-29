@@ -1,5 +1,5 @@
 //! OS wait adapter. Predicate ownership lives in parking, not in the syscall.
-pub(crate) use std::sync::atomic::{AtomicU32, Ordering};
+pub(crate) use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 #[derive(Default)]
 pub(crate) struct Wait {
@@ -16,6 +16,29 @@ impl Wait {
                 libc::FUTEX_WAIT | libc::FUTEX_PRIVATE_FLAG,
                 expected,
                 std::ptr::null::<libc::timespec>(),
+            );
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn wait_timeout(
+        &self,
+        word: &AtomicU32,
+        expected: u32,
+        timeout: std::time::Duration,
+    ) {
+        let timeout = libc::timespec {
+            tv_sec: timeout.as_secs().try_into().unwrap_or(libc::time_t::MAX),
+            tv_nsec: timeout.subsec_nanos().into(),
+        };
+        // SAFETY: the word remains live and aligned; timeout is a valid
+        // relative timespec. The caller rechecks its token and deadline.
+        unsafe {
+            libc::syscall(
+                libc::SYS_futex,
+                word.as_ptr(),
+                libc::FUTEX_WAIT | libc::FUTEX_PRIVATE_FLAG,
+                expected,
+                &timeout,
             );
         }
     }

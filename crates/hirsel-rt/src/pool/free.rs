@@ -723,9 +723,8 @@ fn wake_ready(execs: &Execs) {
             }
             // Publish before locking the sleep predicate: a search that missed
             // this queue either sees the epoch change or receives the bell.
-            let _inbox = exec.inbox.lock().unwrap();
             exec.ready_epoch.fetch_add(1, Ordering::Release);
-            exec.bell.notify_one();
+            exec.bell.notify();
             return;
         }
     }

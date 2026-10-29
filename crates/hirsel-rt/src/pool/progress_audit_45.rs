@@ -134,7 +134,9 @@ fn home_callback_parent_and_child_bridge_make_progress() {
             let home = &execs(ctx).home;
             let mut inbox = home.inbox.lock().unwrap();
             while !inbox.posts.iter().any(|(post, _)| matches!(post, Post::Call(_))) {
-                inbox = home.bell.wait(inbox).unwrap();
+                drop(inbox);
+                home.bell.wait();
+                inbox = home.inbox.lock().unwrap();
             }
             assert!(inbox.posts.iter().any(|(post, _)| matches!(post, Post::Call(call) if call.claim.state() == hirsel_free::claim::Claim::Prepared)));
             drop(inbox);

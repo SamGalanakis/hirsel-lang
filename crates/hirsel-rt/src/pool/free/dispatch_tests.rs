@@ -128,18 +128,26 @@ fn publication_while_subscribing_to_the_bell_wakes_the_parked_worker() {
     assert!(next(&execs, &exec).is_none());
     let mut inbox = exec.inbox.lock().unwrap();
     std::thread::scope(|scope| {
-        let publisher = scope.spawn(|| publish(&execs, segment(&execs, 8), false, false));
-        // The publisher needs this predicate lock before changing the epoch.
+        let (begin, ready) = std::sync::mpsc::channel();
+        let mut begin = Some(begin);
+        let publisher = scope.spawn({
+            let execs = &execs;
+            move || {
+                ready.recv().unwrap();
+                publish(execs, segment(execs, 8), false, false);
+            }
+        });
+        // Publish after the last predicate check, potentially before parking.
         while exec.ready_epoch.load(Ordering::Acquire) == epoch {
-            let (guard, timeout) = exec
-                .bell
-                .wait_timeout(inbox, Duration::from_secs(5))
-                .unwrap();
-            inbox = guard;
+            drop(inbox);
+            if let Some(begin) = begin.take() {
+                begin.send(()).unwrap();
+            }
             assert!(
-                !timeout.timed_out(),
+                exec.bell.wait_timeout(Duration::from_secs(5)),
                 "publication lost at the park boundary"
             );
+            inbox = exec.inbox.lock().unwrap();
         }
         drop(inbox);
         publisher.join().unwrap();
@@ -735,22 +743,21 @@ fn scoped_publication_at_park(after_lock: bool) {
                 publish(execs, addressed, false, false);
             });
             ready.recv_timeout(Duration::from_secs(5)).unwrap();
-            // The publisher cannot pass the final predicate lock until wait
-            // atomically subscribes and releases it, as in Exec::take/serve.
+            // Release the predicate lock before parking. A post in that
+            // interval must retain a notification.
             while inbox.posts.is_empty() {
-                let (guard, timeout) = scoped
-                    .bell
-                    .wait_timeout(inbox, Duration::from_secs(5))
-                    .unwrap();
-                inbox = guard;
-                assert!(!timeout.timed_out(), "addressed CPU post lost at park");
+                drop(inbox);
+                assert!(
+                    scoped.bell.wait_timeout(Duration::from_secs(5)),
+                    "addressed CPU post lost at park"
+                );
+                inbox = scoped.inbox.lock().unwrap();
             }
             drop(inbox);
             publisher.join().unwrap();
         });
     } else {
-        // A notification sent before the receiver waits must survive as an
-        // inbox entry even though its condition-variable wake is not retained.
+        // A post and its notification survive until the receiver waits.
         publish(&execs, addressed, false, false);
     }
     let Post::Saved(saved) = scoped.take().0 else {

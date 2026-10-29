@@ -43,7 +43,9 @@ impl Drop for Controllers {
                 }
             }
         }
-        self.permits.freed.notify_all();
+        if state.waiting != 0 {
+            self.permits.freed.notify_all();
+        }
     }
 }
 
@@ -103,7 +105,9 @@ impl Permits {
         for exec in &execs {
             exec.reserved.store(true, Ordering::Release);
         }
-        self.freed.notify_all();
+        if state.waiting != 0 {
+            self.freed.notify_all();
+        }
         Ok((
             Reservation {
                 permits: Arc::clone(self),
@@ -139,7 +143,9 @@ impl Drop for Reservation {
     fn drop(&mut self) {
         let mut state = self.permits.state.lock().unwrap();
         state.held -= self.unassigned;
-        self.permits.freed.notify_all();
+        if state.waiting != 0 {
+            self.permits.freed.notify_all();
+        }
     }
 }
 
@@ -157,7 +163,9 @@ impl Drop for Assigned {
         if self.exec.lost.swap(false, Ordering::AcqRel) {
             state.lost -= 1;
         }
-        self.permits.freed.notify_all();
+        if state.waiting != 0 {
+            self.permits.freed.notify_all();
+        }
     }
 }
 

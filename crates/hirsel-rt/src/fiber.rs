@@ -32,26 +32,11 @@ pub(crate) const STACK_BYTES: usize = 8 << 20;
 /// Inaccessible bytes below each stack, so a frame larger than a page still lands in them.
 pub(crate) const GUARD_BYTES: usize = 64 << 10;
 
-/// The admitting thread may have a host-selected stack limit.
+mod native_stack;
+
+/// The admitting thread's cached bounds, invalidated when its limit changes.
 pub(crate) fn native_stack_bytes() -> u64 {
-    let mut attributes = std::mem::MaybeUninit::<libc::pthread_attr_t>::uninit();
-    let (mut stack, mut guard) = (0usize, 0usize);
-    // SAFETY: attributes is initialized by pthread_getattr_np and destroyed once.
-    unsafe {
-        if libc::pthread_getattr_np(libc::pthread_self(), attributes.as_mut_ptr()) != 0 {
-            environmental("the admission stack size could not be read");
-        }
-        let mut attributes = attributes.assume_init();
-        let status = libc::pthread_attr_getstacksize(&attributes, &mut stack)
-            | libc::pthread_attr_getguardsize(&attributes, &mut guard);
-        libc::pthread_attr_destroy(&mut attributes);
-        if status != 0 {
-            environmental("the admission stack bounds could not be read");
-        }
-    }
-    (stack as u64)
-        .checked_add(guard as u64)
-        .unwrap_or_else(|| environmental("the admission stack bounds overflowed"))
+    native_stack::bytes()
 }
 
 /// Bytes at the top of each mapping for its task's context.

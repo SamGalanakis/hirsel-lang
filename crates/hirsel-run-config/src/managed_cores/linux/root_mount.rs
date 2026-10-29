@@ -3,7 +3,7 @@
 //! exposes the complete hierarchy, including all visible ancestor quotas.
 use std::{os::fd::AsRawFd, os::unix::fs::MetadataExt, path::PathBuf};
 
-pub(super) fn root_mount() -> Option<PathBuf> {
+pub(super) fn root_mount() -> Option<(PathBuf, std::fs::File)> {
     let directory = std::fs::File::open("/sys/fs/cgroup").ok()?;
     let metadata = directory.metadata().ok()?;
     // SAFETY: zero initializes a valid output buffer. The live descriptor
@@ -14,7 +14,7 @@ pub(super) fn root_mount() -> Option<PathBuf> {
     {
         return None;
     }
-    Some(PathBuf::from("/sys/fs/cgroup"))
+    Some((PathBuf::from("/sys/fs/cgroup"), directory))
 }
 
 fn complete_root(kind: libc::c_long, inode: u64, directory: bool) -> bool {

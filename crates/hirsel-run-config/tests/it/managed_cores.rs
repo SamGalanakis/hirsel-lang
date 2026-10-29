@@ -492,3 +492,60 @@ fn kernel_affinity_and_complete_root_match_proc_discovery() {
     assert_eq!(fast.quota, table.quota);
     assert!(fast.throttled_usec <= table.throttled_usec);
 }
+
+#[test]
+fn cgroup_controls_preserve_long_cpu_lists_stat_tails_and_utf8_errors() {
+    let f = Fixture::new();
+    let text = (0..5000u32)
+        .map(|cpu| cpu.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+        + "\n";
+    f.put("cg/parent/leaf/cpuset.cpus.effective", &text);
+    f.put(
+        "cg/parent/leaf/cpu.stat",
+        &("usage_usec 0\n".repeat(1024) + "throttled_usec 456\n"),
+    );
+    let limits = f.reader().read().unwrap();
+    assert_eq!(limits.effective_cpuset, cpus("0-4999"));
+    assert_eq!(limits.throttled_usec, 456);
+    let path = f.0.join("cg/parent/leaf/cpuset.cpus.effective");
+    let mut malformed = text.into_bytes();
+    malformed.push(0xff);
+    fs::write(&path, malformed).unwrap();
+    let expected = fs::read_to_string(&path).unwrap_err();
+    assert_eq!(
+        f.reader().read().unwrap_err(),
+        RunRefusal::Invalid {
+            field: "host limits".into(),
+            detail: format!("{}: {expected}", path.display()),
+        }
+    );
+}
+
+#[test]
+fn cgroup_search_permissions_do_not_require_directory_listing() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let expected = f.reader().read().unwrap();
+    let path = f.0.join("cg/parent");
+    let original = fs::metadata(&path).unwrap().permissions();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o111)).unwrap();
+    let actual = f.reader().read();
+    fs::set_permissions(&path, original).unwrap();
+    let actual = actual.unwrap();
+    assert_eq!(
+        (
+            actual.admission_affinity,
+            actual.effective_cpuset,
+            actual.quota,
+            actual.throttled_usec
+        ),
+        (
+            expected.admission_affinity,
+            expected.effective_cpuset,
+            expected.quota,
+            expected.throttled_usec
+        )
+    );
+}

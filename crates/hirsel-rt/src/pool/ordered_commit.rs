@@ -176,9 +176,8 @@ impl Service {
                     crate::stop::set_running(running);
                     // As run_call: the borrowed callback has fully returned
                     // before its owner can destroy the closure or result.
-                    let mut ended = done.ended.lock().unwrap();
-                    *ended = Some(true);
-                    done.bell.notify_one();
+                    done.ended.store(1, Ordering::Relaxed);
+                    done.bell.notify();
                 }
             }
         }
@@ -212,11 +211,7 @@ pub(crate) fn on_issuer<T>(action: impl FnOnce() -> T) -> T {
     loan.reply
         .send(Reply::Action(Action(callback), done.clone()))
         .expect("waiting commit issuer");
-    let mut ended = done.ended.lock().unwrap();
-    while ended.is_none() {
-        ended = done.bell.wait(ended).unwrap();
-    }
-    drop(ended);
+    done.bell.wait();
     result.expect("affine callback result")
 }
 

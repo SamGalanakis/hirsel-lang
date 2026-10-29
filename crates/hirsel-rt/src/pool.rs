@@ -85,16 +85,15 @@ enum Kind {
 /// A closure the home thread runs for a thread that waits for it ([`call_home`]).
 #[derive(Clone)]
 pub(crate) struct Call {
-    claim: Arc<hirsel_free::claim::Request<()>>,
+    claim: Arc<hirsel_free::claim::Request<Done>>,
     run: *mut (dyn FnMut() + 'static),
-    done: *const Done,
 }
 
-/// A [`Call`]'s completion, on its caller's stack.
+/// A [`Call`]'s completion, retained by its shared request through notification.
 #[derive(Default)]
 struct Done {
-    ended: Mutex<Option<bool>>,
-    bell: Condvar,
+    ended: AtomicU32,
+    bell: crate::parking::Parker,
 }
 
 /// What a thread is asked to do next.
@@ -121,7 +120,7 @@ struct Inbox {
 /// One thread that runs a run's code: home, a compute worker or a pool thread.
 pub(crate) struct Exec {
     inbox: Mutex<Inbox>,
-    bell: Condvar,
+    bell: crate::parking::Parker,
     kind: Kind,
     /// The thread holds the run: from the post of a task to it until it goes idle.
     busy: AtomicBool,
@@ -167,7 +166,7 @@ impl Exec {
                 posts: VecDeque::new(),
                 closed: false,
             }),
-            bell: Condvar::new(),
+            bell: Default::default(),
             kind,
             busy: AtomicBool::new(false),
             idle: Cell::new(std::ptr::null_mut()),
@@ -217,7 +216,8 @@ impl Exec {
             self.busy.store(true, Ordering::SeqCst);
         }
         inbox.posts.push_back((post, queued));
-        self.bell.notify_one();
+        drop(inbox);
+        self.bell.notify();
         if let Some(driver) = self.home_driver.get() {
             driver.notify().expect("an admitted execution home wake");
         }
@@ -228,12 +228,11 @@ impl Exec {
     }
 
     fn take(&self) -> (Post, Option<Instant>) {
-        let mut inbox = self.inbox.lock().unwrap();
         loop {
-            if let Some(post) = inbox.posts.pop_front() {
+            if let Some(post) = self.inbox.lock().unwrap().posts.pop_front() {
                 return post;
             }
-            inbox = self.bell.wait(inbox).unwrap();
+            self.bell.wait();
         }
     }
 
@@ -315,14 +314,17 @@ pub fn set_compute_grant(limit: u32) {
 
 fn update_compute_grant(limit: u32) {
     let permits = process_permits();
-    {
+    let waiting = {
         let mut state = permits.state.lock().unwrap();
         if limit < state.limit {
             state.contraction = state.contraction.wrapping_add(1);
         }
         state.limit = limit;
+        state.waiting != 0
+    };
+    if waiting {
+        permits.freed.notify_all();
     }
-    permits.freed.notify_all();
 }
 
 /// Current process permit accounting, available to the embedding manager.
@@ -343,8 +345,10 @@ pub fn lost_compute_permits() -> u32 {
 /// through notification prevents a stop from being lost just before a wait.
 pub(crate) fn wake_permits() {
     if let Some(permits) = PROCESS_PERMITS.get() {
-        let _state = permits.state.lock().unwrap();
-        permits.freed.notify_all();
+        let state = permits.state.lock().unwrap();
+        if state.waiting != 0 {
+            permits.freed.notify_all();
+        }
     }
 }
 
@@ -375,6 +379,16 @@ impl Permits {
     ) -> Stopped<bool> {
         if exec.held.load(Ordering::Relaxed) {
             return Ok(false);
+        }
+        // Only this scoped thread drops Assigned and unsets reserved, after
+        // its final segment. Its credit is already in state.held, so toggling
+        // local execution does not borrow or return process capacity.
+        if matches!(exec.kind, Kind::Scoped(_)) && exec.reserved.load(Ordering::Acquire) {
+            if let Some(stop) = control.and_then(|c| c.stopped()) {
+                return Err(stop);
+            }
+            exec.held.store(true, Ordering::Release);
+            return Ok(true);
         }
         let started = metrics.map(|_| Instant::now());
         let mut state = self.state.lock().unwrap();
@@ -417,6 +431,10 @@ impl Permits {
         if !exec.held.load(Ordering::Acquire) {
             return;
         }
+        if matches!(exec.kind, Kind::Scoped(_)) && exec.reserved.load(Ordering::Acquire) {
+            exec.held.store(false, Ordering::Release);
+            return;
+        }
         let mut state = self.state.lock().unwrap();
         if !exec.held.swap(false, Ordering::AcqRel) {
             return;
@@ -427,7 +445,9 @@ impl Permits {
                 state.lost -= 1;
             }
         }
-        self.freed.notify_one();
+        if state.waiting != 0 {
+            self.freed.notify_one();
+        }
     }
     #[cfg(test)]
     fn available(&self) -> u32 {
@@ -518,7 +538,7 @@ pub(crate) struct Execs {
     migrate: bool,
     /// Production Ordered width one uses the admission thread as its worker.
     home_at_one: bool,
-    calls: hirsel_free::claim::Requests<()>,
+    calls: hirsel_free::claim::Requests<Done>,
     next_call: AtomicU64,
     activity: Mutex<()>,
     dispatch: std::sync::OnceLock<free::Dispatch>,
@@ -1207,13 +1227,10 @@ pub(crate) unsafe fn run_call(call: Call) {
             (*call.run)();
             call.claim.finish();
         }
-        let done = &*call.done;
-        // The caller owns Done on its stack. Keep the predicate locked until
-        // notification returns, so a fast caller cannot destroy the condition
-        // variable while notify_one still accesses its futex word.
-        let mut ended = done.ended.lock().unwrap();
-        *ended = Some(claimed);
-        done.bell.notify_one();
+        let done = call.claim.buffers();
+        done.ended
+            .store(if claimed { 1 } else { 2 }, Ordering::Relaxed);
+        done.bell.notify();
     }
 }
 
@@ -1258,13 +1275,9 @@ unsafe fn serve(run: *mut RunShared, exec: &Exec) -> bool {
             if let Some(saved) = free::next(execs, exec) {
                 break (Post::Saved(saved), None);
             }
-            let mut inbox = exec.inbox.lock().unwrap();
-            if let Some(post) = inbox.posts.pop_front() {
-                break post;
-            }
             if exec.ready_epoch.load(Ordering::Acquire) == epoch {
                 unsafe { cpu_scoped::probe::worker(run, exec, "park") };
-                drop(exec.bell.wait(inbox).unwrap());
+                exec.bell.wait();
                 unsafe { cpu_scoped::probe::worker(run, exec, "wake") };
             }
         }
@@ -1799,19 +1812,18 @@ pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -
     if let Some(stop) = run.control.stopped() {
         return Err(stop);
     }
-    let done = Done::default();
     let execs = run.execs.as_deref().unwrap();
     let id = execs.next_call.fetch_add(1, Relaxed);
-    let claim = execs.calls.prepare(id, ());
+    let claim = execs.calls.prepare(id, Done::default());
+    let done = claim.buffers();
     // SAFETY: this frame waits until the home thread signals `done`, so the closure outlives
     // its run there.
     let call: *mut (dyn FnMut() + 'static) = unsafe { std::mem::transmute(call) };
     let home = &run.execs.as_deref().unwrap().home;
     if !home.post(
         Post::Call(Call {
-            claim,
+            claim: claim.clone(),
             run: call,
-            done: &done,
         }),
         None,
     ) {
@@ -1819,18 +1831,14 @@ pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -
         return Err(run.control.stopped().unwrap_or(Stop::Requested));
     }
     run.role.notify_home_call();
-    let mut ended = done.ended.lock().unwrap();
     let exec = unsafe { &*current(execs) };
     let held = exec.held.load(Ordering::Relaxed);
     // The caller can lend R and scheduler borrows to this synchronous loan.
     // Returning C here would require R -> C on return, while another selected
     // worker can hold C waiting for R. Keep the existing permit, as for the
     // dedicated commit loan; home serves Call without acquiring either C or R.
-    while ended.is_none() {
-        ended = done.bell.wait(ended).unwrap();
-    }
-    let claimed = ended.unwrap();
-    drop(ended);
+    done.bell.wait();
+    let claimed = done.ended.load(Ordering::Relaxed) == 1;
     execs.calls.retire(id);
     if !claimed {
         return Err(run.control.stopped().unwrap_or(Stop::Requested));
