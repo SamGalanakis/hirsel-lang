@@ -144,8 +144,8 @@ pub(super) unsafe fn adopt(
     }
 }
 
-/// A canonical growth service can consume its old block. Remove that block
-/// from the private lists before entering the service, while it is still live.
+/// Remove backing that a canonical service will consume, while it is still
+/// live. Shared detach and in-place reserve keep their registered original.
 pub(super) unsafe fn forget(native: *mut Native, pointer: *mut Header) {
     // SAFETY: idle owns this job; no mapper instruction runs concurrently.
     unsafe {
@@ -234,7 +234,7 @@ pub(super) unsafe fn flush(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
     }
 }
 
-/// End private custody before ordinary runtime code, publication or return.
+/// End private custody at a runtime escape, publication or return.
 /// Live values already have canonical headers/backing and keep their holders.
 /// Dead cache entries return physical storage without a second logical free.
 /// # Safety
@@ -311,7 +311,7 @@ pub(super) unsafe extern "C" fn allocate(
 }
 
 /// # Safety
-/// The checked caller owns the block's last credit. The leaf accepts only a
+/// The checked caller owns one of the block's credits. The leaf accepts only a
 /// pointer-free block already registered in this exact job's arena.
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
@@ -323,7 +323,10 @@ pub(super) unsafe extern "C" fn release(_native: *mut Native, _block: *mut Heade
         "lea r8, [rdi + {entries}]", "mov r10d, {slots}",
         "2:", "cmp [r8], rsi", "jne 4f",
         "cmp dword ptr [r8 + {live}], 1", "jne 5f",
-        "cmp dword ptr [rsi], 1", "jne 5f",
+        "cmp dword ptr [rsi], 1", "je 7f",
+        "cmp dword ptr [rsi], {arena_shared}", "jae 5f",
+        "cmp dword ptr [rsi], 1", "jbe 5f",
+        "dec dword ptr [rsi]", "mov eax, 1", "ret", "7:",
         "mov dword ptr [r8 + {live}], 0",
         "cmp qword ptr [rdi + {traced}], 0", "jne 6f", "mov eax, 1", "ret", "6:",
         "imul r9, r9, {event_bytes}", "lea r9, [rdi + r9 + {journal}]",
@@ -332,6 +335,7 @@ pub(super) unsafe extern "C" fn release(_native: *mut Native, _block: *mut Heade
         "mov eax, 1", "ret",
         "4:", "add r8, {entry_bytes}", "dec r10d", "jne 2b",
         "5:", "ret",
+        arena_shared = const crate::count::COUNT_ARENA_SHARED,
         traced = const std::mem::offset_of!(Native, arena) + std::mem::offset_of!(Arena, traced),
         enabled = const std::mem::offset_of!(Native, arena) + std::mem::offset_of!(Arena, enabled),
         count = const std::mem::offset_of!(Native, arena) + std::mem::offset_of!(Arena, count),
@@ -362,6 +366,7 @@ pub(super) unsafe extern "C" fn growth(
         "cmp dword ptr [r12], 1", "jne 9f",
         "mov rdx, [r12 + 8]", "cmp [rbx + {ordinal}], rdx", "jne 9f",
         "cmp dword ptr [r12 + 4], 6", "je 6f",
+        "cmp dword ptr [r12 + 4], 7", "je 10f",
         "cmp dword ptr [r12 + 4], 1", "je 3f",
         "cmp dword ptr [r12 + 4], 5", "jne 9f",
         // Copy only a registered owner; ordinary inputs stay canonical.
@@ -393,8 +398,19 @@ pub(super) unsafe extern "C" fn growth(
         "6:", "mov rsi, [r12 + 16]", "test rsi, rsi", "je 9f",
         "mov edx, [rsi + 4]", "and edx, {index_mask}", "cmp [r12 + 32], edx", "jne 9f",
         "call {release}", "jmp 9f",
+        "10:", "mov rdx, [r12 + 16]", "test rdx, rdx", "je 9f",
+        "lea r8, [rbx + {entries}]", "mov r10d, {slots}",
+        "11:", "cmp [r8], rdx", "je 12f",
+        "add r8, {entry_bytes}", "dec r10d", "jne 11b", "jmp 9f",
+        "12:", "cmp dword ptr [r8 + {live}], 1", "jne 9f",
+        "mov eax, [r8 + {index}]", "cmp [r12 + 32], eax", "jne 8f",
+        "mov eax, [rdx]", "test eax, eax", "je 8f",
+        "mov rcx, [rbx + {ctx}]", "cmp eax, [rcx + {dup_max}]", "jae 8f",
+        "inc dword ptr [rdx]", "mov eax, 1", "jmp 9f",
         "8:", "xor eax, eax",
         "9:", "pop r14", "pop r13", "pop r12", "pop rbx", "ret",
+        ctx = const std::mem::offset_of!(Native, ctx),
+        dup_max = const crate::alloc::CTX_DUP_MAX_OFFSET,
         enabled = const std::mem::offset_of!(Native, arena) + std::mem::offset_of!(Arena, enabled),
         entries = const std::mem::offset_of!(Native, arena) + std::mem::offset_of!(Arena, entries),
         live = const std::mem::offset_of!(Entry, live),
@@ -414,6 +430,128 @@ pub(super) unsafe extern "C" fn growth(
 mod tests {
     use super::inert_layout;
     use hirsel_core_contract::handle_scan::*;
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn arena_aliases_detach_release_and_refuse_dup_without_losing_custody() {
+        use super::*;
+        use crate::tasks::ordered::ahead::{cpu_handoff::Growth, native::Certificate};
+        unsafe extern "C" fn unused(_: *mut TaskCtx, _: *mut Header, _: u64, _: u64) -> u8 {
+            crate::STATUS_OK
+        }
+        let outcome = crate::host::BodyRun::new(1, false).run(
+            |_| {},
+            |ctx| {
+                // SAFETY: this BodyRun owns its context and all initialized
+                // heap buffers until their explicit return below. The fixture
+                // models one checked ordinal without entering scheduler code.
+                unsafe {
+                    let source = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        0,
+                        32,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    let target = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        0,
+                        32,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    let bytes = (*ctx).heap_ref().capacity(source);
+                    assert_eq!(bytes, (*ctx).heap_ref().capacity(target));
+                    std::ptr::write_bytes(crate::alloc::payload(source), 7, bytes as usize);
+                    let mut live = 1;
+                    let mut native = Native::new(
+                        ctx,
+                        std::ptr::null_mut(),
+                        0,
+                        Certificate {
+                            entry: unused,
+                            stack_bytes: 256,
+                            host: std::ptr::null(),
+                            resume: None,
+                            cpu: false,
+                            preclaimed: false,
+                            live: &raw mut live,
+                            mask: 1,
+                            source: std::ptr::null_mut(),
+                        },
+                    );
+                    native.cpu = true;
+                    native.cpu_phase = 2;
+                    native.arena.enabled = 1;
+                    native.arena.ordinal = 9;
+                    for (i, pointer) in [source, target].into_iter().enumerate() {
+                        native.arena.entries[i] = Entry {
+                            pointer,
+                            extent: bytes,
+                            capacity: bytes,
+                            align: 8,
+                            charge: 0,
+                            index: 0,
+                            live: u32::from(i == 0),
+                        };
+                    }
+                    let dup_bound = (*ctx).view.compiled.dup_max;
+                    (*ctx).view.compiled.dup_max = 8;
+                    let mut request = Growth {
+                        version: 1,
+                        kind: 7,
+                        ordinal: 9,
+                        block: source,
+                        region: std::ptr::null_mut(),
+                        index: 0,
+                        flags: 0,
+                        extent: 0,
+                        align: 0,
+                        keep: 0,
+                        element_size: 0,
+                        element_align: 0,
+                        capacity: 0,
+                    };
+                    assert_eq!(growth(&raw mut *native, &raw mut request), 1);
+                    assert_eq!((*source).count, 2);
+                    request.kind = 5;
+                    assert_eq!(growth(&raw mut *native, &raw mut request), 1);
+                    assert_eq!(request.block, target);
+                    assert_eq!((*target).count, 1);
+                    crate::alloc::payload(target).write(99);
+                    assert_eq!(crate::alloc::payload(source).read(), 7);
+                    assert_eq!(release(&raw mut *native, source), 1);
+                    assert_eq!((*source).count, 1);
+                    assert_eq!(native.arena.entries[0].live, 1);
+                    assert_eq!(release(&raw mut *native, target), 1);
+                    assert_eq!(native.arena.entries[1].live, 0);
+                    request.kind = 7;
+                    request.block = source;
+                    (*source).count = 8;
+                    assert_eq!(growth(&raw mut *native, &raw mut request), 0);
+                    assert_eq!((*source).count, 8);
+                    assert_eq!(native.arena.entries[0].live, 1);
+                    (*source).count = 1;
+                    (*ctx).view.compiled.dup_max = 0;
+                    assert_eq!(growth(&raw mut *native, &raw mut request), 0);
+                    assert_eq!((*source).count, 1);
+                    (*ctx).view.compiled.dup_max = 8;
+                    request.ordinal += 1;
+                    assert_eq!(growth(&raw mut *native, &raw mut request), 0);
+                    assert_eq!((*source).count, 1);
+                    assert_eq!(native.arena.enabled, 1);
+                    (*ctx).view.compiled.dup_max = dup_bound;
+                    native.arena = Arena::new();
+                    (*ctx).heap().free(source);
+                    (*ctx).heap().free(target);
+                }
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    }
 
     #[test]
     fn arena_layout_ignores_observations_and_rejects_holder_or_unknown_scans() {

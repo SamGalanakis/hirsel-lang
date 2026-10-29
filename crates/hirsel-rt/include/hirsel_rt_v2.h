@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 100
+#define HIRSEL_RT_V2_ABI_VERSION 103
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -903,6 +903,7 @@ hirsel_rt_v2_header *hirsel_rt_v2_cpu_ahead_alloc(hirsel_rt_v2_ahead_physical *s
 #define HIRSEL_RT_V2_CPU_CHECK_UNTRACKED_SEQUENCE 4
 #define HIRSEL_RT_V2_CPU_COPY_SEQUENCE 5
 #define HIRSEL_RT_V2_CPU_RELEASE_SEQUENCE 6
+#define HIRSEL_RT_V2_CPU_DUP_SEQUENCE 7
 #define HIRSEL_RT_V2_CPU_ALLOC_REGION 2
 typedef struct hirsel_rt_v2_cpu_summary {
     uint32_t version, phase;
@@ -931,6 +932,8 @@ _Static_assert(offsetof(hirsel_rt_v2_cpu_growth, capacity) == 80, "cpu growth ca
  * CHECK_UNTRACKED_SEQUENCE validates a heap/static owner and leaves it unchanged.
  * COPY_SEQUENCE copies its borrowed block at capacity and retains children.
  * RELEASE_SEQUENCE consumes one fully-live pointer-free sequence credit.
+ * DUP_SEQUENCE adds one credit while preserving job-private arena custody.
+ * Unknown owners and finite-count saturation use canonical count handling.
  * Private job lists preserve canonical logical charges; escape transfers an
  * existing canonical block. Full private journals save before policy work.
  * Regions are ordinal-local, never shared between saved mappers. */

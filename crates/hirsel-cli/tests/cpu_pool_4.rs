@@ -190,3 +190,11 @@ fn ordered_allocating_job_arena_preserves_serial_receipts_and_exact_trace() {
 fn ordered_allocating_pressure_agrees_across_four_engines_and_cross_replay() {
     cpu_fixture_allocating_pressure_four_engine_agreement(4);
 }
+
+#[test]
+fn ordered_allocating_job_local_aliases_detach_independently_and_escape() {
+    cpu_fixture_allocating_four_engine_mapper(
+        4,
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut source: List[u64] = []; list.reserve(mut source, 128u64); list.push(mut source, job); list.push(mut source, job + 7u64); for i in 0u64..130u64 { let alias = copy source; let mut left = copy alias; let mut right = copy alias; left[0] = job + i; right[1] = job + 7u64 + i; failure.check(source[0] == job && alias[1] == job + 7u64 && left[0] == job + i && right[1] == job + 7u64 + i, Bounds()) }; take source }",
+    );
+}

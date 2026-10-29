@@ -185,7 +185,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// Retain the selected inert buffer without a count mutation or runtime
     /// allocator on the private stack. Its old fuel position is journaled on idle.
     pub(super) fn host_instruction(&mut self, inst: &Inst) -> Emitted<bool> {
-        if self.cpu_release()? {
+        if self.cpu_ownership()? {
             return Ok(true);
         }
         let Some(state) = self.ahead_state else {
@@ -667,7 +667,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 }
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
-    fn cpu_release(&mut self) -> Emitted<bool> {
+    fn cpu_ownership(&mut self) -> Emitted<bool> {
         if self.ownership.is_some() || self.inputs.fuel {
             return Ok(false);
         }
@@ -675,11 +675,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return Ok(false);
         };
         let index = self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1;
-        let Some((value, payload)) = self
-            .inputs
-            .ahead
-            .and_then(|plan| plan.cpu_release(self.unit, index, self.inputs.layouts))
-        else {
+        let Some((value, payload, kind)) = self.inputs.ahead.and_then(|plan| {
+            plan.cpu_release(self.unit, index, self.inputs.layouts)
+                .map(|(value, payload)| (value, payload, 6))
+                .or_else(|| {
+                    plan.cpu_dup(self.unit, index, self.inputs.layouts)
+                        .map(|(value, payload)| (value, payload, 7))
+                })
+        }) else {
             return Ok(false);
         };
         let offset = self
@@ -688,8 +691,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             .and_then(|p| p.cpu_ordinal(self.unit.header.instance, self.inputs.layouts))
             .ok_or_else(|| CodegenError::Invalid {
                 definition: self.definition().clone(),
-                what: "CPU release without a job ordinal".into(),
+                what: "CPU ownership operation without a job ordinal".into(),
             })?;
+        if kind == 7 {
+            self.invalidate_uniqueness();
+        }
         self.flush_lengths(true)?;
         let environment = self.builder.load(
             self.module.ptr_type(),
@@ -708,7 +714,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let descriptor = self.descriptor(payload)?;
         for (offset, value, align) in [
             (0, self.module.const_int(i32t, 1), 4),
-            (4, self.module.const_int(i32t, 6), 4),
+            (4, self.module.const_int(i32t, kind), 4),
             (8, ordinal, 8),
             (16, pointer, 8),
             (24, self.module.const_zero(self.module.ptr_type()), 8),

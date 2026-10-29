@@ -175,7 +175,7 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
         unsafe { finish(native, std::ptr::null_mut(), NOT_CERTIFIED) };
         return Ok(true);
     }
-    if unsafe { (*pointer).kind == RELEASE_SEQUENCE } {
+    if unsafe { matches!((*pointer).kind, RELEASE_SEQUENCE | DUP_SEQUENCE) } {
         let block = unsafe { (*pointer).block };
         let task = super::super::super::engine::current(ctx);
         let owned = super::super::super::engine::with_driver(ctx, |driver| {
@@ -193,6 +193,16 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
                     && (*(*ctx).descriptor(descriptor)).finalizer.is_none()
                     && (*(*ctx).descriptor(descriptor)).step_count == 0
             };
+        if valid && unsafe { (*pointer).kind == DUP_SEQUENCE } {
+            // SAFETY: the checked mapper owns this initialized pointer-free
+            // sequence. Idle has flushed its journal. Ordinary saturation and
+            // diagnostic handling do not publish or transfer any other owner.
+            unsafe {
+                crate::count::hirsel_rt_v2_dup(ctx, block);
+                finish(native, block, ACCEPTED);
+            }
+            return Ok(true);
+        }
         let released = valid
             && unsafe {
                 // The checked descriptor has neither child credits nor a user
@@ -208,6 +218,7 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
                     } else {
                         crate::budget::small_charge(capacity)
                     };
+                    super::super::cpu_arena::forget(native, block);
                     (*ctx).heap().free(block);
                     super::super::super::engine::memory_freed(ctx, charge);
                     true
@@ -511,6 +522,11 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
             return Ok(true);
         }
         unsafe {
+            // Only a replaced unique block is consumed. Shared detach and
+            // in-place reserve keep the arena's original registered owner.
+            if !plan.detach {
+                super::super::cpu_arena::forget(native, plan.old);
+            }
             (*native)
                 .allocation
                 .begin((*plan.old).index(), extent, align.max(8));

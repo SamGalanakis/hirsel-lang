@@ -13,7 +13,7 @@ use std::sync::{
 };
 pub(crate) mod results;
 
-pub const ABI_VERSION: u32 = 102;
+pub const ABI_VERSION: u32 = 104;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 

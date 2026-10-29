@@ -1003,6 +1003,33 @@ impl AheadPlan {
         else {
             return None;
         };
+        self.cpu_sequence_owner(unit, instruction, value, layout, table)
+    }
+    /// Dup can keep the same private custody as release. Existing mapper
+    /// graph closure excludes sends and escaping captures; publication ends it.
+    pub fn cpu_dup(
+        &self,
+        unit: &LirUnit<Ready>,
+        instruction: usize,
+        table: &LayoutTable,
+    ) -> Option<(ValueId, LayoutId)> {
+        let Inst::Dup { value } = *unit.instructions.get(instruction)? else {
+            return None;
+        };
+        let ty = unit.types.get(unit.values.get(value.index())?.ty.index())?;
+        let LayoutKind::Block { payload } = table.layout(ty.layout)?.kind else {
+            return None;
+        };
+        self.cpu_sequence_owner(unit, instruction, value, payload, table)
+    }
+    fn cpu_sequence_owner(
+        &self,
+        unit: &LirUnit<Ready>,
+        instruction: usize,
+        value: ValueId,
+        layout: LayoutId,
+        table: &LayoutTable,
+    ) -> Option<(ValueId, LayoutId)> {
         let permitted = self
             .roots
             .values()
@@ -1021,7 +1048,7 @@ impl AheadPlan {
         {
             return None;
         }
-        // Release names the payload layout, as checked by Ready validation.
+        // Ready validation binds each owner to this sequence payload.
         let record = table.layout(layout)?;
         let LayoutKind::Sequence { element } = record.kind else {
             return None;

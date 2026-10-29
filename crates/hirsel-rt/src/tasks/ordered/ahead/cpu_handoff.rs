@@ -22,6 +22,8 @@ pub const CHECK_UNTRACKED_SEQUENCE: u32 = 4;
 pub const COPY_SEQUENCE: u32 = 5;
 /// Release of a checked pointer-free sequence owned by this job.
 pub const RELEASE_SEQUENCE: u32 = 6;
+/// Dup of a checked pointer-free sequence, retaining job-local arena custody.
+pub const DUP_SEQUENCE: u32 = 7;
 pub const STACK_BYTES: u64 = 96;
 
 /// The value and retained-block table remain owned by the saved mapper until

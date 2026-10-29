@@ -51,7 +51,7 @@ pub(crate) struct Native {
     operation_site: u64,
     status: u8,
     pub pending_refill: bool,
-    ctx: *mut TaskCtx,
+    pub(super) ctx: *mut TaskCtx,
     live: *mut u64,
     original_mask: u64,
     pub(super) source: *mut Header,
@@ -501,14 +501,8 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                     }
                 }
             };
-            if arena_ready {
-                if (*native).physical.reason & (4 | 16) != 0 {
-                    super::cpu_arena::canonical(ctx, native);
-                } else if !(*native).growth.is_null()
-                    && (*(*native).growth).kind != super::cpu_handoff::COPY_SEQUENCE
-                {
-                    super::cpu_arena::forget(native, (*(*native).growth).block);
-                }
+            if arena_ready && (*native).physical.reason & (4 | 16) != 0 {
+                super::cpu_arena::canonical(ctx, native);
             }
             super::host_return::flush_logical(ctx, native);
             let mut pause = !arena_ready || (*run).control.stopped().is_some();

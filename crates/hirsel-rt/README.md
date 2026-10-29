@@ -1222,6 +1222,16 @@ The interpreter records its own value-free CPU stop receipt after its completed
 prefix. Fuel counts and cuts are specific to the engine and compilation, so a
 native CPU tape stopped on fuel is refused by the interpreter.
 
+Certified allocating mappers retain pointer-free sequence backing in an
+ordinal-owned arena. A Dup of a registered owner keeps that custody and uses
+the ordinary finite-count bound. Shared releases consume one credit; the last
+release leaves reusable backing. Copy-on-write detachment copies into another
+arena slot. Publication and existing runtime escape barriers end custody,
+transferring live canonical headers so escaped values survive arena release.
+Unknown owners, saturation and diagnostic count operations use canonical
+handling. Runtime ABI 103 adds CPU Growth kind 7 for Dup; the ownership trace
+extension uses ABI 104.
+
 Stdin and stderr are independent Io projections. RealIo pins explicitly supplied
 Read/Write providers, retries interrupted reads, captures accepted stderr prefixes
 and records every typed stdin completion. SimIo replays those completions without

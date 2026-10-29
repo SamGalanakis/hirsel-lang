@@ -393,7 +393,7 @@ impl FnEmitter<'_, '_, '_> {
         Ok(())
     }
     pub(crate) fn host_instruction(&mut self, inst: &hirsel_lir::ir::Inst) -> Emitted<bool> {
-        if self.cpu_release()? {
+        if self.cpu_ownership()? {
             return Ok(true);
         }
         use hirsel_lir::{ir::Inst, runtime_abi::RuntimeEntry};
@@ -782,19 +782,28 @@ impl FnEmitter<'_, '_, '_> {
 }
 
 impl FnEmitter<'_, '_, '_> {
-    fn cpu_release(&mut self) -> Emitted<bool> {
+    fn cpu_ownership(&mut self) -> Emitted<bool> {
         if self.ownership.is_some() || self.em.inputs.unit().fuel {
             return Ok(false);
         }
         let Some(state) = self.ahead_state else {
             return Ok(false);
         };
-        let Some((value, payload)) = self.em.inputs.unit().ahead.and_then(|plan| {
+        let Some((value, payload, kind)) = self.em.inputs.unit().ahead.and_then(|plan| {
             plan.cpu_release(
                 self.unit,
                 self.instruction_index,
                 self.em.inputs.unit().layouts,
             )
+            .map(|(value, payload)| (value, payload, 6))
+            .or_else(|| {
+                plan.cpu_dup(
+                    self.unit,
+                    self.instruction_index,
+                    self.em.inputs.unit().layouts,
+                )
+                .map(|(value, payload)| (value, payload, 7))
+            })
         }) else {
             return Ok(false);
         };
@@ -803,7 +812,7 @@ impl FnEmitter<'_, '_, '_> {
                 p.cpu_ordinal(self.unit.header.instance, self.em.inputs.unit().layouts)
             })
         else {
-            return self.invalid("CPU release without a job ordinal");
+            return self.invalid("CPU ownership operation without a job ordinal");
         };
         let environment = self.load_ty(
             types::I64,
@@ -813,7 +822,7 @@ impl FnEmitter<'_, '_, '_> {
         let ordinal = self.load_ty(types::I64, environment, offset);
         let (record, _) = self.stack_bytes(88, 8);
         let version = self.b.ins().iconst(types::I32, 1);
-        let kind = self.b.ins().iconst(types::I32, 6);
+        let kind = self.b.ins().iconst(types::I32, kind);
         let zero32 = self.b.ins().iconst(types::I32, 0);
         let zero = self.u64c(0);
         let pointer = self.get1(value)?;
