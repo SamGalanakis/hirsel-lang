@@ -83,13 +83,13 @@ fn source_owned_and_resource_selections_keep_distinct_products_in_the_same_sessi
         let resource_addresses = selections[0]
             .units()
             .iter()
-            .map(|product| product.address)
+            .map(|product| product.address.0)
             .collect::<BTreeSet<_>>();
         assert!(
             selections[1]
                 .units()
                 .iter()
-                .all(|product| !resource_addresses.contains(&product.address))
+                .all(|product| !resource_addresses.contains(&product.address.0))
         );
         for (owner, other) in [(0, 1), (1, 0)] {
             for product in selections[other].units() {
