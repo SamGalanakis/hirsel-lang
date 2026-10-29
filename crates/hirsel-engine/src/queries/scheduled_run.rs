@@ -1126,18 +1126,34 @@ impl Task {
             } else {
                 self.program_from(queries.native_roots.clone())?
             };
-            let bindings = semantic_program.definitions.iter().filter_map(|path| {
-                let input = queries.inputs.get(path)?;
-                input.source.then(|| (path.clone(), (input.implementation, input.signature.fingerprint)))
-            }).collect();
+            let bindings = semantic_program
+                .definitions
+                .iter()
+                .filter_map(|path| {
+                    let input = queries.inputs.get(path)?;
+                    input.source.then(|| {
+                        (
+                            path.clone(),
+                            (input.implementation, input.signature.fingerprint),
+                        )
+                    })
+                })
+                .collect();
             let shared = Arc::new(crate::NativeSemanticProgram::new(
-                semantic_program, escapes, queries.foreign_threads.clone(), snapshot.clone(),
-                bindings, queries.foreign_links.clone(), unreplayable,
+                semantic_program,
+                escapes,
+                queries.foreign_threads.clone(),
+                snapshot.clone(),
+                bindings,
+                queries.foreign_links.clone(),
+                unreplayable,
             ));
             if let Some(cache) = batch_semantic {
                 *cache.borrow_mut() = Some(shared.clone());
                 Arc::new(shared.select_definitions(program.definitions, unreplayable))
-            } else { shared }
+            } else {
+                shared
+            }
         };
         let mut hash_bytes = crate::NativeMetadataWeight::default();
         let definition_hashes = if queries.export_hashes {

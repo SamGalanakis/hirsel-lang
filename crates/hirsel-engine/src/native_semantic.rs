@@ -24,12 +24,15 @@ impl NativeSemanticProgram {
         &self,
         definition: Option<DefId>,
     ) -> Option<Arc<hirsel_run_schema::ProgramNode>> {
-        if definition.is_some_and(|id| !self.semantic_contains(id.path())) { return None; }
+        if definition.is_some_and(|id| !self.semantic_contains(id.path())) {
+            return None;
+        }
         let identity = definition.map_or_else(
             || "$hirsel/runtime@1".to_owned(),
             |definition| definition.path().to_string(),
         );
-        self.shared.program
+        self.shared
+            .program
             .nodes
             .binary_search_by(|node| node.identity.cmp(&identity))
             .ok()
@@ -43,9 +46,13 @@ impl NativeSemanticProgram {
         weight.add(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>());
         if let Some(selected) = &self.selected {
             weight.tree::<DefPath, ()>(selected.len());
-            for path in selected { weight.path(path); }
+            for path in selected {
+                weight.path(path);
+            }
         }
-        if !nodes.insert(Arc::as_ptr(&self.shared) as usize) { return; }
+        if !nodes.insert(Arc::as_ptr(&self.shared) as usize) {
+            return;
+        }
         weight.arc(&self.shared);
         weight.vec(&self.shared.program.nodes, |weight, node| {
             if !nodes.insert(Arc::as_ptr(node) as usize) {
@@ -80,7 +87,9 @@ impl NativeSemanticProgram {
         });
     }
     pub(crate) fn definitions(&self) -> &std::collections::BTreeSet<DefPath> {
-        self.selected.as_ref().unwrap_or(&self.shared.program.definitions)
+        self.selected
+            .as_ref()
+            .unwrap_or(&self.shared.program.definitions)
     }
     pub(crate) fn select_definitions(
         &self,
@@ -88,7 +97,11 @@ impl NativeSemanticProgram {
         foreign_unreplayable: bool,
     ) -> Self {
         debug_assert!(definitions.is_subset(&self.shared.program.definitions));
-        Self { shared: self.shared.clone(), selected: Some(definitions), foreign_unreplayable }
+        Self {
+            shared: self.shared.clone(),
+            selected: Some(definitions),
+            foreign_unreplayable,
+        }
     }
 
     pub(crate) fn new(
@@ -104,7 +117,14 @@ impl NativeSemanticProgram {
             .nodes
             .sort_by(|left, right| left.identity.cmp(&right.identity));
         Self {
-            shared: Arc::new(Shared { program, escapes, foreign_threads, signatures, sources, foreign_links }),
+            shared: Arc::new(Shared {
+                program,
+                escapes,
+                foreign_threads,
+                signatures,
+                sources,
+                foreign_links,
+            }),
             selected: None,
             foreign_unreplayable,
         }
@@ -115,7 +135,11 @@ impl NativeSemanticProgram {
     ) -> Result<hirsel_run_schema::ProgramRevision, QueryError> {
         if !self.semantic_contains(entry) {
             return Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "semantic program revision".into(), message: format!("entry is outside the selected closure: {entry}"),
+                operation: "semantic program revision".into(),
+                message: hirsel_run_schema::RevisionError::Missing {
+                    identity: entry.to_string(),
+                }
+                .to_string(),
             }));
         }
         self.shared.program.revision(entry)
@@ -143,21 +167,26 @@ impl NativeSemanticProgram {
     /// closure. A native launch constructor can check settled Lower bindings
     /// without reopening a source body or querying the semantic controller.
     pub fn source_bindings(&self) -> impl Iterator<Item = (&DefPath, ContentHash, ContentHash)> {
-        self.shared.sources
+        self.shared
+            .sources
             .iter()
             .filter(|(path, _)| self.semantic_contains(path))
             .map(|(path, (implementation, signature))| (path, *implementation, *signature))
     }
     pub fn unsafe_reach(&self, entry: &DefPath) -> Option<UnsafeReach> {
-        self.semantic_contains(entry).then(|| self.shared.program.reach(entry, &self.shared.escapes)).flatten()
+        self.semantic_contains(entry)
+            .then_some(())
+            .and_then(|()| self.shared.program.reach(entry, &self.shared.escapes))
     }
     pub fn home_reach(&self, root: &DefPath) -> Option<UnsafeReach> {
-        let home = self.shared
+        let home = self
+            .shared
             .escapes
             .iter()
             .filter(|(path, escape)| {
                 **escape == Escape::Extern
-                    && self.shared
+                    && self
+                        .shared
                         .foreign_threads
                         .get(&path.0.package)
                         .copied()
@@ -166,7 +195,9 @@ impl NativeSemanticProgram {
             })
             .map(|(path, escape)| (path.clone(), *escape))
             .collect();
-        self.semantic_contains(root).then(|| self.shared.program.reach(root, &home)).flatten()
+        self.semantic_contains(root)
+            .then_some(())
+            .and_then(|()| self.shared.program.reach(root, &home))
     }
 }
 impl QueryEngine {
