@@ -630,22 +630,30 @@ impl<P, R> Frontier<P, R> {
 
     /// A newly selected head absorbs its existing log before running any new
     /// operation. An early receipt is taken over, never committed a second time.
+    pub(crate) fn absorb_status(&self) -> Option<Progress> {
+        if self.stopped {
+            Some(Progress::Stopped)
+        } else if self.polling.is_some() {
+            Some(Progress::Poll)
+        } else if let Some(task) = self.head {
+            self.tasks[&task]
+                .log
+                .is_empty()
+                .then_some(Progress::NeedSegment(task))
+        } else {
+            Some(Progress::Idle)
+        }
+    }
+
     pub fn absorb<B: Backend<P, Result = R>>(
         &mut self,
         backend: &mut B,
     ) -> Result<Progress, BudgetKind> {
-        if self.stopped {
-            return Ok(Progress::Stopped);
+        if let Some(progress) = self.absorb_status() {
+            return Ok(progress);
         }
-        if self.polling.is_some() {
-            return Ok(Progress::Poll);
-        }
-        let Some(task) = self.head else {
-            return Ok(Progress::Idle);
-        };
-        let Some(entry) = self.tasks.get_mut(&task).unwrap().log.pop_front() else {
-            return Ok(Progress::NeedSegment(task));
-        };
+        let task = self.head.unwrap();
+        let entry = self.tasks.get_mut(&task).unwrap().log.pop_front().unwrap();
         if entry.committed.is_none() && !backend.can_retire(task, &entry.operation) {
             self.tasks.get_mut(&task).unwrap().log.push_front(entry);
             return Ok(Progress::NeedSave(task));

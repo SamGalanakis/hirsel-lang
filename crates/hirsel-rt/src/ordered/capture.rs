@@ -28,10 +28,10 @@ pub struct Handle {
 
 /// Static type edges follow every variant, not only the current value's.
 /// Missing/opaque metadata has no definition, so Carries cannot certify it.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Types {
-    pub definitions: std::collections::BTreeMap<u32, BTreeSet<u32>>,
-    pub families: std::collections::BTreeMap<u64, BTreeSet<u32>>,
+    pub definitions: std::sync::Arc<std::collections::BTreeMap<u32, BTreeSet<u32>>>,
+    pub families: std::sync::Arc<std::collections::BTreeMap<u64, BTreeSet<u32>>>,
 }
 
 /// Read the admitted program's immutable type graph, once before dispatch.
@@ -43,7 +43,8 @@ pub unsafe fn types(ctx: *mut TaskCtx) -> Types {
 }
 
 unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> Types {
-    let mut out = Types::default();
+    let mut definitions = std::collections::BTreeMap::new();
+    let mut families = std::collections::BTreeMap::<_, BTreeSet<_>>::new();
     // SAFETY: caller contract, immutable registry lives for the run.
     unsafe {
         for id in 0..count {
@@ -52,7 +53,7 @@ unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> T
                 continue;
             }
             if layout.scan_words == 0 {
-                out.definitions.insert(id, BTreeSet::new());
+                definitions.insert(id, BTreeSet::new());
                 continue;
             }
             if layout.scan.is_null() || layout.scan_words > (WORK_MAX * WORDS) as u64 {
@@ -71,7 +72,7 @@ unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> T
                             continue;
                         }
                         let ty = op[3] as u32;
-                        out.families.entry(op[2]).or_default().insert(ty);
+                        families.entry(op[2]).or_default().insert(ty);
                         edges.insert(ty);
                         if op[4] != 0 {
                             edges.insert(op[4] as u32);
@@ -92,11 +93,14 @@ unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> T
                 }
             }
             if known {
-                out.definitions.insert(id, edges);
+                definitions.insert(id, edges);
             }
         }
     }
-    out
+    Types {
+        definitions: definitions.into(),
+        families: families.into(),
+    }
 }
 
 const WORK_MAX: usize = 65_536;

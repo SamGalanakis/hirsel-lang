@@ -128,6 +128,7 @@ pub struct Program {
     /// Each Entry's code word and its definition's full path.
     pub(crate) entries: Vec<(usize, String)>,
     pub(crate) value_codes: std::sync::Arc<ValueCodes>,
+    pub(crate) ordered_image: std::sync::Arc<crate::tasks::ordered::image::Image>,
     pub(crate) callees: Option<CalleeMetadata>,
 }
 
@@ -205,6 +206,7 @@ impl Program {
             config: d.config,
             entries,
             value_codes: std::sync::Arc::new(value_codes),
+            ordered_image: Default::default(),
             callees,
         })
     }
@@ -231,6 +233,7 @@ impl Program {
             config,
             entries: Vec::new(),
             value_codes: Default::default(),
+            ordered_image: Default::default(),
             callees: None,
         }
     }

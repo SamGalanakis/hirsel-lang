@@ -2714,6 +2714,7 @@ pub(crate) unsafe fn execute(
     unsafe { &mut *ctx }.run().free_root_env = entry.roots() & crate::standalone::ROOT_ENV != 0;
     unsafe { &mut *ctx }.run().free_return = (program.return_kind, program.success_offset);
     unsafe { &mut *ctx }.run().value_codes = program.value_codes.clone();
+    unsafe { &mut *ctx }.run().ordered_image = program.ordered_image.clone();
     // F0's free-mode test channel, when the environment sets it, replaces the schedule.
     crate::free::install(unsafe { &mut *ctx }, &launch_config.run_identity)?;
     if cpu_fixture.is_some() && unsafe { (*ctx).run_ref().free_mode } {

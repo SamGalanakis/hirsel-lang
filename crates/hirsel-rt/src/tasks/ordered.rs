@@ -18,6 +18,7 @@ pub(crate) mod events;
 pub(crate) mod foreign;
 pub(crate) mod home;
 pub(crate) mod host;
+pub(crate) mod image;
 pub(crate) mod inop;
 pub(crate) mod lifecycle;
 #[cfg(test)]

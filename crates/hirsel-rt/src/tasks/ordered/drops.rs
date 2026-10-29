@@ -12,12 +12,12 @@ use crate::ordered::{Next, Progress};
 
 /// Membership in the linked descriptor registry. Layout IDs are dense; one
 /// bit per ID avoids allocating tree nodes and searching them during closure.
-#[derive(Default)]
-pub(super) struct PlainLayouts(Vec<u64>);
+#[derive(Clone, Default)]
+pub(super) struct PlainLayouts(std::sync::Arc<Vec<u64>>);
 
 impl PlainLayouts {
     fn new(count: u32) -> Self {
-        Self(vec![0; (count as usize).div_ceil(64)])
+        Self(std::sync::Arc::new(vec![0; (count as usize).div_ceil(64)]))
     }
 
     pub(super) fn contains(&self, id: &u32) -> bool {
@@ -27,11 +27,11 @@ impl PlainLayouts {
     }
 
     fn insert(&mut self, id: u32) {
-        self.0[id as usize / 64] |= 1 << (id % 64);
+        std::sync::Arc::make_mut(&mut self.0)[id as usize / 64] |= 1 << (id % 64);
     }
 
     fn remove(&mut self, id: u32) {
-        self.0[id as usize / 64] &= !(1 << (id % 64));
+        std::sync::Arc::make_mut(&mut self.0)[id as usize / 64] &= !(1 << (id % 64));
     }
 }
 
@@ -77,7 +77,7 @@ pub(super) unsafe fn plain_layouts(
     }
     loop {
         let mut changed = false;
-        for (&id, edges) in &types.definitions {
+        for (&id, edges) in types.definitions.iter() {
             if plain.contains(&id) && edges.iter().any(|edge| !plain.contains(edge)) {
                 plain.remove(id);
                 changed = true;

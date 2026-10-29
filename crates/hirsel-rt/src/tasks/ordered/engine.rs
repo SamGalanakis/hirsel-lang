@@ -101,9 +101,8 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
         )
     };
     let mut objects = Registry::default();
-    let types = unsafe { crate::ordered::capture::types(ctx) };
-    let plain_layouts = unsafe { super::drops::plain_layouts(ctx, &types) };
-    objects.install_types(types);
+    let image = unsafe { (*ctx).run_ref().ordered_image.get(ctx) };
+    objects.install_types(image.types.clone());
     let root = current(ctx);
     let mut driver = Driver::new(
         root,
@@ -115,7 +114,7 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
         },
         objects,
     );
-    driver.plain_layouts = plain_layouts;
+    driver.plain_layouts = image.plain.clone();
     driver
         .frontier
         .as_mut()
@@ -597,8 +596,16 @@ fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
         return Ok(());
     }
     loop {
-        let progress =
-            with_frontier(ctx, |f, backend| f.absorb(backend)).map_err(Stop::BudgetExceeded)?;
+        // Empty logs have no backend work or callback. Keep the frontier in
+        // place rather than moving its tables through an empty commit bridge.
+        // Polls and selection below still run at their canonical positions.
+        let status = with_driver(ctx, |d| d.frontier.as_ref().unwrap().absorb_status());
+        let progress = match status {
+            Some(progress) => progress,
+            None => {
+                with_frontier(ctx, |f, backend| f.absorb(backend)).map_err(Stop::BudgetExceeded)?
+            }
+        };
         // A successful retry has discharged the save wait. The owned log,
         // rather than a notification alone, remains the readiness authority.
         with_driver(ctx, |d| {

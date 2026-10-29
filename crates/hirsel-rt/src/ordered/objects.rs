@@ -62,7 +62,7 @@ struct Binding {
 pub struct Registry {
     handles: BTreeMap<u64, BTreeMap<Kind, Binding>>,
     pub carries: Carries,
-    families: BTreeMap<u64, BTreeSet<u32>>,
+    families: std::sync::Arc<BTreeMap<u64, BTreeSet<u32>>>,
 }
 
 impl Registry {

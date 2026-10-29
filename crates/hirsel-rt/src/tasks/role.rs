@@ -440,6 +440,13 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx) {
         unsafe { super::free::objects::retire(ctx) };
         return;
     }
+    if role.reentered(ctx.addr()) {
+        // This task already installed current and its shield when it acquired
+        // the role. A switch or compiled-code segment releases ownership;
+        // shield changes publish themselves through shield_changed.
+        unsafe { super::free::objects::retire(ctx) };
+        return;
+    }
     // A home foreign callback can wait for a child's R while that child
     // synchronously loans runtime work to home. No scheduler or adapter
     // borrow survives entry, so serve that loan before claiming our own R.

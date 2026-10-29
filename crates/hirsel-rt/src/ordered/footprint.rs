@@ -92,11 +92,12 @@ pub struct Carries {
 }
 
 impl Carries {
-    pub(super) fn install_types(&mut self, types: BTreeMap<TypeId, BTreeSet<TypeId>>) {
+    pub(super) fn install_types(&mut self, types: Arc<BTreeMap<TypeId, BTreeSet<TypeId>>>) {
         if self.types.is_empty() {
-            self.types = Arc::new(types);
+            self.types = types;
         } else {
-            Arc::make_mut(&mut self.types).extend(types);
+            Arc::make_mut(&mut self.types)
+                .extend(types.iter().map(|(&ty, edges)| (ty, edges.clone())));
         }
     }
 

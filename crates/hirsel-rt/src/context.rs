@@ -430,6 +430,7 @@ pub(crate) struct RunShared {
     /// Immutable compiler code identities, installed before dispatch. No
     /// pointer value is ever included in canonical initialized-field output.
     pub(crate) value_codes: std::sync::Arc<crate::program::ValueCodes>,
+    pub(crate) ordered_image: std::sync::Arc<crate::tasks::ordered::image::Image>,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
     pub(crate) root_overflow: crate::roots::Overflow,
     /// Every worker's heap, until the run ends (`crate::heaps`).
@@ -1112,6 +1113,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         ordered_allowance: std::sync::atomic::AtomicU64::new(u64::MAX),
         ordered_memory: Default::default(),
         value_codes: Default::default(),
+        ordered_image: Default::default(),
         root_overflow: Default::default(),
         heaps,
         fuel: Default::default(),
