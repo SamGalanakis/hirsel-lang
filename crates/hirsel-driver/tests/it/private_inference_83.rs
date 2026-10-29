@@ -663,3 +663,45 @@ fn cross_module_declared_reads_reuse_proofs_before_private_headers_are_demanded(
         }
     });
 }
+
+#[test]
+fn standalone_generic_bootstrap_can_demand_another_private_generic_without_self_locking() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"private_bootstrap","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        std::fs::write(
+            directory.path().join("main.hir"),
+            r#"
+type Value { x: u8 }
+fn relay[T](s:TypeShape[T])->Result[Body[fn(T)->u8 uses {}],String] uses {} {
+    let _ = s
+    Ok(codegen.body("fn(v:Value)->u8 uses {} {7u8}"))
+}
+fn body[T](s:TypeShape[T])->Result[Body[fn(T)->u8 uses {}],String] uses {} {relay(s)}
+fn generated[T](v:T)->u8 uses {} = comptime body(shape(T))
+pub fn main()->u8 uses {} {generated(Value(x:7u8))}
+"#,
+        )
+        .unwrap();
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store: Arc::new(MemStore::default()),
+                jobs: hirsel_intern::jobs::Jobs::new(1),
+                hold_bytes: 0,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_program(&manifest)
+            .unwrap();
+        match program.check_for_execution() {
+            Ok(()) => {}
+            Err(ToolError::Query {
+                error: QueryError::Operational(failure),
+                ..
+            }) if failure.operation == "private generated inference"
+                || failure.operation == "private inference admission" => {}
+            Err(error) => panic!("unexpected bootstrap refusal: {error:?}"),
+        }
+    });
+}

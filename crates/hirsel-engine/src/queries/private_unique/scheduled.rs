@@ -3,7 +3,7 @@
 use super::*;
 use crate::runtime::*;
 use crate::store::{Entry as StoredEntry, EntryKey, VariantRef};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 const KIND: u32 = 0x4602_0001;
 type Proofs = Vec<(DefId, UniqueInference)>;
@@ -738,15 +738,15 @@ impl QueryEngine {
         {
             return;
         }
-        static SERIAL: Mutex<()> = Mutex::new(());
-        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         static BUDGET: OnceLock<Arc<ProcessBudget>> = OnceLock::new();
         let budget = BUDGET.get_or_init(|| ProcessBudget::new(512 << 20));
         let available = budget.limit().saturating_sub(budget.reserved());
         if let Ok(reservation) = budget.reserve(available) {
+            self.private_bootstrap_active = true;
             let _ = self.standalone_inference(reservation).inspect_err(|error| {
                 self.private_summary_failure = Some((self.graph.revision(), error.clone()));
             });
+            self.private_bootstrap_active = false;
         }
     }
     fn standalone_inference(&mut self, reservation: MemoryReservation) -> Result<(), QueryError> {
