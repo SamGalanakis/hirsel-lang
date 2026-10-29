@@ -75,12 +75,13 @@ impl Directory {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(failed(e)),
         };
-        let mut buffer = [0u8; 8192];
+        let mut buffer = [0u8; 256];
         let size = read_at(&file, &mut buffer, 0).map_err(failed)?;
         let mut bytes = buffer[..size].to_vec();
         // No new size cap: unusually long cpulists and fixture files retain
         // the old reader's complete contents and diagnostic behaviour.
         if size == buffer.len() {
+            let mut buffer = [0u8; 8192];
             loop {
                 let size = read_at(&file, &mut buffer, bytes.len() as u64).map_err(failed)?;
                 bytes.extend_from_slice(&buffer[..size]);

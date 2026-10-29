@@ -524,6 +524,29 @@ fn cgroup_controls_preserve_long_cpu_lists_stat_tails_and_utf8_errors() {
 }
 
 #[test]
+fn cgroup_stat_tails_and_utf8_refusals_survive_both_read_boundaries() {
+    let f = Fixture::new();
+    let tail = "throttled_usec 456\n";
+    let path = f.0.join("cg/parent/leaf/cpu.stat");
+    for size in [255, 256, 257, 8447, 8448, 8449] {
+        let text = " ".repeat(size - tail.len() - 1) + "\n" + tail;
+        f.put("cg/parent/leaf/cpu.stat", &text);
+        assert_eq!(f.reader().read().unwrap().throttled_usec, 456);
+        let mut malformed = text.into_bytes();
+        malformed.push(0xff);
+        fs::write(&path, malformed).unwrap();
+        let expected = fs::read_to_string(&path).unwrap_err();
+        assert_eq!(
+            f.reader().read().unwrap_err(),
+            RunRefusal::Invalid {
+                field: "host limits".into(),
+                detail: format!("{}: {expected}", path.display()),
+            }
+        );
+    }
+}
+
+#[test]
 fn cgroup_search_permissions_do_not_require_directory_listing() {
     use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new();
