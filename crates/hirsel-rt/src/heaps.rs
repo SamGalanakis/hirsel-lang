@@ -41,7 +41,7 @@ pub(crate) struct HeapRegistry {
     /// Heaps whose worker retired and that no worker took over for good.
     orphans: AtomicU32,
     template: Mutex<Template>,
-    private: Mutex<Vec<usize>>,
+    private: Mutex<Vec<u32>>,
 }
 
 // SAFETY: heaps are reached through their slots by their one collector (`Owner`), or through
@@ -108,8 +108,8 @@ impl HeapRegistry {
 
     /// An unretired CPU attempt owns every page until it is revoked.
     pub(crate) fn private_heap(&self) -> *mut Heap {
-        if let Some(heap) = self.private.lock().unwrap().pop() {
-            return heap as *mut Heap;
+        if let Some(id) = self.private.lock().unwrap().pop() {
+            return self.heap(id);
         }
         self.create_heap(self.worker_id())
     }
@@ -123,7 +123,7 @@ impl HeapRegistry {
             (*heap).regions.release_all();
             (*heap).release_all();
         }
-        self.private.lock().unwrap().push(heap.addr());
+        self.private.lock().unwrap().push(unsafe { (*heap).id });
     }
 
     fn create_heap(&self, worker: u32) -> *mut Heap {
