@@ -191,3 +191,40 @@ fn claim_and_settlement_share_the_interval_and_stop_on_unreadable_capacity() {
         1
     );
 }
+
+#[test]
+fn admitted_control_answers_before_the_first_pool_claim() {
+    if !isolated("admitted_control_answers_before_the_first_pool_claim") {
+        return;
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("control");
+    let socket = crate::host_paths::RecorderDestination::pin(&path)
+        .unwrap()
+        .bind_control(&[], &[])
+        .unwrap();
+    let control = RunControl::from_inner(Arc::new(crate::stop::Control::default()));
+    let manager = manager(control, 4);
+    let proc = scratch.path().join("proc");
+    std::fs::create_dir_all(proc.join("thread-self")).unwrap();
+    std::fs::write(proc.join("thread-self/status"), "Cpus_allowed_list:\t0-7\n").unwrap();
+    let service = Service::new(
+        LinuxLimits::from_proc(&proc).unwrap(),
+        manager,
+        None,
+        Some(socket),
+        None,
+    );
+    let mut peer = UnixStream::connect(&path).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    peer.write_all(b"{\"metrics\":true}\n").unwrap();
+    let mut reply = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(peer), &mut reply).unwrap();
+    let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(reply["width"]["requested"], 4);
+    assert_eq!(reply["width"]["effective"], 0);
+    assert_eq!(reply["width"]["pending"], 4);
+    assert_eq!(reply["worker_phase"], "starting");
+    drop(service);
+    assert!(!path.exists());
+}

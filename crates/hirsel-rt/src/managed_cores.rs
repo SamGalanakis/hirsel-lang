@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
@@ -241,13 +241,7 @@ pub(crate) struct Service {
     manager: Arc<ManagedCores>,
     started: Instant,
     failed: AtomicBool,
-    pending: Mutex<Option<PendingDiagnostics>>,
-    diagnostics: OnceLock<Option<Diagnostics>>,
-}
-struct PendingDiagnostics {
-    writer: Option<File>,
-    socket: Option<ControlSocket>,
-    metrics: Option<Arc<crate::pool::WorkerMetrics>>,
+    diagnostics: Option<Diagnostics>,
 }
 impl Service {
     pub(crate) fn new(
@@ -257,46 +251,30 @@ impl Service {
         socket: Option<ControlSocket>,
         metrics: Option<Arc<crate::pool::WorkerMetrics>>,
     ) -> Self {
+        let observed = writer.is_some() || socket.is_some();
+        let (diagnostics, failed) = if observed {
+            match Diagnostics::start(manager.clone(), writer, socket, metrics) {
+                Ok(diagnostics) => (Some(diagnostics), false),
+                Err(_) => {
+                    manager.control.stop();
+                    (None, true)
+                }
+            }
+        } else {
+            (None, false)
+        };
         Self {
             reader,
             manager,
             started: Instant::now(),
-            failed: AtomicBool::new(false),
-            pending: Mutex::new(Some(PendingDiagnostics {
-                writer,
-                socket,
-                metrics,
-            })),
-            diagnostics: OnceLock::new(),
+            failed: AtomicBool::new(failed),
+            diagnostics,
         }
     }
     pub(crate) fn observed(&self) -> bool {
-        self.pending
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|pending| pending.writer.is_some() || pending.socket.is_some())
+        self.diagnostics.is_some()
     }
     pub(crate) fn refresh(&self) -> bool {
-        self.diagnostics.get_or_init(|| {
-            let pending = self.pending.lock().unwrap().take().unwrap();
-            if pending.writer.is_none() && pending.socket.is_none() {
-                return None;
-            }
-            match Diagnostics::start(
-                self.manager.clone(),
-                pending.writer,
-                pending.socket,
-                pending.metrics,
-            ) {
-                Ok(diagnostics) => Some(diagnostics),
-                Err(_) => {
-                    self.failed.store(true, Ordering::Release);
-                    self.manager.control.stop();
-                    None
-                }
-            }
-        });
         self.check(self.started.elapsed(), || {
             self.reader.read().map_err(|e| e.to_string())
         })
@@ -337,10 +315,9 @@ impl Service {
     }
 }
 
-/// Created on first use only when a sidecar was requested. Owns Send
-/// diagnostics, never a run pointer, adapter, sink or capacity reader.
-/// Owned by admission. Its service thread owns only Send diagnostics, never a
-/// run pointer, adapter or sink. A shutdown descriptor wakes poll immediately.
+/// Admission starts explicitly requested sidecars before application readiness.
+/// The thread owns only Send diagnostics, never a run pointer, adapter, sink
+/// or capacity reader. A shutdown descriptor wakes poll immediately.
 struct Diagnostics {
     wake: UnixStream,
     thread: Option<std::thread::JoinHandle<()>>,

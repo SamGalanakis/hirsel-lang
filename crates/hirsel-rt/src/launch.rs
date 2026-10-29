@@ -2882,7 +2882,11 @@ pub(crate) unsafe fn execute(
                     admission: CapacityAdmission::NotPhysical {
                         requested: request.cores.clone(),
                         worker_phase: hirsel_run_config::managed_cores::WorkerPhase::Running,
-                        reason: CapacityExclusion::ExecutorNotObserved,
+                        reason: if placement_run.is_some_and(scripted_world) {
+                            CapacityExclusion::ScriptedWorld
+                        } else {
+                            CapacityExclusion::ExecutorNotObserved
+                        },
                     },
                     request,
                 }
