@@ -62,6 +62,9 @@ impl PrivateProducts {
             retention: OnceLock::new(),
         })
     }
+    pub(super) fn requires_proof(&self, id: DefId) -> bool {
+        self.candidates.contains_key(&id)
+    }
     fn product(&self, id: DefId) -> Option<&Result<ModuleProduct, QueryError>> {
         self.modules.get(self.candidates.get(&id)?)?.get()
     }

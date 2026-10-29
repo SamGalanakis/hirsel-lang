@@ -81,6 +81,7 @@ pub(crate) struct HeaderProducts {
 }
 impl HeaderProducts {
     pub(crate) fn capture(engine: &QueryEngine) -> Arc<Self> {
+        let private = private::PrivateProducts::capture(engine);
         let rows = engine
             .source_paths()
             .into_iter()
@@ -88,11 +89,9 @@ impl HeaderProducts {
                 let id = DefId::intern(&path);
                 let cell = OnceLock::new();
                 if engine.unmarked_signature(id).is_some()
-                    && (engine.private_summary_active
-                        || engine.private_summary_revision == Some(engine.graph.revision())
-                        || !engine
-                            .source_facts(&path)
-                            .is_some_and(|f| (f.body || f.generator) && !f.constant))
+                    && private
+                        .as_ref()
+                        .is_none_or(|private| !private.requires_proof(id))
                 {
                     let entry = engine.signatures[&id].clone();
                     let _ = cell.set(HeaderProduct {
@@ -123,7 +122,7 @@ impl HeaderProducts {
                 .as_ref()
                 .map(|headers| headers.syntax.clone())
                 .unwrap_or_else(|| Arc::new(HeaderSources::capture(engine))),
-            private: private::PrivateProducts::capture(engine),
+            private,
             declarations: engine.declarations.header_inputs(),
             catalog: engine.catalog.clone(),
             types: engine.types.clone(),
