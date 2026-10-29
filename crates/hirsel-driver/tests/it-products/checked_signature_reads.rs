@@ -22,7 +22,8 @@ fn checked_dependency_readers_preserve_the_complete_generated_signature_sequence
         let mut path = hirsel_engine::entry_path(&hirsel_engine::default_context());
         for name in ["B", "A", "B"] {
             path.0.name = name.into();
-            control.materialize_value(&path).unwrap();
+            let result = control.materialize_value(&path);
+            assert!(result.is_ok(), "{path}: {result:?}; phase={:?}", control.last_phase);
         }
         path.0.name = "chosen".into();
         let expected = control
@@ -56,7 +57,7 @@ fn checked_dependency_readers_preserve_the_complete_generated_signature_sequence
                 );
                 let output = requests
                     .execute(&manifest, CompileOperation::Precompute)
-                    .unwrap_or_else(|error| panic!("jobs={jobs} warm={warm}: {error}"));
+                    .unwrap_or_else(|error| panic!("jobs={jobs} warm={warm}: {error:?}"));
                 let CompileResult::Precomputed { sources, .. } = &output.result else {
                     panic!("expected source products");
                 };
