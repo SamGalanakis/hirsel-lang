@@ -383,7 +383,7 @@ for argument in "$@"; do
     *) filtered=true ;;
   esac
 done
-if "$discovery" && ! "$inventory"; then run_harness "$@"; exit $?; fi
+if "$discovery" && ! "$inventory" && [ -z "$shard" ] && [ -z "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then run_harness "$@"; exit $?; fi
 if [ -z "$shard" ] && ! "$inventory" && [ -z "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then
   if [ -n "$test_binary" ] && { "$filtered" || "$restricted"; }; then
     cases="$(list_cases "$@")"
@@ -395,12 +395,12 @@ if [ -z "$shard" ] && ! "$inventory" && [ -z "${HIRSEL_TEST_DEDICATED_CASE:-}" ]
   materialize_native_inputs "$@"; run_harness "$@"; exit $?
 fi
 cases="$(list_cases "$@")"
-if [ -z "$cases" ] && { "$filtered" || "$restricted"; } && ! selection_exists "$@"; then
+if [ -z "$cases" ] && { "$filtered" || "$restricted"; } && ! "$discovery" && ! selection_exists "$@"; then
   printf 'test_launcher.sh: selector [%s] matched no test bodies\n' "$*" >&2
   exit 2
 fi
 if [ -n "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then
-  if [ -z "$(list_cases --exact "$HIRSEL_TEST_DEDICATED_CASE")" ]; then
+  if ! "$discovery" && [ -z "$(list_cases --exact "$HIRSEL_TEST_DEDICATED_CASE")" ]; then
     printf 'test_launcher.sh: selector [%s] matched no test bodies\n' "$HIRSEL_TEST_DEDICATED_CASE" >&2
     exit 2
   fi

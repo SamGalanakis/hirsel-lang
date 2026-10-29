@@ -650,6 +650,15 @@ class LauncherSelection(LauncherFixture):
             self.assertEqual(set(result['cases']),
                              {name for name in CASES if 'full_gate_' in name} if shard == '1/3' else set())
 
+    def test_shard_listing_names_the_same_cases_as_shard_execution(self):
+        for shard in ('1/2', '2/2'):
+            executed, _ = self.run_cases('--include-ignored', shard=shard)
+            _, output = self.run_cases('--list', '--include-ignored', shard=shard)
+            listed = [line.removesuffix(': test') for line in output.splitlines() if line.endswith(': test')]
+            self.assertCountEqual(listed, executed['cases'])
+        _, output = self.run_cases('--list', 'missing_case', shard='1/2')
+        self.assertEqual(output, '')
+
     def test_values_and_spaces_survive_selection(self):
         args = ('--test-threads', '2', '--logfile', 'a path with spaces', '--color=never',
                 '--format', 'pretty', '--shuffle-seed', '123', '-Z', 'unstable-options',
