@@ -159,3 +159,26 @@ impl FrontLowerQueries {
         Ok(())
     }
 }
+
+impl FrontLowerQueries {
+    pub(crate) fn staged_failure(
+        &self,
+        id: QueryId,
+        reference: Reference,
+        site: Option<Span>,
+    ) -> Option<QueryError> {
+        let mut error = self.failure(reference)?;
+        if let Some(site) = site
+            && let QueryError::Diagnostics(diagnostics) = &mut error
+        {
+            let selection = self.staged.selection(id)?;
+            for diagnostic in diagnostics {
+                diagnostic.secondary.push(hirsel_diag::Label {
+                    span: site,
+                    message: format!("selected size instantiation {:?}", selection.arguments),
+                });
+            }
+        }
+        Some(error)
+    }
+}

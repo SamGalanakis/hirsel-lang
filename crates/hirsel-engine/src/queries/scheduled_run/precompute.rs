@@ -84,7 +84,6 @@ pub(super) fn create(queries: &Arc<FrontRunQueries>, query: QueryId) -> Option<B
         queries: queries.clone(),
         query,
         checked: false,
-        staged: Default::default(),
         index: 0,
         digest: ContentHash::default(),
         waiting: None,
@@ -95,7 +94,6 @@ struct Task {
     queries: Arc<FrontRunQueries>,
     query: QueryId,
     checked: bool,
-    staged: runtime_stages::RuntimeStages,
     index: usize,
     digest: ContentHash,
     waiting: Option<QueryId>,
@@ -169,14 +167,6 @@ impl Task {
                 return Poll::Ready(Err(self.queries.failure_record(QueryError::NotImplemented)));
             }
             self.checked = true;
-        }
-        match self.staged.poll(&self.queries, cx) {
-            Poll::Pending => {
-                self.waiting = self.staged.waiting;
-                return Poll::Pending;
-            }
-            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-            Poll::Ready(Ok(())) => {}
         }
         let queries = self.queries.clone();
         let Some(selection) = &queries.precompute else {

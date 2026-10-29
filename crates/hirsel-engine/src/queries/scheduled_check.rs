@@ -222,6 +222,7 @@ impl QueryFactory for Factory {
             file: 0,
             root: 0,
             selecting_instances: false,
+            staged: None,
             instances: Vec::new(),
             reads: ReadsBuilder::new(),
             front: Vec::new(),
@@ -273,6 +274,7 @@ enum Stage {
     Storage,
     Comptime,
     Rest,
+    RuntimeStaged,
     Done,
 }
 struct Task {
@@ -283,6 +285,7 @@ struct Task {
     root: usize,
     selecting_instances: bool,
     instances: Vec<DefPath>,
+    staged: Option<Vec<super::scheduled_lower::staged_runtime::Selection>>,
     reads: ReadsBuilder,
     front: Vec<(DefPath, ProductRef)>,
     lowered: Vec<(DefPath, ProductRef)>,
@@ -599,7 +602,73 @@ impl Task {
                     }
                     self.file = 0;
                     self.root = 0;
-                    self.stage = if rest { Stage::Done } else { Stage::Rest };
+                    self.stage = if rest {
+                        Stage::RuntimeStaged
+                    } else {
+                        Stage::Rest
+                    };
+                }
+                Stage::RuntimeStaged => {
+                    while self.file < self.files.len() {
+                        let file = &mut self.files[self.file];
+                        if !file.clean() {
+                            self.file += 1;
+                            self.root = 0;
+                            self.staged = None;
+                            continue;
+                        }
+                        if self.staged.is_none() {
+                            let roots = file.input.paths.iter().map(|(path, _)| path.clone());
+                            match self.queries.plan.lower.runtime_staged_queries(
+                                roots,
+                                self.queries
+                                    .weight
+                                    .retained
+                                    .min(self.queries.weight.scratch),
+                            ) {
+                                Ok(staged) => self.staged = Some(staged),
+                                Err(error) => {
+                                    file.error(error, Some(QueryKind::Lower));
+                                    continue;
+                                }
+                            }
+                        }
+                        let Some((id, site)) = self
+                            .staged
+                            .as_ref()
+                            .and_then(|rows| rows.get(self.root))
+                            .copied()
+                        else {
+                            self.file += 1;
+                            self.root = 0;
+                            self.staged = None;
+                            continue;
+                        };
+                        let selected = match cx.read(id) {
+                            Poll::Pending => return Ok(Some(vec![id])),
+                            Poll::Ready(selected) => selected,
+                        };
+                        let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
+                        let reads = self
+                            .queries
+                            .plan
+                            .lower
+                            .selected_reads(id, reference)
+                            .ok_or(reference)?;
+                        self.reads.merge(&reads);
+                        if selected.is_err() {
+                            file.error(
+                                self.queries
+                                    .plan
+                                    .lower
+                                    .staged_failure(id, reference, site)
+                                    .ok_or(reference)?,
+                                Some(QueryKind::Lower),
+                            );
+                        }
+                        self.root += 1;
+                    }
+                    self.stage = Stage::Done;
                 }
                 Stage::Done => return Ok(None),
             }

@@ -383,33 +383,60 @@ fn size_constant_instances_cache_separately_and_refresh_executed_dependencies() 
 
 #[test]
 fn a_failed_size_instantiation_retains_its_selecting_site() {
+    use hirsel_driver::requests::{CompileOperation, CompileResult, CompilerRequests};
     with_compiler_stack(|| {
         let source = include_str!("../../../../conformance/CT/CT-1-size-instantiation-bad.hir");
-        let mut engine = engine(source);
-        let file = engine.sources.add("comptime.hir", source.into()).unwrap();
-        let output = check_progress(&mut engine, file, &default_context()).unwrap();
-        let diagnostic = output
-            .diagnostics
-            .iter()
-            .find(|d| d.rule.as_str() == "CT-1")
-            .unwrap();
-        assert!(
-            engine
-                .sources
-                .slice(diagnostic.primary)
-                .unwrap()
-                .starts_with("comptime")
-        );
-        assert!(
-            diagnostic
-                .secondary
-                .iter()
-                .any(
-                    |label| engine.sources.slice(label.span) == Some("inverse(second)")
-                        && label.message.contains("[0]")
-                ),
-            "{diagnostic:?}"
-        );
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(directory.path().join("comptime.hir"), source).unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"comptime.hir","module":[]}],"dependencies":[]}"#).unwrap();
+        for jobs in [1, 2, 8] {
+            let config = CompileConfig {
+                jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                store: std::sync::Arc::new(store::MemStore::default()),
+                hold_bytes: 0,
+                ..Default::default()
+            };
+            for warm in [false, true] {
+                let mut requests = CompilerRequests::for_host(
+                    COMPILER.with_config(config.clone()),
+                    config.clone(),
+                );
+                let output = requests
+                    .execute(
+                        &manifest,
+                        CompileOperation::Check {
+                            lowering: LoweringPolicy::Comptime,
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("jobs={jobs} warm={warm}: {error}"));
+                let CompileResult::Check(checked) = &output.result else {
+                    panic!("expected checked source");
+                };
+                let diagnostic = checked
+                    .diagnostics
+                    .iter()
+                    .find(|d| d.rule.as_str() == "CT-1")
+                    .unwrap();
+                assert!(
+                    checked
+                        .sources
+                        .slice(diagnostic.primary)
+                        .unwrap()
+                        .starts_with("comptime")
+                );
+                assert!(
+                    diagnostic
+                        .secondary
+                        .iter()
+                        .any(
+                            |label| checked.sources.slice(label.span) == Some("inverse(second)")
+                                && label.message.contains("[0]")
+                        ),
+                    "{diagnostic:?}"
+                );
+            }
+        }
     });
 }
 

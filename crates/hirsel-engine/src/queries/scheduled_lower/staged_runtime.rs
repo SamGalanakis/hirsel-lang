@@ -9,7 +9,11 @@ type Frame = (DefId, NameSite, Bindings, Option<Span>);
 pub(crate) type Selection = (QueryId, Option<Span>);
 
 impl FrontLowerQueries {
-    pub(crate) fn runtime_staged_queries(&self, limit: u64) -> Result<Vec<Selection>, QueryError> {
+    pub(crate) fn runtime_staged_queries(
+        &self,
+        roots: impl IntoIterator<Item = DefPath>,
+        limit: u64,
+    ) -> Result<Vec<Selection>, QueryError> {
         if self.staged.declarations.is_empty() {
             return Ok(Vec::new());
         }
@@ -23,14 +27,17 @@ impl FrontLowerQueries {
         let mut seen = BTreeSet::new();
         let mut selected = Vec::new();
         let mut weight = crate::NativeMetadataWeight::default();
-        for path in self.inputs.keys() {
-            let signature = self.signature(path)?;
+        for path in roots {
+            if !self.inputs.contains_key(&path) {
+                continue;
+            }
+            let signature = self.signature(&path)?;
             if matches!(signature.kind, hirsel_types::SignatureKind::Const { .. }) {
                 continue;
             }
             let Some(generic) = self
                 .front
-                .with_settled_summary(path, |s| s.frames[0].generic)
+                .with_settled_summary(&path, |s| s.frames[0].generic)
             else {
                 continue;
             };
@@ -39,7 +46,7 @@ impl FrontLowerQueries {
                 if weight.bytes() > limit {
                     return Err(refused());
                 }
-                pending.push_back((DefId::intern(path), NameSite::Item, Bindings::new(), None));
+                pending.push_back((DefId::intern(&path), NameSite::Item, Bindings::new(), None));
             }
         }
         while let Some((path, scope, bindings, site)) = pending.pop_front() {

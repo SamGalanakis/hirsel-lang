@@ -4,7 +4,6 @@ mod content;
 mod graph_reader;
 mod precompute;
 mod proof_export;
-mod runtime_stages;
 mod semantic;
 mod source_products;
 pub use graph_reader::FrontSemanticGraph;
@@ -362,7 +361,6 @@ impl QueryFactory for Factory {
             query,
             root,
             checked: false,
-            staged: Default::default(),
             pending: Vec::new(),
             entries: BTreeMap::new(),
             waiting: None,
@@ -381,7 +379,6 @@ struct Task {
     query: QueryId,
     root: DefPath,
     checked: bool,
-    staged: runtime_stages::RuntimeStages,
     pending: Vec<DefId>,
     entries: BTreeMap<DefId, Arc<GraphEntry>>,
     waiting: Option<QueryId>,
@@ -483,14 +480,6 @@ impl Task {
                     self.pending.push(DefId::intern(path));
                 }
             }
-        }
-        match self.staged.poll(&self.queries, cx) {
-            Poll::Pending => {
-                self.waiting = self.staged.waiting;
-                return Poll::Pending;
-            }
-            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-            Poll::Ready(Ok(())) => {}
         }
         loop {
             while let Some(id) = self.pending.last().copied() {
