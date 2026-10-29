@@ -252,7 +252,8 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
             })
             .expect("iter.from has a closed environment thunk");
         let table = layouts.finish();
-        let recipe = LibraryRecipe::capture(&instances, library, &table).unwrap();
+        let recipe =
+            LibraryRecipe::capture(&declarations.program, &instances, library, &table).unwrap();
         let recipe_bytes = recipe.encode(&records, &source).unwrap();
         let expected_key = recipe.key().unwrap();
         let keys = hirsel_lir::LayoutKeys::new(&table);
@@ -450,7 +451,7 @@ fn library_recipes_share_a_key_across_erased_actual_modes() {
             let id =
                 hirsel_rc::library::instantiate(&mut layouts, &mut instances, request).unwrap();
             let table = layouts.finish();
-            let recipe = LibraryRecipe::capture(&instances, id, &table).unwrap();
+            let recipe = LibraryRecipe::capture(program, &instances, id, &table).unwrap();
             let key = recipe.key().unwrap();
             let bytes = recipe.encode(&records, &source).unwrap();
             let abi = hirsel_lir::LayoutKeys::new(&table)
@@ -510,7 +511,7 @@ fn library_recipe_preserves_the_declared_borrowed_result_contract() {
                 .borrowed_parameters,
             [0]
         );
-        let recipe = LibraryRecipe::capture(&instances, id, &table).unwrap();
+        let recipe = LibraryRecipe::capture(program, &instances, id, &table).unwrap();
         let records = NativeRecords::new(program.types.clone(), store);
         let bytes = recipe.encode(&records, &source).unwrap();
         let recipe = LibraryRecipe::decode(&records, &source, &bytes).unwrap();
@@ -539,5 +540,83 @@ fn library_recipe_preserves_the_declared_borrowed_result_contract() {
             discharge: None,
         };
         hirsel_lir::validate::validate_value(unit, &validation).unwrap();
+    });
+}
+
+#[test]
+fn synthesized_cursor_finalizer_recipes_share_erased_actual_modes() {
+    use hirsel_types::{GenericArgument, Primitive, Type, TypeKind, Uniqueness};
+    use native::queries::recipes::LibraryRecipe;
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone());
+        let file = engine
+            .sources
+            .add("cursor-recipes.hir", "pub fn main()->u64 {0u64}".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let inputs = crate::native_front_fixture::inputs(&mut engine, &[]);
+        let program = &inputs.declarations.program;
+        let source = inputs.provider();
+        let records = NativeRecords::new(program.types.clone(), store);
+        let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+        let open = hirsel_syntax::DefPath::core("$intrinsic.ListConsume_open");
+        let path = hirsel_rc::library::native_path("owned_cursor_drop");
+        let mut captures = Vec::new();
+        for unique in [false, true] {
+            let mut string = Type::with_kind(TypeKind::Primitive(Primitive::String));
+            if unique {
+                string.modes.uniqueness = Uniqueness::Unique;
+            }
+            let string = program.types.intern(string);
+            let request = hirsel_rc::library::Request::operation(
+                program,
+                hirsel_rc::library::body_index(&open).unwrap(),
+                &open,
+                vec![GenericArgument::Type(string)],
+            )
+            .unwrap();
+            let TypeKind::Function(function) = &program.types.row(request.callable).kind else {
+                panic!("cursor open callable");
+            };
+            let TypeKind::Named {
+                definition,
+                arguments,
+            } = program.types.row(function.result).kind.clone()
+            else {
+                panic!("cursor result nominal");
+            };
+            let actuals = Actuals {
+                binder: Some(hirsel_rc::library::binder(&path)),
+                arguments: arguments.to_vec(),
+                outer: vec![],
+            };
+            let request = hirsel_rc::library::Request::finalizer(
+                &program.types,
+                hirsel_rc::library::body_index(&path).unwrap(),
+                &path,
+                definition.path(),
+                &actuals,
+            );
+            let owners = hirsel_rc::library::owners(&program.types, &program.signatures)
+                .over(&program.owners);
+            let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &owners);
+            layouts.prepare_native_controls();
+            let mut instances =
+                hirsel_rc::instance::Instances::new(program.types.clone(), program.memo.clone());
+            let id =
+                hirsel_rc::library::instantiate(&mut layouts, &mut instances, request).unwrap();
+            let table = layouts.finish();
+            let recipe = LibraryRecipe::capture(program, &instances, id, &table).unwrap();
+            let key = recipe.key().unwrap();
+            let bytes = recipe.encode(&records, &source).unwrap();
+            let abi = hirsel_lir::LayoutKeys::new(&table)
+                .fn_abi(&table.fn_abis[instances.abis[id.index()].0 as usize]);
+            captures.push((key, abi, bytes));
+        }
+        assert_eq!(captures[0].0, captures[1].0);
+        assert_eq!(captures[0].1, captures[1].1);
+        assert_eq!(captures[0].2, captures[1].2);
     });
 }

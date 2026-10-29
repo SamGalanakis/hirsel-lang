@@ -447,12 +447,36 @@ pub struct LibraryRecipe {
     body: u32,
     actuals: Actuals,
     callable: hirsel_types::TypeId,
+    declared_callable: bool,
     shape: RecipeShape,
     environment: Option<hirsel_syntax::ContentHash>,
     finalizer: bool,
 }
+fn declared_library_callable(
+    program: &Program,
+    definition: &DefPath,
+    actuals: &Actuals,
+) -> Result<Option<hirsel_types::TypeId>, String> {
+    let Some(signature) = program.signatures.get(definition) else {
+        return Ok(None);
+    };
+    let hirsel_types::SignatureKind::Function(function) = &signature.kind else {
+        return Ok(None);
+    };
+    hirsel_rc::instance::instantiate_function(
+        &program.types,
+        &program.memo,
+        function,
+        hirsel_types::Modes::global(),
+        actuals,
+    )
+    .map(Some)
+    .map_err(|error| format!("library callable declaration: {error:?}"))
+}
+
 impl LibraryRecipe {
     pub fn capture(
+        program: &Program,
         instances: &Instances,
         id: InstanceId,
         table: &hirsel_lir::LayoutTable,
@@ -461,14 +485,29 @@ impl LibraryRecipe {
             return Err("source instance is not a library recipe".into());
         };
         let view = instances.view(id);
-        let mut sendless = NativeKeyTypes::new(&instances.types);
+        if !std::sync::Arc::ptr_eq(&program.types, &instances.types) {
+            return Err("library recipe source belongs to another type interner".into());
+        }
+        let original = instances.callables[id.index()];
+        let source_actuals = &instances.actuals[id.index()];
+        let declared_callable =
+            declared_library_callable(program, view.key.definition(), source_actuals)?
+                == Some(original);
+        let actuals = NativeKeyTypes::new(&instances.types).actuals(source_actuals)?;
+        let callable = if declared_callable {
+            declared_library_callable(program, view.key.definition(), &actuals)?
+                .ok_or("library callable declaration is unavailable")?
+        } else {
+            NativeKeyTypes::new(&instances.types).ty(original)?
+        };
         Ok(Self {
-            schema: 1,
+            schema: 2,
             definition: view.key.definition().clone(),
             encoding: view.key.encoding().to_vec(),
             body: u32::try_from(body).map_err(|_| "library recipe body limit")?,
-            actuals: sendless.actuals(&instances.actuals[id.index()])?,
-            callable: sendless.ty(instances.callables[id.index()])?,
+            actuals,
+            callable,
+            declared_callable,
             shape: view.owner.into(),
             environment: instances.environments[id.index()]
                 .map(|layout| hirsel_lir::LayoutKeys::rooted(table, layout).0),
@@ -496,7 +535,7 @@ impl LibraryRecipe {
         let recipe: Self = records
             .decode(engine, bytes)
             .ok_or("library recipe decoding failed")?;
-        if recipe.schema != 1 {
+        if recipe.schema != 2 {
             return Err("library recipe schema differs".into());
         }
         recipe.key()?;
@@ -507,6 +546,12 @@ impl LibraryRecipe {
         program: &Program,
         layouts: &mut LayoutBuilder<'_>,
     ) -> Result<(Instances, InstanceId), String> {
+        if self.declared_callable
+            && declared_library_callable(program, &self.definition, &self.actuals)?
+                != Some(self.callable)
+        {
+            return Err("library recipe callable differs from its current declaration".into());
+        }
         let body = hirsel_rc::library::BODIES
             .get(self.body as usize)
             .ok_or("library recipe body no longer registered")?;

@@ -22,7 +22,7 @@ const SOURCE_RECIPE: Domain = Domain {
 };
 const LIBRARY_RECIPE: Domain = Domain {
     kind: 0x4e00_0017,
-    schema: 1,
+    schema: 2,
 };
 const REQUEST_LAYOUTS: Domain = Domain {
     kind: 0x4e00_0018,
@@ -684,7 +684,7 @@ impl DemandInstances {
     }
     fn request(
         &self,
-        engine: &impl NativeRecordSource,
+        engine: &impl NativeSourceProvider,
         instances: &Instances,
         id: InstanceId,
         table: &hirsel_lir::LayoutTable,
@@ -693,7 +693,8 @@ impl DemandInstances {
         let key = &instances.view(id).key;
         let (recipe, layouts) = if instances.roles[id.index()].is_library() {
             let recipe =
-                LibraryRecipe::capture(instances, id, table)?.encode(&self.records, engine)?;
+                LibraryRecipe::capture(&engine.declarations().program, instances, id, table)?
+                    .encode(&self.records, engine)?;
             let layouts = LayoutClosure::select(
                 table,
                 &self.target,
