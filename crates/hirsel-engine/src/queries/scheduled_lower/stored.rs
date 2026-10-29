@@ -162,7 +162,8 @@ impl FrontLowerQueries {
                 acceptance = accepted;
                 if let Some(evidence) = evidence
                     && let Some(cache) = self.store.verifier()
-                    && let Some(output) = cache.definition_output_from_evidence(
+                    && let Some(output) = cache.publish_definition(
+                        persistent::evaluation_subject(key, &descriptor),
                         &decoded,
                         self.snapshot.types().clone(),
                         self.snapshot.source_verification_policy(),
