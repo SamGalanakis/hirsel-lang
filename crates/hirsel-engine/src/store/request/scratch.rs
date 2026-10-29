@@ -209,10 +209,7 @@ impl ResultStore for ScratchStore {
         let read = || -> Option<Bytes> {
             let mut value = vec![0; usize::try_from(reference.len).ok()?];
             read_at(&files.spool, &mut value, entry.offset).ok()?;
-            if reference.domain.reference(&value)? != reference {
-                return None;
-            }
-            Some(Bytes::from(value))
+            Bytes::from(value).checked(reference)
         };
         let value = read();
         if value.is_none() {

@@ -148,6 +148,7 @@ enum Region {
     Buffer(Box<[u8]>),
     Static(&'static [u8]),
     Checked(Box<CheckedRegion>),
+    Payload(Box<CheckedPayload>),
     Retained {
         region: Arc<Region>,
         _owner: Arc<dyn Send + Sync>,
@@ -163,6 +164,11 @@ struct CheckedRegion {
     statistics: Option<Arc<Statistics>>,
 }
 struct CheckedContainer {
+    range: Range<usize>,
+    reference: Reference,
+}
+struct CheckedPayload {
+    region: Arc<Region>,
     range: Range<usize>,
     reference: Reference,
 }
@@ -221,12 +227,14 @@ impl Region {
             Self::Buffer(bytes) => bytes,
             Self::Static(bytes) => bytes,
             Self::Checked(checked) => checked.region.bytes(),
+            Self::Payload(checked) => checked.region.bytes(),
             Self::Retained { region, .. } => region.bytes(),
         }
     }
     fn checks(&self) -> Option<&CheckedRegion> {
         match self {
             Self::Checked(checked) => Some(checked),
+            Self::Payload(checked) => checked.region.checks(),
             Self::Retained { region, .. } => region.checks(),
             _ => None,
         }
@@ -296,6 +304,23 @@ impl Bytes {
     /// container range reuses its immutable backing's integrity check. Other
     /// views, including arbitrary provider bytes, require the complete digest.
     pub fn matches_reference(&self, reference: Reference) -> bool {
+        self.has_reference(reference) || reference.domain.reference(self) == Some(reference)
+    }
+
+    fn has_reference(&self, reference: Reference) -> bool {
+        let mut region = &self.region;
+        loop {
+            match &**region {
+                Region::Payload(checked) => {
+                    if checked.range == self.range && checked.reference == reference {
+                        return true;
+                    }
+                    region = &checked.region;
+                }
+                Region::Retained { region: parent, .. } => region = parent,
+                _ => break,
+            }
+        }
         if let Some(checks) = self.region.checks() {
             let slot = &checks.records[reference.output.0.0[0] as usize % checks.records.len()];
             if let Some(checked) = slot.get()
@@ -306,7 +331,27 @@ impl Bytes {
                 return true;
             }
         }
-        reference.domain.reference(self) == Some(reference)
+        false
+    }
+
+    /// Bind a complete content check to this exact immutable payload range.
+    /// The returned view retains the full backing and every admission owner.
+    /// This records byte integrity only, never query or verifier acceptance.
+    pub fn checked(self, reference: Reference) -> Option<Self> {
+        if self.has_reference(reference) {
+            return Some(self);
+        }
+        if reference.domain.reference(&self)? != reference {
+            return None;
+        }
+        Some(Self {
+            region: Arc::new(Region::Payload(Box::new(CheckedPayload {
+                region: self.region,
+                range: self.range.clone(),
+                reference,
+            }))),
+            range: self.range,
+        })
     }
 
     /// Visit the complete physical backing retained by this view. Identities
@@ -333,6 +378,14 @@ impl Bytes {
                     visit(
                         &**checked as *const CheckedRegion as usize,
                         std::mem::size_of::<CheckedRegion>(),
+                    );
+                    region = &checked.region;
+                    continue;
+                }
+                Region::Payload(checked) => {
+                    visit(
+                        &**checked as *const CheckedPayload as usize,
+                        std::mem::size_of::<CheckedPayload>(),
                     );
                     region = &checked.region;
                     continue;

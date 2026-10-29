@@ -1312,3 +1312,54 @@ fn payload_integrity_reuse_is_bound_to_the_exact_reference_and_range() {
     let changed = Bytes::from(b"checked payloae".as_slice());
     assert!(!changed.matches_reference(reference));
 }
+
+#[test]
+fn checked_payloads_refuse_substitution_and_retain_the_full_parent_owner() {
+    let payload = b"a complete immutable payload";
+    let reference = DOMAIN.reference(payload).unwrap();
+    assert!(
+        Bytes::from(b"a complete immutable payloae".as_slice())
+            .checked(reference)
+            .is_none()
+    );
+    let mut foreign = reference;
+    foreign.domain.schema += 1;
+    assert!(Bytes::from(payload.as_slice()).checked(foreign).is_none());
+    let owner = Arc::new(());
+    let weak = Arc::downgrade(&owner);
+    let checked = Bytes::from(payload.as_slice())
+        .retain_owner(owner.clone())
+        .checked(reference)
+        .unwrap();
+    drop(owner);
+    let allocations = |bytes: &Bytes| {
+        let mut seen = std::collections::BTreeMap::new();
+        bytes.visit_retained_allocations(|id, size| {
+            seen.insert(id, size);
+        });
+        seen
+    };
+    let before = allocations(&checked);
+    let clone = checked.clone().checked(reference).unwrap();
+    assert_eq!(
+        allocations(&clone),
+        before,
+        "a repeated check retains no new owner"
+    );
+    let child = checked.range(11, 9, 1).unwrap();
+    assert!(!child.matches_reference(reference));
+    assert_eq!(
+        allocations(&child),
+        before,
+        "a child retains the complete backing"
+    );
+    let child_reference = DOMAIN.reference(&child).unwrap();
+    let child = child.checked(child_reference).unwrap();
+    drop(clone);
+    drop(checked);
+    assert!(weak.upgrade().is_some());
+    assert_eq!(&*child, b"immutable");
+    assert!(child.matches_reference(child_reference));
+    drop(child);
+    assert!(weak.upgrade().is_none());
+}
