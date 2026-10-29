@@ -911,3 +911,7 @@ including copies, deep uniqueness, captures and result paths. Contextual
 `region.with` literals select their root parameter. A taken or mutable data
 parameter cannot claim a read-only entry. Ordinary borrowed data parameters
 acquire no nonretaining promise implicitly.
+
+Entry scoped selectors are checked against the body's private summary. V also
+requires that summary to match the owner signature; a mismatch still reports
+independent source, loan and cleanup violations after structural/type checks.

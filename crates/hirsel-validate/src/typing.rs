@@ -785,8 +785,7 @@ impl<'a> Checker<'a> {
             })
             .collect();
         expected.extend(
-            signature
-                .metadata
+            self.definition
                 .inferred_unique
                 .nonretaining
                 .iter()
