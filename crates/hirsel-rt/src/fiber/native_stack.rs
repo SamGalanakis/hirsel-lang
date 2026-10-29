@@ -92,10 +92,12 @@ fn mapping(line: &[u8]) -> Option<(usize, usize)> {
                 b'A'..=b'F' => byte - b'A' + 10,
                 _ => break,
             };
-            value = value.checked_mul(16)?.checked_add(usize::from(digit))?;
+            value = (value << 4) | usize::from(digit);
             *at += 1;
         }
-        (*at != start).then_some(value)
+        (1..=size_of::<usize>() * 2)
+            .contains(&(*at - start))
+            .then_some(value)
     }
     let mut at = 0;
     let from = address(line, &mut at)?;

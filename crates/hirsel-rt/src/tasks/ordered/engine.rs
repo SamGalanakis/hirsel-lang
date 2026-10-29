@@ -307,34 +307,49 @@ fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 }
 
 fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
-    let published = with_current_driver(ctx, |task, driver| {
-        assert!(driver.head_ready(task), "summaries retire only at head");
-        driver.cpu_commit(task)?.summary()
+    let mut settled = None;
+    let (task, published) = with_current_driver(ctx, |task, driver| {
+        let published = if let Some(mut commit) = driver.cpu_commit(task) {
+            match commit.summary() {
+                Some(summary) => Some(summary),
+                None => {
+                    settled = Some(commit.settle(before, false));
+                    None
+                }
+            }
+        } else {
+            assert!(driver.head_ready(task), "head charges retire only at head");
+            settled = Some(driver.frontier.as_mut().unwrap().settled.settle(before));
+            None
+        };
+        (task, published)
     });
-    if let Some(super::cpu::RetiredSummary {
+    if let Some(result) = settled {
+        super::events::charges::partial(ctx, task, before, result);
+        return result.map_err(Stop::BudgetExceeded);
+    }
+    let super::cpu::RetiredSummary {
         charges,
         result,
         record,
         verdict,
-    }) = published
-    {
-        // A speculative mapper may have reached publication beyond the first
-        // rejected charge. Serial replay stops at that charge without a value
-        // to publish. Only a successfully retired result belongs on the tape;
-        // the run's terminal outcome records the rejected budget instead.
-        if let Some(record) = record {
-            super::cpu::record_summary(ctx, &record)?;
-        }
-        if result.is_ok() {
-            if let Some(verdict) = verdict {
-                verdict.accept();
-            }
-        } else {
-            drop(verdict);
-        }
-        super::events::charges::partial(ctx, current(ctx), &charges, result);
-        result.map_err(Stop::BudgetExceeded)?;
+    } = published.unwrap();
+    // A speculative mapper may have reached publication beyond the first
+    // rejected charge. Serial replay stops at that charge without a value
+    // to publish. Only a successfully retired result belongs on the tape;
+    // the run's terminal outcome records the rejected budget instead.
+    if let Some(record) = record {
+        super::cpu::record_summary(ctx, &record)?;
     }
+    if result.is_ok() {
+        if let Some(verdict) = verdict {
+            verdict.accept();
+        }
+    } else {
+        drop(verdict);
+    }
+    super::events::charges::partial(ctx, current(ctx), &charges, result);
+    result.map_err(Stop::BudgetExceeded)?;
     let (task, result) = with_current_driver(ctx, |task, driver| {
         assert!(
             driver.head_ready(task),

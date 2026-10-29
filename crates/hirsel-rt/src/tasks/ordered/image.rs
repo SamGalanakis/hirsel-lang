@@ -52,7 +52,7 @@ mod tests {
                     ordinal: 0,
                 },
             );
-            assert_eq!(next.types.definitions[&0], Default::default());
+            assert!(next.types.definitions[&0].is_empty());
             let plain = super::super::drops::plain_layouts(ctx, &next.types);
             for id in 0..(*ctx).heap_ref().layout_count() {
                 assert_eq!(next.plain.contains(&id), plain.contains(&id));

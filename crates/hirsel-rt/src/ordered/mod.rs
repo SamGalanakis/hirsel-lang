@@ -14,6 +14,7 @@ pub mod footprint;
 pub mod native;
 pub mod objects;
 pub(crate) mod root_ids;
+pub mod type_graph;
 
 use std::collections::{BTreeMap, VecDeque};
 

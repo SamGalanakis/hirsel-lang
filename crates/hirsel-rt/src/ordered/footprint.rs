@@ -87,22 +87,24 @@ impl Held {
 /// Task, or TaskSet. `register` also covers objects created during run-ahead.
 #[derive(Clone, Debug, Default)]
 pub struct Carries {
-    types: Arc<BTreeMap<TypeId, BTreeSet<TypeId>>>,
+    types: Arc<super::type_graph::TypeGraph>,
     objects: BTreeMap<TypeId, BTreeSet<ObjectId>>,
 }
 
 impl Carries {
-    pub(super) fn install_types(&mut self, types: Arc<BTreeMap<TypeId, BTreeSet<TypeId>>>) {
+    pub(super) fn install_types(&mut self, types: Arc<super::type_graph::TypeGraph>) {
         if self.types.is_empty() {
             self.types = types;
         } else {
-            Arc::make_mut(&mut self.types)
-                .extend(types.iter().map(|(&ty, edges)| (ty, edges.clone())));
+            let graph = Arc::make_mut(&mut self.types);
+            for (&ty, edges) in types.iter() {
+                graph.define(ty, edges.to_vec());
+            }
         }
     }
 
     pub fn define(&mut self, ty: TypeId, carries: BTreeSet<TypeId>) {
-        Arc::make_mut(&mut self.types).insert(ty, carries);
+        Arc::make_mut(&mut self.types).define(ty, carries.into_iter().collect());
     }
 
     pub fn register(&mut self, ty: TypeId, object: ObjectId) {

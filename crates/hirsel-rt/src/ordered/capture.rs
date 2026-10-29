@@ -30,7 +30,7 @@ pub struct Handle {
 /// Missing/opaque metadata has no definition, so Carries cannot certify it.
 #[derive(Clone, Default)]
 pub struct Types {
-    pub definitions: std::sync::Arc<std::collections::BTreeMap<u32, BTreeSet<u32>>>,
+    pub definitions: std::sync::Arc<super::type_graph::TypeGraph>,
     pub families: std::sync::Arc<std::collections::BTreeMap<u64, BTreeSet<u32>>>,
 }
 
@@ -43,7 +43,7 @@ pub unsafe fn types(ctx: *mut TaskCtx) -> Types {
 }
 
 unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> Types {
-    let mut definitions = std::collections::BTreeMap::new();
+    let mut definitions = super::type_graph::TypeGraph::with_capacity(count as usize);
     let mut families = std::collections::BTreeMap::<_, BTreeSet<_>>::new();
     // SAFETY: caller contract, immutable registry lives for the run.
     unsafe {
@@ -53,13 +53,13 @@ unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> T
                 continue;
             }
             if layout.scan_words == 0 {
-                definitions.insert(id, BTreeSet::new());
+                definitions.define(id, Vec::new());
                 continue;
             }
             if layout.scan.is_null() || layout.scan_words > (WORK_MAX * WORDS) as u64 {
                 continue;
             }
-            let mut edges = BTreeSet::new();
+            let mut edges = Vec::new();
             let mut known = true;
             for op in std::slice::from_raw_parts(layout.scan, layout.scan_words as usize)
                 .chunks_exact(WORDS)
@@ -73,19 +73,19 @@ unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> T
                         }
                         let ty = op[3] as u32;
                         families.entry(op[2]).or_default().insert(ty);
-                        edges.insert(ty);
+                        edges.push(ty);
                         if op[4] != 0 {
-                            edges.insert(op[4] as u32);
+                            edges.push(op[4] as u32);
                         }
                     }
                     INLINE | TYPE_EDGE => {
-                        edges.insert(op[2] as u32);
+                        edges.push(op[2] as u32);
                     }
                     SEQUENCE | REPEAT => {
-                        edges.insert(op[4] as u32);
+                        edges.push(op[4] as u32);
                     }
                     COLUMN => {
-                        edges.insert(op[6] as u32);
+                        edges.push(op[6] as u32);
                     }
                     BLOCK | ROOT | TAG | NONNULL | LIVE_BIT | VALUE | VALUE_FIELD
                     | VALUE_COLUMN => {}
@@ -93,7 +93,7 @@ unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> T
                 }
             }
             if known {
-                definitions.insert(id, edges);
+                definitions.define(id, edges);
             }
         }
     }
@@ -290,7 +290,7 @@ mod tests {
         let captures = unsafe { scan_with(std::ptr::null(), 0, |_| &descriptor) };
         assert_eq!(captures, Captures::default());
         let types = unsafe { types_with(1, |_| &descriptor) };
-        assert_eq!(types.definitions.get(&0), Some(&BTreeSet::new()));
+        assert_eq!(types.definitions.get(&0), Some([].as_slice()));
     }
 
     fn layout(program: &[u64]) -> Layout {

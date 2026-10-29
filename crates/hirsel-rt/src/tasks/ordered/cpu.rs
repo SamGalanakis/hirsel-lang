@@ -55,12 +55,12 @@ pub(super) struct BatchCommit<'a> {
 
 impl super::driver::Driver {
     pub(super) fn cpu_commit(&mut self, task: TaskId) -> Option<BatchCommit<'_>> {
+        self.cpu_batch.as_ref()?.ordinal(task)?;
         assert!(
             self.head_ready(task),
             "CPU retirement follows the cooperative head"
         );
-        let batch = self.cpu_batch.as_mut()?;
-        batch.ordinal(task)?;
+        let batch = self.cpu_batch.as_mut().unwrap();
         let frontier = self.frontier.as_mut().unwrap();
         let authority =
             hirsel_free::batch::Commit::claim(batch, task, frontier.head(), true).unwrap();
