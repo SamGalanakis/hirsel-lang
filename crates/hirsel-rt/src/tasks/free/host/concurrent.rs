@@ -210,10 +210,9 @@ pub(crate) fn with_current(action: impl FnOnce(&dyn ConcurrentAdapter)) -> bool 
     }
     // Live Ordered sets up its own concurrent service's providers.
     if !super::native::enabled(ctx) {
-        let Some(io) = (crate::tasks::ordered::engine::on(ctx))
-            .then(|| unsafe { (*ctx).run_ref().ordered_io.get() })
-            .flatten()
-        else {
+        // The service owns providers from launch, including the scalar prefix
+        // before the first Tasks projection activates the Ordered scheduler.
+        let Some(io) = (unsafe { (*ctx).run_ref().ordered_io.get() }) else {
             return false;
         };
         let _segment = unsafe { role::Segment::new(ctx) };
