@@ -42,9 +42,9 @@ The caller admits backing and validation scratch. `Bytes::visit_retained_allocat
 reports the full backing through subslices to the existing shared-charge policy.
 Process allocation keys never enter portable records.
 
-`IndexedEnvelope` supplies the next ordinary envelope layout for the owner
-cutover. It is an explicit API; `TypeRecords::encode_record` still uses its
-current transport until that coordinated switch. Its 48-byte header contains
+`IndexedEnvelope` is the ordinary record layout emitted by
+`TypeRecords::encode_record`. The former bincode Record reader/writer is removed,
+with no schema-1 fallback. Its 48-byte header contains
 `HIRREC02`, total length u64, anchor/type counts u32, type-array offset u64,
 payload offset u64 and payload length u64. It is followed by 16-byte anchor
 extent descriptors, 44-byte type references, contiguous source-owner rows and
@@ -81,3 +81,11 @@ contract over a live Definition and an archive; archived access decodes one row,
 without constructing a Body or TypeTable. `materialize` is an explicit transform
 boundary. `NativeRecords::open_tir` retains current source bindings and the caller's
 admission owner on the complete backing. Neither view supplies V acceptance.
+
+Ordinary publication and indexed TIR share one portable position builder. It
+merges equal type references and equal lexical source owners in semantic first-use
+order, then writes payload positions under that mapping. Interner/anchor sharing
+and previous root requests cannot change those positions. `StoredRecord` retains
+the checked backing and reads its source/type directories directly; it retains no
+copied source-path or type-reference arrays. Raw byte-slice transformation callers
+use transient reference/anchor handles under the same framing and child checks.

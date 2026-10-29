@@ -166,8 +166,10 @@ pub fn canonical_bytes<T: Serialize>(
     bincode::serialize(&(anchor_owners(anchors, owner)?, table.finish(), payload)).ok()
 }
 /// Peak outer-record decode storage, excluding the caller's typed payload.
-/// Source interner rows retain their existing owners; this covers the copied
-/// input/payload, anchor paths, anchor handles and type-reference array.
+/// Source interner rows retain their existing owners. This conservative bound
+/// covers input, transient scalar materialization, path binding, anchor handles
+/// and raw byte callers' reference array. Stored owners borrow all payload bytes;
+/// complete backing retention remains with the existing shared-charge policy.
 fn record_decode_bytes(
     anchors: &[(DefPath, u32)],
     type_count: usize,
