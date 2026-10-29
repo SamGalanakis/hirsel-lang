@@ -223,7 +223,7 @@ impl TypeRecords {
     pub fn encode_tir(
         &self,
         definition: &Definition,
-        mut owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
     ) -> Option<Vec<u8>> {
         let mut types = TableBuilder::new(self.types.clone());
         let mut anchors = AnchorCodec::Collect(vec![]);
@@ -234,39 +234,10 @@ impl TypeRecords {
                 crate::indexed_types::inline_names(|| encode_definition(definition))
             })
         })?);
-        let references = self.encode(types.roots())?;
-        let mut unique_types = Vec::new();
-        let mut reference_positions = std::collections::HashMap::new();
-        let mut type_positions = std::collections::HashMap::new();
-        for (&id, reference) in types.roots().iter().zip(references) {
-            let next = u32::try_from(unique_types.len()).ok()?;
-            let position = *reference_positions.entry(reference).or_insert_with(|| {
-                unique_types.push(reference);
-                next
-            });
-            type_positions.insert(id, position);
-        }
-        let AnchorCodec::Collect(anchors) = anchors else {
-            unreachable!()
-        };
-        let mut unique_anchors = Vec::new();
-        let mut owner_positions = std::collections::HashMap::new();
-        let mut anchor_positions = std::collections::BTreeMap::new();
-        for anchor in anchors {
-            let identity = owner(anchor)?;
-            let next = u32::try_from(unique_anchors.len()).ok()?.checked_add(1)?;
-            let position = *owner_positions.entry(identity.clone()).or_insert_with(|| {
-                unique_anchors.push(identity);
-                next
-            });
-            anchor_positions.insert(anchor, position);
-        }
-        let payload = hirsel_types::with_type_positions(type_positions, || {
-            hirsel_span::with_anchor_codec(&mut AnchorCodec::Encode(anchor_positions), || {
-                crate::indexed_types::inline_names(|| encode_definition(definition))
-            })
-        })?;
-        IndexedEnvelope::encode(&unique_anchors, &unique_types, &payload)
+        self.indexed_record(types.roots(), anchors, owner, || {
+            encode_definition(definition)
+        })
+        .map(|(bytes, _)| bytes)
     }
 }
 

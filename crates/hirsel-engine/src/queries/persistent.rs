@@ -10,7 +10,7 @@ mod expected;
 pub(crate) use expected::{Expected, Spool};
 pub(crate) use hirsel_product_codec::TypeRecords;
 #[cfg(test)]
-use hirsel_product_codec::{Record as Envelope, TypeRef};
+use hirsel_product_codec::{IndexedEnvelope, TypeRef};
 
 #[cfg(test)]
 mod expected_tests {
@@ -3821,6 +3821,34 @@ mod malformed_tests {
         }
     }
 
+    struct Envelope {
+        anchors: Vec<(DefPath, u32)>,
+        types: Vec<TypeRef>,
+        payload: Vec<u8>,
+    }
+    impl Envelope {
+        fn decode(bytes: &[u8]) -> Option<Self> {
+            let reference = hirsel_artifact_store::Domain {
+                kind: 0x5245_4344,
+                schema: 2,
+            }
+            .reference(bytes)?;
+            let checked = IndexedEnvelope::open(bytes.to_vec().into(), reference)?;
+            Some(Self {
+                anchors: (0..checked.anchor_count())
+                    .map(|n| Some(checked.anchor(n)?.to_owned()))
+                    .collect::<Option<_>>()?,
+                types: (0..checked.type_count())
+                    .map(|n| checked.type_reference(n))
+                    .collect::<Option<_>>()?,
+                payload: checked.payload().to_vec(),
+            })
+        }
+        fn encode(&self) -> Option<Vec<u8>> {
+            IndexedEnvelope::encode(&self.anchors, &self.types, &self.payload)
+        }
+    }
+
     // Equivalent sequence serialization for the bulk byte payload vectors.
     #[derive(Serialize, Deserialize)]
     struct SequenceEnvelope {
@@ -3831,13 +3859,12 @@ mod malformed_tests {
 
     #[test]
     fn bulk_payload_matches_sequence_encoding_and_bounded_decoding() {
-        use bincode::Options;
         let (engine, syntax) = fixture();
         let unit = engine.types.intern(hirsel_types::Type::unit());
         let bytes = engine
             .encode_record(&(unit, syntax.item.origin.span))
             .unwrap();
-        let mut envelope: Envelope = bincode::deserialize(&bytes).unwrap();
+        let mut envelope = Envelope::decode(&bytes).unwrap();
         assert!(!envelope.anchors.is_empty());
         assert!(!envelope.types.is_empty());
         // Include bincode 1.3.3 tests/test.rs:565-572's byte equality vector,
@@ -3857,24 +3884,19 @@ mod malformed_tests {
                 payload: envelope.payload.clone(),
             };
             let old = bincode::serialize(&legacy).unwrap();
-            let new = bincode::serialize(&envelope).unwrap();
-            assert_eq!(old, new);
-            let options = bincode::DefaultOptions::new()
-                .with_fixint_encoding()
-                .with_limit(old.len() as u64)
-                .reject_trailing_bytes();
-            let decoded: Envelope = options.deserialize(&old).unwrap();
-            assert_eq!(decoded.payload, legacy.payload);
-            let decoded: SequenceEnvelope = options.deserialize(&new).unwrap();
-            assert_eq!(decoded.payload, envelope.payload);
+            let new = envelope.encode().unwrap();
             assert!(
-                options
-                    .deserialize::<Envelope>(&old[..old.len() - 1])
-                    .is_err()
+                Envelope::decode(&old).is_none(),
+                "obsolete envelopes are refused"
             );
-            let mut trailing = old;
+            let decoded = Envelope::decode(&new).unwrap();
+            assert_eq!(decoded.payload, legacy.payload);
+            assert_eq!(decoded.anchors, envelope.anchors);
+            assert_eq!(decoded.types, envelope.types);
+            assert!(Envelope::decode(&new[..new.len() - 1]).is_none());
+            let mut trailing = new;
             trailing.push(0);
-            assert!(options.deserialize::<Envelope>(&trailing).is_err());
+            assert!(Envelope::decode(&trailing).is_none());
         }
     }
 
@@ -4318,11 +4340,11 @@ mod malformed_tests {
         let unit = engine.types.intern(hirsel_types::Type::unit());
         let bytes = engine.encode_record(&unit).unwrap();
         assert_eq!(engine.decode_record::<TypeId>(&bytes), Some(unit));
-        let mut envelope: Envelope = bincode::deserialize(&bytes).unwrap();
+        let mut envelope = Envelope::decode(&bytes).unwrap();
         envelope.payload = u32::MAX.to_le_bytes().to_vec();
         assert!(
             engine
-                .decode_record::<TypeId>(&bincode::serialize(&envelope).unwrap())
+                .decode_record::<TypeId>(&envelope.encode().unwrap())
                 .is_none()
         );
         let bad = engine
@@ -4332,19 +4354,18 @@ mod malformed_tests {
             )));
         assert!(engine.encode_record(&bad).is_none());
         let bytes = engine.encode_record(&syntax.item.origin.span).unwrap();
-        let mut envelope: Envelope = bincode::deserialize(&bytes).unwrap();
+        let mut envelope = Envelope::decode(&bytes).unwrap();
         envelope.payload[..4].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(
             engine
-                .decode_record::<Span>(&bincode::serialize(&envelope).unwrap())
+                .decode_record::<Span>(&envelope.encode().unwrap())
                 .is_none()
         );
-        let mut envelope: Envelope =
-            bincode::deserialize(&engine.encode_record(&unit).unwrap()).unwrap();
+        let mut envelope = Envelope::decode(&engine.encode_record(&unit).unwrap()).unwrap();
         envelope.payload.push(0);
         assert!(
             engine
-                .decode_record::<TypeId>(&bincode::serialize(&envelope).unwrap())
+                .decode_record::<TypeId>(&envelope.encode().unwrap())
                 .is_none()
         );
         let mut bytes = engine.encode_record(&unit).unwrap();

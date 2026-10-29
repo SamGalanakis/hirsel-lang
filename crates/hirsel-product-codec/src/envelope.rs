@@ -141,10 +141,14 @@ impl<'a> AnchorRow<'a> {
 pub struct IndexedEnvelope {
     bytes: Bytes,
     reference: Reference,
-    anchors: u32,
-    types: u32,
+    layout: EnvelopeLayout,
+}
+#[derive(Clone, Copy)]
+pub(super) struct EnvelopeLayout {
+    pub anchors: u32,
+    pub types: u32,
     type_start: usize,
-    payload_start: usize,
+    pub payload_start: usize,
 }
 impl IndexedEnvelope {
     /// Canonical fixed-endian framing. Source/type positions preserve semantic
@@ -208,7 +212,54 @@ impl IndexedEnvelope {
         if expected.domain.reference(&bytes)? != expected {
             return None;
         }
-        let view = &*bytes;
+        let layout = EnvelopeLayout::open(&bytes)?;
+        Some(Self {
+            bytes,
+            reference: expected,
+            layout,
+        })
+    }
+    pub fn anchor_count(&self) -> u32 {
+        self.layout.anchors
+    }
+    pub fn reference(&self) -> Reference {
+        self.reference
+    }
+    pub fn type_count(&self) -> u32 {
+        self.layout.types
+    }
+    pub fn anchor(&self, index: u32) -> Option<AnchorRow<'_>> {
+        self.layout.anchor(&self.bytes, index)
+    }
+    /// A designation, not validation of the child. Use `type_component` before
+    /// accessing its typed rows; a parent digest never checks child bytes.
+    pub fn type_reference(&self, index: u32) -> Option<TypeRef> {
+        self.layout.type_reference(&self.bytes, index)
+    }
+    pub fn type_component(&self, index: u32, store: &dyn Contents) -> Option<CheckedTypeComponent> {
+        let reference = self.type_reference(index)?;
+        CheckedTypeComponent::open(store.get_content(reference.reference())?, reference)
+    }
+    pub fn payload(&self) -> Bytes {
+        self.bytes
+            .range(
+                self.layout.payload_start as u64,
+                (self.bytes.len() - self.layout.payload_start) as u64,
+                1,
+            )
+            .expect("checked payload extent")
+    }
+    pub fn backing(&self) -> &Bytes {
+        &self.bytes
+    }
+}
+
+impl EnvelopeLayout {
+    pub fn open(bytes: &[u8]) -> Option<Self> {
+        let view = bytes;
+        if view.len() > MAX_RECORD {
+            return None;
+        }
         if view.get(..8)? != MAGIC || size(view, 8)? != view.len() {
             return None;
         }
@@ -236,69 +287,38 @@ impl IndexedEnvelope {
         if cursor != payload_start {
             return None;
         }
-        let envelope = Self {
-            bytes,
-            reference: expected,
+        let layout = Self {
             anchors,
             types,
             type_start,
             payload_start,
         };
         for n in 0..types {
-            if envelope.type_reference(n)?.len > MAX_RECORD as u64 {
+            if layout.type_reference(view, n)?.len > MAX_RECORD as u64 {
                 return None;
             }
         }
-        Some(envelope)
+        Some(layout)
     }
-    pub fn anchor_count(&self) -> u32 {
-        self.anchors
-    }
-    pub fn reference(&self) -> Reference {
-        self.reference
-    }
-    pub fn type_count(&self) -> u32 {
-        self.types
-    }
-    pub fn anchor(&self, index: u32) -> Option<AnchorRow<'_>> {
+    pub fn anchor<'a>(&self, bytes: &'a [u8], index: u32) -> Option<AnchorRow<'a>> {
         if index >= self.anchors {
             return None;
         }
-        let bytes = &*self.bytes;
         let at = HEADER + index as usize * ANCHOR;
         let start = size(bytes, at)?;
         let end = start.checked_add(size(bytes, at + 8)?)?;
         AnchorRow::read(bytes.get(start..end)?)
     }
-    /// A designation, not validation of the child. Use `type_component` before
-    /// accessing its typed rows; a parent digest never checks child bytes.
-    pub fn type_reference(&self, index: u32) -> Option<TypeRef> {
+    pub fn type_reference(&self, bytes: &[u8], index: u32) -> Option<TypeRef> {
         if index >= self.types {
             return None;
         }
-        let bytes = &*self.bytes;
         let at = self.type_start + index as usize * TYPE;
         Some(TypeRef {
             output: hirsel_syntax::ContentHash(bytes.get(at..at + 32)?.try_into().ok()?),
             len: number(bytes, at + 32)?,
             member: word(bytes, at + 40)?,
         })
-    }
-    pub fn type_component(&self, index: u32, store: &dyn Contents) -> Option<CheckedTypeComponent> {
-        let reference = self.type_reference(index)?;
-        CheckedTypeComponent::open(store.get_content(reference.reference())?, reference)
-    }
-    pub fn payload(&self) -> Bytes {
-        self.bytes
-            .range(
-                self.payload_start as u64,
-                (self.bytes.len() - self.payload_start) as u64,
-                1,
-            )
-            .expect("checked payload extent")
-    }
-    pub fn backing(&self) -> &Bytes {
-        &self.bytes
     }
 }
 

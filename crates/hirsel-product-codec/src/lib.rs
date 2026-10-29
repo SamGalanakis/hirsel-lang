@@ -22,37 +22,60 @@ use std::sync::Arc;
 pub use tir::{CheckedTir, TirBlockRows, TirBodyHeader, TirBodyRows, TirHeader, TirMatchRows};
 pub use types::{ProductTypes, TypeRecords, TypeRef};
 
-#[derive(Serialize, Deserialize)]
-pub struct Record {
-    pub anchors: Vec<(DefPath, u32)>,
-    pub types: Vec<TypeRef>,
-    #[serde(
-        serialize_with = "serialize_payload",
-        deserialize_with = "deserialize_payload"
-    )]
-    pub payload: Vec<u8>,
-}
+use envelope::EnvelopeLayout;
+use hirsel_intern::persist::Source;
+use hirsel_types::TypeId;
 
-// bincode 1.3.3 de/read.rs:131-135 forwards a checked slice to Serde's
-// borrowed-byte visitor. This reads the existing Vec wire format verbatim.
-#[derive(Deserialize)]
+/// A transient checked view. The payload remains in the caller's immutable
+/// buffer; only a transformation's typed decoder allocates semantic values.
+#[derive(Clone, Copy)]
 struct RecordView<'a> {
-    anchors: Vec<(DefPath, u32)>,
-    types: Vec<TypeRef>,
-    #[serde(borrow)]
-    payload: &'a [u8],
+    bytes: &'a [u8],
+    layout: EnvelopeLayout,
+}
+impl<'a> RecordView<'a> {
+    fn open(bytes: &'a [u8]) -> Option<Self> {
+        Some(Self {
+            bytes,
+            layout: EnvelopeLayout::open(bytes)?,
+        })
+    }
+    fn payload(self) -> &'a [u8] {
+        &self.bytes[self.layout.payload_start..]
+    }
+    fn type_references(self) -> Option<Vec<TypeRef>> {
+        (0..self.layout.types)
+            .map(|n| self.layout.type_reference(self.bytes, n))
+            .collect()
+    }
+    fn anchors(
+        self,
+        mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+    ) -> Option<Vec<Anchor>> {
+        (0..self.layout.anchors)
+            .map(|n| {
+                let (owner, occurrence) = self.layout.anchor(self.bytes, n)?.to_owned();
+                anchor(&owner, occurrence)
+            })
+            .collect()
+    }
 }
 
-/// One portable record's immutable payload, type positions and source owners.
-/// The byte range retains its full backing and admission through every clone.
-/// Opening checks the envelope; each typed read resolves current source anchors
-/// and checked type components independently, without transferring V authority.
+/// One portable record retains its complete immutable backing and admission.
+/// Every clone reads source/type positions directly from checked directories.
 #[derive(Clone)]
 pub struct StoredRecord(Arc<StoredRecordOwner>);
 struct StoredRecordOwner {
-    anchors: Vec<(DefPath, u32)>,
-    types: Arc<ProductTypes>,
+    backing: hirsel_artifact_store::Bytes,
     payload: hirsel_artifact_store::Bytes,
+    layout: EnvelopeLayout,
+    records: Arc<TypeRecords>,
+}
+impl Source<TypeId> for StoredRecordOwner {
+    fn id(&self, number: u32) -> Option<TypeId> {
+        self.records
+            .get(self.layout.type_reference(&self.backing, number)?)
+    }
 }
 impl StoredRecord {
     pub fn payload(&self) -> &hirsel_artifact_store::Bytes {
@@ -60,26 +83,23 @@ impl StoredRecord {
     }
     pub fn decode<T: serde::de::DeserializeOwned>(
         &self,
-        mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+        anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
     ) -> Option<T> {
-        let anchors = self
-            .0
-            .anchors
-            .iter()
-            .map(|(owner, occurrence)| anchor(owner, *occurrence))
-            .collect::<Option<_>>()?;
-        decode_payload(&self.0.payload, self.0.types.clone(), anchors)
+        let view = RecordView {
+            bytes: &self.0.backing,
+            layout: self.0.layout,
+        };
+        decode_payload(&self.0.payload, self.0.clone(), view.anchors(anchor)?)
     }
 }
-
 fn decode_payload<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
-    types: Arc<ProductTypes>,
+    types: Arc<dyn Source<TypeId>>,
     anchors: Vec<Anchor>,
 ) -> Option<T> {
     hirsel_types::with_type_source(types, || {
         hirsel_span::with_anchor_codec(&mut AnchorCodec::Decode(anchors), || {
-            options(bytes.len()).deserialize(bytes)
+            indexed_types::inline_names(|| options(bytes.len()).deserialize(bytes))
         })
     })
     .ok()
@@ -148,10 +168,15 @@ pub fn canonical_bytes<T: Serialize>(
 /// Peak outer-record decode storage, excluding the caller's typed payload.
 /// Source interner rows retain their existing owners; this covers the copied
 /// input/payload, anchor paths, anchor handles and type-reference array.
-fn record_decode_bytes(record: &Record, encoded: usize) -> Option<u64> {
+fn record_decode_bytes(
+    anchors: &[(DefPath, u32)],
+    type_count: usize,
+    payload: usize,
+    encoded: usize,
+) -> Option<u64> {
     let mut bytes = encoded
-        .checked_add(record.payload.len())?
-        .checked_add(std::mem::size_of::<Record>())?;
+        .checked_add(payload)?
+        .checked_add(std::mem::size_of::<StoredRecordOwner>())?;
     let product_types = std::alloc::Layout::new::<[usize; 2]>()
         .extend(std::alloc::Layout::new::<ProductTypes>())
         .ok()?
@@ -161,15 +186,15 @@ fn record_decode_bytes(record: &Record, encoded: usize) -> Option<u64> {
     bytes = bytes.checked_add(product_types)?;
     // Serde's cautious vectors can grow geometrically; collecting decoded
     // anchor Options also uses Vec's minimum non-zero allocation of four rows.
-    let anchor_slots = record.anchors.len().checked_mul(2)?.max(4);
-    let type_slots = record.types.len().checked_mul(2)?.max(4);
+    let anchor_slots = anchors.len().checked_mul(2)?.max(4);
+    let type_slots = type_count.checked_mul(2)?.max(4);
     bytes =
         bytes
             .checked_add(anchor_slots.checked_mul(
                 std::mem::size_of::<(DefPath, u32)>() + std::mem::size_of::<Anchor>(),
             )?)?
             .checked_add(type_slots.checked_mul(std::mem::size_of::<TypeRef>())?)?;
-    for (path, _) in &record.anchors {
+    for (path, _) in anchors {
         bytes = bytes
             .checked_add(path.0.package.name.len())?
             .checked_add(path.0.package.version.len())?
@@ -198,8 +223,8 @@ impl TypeRecords {
         bytes: &[u8],
         mut visit: impl FnMut(hirsel_artifact_store::Reference) -> Option<bool>,
     ) -> Option<()> {
-        let record: RecordView<'_> = options(bytes.len()).deserialize(bytes).ok()?;
-        let mut pending = record.types;
+        let record = RecordView::open(bytes)?;
+        let mut pending = record.type_references()?;
         while let Some(reference) = pending.pop() {
             if visit(reference.reference())? {
                 let component = types::component(self.store.as_ref(), reference)?;
@@ -222,18 +247,70 @@ impl TypeRecords {
     ) -> Option<(Vec<u8>, u64)> {
         let mut anchors = AnchorCodec::Collect(vec![]);
         let mut table = TableBuilder::new(self.types.clone());
-        let payload = table
+        let size = table
             .with_encoding(|| {
-                hirsel_span::with_anchor_codec(&mut anchors, || bincode::serialize(value))
+                hirsel_span::with_anchor_codec(&mut anchors, || {
+                    indexed_types::inline_names(|| bincode::serialized_size(value))
+                })
             })
             .ok()?;
-        let record = Record {
-            anchors: anchor_owners(anchors, owner)?,
-            types: self.encode(table.roots())?,
-            payload,
+        if size > hirsel_artifact_store::MAX_RECORD as u64 {
+            return None;
+        }
+        self.indexed_record(table.roots(), anchors, owner, || {
+            let mut payload = Vec::with_capacity(usize::try_from(size).ok()?);
+            bincode::serialize_into(&mut payload, value).ok()?;
+            Some(payload)
+        })
+    }
+    /// Normalize portable sharing and first-use positions before encoding a
+    /// schema's indexed payload. Live IDs never determine portable positions.
+    pub(crate) fn indexed_record(
+        &self,
+        roots: &[TypeId],
+        anchors: AnchorCodec,
+        mut owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+        write: impl FnOnce() -> Option<Vec<u8>>,
+    ) -> Option<(Vec<u8>, u64)> {
+        let references = self.encode(roots)?;
+        let mut unique_types = Vec::new();
+        let mut reference_positions = std::collections::HashMap::new();
+        let mut type_positions = std::collections::HashMap::new();
+        for (&id, reference) in roots.iter().zip(references) {
+            let next = u32::try_from(unique_types.len()).ok()?;
+            let position = *reference_positions.entry(reference).or_insert_with(|| {
+                unique_types.push(reference);
+                next
+            });
+            type_positions.insert(id, position);
+        }
+        let AnchorCodec::Collect(anchors) = anchors else {
+            unreachable!()
         };
-        let bytes = bincode::serialize(&record).ok()?;
-        let working = record_decode_bytes(&record, bytes.len())?;
+        let mut unique_anchors = Vec::new();
+        let mut owner_positions = std::collections::HashMap::new();
+        let mut anchor_positions = std::collections::BTreeMap::new();
+        for anchor in anchors {
+            let identity = owner(anchor)?;
+            let next = u32::try_from(unique_anchors.len()).ok()?.checked_add(1)?;
+            let position = *owner_positions.entry(identity.clone()).or_insert_with(|| {
+                unique_anchors.push(identity);
+                next
+            });
+            anchor_positions.insert(anchor, position);
+        }
+        let payload = hirsel_types::with_type_positions(type_positions, || {
+            hirsel_span::with_anchor_codec(&mut AnchorCodec::Encode(anchor_positions), || {
+                indexed_types::inline_names(write)
+            })
+        })?;
+        let bytes = IndexedEnvelope::encode(&unique_anchors, &unique_types, &payload)?;
+        let working = record_decode_bytes(
+            &unique_anchors,
+            unique_types.len(),
+            payload.len(),
+            bytes.len(),
+        )?;
         Some((bytes, working))
     }
     pub fn encode_record<T: Serialize>(
@@ -250,17 +327,13 @@ impl TypeRecords {
         bytes: &[u8],
         mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
     ) -> Option<T> {
-        let record: RecordView<'_> = options(bytes.len()).deserialize(bytes).ok()?;
-        let anchors = record
-            .anchors
-            .iter()
-            .map(|(owner, occurrence)| anchor(owner, *occurrence))
-            .collect::<Option<_>>()?;
+        let record = RecordView::open(bytes)?;
+        let anchors = record.anchors(&mut anchor)?;
         decode_payload(
-            record.payload,
+            record.payload(),
             Arc::new(ProductTypes {
                 records: self.clone(),
-                references: record.types,
+                references: record.type_references()?,
             }),
             anchors,
         )
@@ -272,15 +345,16 @@ impl TypeRecords {
         self: &Arc<Self>,
         bytes: hirsel_artifact_store::Bytes,
     ) -> Option<StoredRecord> {
-        let record: RecordView<'_> = options(bytes.len()).deserialize(&bytes).ok()?;
-        let offset = (record.payload.as_ptr() as usize).checked_sub(bytes.as_ptr() as usize)?;
-        let payload = bytes.range(offset as u64, record.payload.len() as u64, 1)?;
+        let layout = EnvelopeLayout::open(&bytes)?;
+        let payload = bytes.range(
+            layout.payload_start as u64,
+            (bytes.len() - layout.payload_start) as u64,
+            1,
+        )?;
         Some(StoredRecord(Arc::new(StoredRecordOwner {
-            anchors: record.anchors,
-            types: Arc::new(ProductTypes {
-                records: self.clone(),
-                references: record.types,
-            }),
+            backing: bytes,
+            layout,
+            records: self.clone(),
             payload,
         })))
     }
@@ -313,6 +387,27 @@ mod tests {
     use hirsel_artifact_store::Memory;
     use hirsel_syntax::{ContentHash, ItemPath, PackageId};
     use hirsel_types::{Type, TypeId};
+    // Owned transport data exists only for explicit malformed-vector edits.
+    struct Record {
+        anchors: Vec<(DefPath, u32)>,
+        types: Vec<TypeRef>,
+        payload: Vec<u8>,
+    }
+    impl Record {
+        fn encode(&self) -> Option<Vec<u8>> {
+            IndexedEnvelope::encode(&self.anchors, &self.types, &self.payload)
+        }
+        fn decode(bytes: &[u8]) -> Option<Self> {
+            let view = RecordView::open(bytes)?;
+            Some(Self {
+                anchors: (0..view.layout.anchors)
+                    .map(|n| Some(view.layout.anchor(bytes, n)?.to_owned()))
+                    .collect::<Option<_>>()?,
+                types: view.type_references()?,
+                payload: view.payload().to_vec(),
+            })
+        }
+    }
     fn path() -> DefPath {
         DefPath(ItemPath {
             package: PackageId {
@@ -322,6 +417,39 @@ mod tests {
             modules: vec![],
             name: "owner".into(),
         })
+    }
+    #[test]
+    fn ordinary_encoding_uses_indexed_directories_and_normalizes_portable_sharing() {
+        let store = Arc::new(Memory::default());
+        let records = TypeRecords::new(TypeInterner::new(None), store);
+        let unit = records.types.intern(Type::unit());
+        let duplicate = records.types.intern_graph(1, |_| vec![Type::unit()])[0];
+        assert_ne!(unit, duplicate);
+        let a = Anchor::fresh();
+        let b = Anchor::fresh();
+        let sa = hirsel_span::Span::new(a, 1, 4).unwrap();
+        let sb = hirsel_span::Span::new(b, 1, 4).unwrap();
+        let encode = |types, spans| {
+            records
+                .encode_record(&(types, spans), |anchor| {
+                    [a, b].contains(&anchor).then(|| (path(), 0))
+                })
+                .unwrap()
+        };
+        let canonical = encode((unit, unit), (sa, sa));
+        assert_eq!(encode((unit, duplicate), (sa, sb)), canonical);
+        assert_eq!(&canonical[..8], b"HIRREC02");
+        let view = RecordView::open(&canonical).unwrap();
+        assert_eq!(view.layout.anchors, 1);
+        assert_eq!(view.layout.types, 1);
+        let current = Anchor::fresh();
+        let stored = records.open_record(canonical.into()).unwrap();
+        let (ids, spans): ((TypeId, TypeId), (hirsel_span::Span, hirsel_span::Span)) = stored
+            .decode(|owner, occurrence| (owner == &path() && occurrence == 0).then_some(current))
+            .unwrap();
+        assert_eq!(ids, (unit, unit));
+        assert_eq!(spans.0, spans.1);
+        assert_eq!(spans.0.anchor, current);
     }
     #[test]
     fn stored_record_views_share_backing_and_recheck_current_source_bindings() {
@@ -335,13 +463,13 @@ mod tests {
             .unwrap();
         let owner = Arc::new(());
         let bytes = hirsel_artifact_store::Bytes::from(encoded).retain_owner(owner.clone());
-        let view: RecordView<'_> = options(bytes.len()).deserialize(&bytes).unwrap();
-        let pointer = view.payload.as_ptr();
+        let view = RecordView::open(&bytes).unwrap();
+        let pointer = view.payload().as_ptr();
         let record = records.open_record(bytes.clone()).unwrap();
         assert_eq!(record.payload().as_ptr(), pointer);
         let second = record.clone();
         assert!(Arc::ptr_eq(&record.0, &second.0));
-        assert!(Arc::ptr_eq(&record.0.types, &second.0.types));
+        assert!(Arc::ptr_eq(&record.0.records, &second.0.records));
         drop(bytes);
         for current in [Anchor::fresh(), Anchor::fresh()] {
             let (decoded, site): (TypeId, hirsel_span::Span) = second
@@ -371,31 +499,19 @@ mod tests {
             types: vec![],
             payload: vec![7; 8192],
         };
-        let bytes = bincode::serialize(&record).unwrap();
-        let view: RecordView<'_> = options(bytes.len()).deserialize(&bytes).unwrap();
-        assert_eq!(view.payload, record.payload);
-        assert_eq!(view.payload.as_ptr(), bytes[24..].as_ptr());
+        let bytes = record.encode().unwrap();
+        let view = RecordView::open(&bytes).unwrap();
+        assert_eq!(view.payload(), record.payload);
+        assert_eq!(view.payload().as_ptr(), bytes[48..].as_ptr());
         for len in [0, 1, 23, bytes.len() - 1] {
-            assert!(
-                options(len)
-                    .deserialize::<RecordView<'_>>(&bytes[..len])
-                    .is_err()
-            );
+            assert!(RecordView::open(&bytes[..len]).is_none());
         }
         let mut trailing = bytes.clone();
         trailing.push(0);
-        assert!(
-            options(trailing.len())
-                .deserialize::<RecordView<'_>>(&trailing)
-                .is_err()
-        );
+        assert!(RecordView::open(&trailing).is_none());
         let mut forged = bytes;
         forged[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert!(
-            options(forged.len())
-                .deserialize::<RecordView<'_>>(&forged)
-                .is_err()
-        );
+        assert!(RecordView::open(&forged).is_none());
     }
     #[test]
     fn captured_record_decode_layout_covers_small_and_growing_transport_vectors() {
@@ -411,8 +527,8 @@ mod tests {
                     .collect(),
                 payload: vec![7; rows as usize],
             };
-            let bytes = bincode::serialize(&record).unwrap();
-            let decoded: Record = options(bytes.len()).deserialize(&bytes).unwrap();
+            let bytes = record.encode().unwrap();
+            let decoded = Record::decode(&bytes).unwrap();
             let handles = decoded
                 .anchors
                 .iter()
@@ -435,7 +551,14 @@ mod tests {
                     + path.0.modules.iter().map(String::capacity).sum::<usize>();
             }
             assert!(
-                record_decode_bytes(&record, bytes.len()).unwrap() >= actual as u64,
+                record_decode_bytes(
+                    &record.anchors,
+                    record.types.len(),
+                    record.payload.len(),
+                    bytes.len()
+                )
+                .unwrap()
+                    >= actual as u64,
                 "captured layout must cover decoded capacities for {rows} rows"
             );
         }
@@ -472,38 +595,28 @@ mod tests {
                 types: vec![],
                 payload: payload.clone(),
             };
-            let encoded = bincode::serialize(&legacy).unwrap();
-            let record: Record = options(encoded.len()).deserialize(&encoded).unwrap();
-            assert_eq!(record.payload, payload);
-            assert_eq!(bincode::serialize(&record).unwrap(), encoded);
-            let old: LegacyRecord =
-                bincode::deserialize(&bincode::serialize(&record).unwrap()).unwrap();
-            assert_eq!(old.payload, payload);
+            let obsolete = bincode::serialize(&legacy).unwrap();
             assert!(
-                options(encoded.len() - 1)
-                    .deserialize::<Record>(&encoded)
-                    .is_err()
+                RecordView::open(&obsolete).is_none(),
+                "schema 1 has no fallback"
             );
-            assert!(
-                options(encoded.len())
-                    .deserialize::<Record>(&encoded[..encoded.len() - 1])
-                    .is_err()
-            );
-            let mut trailing = encoded.clone();
+            let record = Record {
+                anchors: vec![],
+                types: vec![],
+                payload: payload.clone(),
+            };
+            let encoded = record.encode().unwrap();
+            let decoded = Record::decode(&encoded).unwrap();
+            assert_eq!(decoded.payload, payload);
+            assert_eq!(RecordView::open(&encoded).unwrap().payload(), payload);
+            assert!(RecordView::open(&encoded[..encoded.len() - 1]).is_none());
+            let mut trailing = encoded;
             trailing.push(0);
-            assert!(
-                options(trailing.len())
-                    .deserialize::<Record>(&trailing)
-                    .is_err()
-            );
+            assert!(RecordView::open(&trailing).is_none());
         }
-        let mut forged = vec![0; 24];
-        forged[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert!(
-            options(forged.len())
-                .deserialize::<Record>(&forged)
-                .is_err()
-        );
+        let mut forged = IndexedEnvelope::encode(&[], &[], &[]).unwrap();
+        forged[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(RecordView::open(&forged).is_none());
     }
 
     #[test]
