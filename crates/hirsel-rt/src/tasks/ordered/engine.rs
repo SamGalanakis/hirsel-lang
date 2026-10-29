@@ -249,9 +249,11 @@ fn capture_charges(ctx: *mut TaskCtx, task: TaskId, driver: &mut Driver) {
     } else {
         None
     };
-    let consumed = private.unwrap_or_else(|| grant
-        .saturating_sub(remaining)
-        .saturating_add(u64::from(word < 0)));
+    let consumed = private.unwrap_or_else(|| {
+        grant
+            .saturating_sub(remaining)
+            .saturating_add(u64::from(word < 0))
+    });
     if consumed != 0 {
         let budgets = driver.budgets;
         driver

@@ -640,20 +640,29 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                 // A scalar private or CPU quantum owns no shared state. Keep the same
                 // 1024-point checkpoint and every stop/save/fuel/barrier test,
                 // without taking the scheduler role for a quota-only return.
-                if (*native).cpu && (*native).cpu_phase == 2 && !private(ctx)
+                if (*native).cpu
+                    && (*native).cpu_phase == 2
+                    && !private(ctx)
                     && (*native).physical.reason == 2
                     && (*run).control.stopped().is_none()
-                    && !(*ctx).ahead.as_ref().unwrap().save_requested.load(Ordering::Acquire)
+                    && !(*ctx)
+                        .ahead
+                        .as_ref()
+                        .unwrap()
+                        .save_requested
+                        .load(Ordering::Acquire)
                     && !(*native).pending_refill
                     && !(*native).allocation.pending()
                     && (*native).summary.is_null()
                     && (*native).growth.is_null()
                     && exec.leaving.get().is_none()
-                    && let Some(grant) = (*native).cpu_fuel.refill(
-                        (*ctx).view.compiled.fuel, crate::budget::FUEL_CHUNK,
-                    )
+                    && let Some(grant) = (*native)
+                        .cpu_fuel
+                        .refill((*ctx).view.compiled.fuel, crate::budget::FUEL_CHUNK)
                 {
-                    (*ctx).ordered_charge_trace.capture((*ctx).view.compiled.fuel);
+                    (*ctx)
+                        .ordered_charge_trace
+                        .capture((*ctx).view.compiled.fuel);
                     (*ctx).heap().set_fuel(grant as i64);
                     (*ctx).ordered_charge_trace.grant(grant as i64);
                     (*native).physical.points_left = 1024;

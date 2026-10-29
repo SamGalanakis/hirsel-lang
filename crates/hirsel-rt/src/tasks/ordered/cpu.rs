@@ -54,7 +54,10 @@ pub(super) struct BatchCommit<'a> {
 
 impl super::driver::Driver {
     pub(super) fn cpu_commit(&mut self, task: TaskId) -> Option<BatchCommit<'_>> {
-        assert!(self.head_ready(task), "CPU retirement follows the cooperative head");
+        assert!(
+            self.head_ready(task),
+            "CPU retirement follows the cooperative head"
+        );
         let batch = self.cpu_batch.as_mut()?;
         batch.ordinal(task)?;
         Some(BatchCommit {
@@ -76,7 +79,9 @@ impl BatchCommit<'_> {
         before: &Stretch,
         complete: bool,
     ) -> Result<(), hirsel_run_schema::BudgetKind> {
-        self.batch.settle(self.task, before, self.state, complete).unwrap()
+        self.batch
+            .settle(self.task, before, self.state, complete)
+            .unwrap()
     }
 }
 
@@ -1007,29 +1012,48 @@ mod commit_tests {
         let mut driver = super::super::driver::Driver::new(
             7,
             crate::ordered::Policy::admit(&Default::default(), None),
-            Settled { level: 0, limit: 100, fuel: 20 },
+            Settled {
+                level: 0,
+                limit: 100,
+                fuel: 20,
+            },
             crate::ordered::objects::Registry::default(),
         );
         let grant = hirsel_run_schema::CpuGrant {
-            provider: "cpu.scoped@1".into(), max_workers: 4, max_domains: 1,
-            max_physical_bytes: 1 << 20, max_batch_bytes: 100,
+            provider: "cpu.scoped@1".into(),
+            max_workers: 4,
+            max_domains: 1,
+            max_physical_bytes: 1 << 20,
+            max_batch_bytes: 100,
         };
         let mut batch = Batch::new(&grant, 4, 2, driver.frontier.as_ref().unwrap().settled);
         batch.claim(7, 4, 1);
         batch.claim(9, 4, 0);
         driver.cpu_batch = Some(batch);
-        assert!(driver.cpu_commit(7).is_some(), "head identity wins over storage ordinal");
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = driver.cpu_commit(9);
-        })).is_err());
+        assert!(
+            driver.cpu_commit(7).is_some(),
+            "head identity wins over storage ordinal"
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = driver.cpu_commit(9);
+            }))
+            .is_err()
+        );
         driver.host_poll = true;
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = driver.cpu_commit(7);
-        })).is_err());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = driver.cpu_commit(7);
+            }))
+            .is_err()
+        );
         driver.host_poll = false;
         driver.awaiting_save = true;
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = driver.cpu_commit(7);
-        })).is_err());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = driver.cpu_commit(7);
+            }))
+            .is_err()
+        );
     }
 }

@@ -360,9 +360,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         // A live scoped W1 executes a distinct certified child on the caller.
         // Replay has no scoped pool and retains its serial ordinary entry.
         let scoped = crate::pool::cpu_scoped::width(ctx);
-        let width = scoped.unwrap_or_else(|| unsafe {
-            (*ctx).run_ref().control.width.load(Ordering::Acquire)
-        });
+        let width = scoped
+            .unwrap_or_else(|| unsafe { (*ctx).run_ref().control.width.load(Ordering::Acquire) });
         let enabled = version != 0
             && (width > 1 || (scoped == Some(1) && matches!(version, 5 | 6)))
             && super::engine::with_driver(ctx, |d| d.private_enabled);

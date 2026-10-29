@@ -15,10 +15,13 @@ impl Fuel {
     }
 
     fn consumed(&self, word: i64) -> Option<u64> {
-        Some(self.pending.saturating_add(
-            self.issued?.saturating_sub(word.max(0) as u64)
-                .saturating_add(u64::from(word < 0)),
-        ))
+        Some(
+            self.pending.saturating_add(
+                self.issued?
+                    .saturating_sub(word.max(0) as u64)
+                    .saturating_add(u64::from(word < 0)),
+            ),
+        )
     }
 
     /// Keep a bounded prefix private. Reaching the snapshot's remaining room
