@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """Exercise layout identity and frozen startup inputs through the native linker."""
 import os
+from pathlib import Path
 import subprocess
 import sys
+
+if "HIRSEL_STARTUP_DRIVER_TESTS" not in os.environ:
+    # main-runs invokes tool tests directly. Buck supplies the driver harness,
+    # frozen native inputs and the normal test limits for the same recipe.
+    root = Path(__file__).resolve().parents[2]
+    command = [str(root / ".buck2/bin/buck2"), "test", "//:test-native-startup-layout"]
+    if "--ignored" in sys.argv[1:]:
+        command += ["--", "--test-arg=--ignored"]
+    sys.exit(subprocess.run(command, cwd=root).returncode)
 
 harness = os.environ["HIRSEL_STARTUP_DRIVER_TESTS"]
 for ignored, cases in [

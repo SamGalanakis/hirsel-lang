@@ -21,6 +21,21 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class NativeStartupLayout(unittest.TestCase):
+    def test_direct_invocation_runs_the_buck_recipe_and_preserves_failures(self):
+        for arguments, status in [([], 0), (["--ignored"], 7)]:
+            with self.subTest(arguments=arguments), patch.dict(os.environ, {}, clear=True), \
+                    patch.object(sys, 'argv', ['native_startup_layout.py', *arguments]), \
+                    patch('subprocess.run', return_value=subprocess.CompletedProcess([], status)) as run:
+                with self.assertRaises(SystemExit) as exit:
+                    runpy.run_path(str(ROOT / 'tools/tests/native_startup_layout.py'), run_name='__main__')
+                self.assertEqual(exit.exception.code, status)
+                expected = [str(ROOT / '.buck2/bin/buck2'), 'test', '//:test-native-startup-layout']
+                if arguments:
+                    expected += ['--', '--test-arg=--ignored']
+                run.assert_called_once_with(expected, cwd=ROOT)
+
+
 def empty_status():
     return dict(version=1, tables={}, known=[], observations=[], selections=[])
 
