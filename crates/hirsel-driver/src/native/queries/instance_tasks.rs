@@ -132,6 +132,7 @@ impl InstanceTasks {
         }
         let mut metadata = hirsel_engine::NativeMetadataWeight::default();
         metadata.add(size_of::<Self>() + 2 * size_of::<usize>());
+        metadata.add(size_of::<MemoryReservation>() + 2 * size_of::<usize>());
         metadata.vec(&roots, |w, key| {
             w.path(key.instance.definition());
             w.add(key.instance.retained_encoding_bytes());
@@ -224,6 +225,7 @@ impl InstanceTasks {
             self.native.clone(),
         )
         .with_store_verification(self.verify_store)
+        .with_retained_owner(self.allowance.clone())
     }
     fn register(&self, requests: Vec<(InstanceAddress, Request)>) -> Result<(), String> {
         // Encoding/validation runs outside the index lock. admit() has already
@@ -330,10 +332,10 @@ impl InstanceTasks {
                 registry.charged,
                 self.allowance.bytes(),
                 registry.entries.len(),
-                output.facts.ready_source.retained_metadata_bytes(),
+                output.facts.source.ready_source.retained_metadata_bytes(),
                 output.facts.seal_demand.retained_bytes(),
                 output.facts.operation_freedom.retained_bytes(),
-                output.facts.discharge.retained_metadata_bytes(),
+                output.facts.source.discharge.retained_metadata_bytes(),
                 self.source.retained_metadata_bytes(),
                 constants.bytes(),
                 source_constants.bytes(),
@@ -547,7 +549,7 @@ impl InstanceTasks {
             &self.options.discharge,
             completed
                 .iter()
-                .map(|(key, output)| (key.instance.definition(), &output.facts.discharge)),
+                .map(|(key, output)| (key.instance.definition(), &output.facts.source.discharge)),
         )
     }
 }
@@ -942,7 +944,10 @@ impl DiscoveryTask {
                 .iter()
                 .map(|entry| {
                     let output = entry.output.get().ok_or("discovery output is unfinished")?;
-                    Ok((entry.key.instance.definition(), &output.facts.discharge))
+                    Ok((
+                        entry.key.instance.definition(),
+                        &output.facts.source.discharge,
+                    ))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             super::discharge::complete(&self.tasks.options.discharge, facts)?;

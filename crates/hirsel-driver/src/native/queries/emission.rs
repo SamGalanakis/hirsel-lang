@@ -61,10 +61,10 @@ pub(super) fn select(
         callbacks.extend(current.facts.emission.callbacks.iter().cloned());
         tracking |= current.facts.emission.tracking;
         inline.extend(&current.facts.emission.inline);
-        if current.facts.ready_source.origin() != &owner.instance {
+        if current.facts.source.ready_source.origin() != &owner.instance {
             if !owner
                 .instance
-                .is_same_or_derived_from(current.facts.ready_source.origin())
+                .is_same_or_derived_from(current.facts.source.ready_source.origin())
             {
                 return Err("derived emission owner has another source origin".into());
             }

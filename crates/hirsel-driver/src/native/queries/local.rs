@@ -302,7 +302,7 @@ impl LocalReadyQueries {
             own.1,
             own.2,
             callee_reads,
-            owner.facts.ready_source.encode()?,
+            owner.facts.source.ready_source.encode()?,
             (options.regions, options.elide, options.reuse),
             format!("{:?}", options.validation),
             format!("{:?}", options.discharge.sites(key.instance.definition())),
@@ -436,7 +436,7 @@ impl LocalReadyQueries {
             ReadyMiss {
                 value,
                 options,
-                source: &owner.facts.ready_source,
+                source: &owner.facts.source.ready_source,
                 guard,
                 finalizers: &finalizers,
                 inputs: &inputs,
