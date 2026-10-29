@@ -224,6 +224,16 @@ impl TaskSlots {
         }
     }
 
+    /// Fixture precondition for a law that must exercise a reused slot.
+    /// Does not reclaim it: allocation still runs the production reclaim step.
+    #[cfg(test)]
+    pub(crate) fn reuse_ready(&self, slot: u32) -> bool {
+        self.retiring
+            .iter()
+            .filter(|entry| entry.slot == slot)
+            .all(Retiring::reclaimable)
+    }
+
     /// Retired slots still waiting for an owner to leave.
     #[cfg(test)]
     pub(crate) fn retained(&self) -> Vec<u32> {

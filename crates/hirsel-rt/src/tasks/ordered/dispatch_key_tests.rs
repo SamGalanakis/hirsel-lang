@@ -103,6 +103,17 @@ unsafe fn body(ctx: *mut crate::TaskCtx, probe: &Probe, result: u32, free: bool)
         probe.go.store(true, SeqCst);
         let old = spawn(ctx, &scope, probe, result);
         join(ctx, &scope, old);
+        // Join publishes logical completion. Older idle-save continuations
+        // can still hold frame leases, which deliberately postpone slot reuse.
+        loop {
+            role::enter(ctx);
+            let ready = scheduler(ctx).task_slots.reuse_ready(old.slot);
+            role::release(ctx);
+            if ready {
+                break;
+            }
+            std::thread::yield_now();
+        }
         // Free: B spins until released, so a wake would latch on its frame.
         probe.running.store(false, SeqCst);
         probe.go.store(!free, SeqCst);

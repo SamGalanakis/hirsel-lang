@@ -878,6 +878,10 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
         Leave::Complete => {
             let task = running.value().task;
             drop(running);
+            // The save callback exposes completion to joiners. Release the
+            // executor's frame reference first. Older idle saves and wake
+            // tokens can still retain their own references until they leave.
+            drop(frame);
             // Keep busy while acquiring the role: a stop must retain this
             // worker's run, and no activity lock may precede the role lock.
             unsafe { crate::tasks::after_save(run, task, true) };
