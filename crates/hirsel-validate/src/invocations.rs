@@ -1,4 +1,5 @@
 //! Admission coverage reconstructed from types and control flow, without tail claims.
+use crate::ReadDefinition;
 use crate::{
     SignatureLookup,
     input::Reader,
@@ -17,12 +18,16 @@ pub fn invocation_coverage(
     definition: &Definition,
     signatures: &dyn SignatureLookup,
 ) -> Result<Vec<(u32, u32, u32, bool)>, &'static str> {
-    coverage(types, definition, &Reader::new(types, signatures))
+    coverage(
+        types,
+        &ReadDefinition::live(definition),
+        &Reader::new(types, signatures),
+    )
 }
 
 pub(crate) fn coverage(
     types: &TypeInterner,
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     reader: &Reader<'_>,
 ) -> Result<Vec<(u32, u32, u32, bool)>, &'static str> {
     let declarations = typing::declaration_tables(types, definition, reader)
@@ -34,7 +39,7 @@ pub(crate) fn coverage(
 /// Standalone coverage still obtains its own independently checked declarations.
 pub(crate) fn coverage_with_declarations(
     types: &TypeInterner,
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     reader: &Reader<'_>,
     declarations: &[hirsel_types::GenericDeclarations],
 ) -> Result<Vec<(u32, u32, u32, bool)>, &'static str> {

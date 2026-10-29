@@ -1,7 +1,7 @@
 //! Independent last-use and storage-closure obligations of a seal transition.
 use super::*;
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn seal_flow(
         &mut self,
         model: &Model,

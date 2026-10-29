@@ -367,6 +367,12 @@ impl BoundIndexedEnvelope {
     pub fn envelope(&self) -> &IndexedEnvelope {
         &self.envelope
     }
+    pub(crate) fn bind_types(&self) -> Option<()> {
+        for n in 0..self.envelope.type_count() {
+            self.types.records.get(self.envelope.type_reference(n)?)?;
+        }
+        Some(())
+    }
     pub(crate) fn decode<T: serde::de::DeserializeOwned>(&self, bytes: &[u8]) -> Option<T> {
         hirsel_types::with_type_source(self.types.clone(), || {
             hirsel_span::with_anchor_codec(

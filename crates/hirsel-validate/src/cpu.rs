@@ -2,7 +2,7 @@
 use super::*;
 use hirsel_types::{AuthoritySummary, BuiltinType, Uses};
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn cpu_call(&mut self, arguments: &[CallArgument]) {
         for argument in arguments.iter().filter(|a| matches!(a.parameter.0, 2 | 3)) {
             let ty = self.place_type(argument.value.place);

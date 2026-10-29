@@ -1,5 +1,5 @@
 use super::*;
-use hirsel_product_codec::{TirBodyView, TirView};
+use hirsel_product_codec::TirView;
 
 /// Check arena references, provenance and scopes directly on live or checked
 /// archived rows. A missing source/type binding fails the read with `None`;
@@ -9,16 +9,18 @@ pub fn validate_structure_rows(
     definition: TirView<'_>,
     t: &TypeInterner,
 ) -> Option<Vec<Violation>> {
-    let header = definition.header()?;
+    Some(validate_bound(&ReadDefinition::new(definition)?, t))
+}
+
+pub(super) fn validate_bound(definition: &ReadDefinition<'_>, t: &TypeInterner) -> Vec<Violation> {
     // TypeIds carry no provenance: a row belongs to this definition exactly
     // when its closure table lists it.
-    let mut members = crate::hashed::HashSet::default();
-    for n in 0..definition.type_count() {
-        let id = *definition.type_id(n)?;
-        if t.contains(id) {
-            members.insert(id);
-        }
-    }
+    let members: crate::hashed::HashSet<TypeId> = definition
+        .types
+        .iter()
+        .copied()
+        .filter(|&id| t.contains(id))
+        .collect();
     let owned_type = |id: TypeId| members.contains(&id);
     let mut errors = Vec::new();
     let mut add = |body: Option<BodyId>, block: Option<BlockId>, instruction: Option<u32>, kind| {
@@ -32,21 +34,20 @@ pub fn validate_structure_rows(
             errors.push(v);
         }
     };
-    if header.entry.0 as usize >= definition.body_count() {
+    if definition.entry.0 as usize >= definition.bodies.len() {
         add(
             None,
             None,
             None,
             ViolationKind::InvalidId {
                 arena: "body",
-                index: header.entry.0,
+                index: definition.entry.0,
             },
         );
     }
     // Caller body references are checked even at the structural-only interpreter boundary.
-    for n in 0..definition.caller_body_count() {
-        let body = definition.caller_body(n)?;
-        if body.0 as usize >= definition.body_count() {
+    for body in &definition.caller_bodies {
+        if body.0 as usize >= definition.bodies.len() {
             add(
                 None,
                 None,
@@ -59,9 +60,7 @@ pub fn validate_structure_rows(
         }
     }
     let mut ordinals = BTreeSet::new();
-    for n in 0..definition.contract_count() {
-        let contract = definition.contract(n)?;
-        let (ordinal, body) = &*contract;
+    for (ordinal, body) in &definition.contracts {
         if !ordinals.insert(*ordinal) {
             add(
                 None,
@@ -73,7 +72,7 @@ pub fn validate_structure_rows(
                 },
             );
         }
-        if body.0 as usize >= definition.body_count() {
+        if body.0 as usize >= definition.bodies.len() {
             add(
                 None,
                 None,
@@ -85,36 +84,27 @@ pub fn validate_structure_rows(
             );
         }
     }
-    for bi in 0..definition.body_count() {
-        let body = definition.body(bi)?;
-        let body_header = body.header()?;
+    for (bi, body) in definition.bodies.iter().enumerate() {
         let bid = Some(BodyId(bi as u32));
         let mut refs = Vec::new();
-        refs.push((None, None, "block", body_header.entry.0));
+        refs.push((None, None, "block", body.entry.0));
         let mut cursor_carriers = BTreeSet::new();
-        for n in 0..body.borrow_cursor_count() {
-            let cursor = body.borrow_cursor(n)?;
+        for cursor in &body.borrow_cursors {
             refs.push((None, None, "local", cursor.carrier.0));
             refs.push((None, None, "rvalue", cursor.initializer.0));
             for place in cursor.cover.iter().flatten() {
                 refs.push((None, None, "place", place.0));
             }
-            let mut declarations = 0;
-            for n in 0..body.block_count() {
-                let block = body.block(n)?;
-                for n in 0..block.instruction_count() {
-                    let instruction = block.instruction(n)?;
-                    if let InstructionKind::Assign { destination, value } = instruction.kind
-                        && value == cursor.initializer
-                        && (destination.0 as usize) < body.place_count()
-                    {
-                        let place = body.place(destination.0 as usize)?;
-                        if place.root == cursor.carrier && place.projection.is_empty() {
-                            declarations += 1;
-                        }
-                    }
-                }
-            }
+            let declarations = body
+                .blocks
+                .iter()
+                .flat_map(|b| &b.instructions)
+                .filter(|instruction| {
+                    matches!(instruction.kind, InstructionKind::Assign { destination, value }
+                    if value == cursor.initializer && body.places.get(destination.0 as usize)
+                        .is_some_and(|p| p.root == cursor.carrier && p.projection.is_empty()))
+                })
+                .count();
             if !cursor_carriers.insert(cursor.carrier.0) || declarations != 1 {
                 add(
                     bid,
@@ -127,10 +117,9 @@ pub fn validate_structure_rows(
                 );
             }
         }
-        let mut type_roots = vec![body_header.result];
+        let mut type_roots = vec![body.result];
         let mut parameters = BTreeSet::new();
-        for n in 0..body.parameter_count() {
-            let p = body.parameter(n)?;
+        for p in &body.parameters {
             refs.push((None, None, "local", p.0));
             if !parameters.insert(p.0) {
                 add(
@@ -143,8 +132,7 @@ pub fn validate_structure_rows(
                     },
                 );
             }
-            if (p.0 as usize) < body.local_count() {
-                let l = body.local(p.0 as usize)?;
+            if let Some(l) = body.locals.get(p.0 as usize) {
                 if !matches!(l.storage, Storage::Parameter | Storage::Capture) {
                     add(
                         bid,
@@ -158,8 +146,7 @@ pub fn validate_structure_rows(
                 }
             }
         }
-        for i in 0..body.local_count() {
-            let l = body.local(i)?;
+        for (i, l) in body.locals.iter().enumerate() {
             type_roots.push(l.ty);
             refs.push((None, None, "scope", l.scope.0));
             if l.storage == Storage::Parameter && !parameters.contains(&(i as u32)) {
@@ -175,7 +162,7 @@ pub fn validate_structure_rows(
             }
             // Only a closure body has an environment; flow starts captures
             // live, so an entry capture would read storage nobody supplied.
-            if l.storage == Storage::Capture && bi == header.entry.0 as usize {
+            if l.storage == Storage::Capture && bi == definition.entry.0 as usize {
                 add(
                     bid,
                     None,
@@ -187,8 +174,7 @@ pub fn validate_structure_rows(
                 );
             }
         }
-        for n in 0..body.place_count() {
-            let p = body.place(n)?;
+        for p in &body.places {
             type_roots.push(p.ty);
             refs.push((None, None, "local", p.root.0));
             for projection in &p.projection {
@@ -197,8 +183,7 @@ pub fn validate_structure_rows(
                 }
             }
         }
-        for i in 0..body.scope_count() {
-            let s = body.scope(i)?;
+        for (i, s) in body.scopes.iter().enumerate() {
             if let Some(p) = s.parent {
                 refs.push((None, None, "scope", p.0));
             }
@@ -214,26 +199,18 @@ pub fn validate_structure_rows(
                     );
                     break;
                 }
-                next = if (id.0 as usize) < body.scope_count() {
-                    body.scope(id.0 as usize)?.parent
-                } else {
-                    None
-                };
+                next = body.scopes.get(id.0 as usize).and_then(|s| s.parent);
             }
         }
         let mut loans = BTreeSet::new();
-        let mut loan_refs = Vec::new();
-        for n in 0..body.place_count() {
-            if let Some(id) = body.place(n)?.loan {
-                loan_refs.push((None, None, id));
-            }
-        }
-        for b in 0..body.block_count() {
-            let block = body.block(b)?;
-            let terminator = block.terminator()?;
+        let mut loan_refs: Vec<_> = body
+            .places
+            .iter()
+            .filter_map(|p| p.loan.map(|id| (None, None, id)))
+            .collect();
+        for (b, block) in body.blocks.iter().enumerate() {
             let block_id = Some(BlockId(b as u32));
-            for i in 0..block.instruction_count() {
-                let inst = block.instruction(i)?;
+            for (i, inst) in block.instructions.iter().enumerate() {
                 let ins = Some(i as u32);
                 refs.push((block_id, ins, "cleanup", inst.on_failure.0));
                 match &inst.kind {
@@ -244,9 +221,9 @@ pub fn validate_structure_rows(
                     InstructionKind::Charge(event) => {
                         let misplaced = match event.kind {
                             hirsel_tir::SourceEventKind::Call => {
-                                i + 1 == block.instruction_count()
+                                i + 1 == block.instructions.len()
                                     && !matches!(
-                                        *terminator,
+                                        block.terminator,
                                         Terminator::Call {
                                             callee: Callee::Definition { .. }
                                                 | Callee::Indirect {
@@ -258,7 +235,7 @@ pub fn validate_structure_rows(
                                     )
                             }
                             hirsel_tir::SourceEventKind::Iteration => {
-                                i != 0 || b == body_header.entry.0 as usize
+                                i != 0 || b == body.entry.0 as usize
                             }
                         };
                         if misplaced {
@@ -340,15 +317,14 @@ pub fn validate_structure_rows(
                     }
                 }
             }
-            for target in successors(body, &terminator)? {
+            for target in body.successors(&block.terminator) {
                 refs.push((block_id, None, "block", target.0));
             }
             let mut operand = |o: &Operand| refs.push((block_id, None, "place", o.place.0));
-            match &*terminator {
+            match &block.terminator {
                 Terminator::Match { table, from } => {
-                    if (table.0 as usize) < body.match_table_count() {
-                        let t = body.match_table(table.0 as usize)?;
-                        if *from as usize > t.arm_count() {
+                    if let Some(t) = body.matches.get(table.0 as usize) {
+                        if *from as usize > t.arms.len() {
                             add(bid, block_id, None, ViolationKind::MatchCoverage);
                         }
                     } else {
@@ -423,31 +399,13 @@ pub fn validate_structure_rows(
                 _ => (),
             }
         }
-        for table_index in 0..body.match_table_count() {
-            let table = body.match_table(table_index)?;
-            let mut has_entry = false;
-            for n in 0..body.block_count() {
-                if matches!(*body.block(n)?.terminator()?, Terminator::Match { table, from: 0 } if table.0 as usize == table_index)
-                {
-                    has_entry = true;
-                    break;
-                }
+        for (table_index, table) in body.matches.iter().enumerate() {
+            if !body.blocks.iter().any(|b| matches!(b.terminator, Terminator::Match { table, from: 0 } if table.0 as usize == table_index)) {
+                add(bid, None, None, ViolationKind::WrongKind { entity: "match table without entry", index: table_index as u32 });
             }
-            if !has_entry {
-                add(
-                    bid,
-                    None,
-                    None,
-                    ViolationKind::WrongKind {
-                        entity: "match table without entry",
-                        index: table_index as u32,
-                    },
-                );
-            }
-            refs.push((None, None, "place", table.scrutinee()?.0));
-            let mut used = vec![false; table.pattern_count()];
-            for n in 0..table.arm_count() {
-                let arm = table.arm(n)?;
+            refs.push((None, None, "place", table.scrutinee.0));
+            let mut used = vec![false; table.patterns.len()];
+            for arm in &table.arms {
                 refs.push((None, None, "block", arm.target.0));
                 if let Some(guard) = arm.guard {
                     refs.push((None, None, "block", guard.0));
@@ -466,8 +424,7 @@ pub fn validate_structure_rows(
                     );
                 }
             }
-            for index in (0..table.pattern_count()).rev() {
-                let pattern = table.pattern(index)?;
+            for (index, pattern) in table.patterns.iter().enumerate().rev() {
                 refs.push((None, None, "place", pattern.place.0));
                 let mut fields = BTreeSet::new();
                 for (field, child) in pattern.kind.fields() {
@@ -511,21 +468,19 @@ pub fn validate_structure_rows(
                 }
             }
         }
-        for n in 0..body.rvalue_count() {
-            let rvalue = body.rvalue(n)?;
-            for o in typing::operands(&rvalue) {
+        for rvalue in &body.rvalues {
+            for o in typing::operands(rvalue) {
                 refs.push((None, None, "place", o.place.0));
             }
-            match &*rvalue {
+            match rvalue {
                 Rvalue::Closure { body, .. } => refs.push((None, None, "body", body.0)),
                 Rvalue::Shape(t) => type_roots.push(*t),
                 _ => (),
             }
         }
-        for n in 0..body.cleanup_count() {
-            let cleanup = body.cleanup(n)?;
+        for cleanup in &body.cleanups {
             if let Some(head) = cleanup.head {
-                if head.0 as usize >= body.cleanup_node_count() {
+                if head.0 as usize >= body.cleanup_nodes.len() {
                     add(
                         bid,
                         None,
@@ -538,8 +493,7 @@ pub fn validate_structure_rows(
                 }
             }
         }
-        for index in 0..body.cleanup_node_count() {
-            let node = body.cleanup_node(index)?;
+        for (index, node) in body.cleanup_nodes.iter().enumerate() {
             if let Some(parent) = node.parent {
                 if parent.0 as usize >= index {
                     add(
@@ -554,8 +508,7 @@ pub fn validate_structure_rows(
                 }
             }
         }
-        for n in 0..body.cleanup_node_count() {
-            let c = body.cleanup_node(n)?;
+        for c in &body.cleanup_nodes {
             for action in [&c.action] {
                 match action {
                     CleanupAction::Drop { place, .. }
@@ -583,13 +536,13 @@ pub fn validate_structure_rows(
         }
         for (block, inst, arena, index) in refs {
             let len = match arena {
-                "local" => body.local_count(),
-                "place" => body.place_count(),
-                "scope" => body.scope_count(),
-                "block" => body.block_count(),
-                "rvalue" => body.rvalue_count(),
-                "cleanup" => body.cleanup_count(),
-                "body" => definition.body_count(),
+                "local" => body.locals.len(),
+                "place" => body.places.len(),
+                "scope" => body.scopes.len(),
+                "block" => body.blocks.len(),
+                "rvalue" => body.rvalues.len(),
+                "cleanup" => body.cleanups.len(),
+                "body" => definition.bodies.len(),
                 _ => unreachable!(),
             };
             if index as usize >= len {
@@ -603,8 +556,7 @@ pub fn validate_structure_rows(
         }
     }
     // Check the table's graph edges once; each body's root IDs were checked above.
-    for n in 0..definition.type_count() {
-        let id = *definition.type_id(n)?;
+    for &id in definition.types.iter() {
         if !owned_type(id) {
             add(None, None, None, ViolationKind::InvalidType(id));
             continue;
@@ -616,30 +568,7 @@ pub fn validate_structure_rows(
         }
     }
 
-    Some(errors)
-}
-
-fn successors(body: TirBodyView<'_>, terminator: &Terminator) -> Option<Vec<BlockId>> {
-    Some(match terminator {
-        Terminator::Goto(block) => vec![*block],
-        Terminator::Match { table, from } => {
-            let mut blocks = Vec::new();
-            if (table.0 as usize) < body.match_table_count() {
-                let table = body.match_table(table.0 as usize)?;
-                for n in *from as usize..table.arm_count() {
-                    let arm = table.arm(n)?;
-                    blocks.push(arm.guard.unwrap_or(arm.target));
-                }
-            }
-            blocks
-        }
-        Terminator::Branch { yes, no, .. } => vec![*yes, *no],
-        Terminator::Switch {
-            arms, otherwise, ..
-        } => arms.iter().map(|a| a.1).chain([*otherwise]).collect(),
-        Terminator::Call { returns, .. } => returns.iter().map(|r| r.next).collect(),
-        Terminator::Return { .. } | Terminator::Fail { .. } | Terminator::Unreachable => vec![],
-    })
+    errors
 }
 
 #[cfg(test)]
@@ -728,6 +657,15 @@ mod tests {
         .unwrap();
         assert!(
             validate_structure_rows(TirView::Archived(&unbound), support::interner()).is_none()
+        );
+        assert!(
+            crate::validate_rows(
+                TirView::Archived(&unbound),
+                support::interner(),
+                &crate::SignatureMap::new(support::session()),
+                &mut vec![]
+            )
+            .is_none()
         );
         assert_eq!(
             validate_structure_rows(TirView::Archived(&checked), support::interner()),

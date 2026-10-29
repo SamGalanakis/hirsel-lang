@@ -77,7 +77,7 @@ fn tag(pattern: &MatchPatternKind) -> Option<Tag> {
         _ => None,
     }
 }
-fn wildcard(table: &MatchTable, cell: Option<MatchPatternId>) -> bool {
+fn wildcard(table: &ReadMatch<'_>, cell: Option<MatchPatternId>) -> bool {
     cell.is_none_or(|id| {
         matches!(
             table.patterns[id.0 as usize].kind,
@@ -85,7 +85,7 @@ fn wildcard(table: &MatchTable, cell: Option<MatchPatternId>) -> bool {
         )
     })
 }
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn match_tables(&mut self) {
         for table in &self.body.matches {
             let errors_before = self.errors.len();
@@ -545,7 +545,7 @@ impl Checker<'_> {
         }
         block == target
     }
-    fn coverage(&mut self, table: &MatchTable, store: &TypeInterner) -> Result<bool, ()> {
+    fn coverage(&mut self, table: &ReadMatch<'_>, store: &TypeInterner) -> Result<bool, ()> {
         let rows: Vec<Vec<Option<MatchPatternId>>> = table
             .arms
             .iter()

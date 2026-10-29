@@ -42,7 +42,7 @@ fn verdict(proven: bool) -> Sendability {
     }
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// The answer to `query` about `root`, as `hirsel_types` proves it; a
     /// boolean property answers Sendable for true. Memoized when the proof
     /// reads this body's own declarations in the session's store.

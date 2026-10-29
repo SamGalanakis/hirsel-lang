@@ -613,7 +613,7 @@ pub(super) fn remember(
 /// region. A whole
 /// introduction subsumes all fields; a field introduction preserves disjoint
 /// siblings. No block-number ordering stands in for CFG reachability.
-pub(super) fn loop_expirations(body: &Body) -> BTreeMap<(u32, u32), BTreeSet<Origin>> {
+pub(super) fn loop_expirations(body: &ReadBody<'_>) -> BTreeMap<(u32, u32), BTreeSet<Origin>> {
     let graph: Vec<_> = body
         .blocks
         .iter()
@@ -722,7 +722,10 @@ pub(super) fn loop_expirations(body: &Body) -> BTreeMap<(u32, u32), BTreeSet<Ori
     result
 }
 /// The names a block introduces fresh.
-fn fresh_bindings(body: &Body, block: u32) -> impl Iterator<Item = Origin> + '_ {
+fn fresh_bindings<'a, 'input>(
+    body: &'a ReadBody<'input>,
+    block: u32,
+) -> impl Iterator<Item = Origin> + 'a {
     body.blocks[block as usize]
         .instructions
         .iter()
@@ -1047,7 +1050,8 @@ mod loop_region_tests {
                 )
             })
             .collect();
-        loop_expirations(body)
+        let definition = ReadDefinition::live(&fixture.definition);
+        loop_expirations(&definition.bodies[0])
             .into_iter()
             .map(|(edge, origins)| {
                 (

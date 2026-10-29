@@ -22,7 +22,7 @@ fn join(to: &mut Paths, from: &Paths) -> bool {
     }
     changed
 }
-fn read(t: &TypeInterner, body: &Body, rows: &State, value: &Operand) -> Paths {
+fn read(t: &TypeInterner, body: &ReadBody<'_>, rows: &State, value: &Operand) -> Paths {
     let p = &body.places[value.place.0 as usize];
     if matches!(&t.row(p.ty).kind, TypeKind::Primitive(k)
         if !matches!(k, hirsel_types::Primitive::Bytes | hirsel_types::Primitive::String))
@@ -50,7 +50,7 @@ fn read(t: &TypeInterner, body: &Body, rows: &State, value: &Operand) -> Paths {
     }
     out
 }
-fn put(body: &Body, rows: &mut State, destination: PlaceId, input: &Paths) -> bool {
+fn put(body: &ReadBody<'_>, rows: &mut State, destination: PlaceId, input: &Paths) -> bool {
     let p = &body.places[destination.0 as usize];
     let path: Option<Vec<u32>> = p
         .projection
@@ -84,7 +84,7 @@ fn put(body: &Body, rows: &mut State, destination: PlaceId, input: &Paths) -> bo
     }
     join(rows.entry(p.root.0 as usize).or_default(), &input)
 }
-fn write(body: &Body, rows: &mut State, destination: PlaceId, input: &Paths) {
+fn write(body: &ReadBody<'_>, rows: &mut State, destination: PlaceId, input: &Paths) {
     let p = &body.places[destination.0 as usize];
     let path: Option<Vec<u32>> = p
         .projection
@@ -154,7 +154,7 @@ fn original_data_shape(t: &TypeInterner, ty: hirsel_types::TypeId) -> bool {
 }
 
 pub(super) fn check(
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     t: &TypeInterner,
     signatures: &Reader<'_>,
 ) -> Vec<Violation> {
@@ -634,7 +634,7 @@ mod tests {
             on_failure: CleanupId(0),
         };
         check(
-            &f.definition,
+            &ReadDefinition::live(&f.definition),
             interner(),
             &Reader::new(interner(), &f.signatures),
         )
@@ -716,7 +716,7 @@ mod tests {
             if_live: false,
         });
         check(
-            &f.definition,
+            &ReadDefinition::live(&f.definition),
             interner(),
             &Reader::new(interner(), &f.signatures),
         )

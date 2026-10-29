@@ -7,21 +7,22 @@
 use super::*;
 use crate::support::{Fixture, block, copy, inst, interner, owner_sig, param, tabled};
 
-fn with_model(f: &Fixture, run: impl FnOnce(&mut Checker<'_>, &Model, State)) {
+fn with_model(f: &Fixture, run: impl FnOnce(&mut Checker<'_, '_>, &Model, State)) {
     let declarations = typing::declaration_tables(
         interner(),
-        &f.definition,
+        &ReadDefinition::live(&f.definition),
         &Reader::new(interner(), &f.signatures),
     )
     .unwrap();
     let scratch = scratch::Scratch::new(f.definition.bodies.len());
     let memo = TypeMemo::new();
     let reader = Reader::new(interner(), &f.signatures);
+    let definition = ReadDefinition::live(&f.definition);
     let mut checker = Checker {
-        definition: &f.definition,
+        definition: &definition,
         t: interner(),
         memo: &memo,
-        body: &f.definition.bodies[0],
+        body: &definition.bodies[0],
         signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,

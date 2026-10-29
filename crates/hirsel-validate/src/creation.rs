@@ -79,7 +79,7 @@ fn relayed(types: &TypeInterner, relayed: TypeId, incoming: TypeId) -> bool {
     types.semantic_eq(a, b)
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// The callable type the validated body implements, with its row store:
     /// the published header for the entry, the creating row for a closure.
     pub(super) fn body_callable(&self) -> Option<(&TypeInterner, &hirsel_types::FunctionType)> {

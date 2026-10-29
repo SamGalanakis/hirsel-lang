@@ -31,7 +31,7 @@ pub(super) fn children(kind: &TypeKind) -> Vec<TypeId> {
 fn implies(bounds: &[Bound], bound: Bound) -> bool {
     bounds.contains(&bound) || (bound == Bound::NoallocDrop && bounds.contains(&Bound::Plain))
 }
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn table_key_arguments(
         &mut self,
         path: &hirsel_syntax::DefPath,
@@ -237,7 +237,7 @@ impl Checker<'_> {
     // values. A contextual callable result promise may already have weakened it.
     fn complete_callable(&self, place: PlaceId, target: &TypeInterner) -> Vec<TypeId> {
         fn producers(
-            body: &Body,
+            body: &ReadBody<'_>,
             root: hirsel_tir::LocalId,
             active: &mut BTreeSet<u32>,
         ) -> Option<BTreeSet<u32>> {

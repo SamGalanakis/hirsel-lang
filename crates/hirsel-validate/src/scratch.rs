@@ -87,7 +87,7 @@ impl Scratch {
     pub(super) fn definition_inputs(
         &self,
         t: &hirsel_types::TypeInterner,
-        definition: &hirsel_tir::Definition,
+        definition: &super::ReadDefinition<'_>,
     ) -> &DefinitionInputs {
         self.definition_inputs
             .get_or_init(|| DefinitionInputs::new(t, definition))
@@ -109,7 +109,7 @@ pub(super) struct DefinitionInputs {
     pub(super) origin_selectors: std::collections::BTreeSet<Vec<hirsel_types::FieldId>>,
 }
 impl DefinitionInputs {
-    fn new(t: &hirsel_types::TypeInterner, definition: &hirsel_tir::Definition) -> Self {
+    fn new(t: &hirsel_types::TypeInterner, definition: &super::ReadDefinition<'_>) -> Self {
         use super::flow_origins::EnvironmentField;
         use crate::{Constructor, InstructionKind, Rvalue};
         use hirsel_intern::work::{self, Counter};

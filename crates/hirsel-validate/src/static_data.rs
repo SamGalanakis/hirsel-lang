@@ -34,7 +34,7 @@ pub(super) struct Values {
     values: Vec<Option<u32>>,
 }
 impl Values {
-    pub fn new(body: &Body) -> Self {
+    pub fn new(body: &ReadBody<'_>) -> Self {
         let mut producers = vec![None; body.locals.len()];
         let mut written = vec![false; body.locals.len()];
         let mut invalid = vec![false; body.locals.len()];
@@ -202,7 +202,7 @@ impl Values {
             }
         })
     }
-    fn place(&self, body: &Body, place: PlaceId) -> Option<u32> {
+    fn place(&self, body: &ReadBody<'_>, place: PlaceId) -> Option<u32> {
         let access = &body.places[place.0 as usize];
         let mut value = self.values[access.root.0 as usize]?;
         for projection in &access.projection {
@@ -222,7 +222,7 @@ impl Values {
     }
     pub fn distinct_keys(
         &self,
-        body: &Body,
+        body: &ReadBody<'_>,
         constructor: &Constructor,
         fields: &[ConstructField],
     ) -> bool {

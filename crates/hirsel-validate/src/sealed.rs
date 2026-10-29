@@ -2,7 +2,7 @@
 use super::*;
 use hirsel_types::{Bound, BuiltinType, Multiplicity, SignatureKind};
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn seal_type(&mut self, arguments: &[CallArgument]) {
         if self
             .invocation_header()

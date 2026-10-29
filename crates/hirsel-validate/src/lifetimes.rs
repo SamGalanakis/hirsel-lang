@@ -13,7 +13,7 @@ pub(crate) struct ContentProof {
     pub(crate) deep: bool,
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     fn content_inputs(&self) -> &ContentInputs {
         self.scratch.content_inputs[self.site.body.0 as usize]
             .get()

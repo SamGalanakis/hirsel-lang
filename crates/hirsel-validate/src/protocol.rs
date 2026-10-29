@@ -368,7 +368,7 @@ fn actuals(
 pub(super) fn receipts(
     t: &TypeInterner,
     memo: &TypeMemo,
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     signatures: &Reader<'_>,
 ) -> Vec<Violation> {
     let mut errors = vec![];
@@ -420,7 +420,7 @@ fn unproved(store: &TypeInterner, f: &FunctionType) -> bool {
 /// declaration-owned boundaries.
 pub(super) fn unproved_promises(
     t: &TypeInterner,
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     signatures: &Reader<'_>,
 ) -> Vec<Violation> {
     let owner = signatures

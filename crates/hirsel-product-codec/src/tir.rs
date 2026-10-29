@@ -439,6 +439,12 @@ impl CheckedTir {
     fn root(&self) -> Rows<'_> {
         Rows::checked(&self.payload)
     }
+    /// Bind every declared type reference to this immutable source's retained
+    /// interner. Framing and all scalar/source positions were checked at open.
+    /// Successful bindings remain cached for this owner, including after unlink.
+    pub fn bind_types(&self) -> Option<()> {
+        self.source.bind_types()
+    }
     pub fn backing(&self) -> &Bytes {
         self.source.envelope().backing()
     }

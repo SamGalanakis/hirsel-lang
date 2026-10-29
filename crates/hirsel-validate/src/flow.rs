@@ -401,7 +401,7 @@ impl Model {
     fn origin_paths_of(&self, ty: TypeId) -> &[Vec<hirsel_types::FieldId>] {
         &self.typed_origin_paths[&ty]
     }
-    fn new(checker: &mut Checker<'_>) -> Self {
+    fn new(checker: &mut Checker<'_, '_>) -> Self {
         let body = checker.body;
         let mut places: Vec<_> = body
             .locals
@@ -1056,7 +1056,7 @@ impl Model {
             mask & LIVE != 0 && mask != LIVE,
         );
     }
-    fn proves_cleanup(&self, body: &Body, state: &State, id: CleanupId) -> bool {
+    fn proves_cleanup(&self, body: &ReadBody<'_>, state: &State, id: CleanupId) -> bool {
         if !self.simple_cleanup || state.cleanup_conflicts != 0 || state.cleanup_maybe_loans != 0 {
             return false;
         }
@@ -1068,7 +1068,7 @@ impl Model {
             proof.roots == state.cleanup_roots && proof.loans == state.cleanup_loans
         })
     }
-    fn access_chain(&self, body: &Body, access: &Place) -> Option<BTreeSet<usize>> {
+    fn access_chain(&self, body: &ReadBody<'_>, access: &Place) -> Option<BTreeSet<usize>> {
         let mut result = BTreeSet::new();
         let mut access = access;
         while let Some(id) = access.loan {
@@ -1084,7 +1084,7 @@ impl Model {
         }
         Some(result)
     }
-    fn binding_valid(&self, state: &State, access: &Place, body: &Body) -> bool {
+    fn binding_valid(&self, state: &State, access: &Place, body: &ReadBody<'_>) -> bool {
         let Some(binding) = &access.binding else {
             return true;
         };
@@ -1166,7 +1166,7 @@ impl Model {
     }
     fn initial(
         &self,
-        body: &Body,
+        body: &ReadBody<'_>,
         types: &TypeInterner,
         origin_types: &super::origin_types::Types,
         lifetime_global: &dyn Fn(TypeId) -> bool,
@@ -1485,7 +1485,7 @@ fn share_root(state: &mut State, root: usize) {
     state.nested_shared.set(root, true);
     state.borrow_only.set(root, false);
 }
-fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
+fn result_read_sites(body: &ReadBody<'_>) -> BTreeSet<(u32, Option<u32>)> {
     let mut incoming = vec![BTreeSet::new(); body.blocks.len()];
     let graph: Vec<Vec<usize>> = body
         .blocks
@@ -1569,7 +1569,7 @@ fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
 }
 
 fn structural_property(
-    c: &Checker<'_>,
+    c: &Checker<'_, '_>,
     root: TypeId,
     source: &TypeInterner,
     bound: hirsel_types::Bound,
@@ -1582,15 +1582,15 @@ fn structural_property(
     c.proven(source, root, query, c.generic_declarations())
 }
 
-pub(super) fn needs_release(c: &Checker<'_>, t: TypeId, store: &TypeInterner) -> bool {
+pub(super) fn needs_release(c: &Checker<'_, '_>, t: TypeId, store: &TypeInterner) -> bool {
     !structural_property(c, t, store, hirsel_types::Bound::Plain)
 }
 
-fn copyable(c: &Checker<'_>, t: TypeId, store: &TypeInterner) -> bool {
+fn copyable(c: &Checker<'_, '_>, t: TypeId, store: &TypeInterner) -> bool {
     structural_property(c, t, store, hirsel_types::Bound::Copyable)
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// User-visible destruction (DROP-1/2): a value that may contain a
     /// resource, which is noncopyable, or a once callable.
     fn destroyed(&self, t: TypeId) -> bool {
@@ -1600,7 +1600,7 @@ impl Checker<'_> {
     }
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn flow(&mut self, captures: &[super::flow_origins::CapturedOrigin], report: bool) {
         self.flow_with(captures, report, None);
     }
@@ -2054,7 +2054,7 @@ impl Checker<'_> {
         model: &Model,
         state: &State,
         access: &Place,
-        body: &Body,
+        body: &ReadBody<'_>,
     ) -> BTreeSet<Origin> {
         if !model.binding_valid(state, access, body) {
             return BTreeSet::new();
@@ -7109,11 +7109,12 @@ mod nominal_limit_tests {
             let scratch = scratch::Scratch::new(f.definition.bodies.len());
             let memo = TypeMemo::new();
             let reader = crate::input::Reader::new(interner(), &f.signatures);
+            let definition = ReadDefinition::live(&f.definition);
             let mut checker = Checker {
-                definition: &f.definition,
+                definition: &definition,
                 t: interner(),
                 memo: &memo,
-                body: &f.definition.bodies[0],
+                body: &definition.bodies[0],
                 signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,
@@ -7226,11 +7227,12 @@ mod header_name_tests {
             let scratch = scratch::Scratch::new(f.definition.bodies.len());
             let memo = TypeMemo::new();
             let reader = crate::input::Reader::new(interner(), &f.signatures);
+            let definition = ReadDefinition::live(&f.definition);
             let mut checker = Checker {
-                definition: &f.definition,
+                definition: &definition,
                 t: interner(),
                 memo: &memo,
-                body: &f.definition.bodies[1],
+                body: &definition.bodies[1],
                 signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,
@@ -7324,11 +7326,12 @@ mod header_name_tests {
             let scratch = scratch::Scratch::new(f.definition.bodies.len());
             let memo = TypeMemo::new();
             let reader = crate::input::Reader::new(interner(), &f.signatures);
+            let definition = ReadDefinition::live(&f.definition);
             let mut checker = Checker {
-                definition: &f.definition,
+                definition: &definition,
                 t: interner(),
                 memo: &memo,
-                body: &f.definition.bodies[1],
+                body: &definition.bodies[1],
                 signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,

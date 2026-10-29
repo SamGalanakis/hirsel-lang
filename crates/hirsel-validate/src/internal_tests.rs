@@ -16,10 +16,11 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
         panic!()
     };
     *bounds = vec![Bound::Flat].into();
-    let body = &f.definition.bodies[1];
+    let definition = ReadDefinition::live(&f.definition);
+    let body = &definition.bodies[1];
     let declarations = typing::declaration_tables(
         interner(),
-        &f.definition,
+        &ReadDefinition::live(&f.definition),
         &crate::input::Reader::new(interner(), &f.signatures),
     )
     .unwrap();
@@ -27,7 +28,7 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
     let reader = crate::input::Reader::new(interner(), &f.signatures);
     let memo = TypeMemo::new();
     let checker = Checker {
-        definition: &f.definition,
+        definition: &definition,
         t: interner(),
         memo: &memo,
         body,
@@ -74,10 +75,11 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     let mut row = ty(TypeKind::Box(parameter));
     row.modes.uniqueness = Uniqueness::Unique;
     let actual = f.definition.types.push(row);
-    let body = &f.definition.bodies[1];
+    let definition = ReadDefinition::live(&f.definition);
+    let body = &definition.bodies[1];
     let declarations = typing::declaration_tables(
         interner(),
-        &f.definition,
+        &ReadDefinition::live(&f.definition),
         &crate::input::Reader::new(interner(), &f.signatures),
     )
     .unwrap();
@@ -85,7 +87,7 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     let reader = crate::input::Reader::new(interner(), &f.signatures);
     let memo = TypeMemo::new();
     let checker = Checker {
-        definition: &f.definition,
+        definition: &definition,
         t: interner(),
         memo: &memo,
         body,
@@ -171,10 +173,11 @@ fn sorted_map_equality_and_key_validation_accounts_for_the_order_dictionary() {
             kind == BuiltinType::SortedMap,
             "{kind:?}: {kinds:?}"
         );
-        let body = &f.definition.bodies[0];
+        let definition = ReadDefinition::live(&f.definition);
+        let body = &definition.bodies[0];
         let declarations = typing::declaration_tables(
             interner(),
-            &f.definition,
+            &ReadDefinition::live(&f.definition),
             &crate::input::Reader::new(interner(), &f.signatures),
         )
         .unwrap();
@@ -182,7 +185,7 @@ fn sorted_map_equality_and_key_validation_accounts_for_the_order_dictionary() {
         let reader = crate::input::Reader::new(interner(), &f.signatures);
         let memo = TypeMemo::new();
         let checker = Checker {
-            definition: &f.definition,
+            definition: &definition,
             t: interner(),
             memo: &memo,
             body,
@@ -327,16 +330,17 @@ fn capability_authority_is_nominal_even_with_an_incomplete_snapshot() {
         };
         f.signatures.insert(id("Gate"), signature);
         owner_sig(&mut f, &[PassingMode::Borrow]);
-        let body = &f.definition.bodies[0];
+        let definition = ReadDefinition::live(&f.definition);
+        let body = &definition.bodies[0];
         let reader = crate::input::Reader::new(interner(), &f.signatures);
         let memo = TypeMemo::new();
         let checker = Checker {
-            definition: &f.definition,
+            definition: &definition,
             t: interner(),
             memo: &memo,
             body,
             signatures: &reader,
-            declarations: &typing::declaration_tables(interner(), &f.definition, &reader).unwrap(),
+            declarations: &typing::declaration_tables(interner(), &definition, &reader).unwrap(),
             scratch: &scratch::Scratch::new(f.definition.bodies.len()),
             contract: false,
             site: Site {
@@ -422,11 +426,12 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
     let scratch = scratch::Scratch::new(1);
     let reader = crate::input::Reader::new(interner(), &f.signatures);
     let memo = TypeMemo::new();
+    let definition = ReadDefinition::live(&f.definition);
     let checker = Checker {
-        definition: &f.definition,
+        definition: &definition,
         t: interner(),
         memo: &memo,
-        body: &f.definition.bodies[0],
+        body: &definition.bodies[0],
         signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,
@@ -515,11 +520,12 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
             let scratch = scratch::Scratch::new(1);
             let reader = crate::input::Reader::new(interner(), &f.signatures);
             let memo = TypeMemo::new();
+            let definition = ReadDefinition::live(&f.definition);
             let mut checker = Checker {
-                definition: &f.definition,
+                definition: &definition,
                 t: interner(),
                 memo: &memo,
-                body: &f.definition.bodies[0],
+                body: &definition.bodies[0],
                 signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,
@@ -569,14 +575,16 @@ fn repeated_flat_copies_keep_canonical_rows_without_reinterning() {
     owner_sig(&mut f, &[]);
     let types = interner();
     let reader = crate::input::Reader::new(types, &f.signatures);
-    let declarations = typing::declaration_tables(types, &f.definition, &reader).unwrap();
+    let declarations =
+        typing::declaration_tables(types, &ReadDefinition::live(&f.definition), &reader).unwrap();
     let scratch = scratch::Scratch::new(f.definition.bodies.len());
     let memo = TypeMemo::new();
+    let definition = ReadDefinition::live(&f.definition);
     let checker = Checker {
-        definition: &f.definition,
+        definition: &definition,
         t: types,
         memo: &memo,
-        body: &f.definition.bodies[0],
+        body: &definition.bodies[0],
         signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,
@@ -637,11 +645,12 @@ fn row_transformations_respect_a_foreign_generic_environment() {
     let declarations = vec![GenericDeclarations::default()];
     let scratch = scratch::Scratch::new(1);
     let memo = TypeMemo::new();
+    let definition = ReadDefinition::live(&f.definition);
     let checker = Checker {
-        definition: &f.definition,
+        definition: &definition,
         t: types,
         memo: &memo,
-        body: &f.definition.bodies[0],
+        body: &definition.bodies[0],
         signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,

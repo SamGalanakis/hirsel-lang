@@ -1,15 +1,16 @@
 //! Independent verification of source-published self-tail witnesses.
+use super::{ReadBody, ReadDefinition};
 use hirsel_syntax::DefPath;
 use hirsel_tir::*;
 use hirsel_types::{TypeId, UseKind};
 use std::collections::BTreeSet;
-fn plain(body: &Body, place: PlaceId, property: &impl Fn(TypeId, bool) -> bool) -> bool {
+fn plain(body: &ReadBody<'_>, place: PlaceId, property: &impl Fn(TypeId, bool) -> bool) -> bool {
     body.places
         .get(place.0 as usize)
         .is_some_and(|p| property(p.ty, false))
 }
 fn counted_temporary(
-    body: &Body,
+    body: &ReadBody<'_>,
     place: PlaceId,
     property: &impl Fn(TypeId, bool) -> bool,
 ) -> bool {
@@ -23,16 +24,16 @@ fn counted_temporary(
             && property(p.ty, true)
     })
 }
-fn same(body: &Body, a: PlaceId, b: PlaceId) -> bool {
+fn same(body: &ReadBody<'_>, a: PlaceId, b: PlaceId) -> bool {
     matches!((body.places.get(a.0 as usize), body.places.get(b.0 as usize)), (Some(a), Some(b)) if a.root == b.root && a.projection == b.projection)
 }
-fn cleared(body: &Body, place: PlaceId, dead: &BTreeSet<u32>) -> bool {
+fn cleared(body: &ReadBody<'_>, place: PlaceId, dead: &BTreeSet<u32>) -> bool {
     body.places
         .get(place.0 as usize)
         .is_some_and(|p| dead.contains(&p.root.0))
 }
 fn clean(
-    body: &Body,
+    body: &ReadBody<'_>,
     cleanup: CleanupId,
     dead: &BTreeSet<u32>,
     loop_roots: &BTreeSet<u32>,
@@ -55,7 +56,7 @@ fn clean(
 /// temporary is carried by an internal loop owner, not an old-frame obligation.
 pub(crate) fn verify_self_tail(
     t: &hirsel_types::TypeInterner,
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     owner: BodyId,
     site: &TailSite,
     property: &impl Fn(TypeId, bool) -> bool,
@@ -315,9 +316,9 @@ fn rvalue_operands(value: &Rvalue) -> Vec<&Operand> {
 
 // Replay physical initialization along normal edges independently of the witness.
 // Conditional join cleanups can mention owners already taken before this call.
-fn live_at_call(body: &Body, target: BlockId) -> Option<BTreeSet<u32>> {
+fn live_at_call(body: &ReadBody<'_>, target: BlockId) -> Option<BTreeSet<u32>> {
     use std::collections::VecDeque;
-    fn take(body: &Body, live: &mut BTreeSet<u32>, operand: &Operand) {
+    fn take(body: &ReadBody<'_>, live: &mut BTreeSet<u32>, operand: &Operand) {
         if operand.usage == UseKind::Take {
             if let Some(p) = body.places.get(operand.place.0 as usize) {
                 if p.projection.is_empty() {
@@ -326,14 +327,14 @@ fn live_at_call(body: &Body, target: BlockId) -> Option<BTreeSet<u32>> {
             }
         }
     }
-    fn drop_place(body: &Body, live: &mut BTreeSet<u32>, place: PlaceId) {
+    fn drop_place(body: &ReadBody<'_>, live: &mut BTreeSet<u32>, place: PlaceId) {
         if let Some(p) = body.places.get(place.0 as usize) {
             if p.projection.is_empty() {
                 live.remove(&p.root.0);
             }
         }
     }
-    fn cleanup(body: &Body, live: &mut BTreeSet<u32>, id: CleanupId) {
+    fn cleanup(body: &ReadBody<'_>, live: &mut BTreeSet<u32>, id: CleanupId) {
         if body.cleanups.get(id.0 as usize).is_some() {
             for a in body.cleanup_actions(id) {
                 if let CleanupAction::Drop { place, .. } = a {
@@ -445,7 +446,7 @@ pub(crate) type OrdinaryConstructor<'a> = dyn Fn(&DefPath) -> bool + 'a;
 /// and variants are levels, built at an inferred (never arena) destination.
 pub(crate) fn constructor_path(
     t: &hirsel_types::TypeInterner,
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     owner: BodyId,
     call_block: BlockId,
     property: &impl Fn(TypeId, bool) -> bool,
@@ -630,7 +631,7 @@ pub(crate) fn constructor_path(
 /// The locals a constructor-tail chain consumes as earlier fields: owners
 /// pending at the call by design, since they become parts of the partial
 /// result. Whether the chain qualifies is `constructor_path`'s question.
-pub(crate) fn chain_fields(body: &Body, call_block: BlockId) -> BTreeSet<u32> {
+pub(crate) fn chain_fields(body: &ReadBody<'_>, call_block: BlockId) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
     let Some(Terminator::Call {
         returns: Some(CallReturn { destination, next }),
@@ -689,7 +690,7 @@ pub(crate) fn chain_fields(body: &Body, call_block: BlockId) -> BTreeSet<u32> {
 /// and a borrowed counted argument is a parameter or a listed loop temporary.
 pub(crate) fn verify_constructor_hole(
     t: &hirsel_types::TypeInterner,
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     owner: BodyId,
     site: &TailSite,
     property: &impl Fn(TypeId, bool) -> bool,

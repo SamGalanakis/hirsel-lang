@@ -22,7 +22,7 @@ pub(super) enum Relation {
 
 pub(super) fn selections(
     function: Option<&hirsel_types::FunctionType>,
-    body: &Body,
+    body: &ReadBody<'_>,
 ) -> Vec<Selection> {
     let Some(function) = function else {
         return vec![];
@@ -62,7 +62,7 @@ fn relation(projection: &[Projection], fields: &[u32]) -> Option<Relation> {
     Some(Relation::Whole)
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// Every selection an access meets, with the access's leading field path.
     pub(super) fn selected(
         &self,

@@ -55,7 +55,7 @@ impl State {
             });
         }
     }
-    pub(super) fn widen_cursors(&mut self, model: &Model, body: &Body) {
+    pub(super) fn widen_cursors(&mut self, model: &Model, body: &ReadBody<'_>) {
         for cursor in &body.borrow_cursors {
             let root = cursor.carrier.0 as usize;
             let contract = &self.cursor_contracts[root];
@@ -96,7 +96,7 @@ impl State {
     }
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     fn cursor_view(&self, model: &Model, state: &State, place: PlaceId) -> View {
         let access = &self.body.places[place.0 as usize];
         if !state.cursor_views.is_empty()

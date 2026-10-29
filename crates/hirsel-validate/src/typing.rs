@@ -21,7 +21,7 @@ pub(super) type Relations = crate::hashed::HashMap<
 
 pub(super) fn declaration_tables(
     t: &TypeInterner,
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     signatures: &Reader<'_>,
 ) -> Option<Vec<GenericDeclarations>> {
     let empty: std::sync::Arc<[GenericParameter]> = [].into();
@@ -63,10 +63,13 @@ pub(super) fn declaration_tables(
 fn scoped_parameters_valid(
     types: &TypeInterner,
     function: &hirsel_types::FunctionType,
-    claimed: &[ScopedParameter],
+    claimed: &row_input::Rows<'_, ScopedParameter>,
     expected: &[ScopedParameter],
 ) -> bool {
-    claimed.windows(2).all(|w| w[0] < w[1])
+    claimed
+        .iter()
+        .zip(claimed.iter().skip(1))
+        .all(|(a, b)| a < b)
         && expected.iter().all(|p| claimed.contains(p))
         && claimed.iter().all(|p| {
             expected.contains(p)
@@ -110,7 +113,7 @@ pub(super) fn signature_valid(t: &TypeInterner, s: &Signature) -> bool {
         }
     }
     let rows = hirsel_types::closure(t, hirsel_types::signature_types(t, s));
-    if !graph_valid(t, &rows)
+    if !graph_valid(t, rows.iter())
         || rows
             .iter()
             .map(|&id| t.row(id))
@@ -310,7 +313,7 @@ pub(super) fn constant_valid(c: &Constant, kind: &TypeKind) -> bool {
     }
 }
 
-impl<'a> Checker<'a> {
+impl<'a, 'input> Checker<'a, 'input> {
     pub(super) fn types(&mut self) {
         self.arena_scope_entry();
         self.match_tables();
@@ -1275,7 +1278,7 @@ impl<'a> Checker<'a> {
     /// Traverse data payloads, never callable contracts or Shared contents.
     fn acquired_global_type(&self, store: &TypeInterner, root: TypeId) -> TypeId {
         fn visit(
-            checker: &Checker<'_>,
+            checker: &Checker<'_, '_>,
             store: &TypeInterner,
             ty: TypeId,
             seen: &mut HashMap<TypeId, TypeId>,
@@ -2775,7 +2778,7 @@ impl<'a> Checker<'a> {
     /// physical rows. Specialization includes generic and erased holders.
     fn retains_scoped_capability(&self, root: TypeId) -> bool {
         fn visit(
-            checker: &Checker<'_>,
+            checker: &Checker<'_, '_>,
             store: &TypeInterner,
             root: TypeId,
             seen: &mut HashSet<TypeId>,

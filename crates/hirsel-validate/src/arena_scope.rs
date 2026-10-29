@@ -2,7 +2,7 @@
 use super::*;
 use hirsel_types::{ParamId, PassingMode, SignatureKind};
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn arena_scope_entry(&mut self) {
         let Some(claim) = self.body.arena_scope_grant.clone() else {
             return;

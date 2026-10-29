@@ -62,6 +62,7 @@ pub use receipts::{
     validate_with_receipt,
 };
 mod protocol;
+mod row_input;
 mod scope_locals;
 mod scoped_transport;
 mod scratch;
@@ -70,6 +71,7 @@ mod serialization;
 mod shared;
 mod static_data;
 mod structure;
+use row_input::{ReadBody, ReadDefinition, ReadMatch};
 pub use structure::validate_structure_rows;
 pub mod storage;
 mod tail;
@@ -202,7 +204,8 @@ pub fn validate(
     // accounting (including V invoked by import and compile-time execution).
     let started = profile_start();
     let reader = Reader::new(t, signatures);
-    let mut validation = validate_input(definition, t, &reader);
+    let definition = ReadDefinition::live(definition);
+    let mut validation = validate_input(&definition, t, &reader);
     validation.violations.extend(reader.input_errors());
     reader.finish(reads);
     if let Some(started) = started {
@@ -217,6 +220,23 @@ pub fn validate(
     validation
 }
 
+/// Independently validate live or checked indexed TIR. Missing immutable source
+/// or type bindings are a read failure. Every semantic obligation and recorded
+/// signature read uses the same checker as ordinary live input.
+pub fn validate_rows(
+    definition: hirsel_product_codec::TirView<'_>,
+    t: &TypeInterner,
+    signatures: &dyn SignatureLookup,
+    reads: &mut Vec<VRead>,
+) -> Option<Validation> {
+    let definition = ReadDefinition::new(definition)?;
+    let reader = Reader::new(t, signatures);
+    let mut validation = validate_input(&definition, t, &reader);
+    validation.violations.extend(reader.input_errors());
+    reader.finish(reads);
+    Some(validation)
+}
+
 /// Independent scoped proof qualification in addition to ordinary V acceptance.
 /// Unsupported borrowed generic/erased forwarding keeps its safe heap behavior
 /// under `validate`, but cannot satisfy this stronger proof boundary.
@@ -227,11 +247,12 @@ pub fn qualify_scoped_transport(
     reads: &mut Vec<VRead>,
 ) -> Validation {
     let reader = Reader::new(t, signatures);
-    let mut result = validate_input(definition, t, &reader);
+    let definition = ReadDefinition::live(definition);
+    let mut result = validate_input(&definition, t, &reader);
     if result.violations.is_empty() {
         result
             .violations
-            .extend(scoped_transport::check(definition, t, &reader));
+            .extend(scoped_transport::check(&definition, t, &reader));
     }
     result.violations.extend(reader.input_errors());
     reader.finish(reads);
@@ -267,7 +288,7 @@ fn signature_error(
         || !typing::signature_valid(t, signature)
         || !carrier_rows_valid(
             t,
-            &hirsel_types::closure(t, hirsel_types::signature_types(t, signature)),
+            hirsel_types::closure(t, hirsel_types::signature_types(t, signature)).iter(),
             signatures,
         )
         || !declaration::valid(t, signature, signatures)
@@ -290,17 +311,17 @@ fn signature_error(
     }
 }
 fn validate_input(
-    definition: &Definition,
+    definition: &ReadDefinition<'_>,
     t: &TypeInterner,
     signatures: &Reader<'_>,
 ) -> Validation {
     // V's own structural memo: it shares no memo or verdict with inference.
     let memo = TypeMemo::new();
-    let mut errors = validate_structure(definition, t);
+    let mut errors = structure::validate_bound(definition, t);
     if !errors.is_empty() {
         return Validation { violations: errors };
     }
-    if !graph_valid(t, &definition.types) || !carrier_rows_valid(t, &definition.types, signatures) || definition.types.iter().map(|&id| t.row(id)).any(|t| {
+    if !graph_valid(t, definition.types.iter()) || !carrier_rows_valid(t, definition.types.iter(), signatures) || definition.types.iter().map(|&id| t.row(id)).any(|t| {
         t.allocation_target.is_some() && !matches!(&t.kind, TypeKind::Named { definition, .. } if signatures.get(*definition).is_some_and(|s| t.is_heap_target(&s.metadata.roles)))
     }) {
         errors.push(Violation { body: None, block: None, instruction: None, kind: ViolationKind::InvalidTypeGraph });
@@ -729,9 +750,9 @@ struct Site {
     block: Option<BlockId>,
     instruction: Option<u32>,
 }
-struct Checker<'a> {
-    definition: &'a Definition,
-    body: &'a Body,
+struct Checker<'a, 'input> {
+    definition: &'a ReadDefinition<'input>,
+    body: &'a ReadBody<'input>,
     /// The session interner: the definition's rows, signature rows and V's
     /// own temporaries.
     t: &'a TypeInterner,
@@ -749,7 +770,7 @@ struct Checker<'a> {
     proof_errors: std::cell::RefCell<Vec<Violation>>,
     unique_parts_cache: std::cell::RefCell<std::collections::HashMap<TypeId, bool>>,
 }
-impl<'a> Checker<'a> {
+impl<'a, 'input> Checker<'a, 'input> {
     fn proof_failure<T>(&self, error: hirsel_types::QueryError, fallback: T) -> T {
         // These pure snapshot callbacks cannot fail. Only the shared declared
         // non-regular expansion budget can produce a query failure here.
@@ -851,7 +872,7 @@ impl<'a> Checker<'a> {
         let Some(heap) = self.signatures.first_heap() else {
             return false;
         };
-        let arena = |body: &Body, local: LocalId| {
+        let arena = |body: &ReadBody<'_>, local: LocalId| {
             body.locals
                 .get(local.0 as usize)
                 .and_then(|l| self.t.get(l.ty))
@@ -897,19 +918,23 @@ impl<'a> Checker<'a> {
 }
 
 /// Only an erased carrier declaration gives a nominal row erased evidence (CAP-2).
-fn carrier_rows_valid(t: &TypeInterner, rows: &[TypeId], signatures: &Reader<'_>) -> bool {
-    rows.iter().all(|&id| match (&t.row(id).kind, &t.row(id).erased_captures) {
-        (TypeKind::Named { definition, .. }, Some(_)) => signatures
-            .get(*definition)
-            .is_some_and(|s| matches!(&s.kind, hirsel_types::SignatureKind::Type(d) if d.captures.is_some())),
+fn carrier_rows_valid<'a>(
+    t: &TypeInterner,
+    mut rows: impl Iterator<Item = &'a TypeId>,
+    signatures: &Reader<'_>,
+) -> bool {
+    rows.all(|&id| match (&t.row(id).kind, &t.row(id).erased_captures) {
+        (TypeKind::Named { definition, .. }, Some(_)) => signatures.get(*definition).is_some_and(
+            |s| matches!(&s.kind, hirsel_types::SignatureKind::Type(d) if d.captures.is_some()),
+        ),
         _ => true,
     })
 }
 /// V's own walk of a closure table: every row and edge is in the table (the
 /// caller checked membership), and the graph is acyclic with no recovery row.
 /// Iterative DFS also bounds recursion before invoking recursive shared helpers.
-fn graph_valid(t: &TypeInterner, rows: &[TypeId]) -> bool {
-    let members: crate::hashed::HashSet<TypeId> = rows.iter().copied().collect();
+fn graph_valid<'a>(t: &TypeInterner, rows: impl Iterator<Item = &'a TypeId> + Clone) -> bool {
+    let members: crate::hashed::HashSet<TypeId> = rows.clone().copied().collect();
     let mut colour = crate::hashed::HashMap::<TypeId, u8>::default();
     for &root in rows {
         let mut stack = vec![(root, false)];

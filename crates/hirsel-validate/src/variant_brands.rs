@@ -19,7 +19,7 @@ pub(super) struct Inputs {
     pub roots: Vec<Vec<Producer>>,
 }
 impl Inputs {
-    pub fn new(body: &Body) -> Self {
+    pub fn new(body: &ReadBody<'_>) -> Self {
         let mut roots = vec![Vec::new(); body.locals.len()];
         for (index, local) in body.locals.iter().enumerate() {
             if matches!(local.storage, Storage::Parameter | Storage::Capture) {

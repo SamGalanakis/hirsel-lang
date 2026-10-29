@@ -6,7 +6,7 @@ use hirsel_types::{
     destination as destination_of,
 };
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn executable_header(&self) -> Option<&FunctionType> {
         if self.site.body == self.definition.entry {
             return None;

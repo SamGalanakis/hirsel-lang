@@ -110,7 +110,7 @@ pub(crate) fn join_parts(target: &mut Parts, incoming: &Parts) {
         }
     });
 }
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn tag_parts(&self, state: &State, value: &Operand) -> Parts {
         let source = carrier(&self.body.places[value.place.0 as usize]);
         state

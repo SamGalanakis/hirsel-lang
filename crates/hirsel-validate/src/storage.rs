@@ -158,7 +158,9 @@ fn reconstruct(
                 .push(StorageViolation::Malformed("TIR structure"));
             return;
         }
-        let Some(declarations) = typing::declaration_tables(types, definition, reader) else {
+        let Some(declarations) =
+            typing::declaration_tables(types, &crate::ReadDefinition::live(definition), reader)
+        else {
             validation
                 .violations
                 .push(StorageViolation::Malformed("callable declaration binders"));

@@ -8,7 +8,7 @@ fn within(actual: &AuthoritySummary, allowed: &AuthoritySummary) -> bool {
         || matches!(allowed, AuthoritySummary::Known(_)) && actual.is_subset_of(allowed)
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// Resolve a selector against V's executable header and declaration-order
     /// body parameters. A receipt belongs only to this invocation's own slot.
     pub(crate) fn own_parameter_selected(&self, ordinal: usize) -> bool {

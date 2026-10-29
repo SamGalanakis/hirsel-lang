@@ -14,7 +14,7 @@ fn update_type(store: &TypeInterner, original: TypeId, row: hirsel_types::Type) 
     }
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     fn transformed(
         &self,
         store: &TypeInterner,
@@ -1318,7 +1318,7 @@ pub(super) fn erased_environment(kind: &hirsel_types::TypeKind) -> bool {
     )
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn operand_unique_parts(&self, state: &State, value: &Operand) -> crossing::Parts {
         let place = &self.body.places[value.place.0 as usize];
         if value.usage == UseKind::Copy || state.shared[place.root.0 as usize] {
