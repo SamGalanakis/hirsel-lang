@@ -58,6 +58,8 @@ mod observation_timing;
 mod operation_latency;
 #[cfg(feature = "ownership-trace")]
 pub mod ownership_trace;
+mod parking;
+mod parking_sync;
 pub mod paths;
 pub mod pool;
 pub mod process;

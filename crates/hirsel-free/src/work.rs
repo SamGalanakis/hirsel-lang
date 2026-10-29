@@ -101,9 +101,9 @@ pub struct Worker<T> {
 pub fn workers<T>(width: u32, metrics: Option<Arc<Metrics>>) -> (Arc<Ready<T>>, Vec<Worker<T>>) {
     assert!(width != 0);
     let mut thieves = Vec::new();
-    let workers = (0..width as usize)
-        .map(|index| {
-            let (local, steal) = queue::local();
+    let workers = queue::locals(width as usize)
+        .enumerate()
+        .map(|(index, (local, steal))| {
             thieves.push(steal);
             Worker {
                 index,

@@ -1356,7 +1356,7 @@ fn worker_main_reserved(
     exec: Arc<Exec>,
     holders: Arc<Holders>,
     assigned: Option<cpu_scoped::Assigned>,
-    ready: Option<std::sync::mpsc::SyncSender<()>>,
+    ready: Option<Arc<cpu_scoped::Startup>>,
 ) {
     let run = run.0;
     EXEC.with(|e| e.set(Arc::as_ptr(&exec)));
@@ -1364,9 +1364,8 @@ fn worker_main_reserved(
     // starting executor may wait for a retiring one's slot.
     unsafe { exec.recording.register(&*run, recorder_slot(), true) };
     if let Some(ready) = ready {
-        // A disconnected startup owner already requested rollback. Still serve
-        // its Exit post, so recorder retirement and native-stack cleanup run.
-        let _ = ready.send(());
+        // A failed startup still serves Exit and retires its native state.
+        ready.acknowledge();
     }
     // The idle fiber of a worker thread is the thread's own stack, here.
     // SAFETY: this is the exec's own thread, idle between posts.

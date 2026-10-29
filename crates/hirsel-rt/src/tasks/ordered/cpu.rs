@@ -5,7 +5,6 @@ use crate::budget::stretch::{Jobs, Pause, Settled, Stretch};
 use crate::ordered::Next;
 use crate::ordered::footprint::TaskId;
 use crate::stop::{Stop, Stopped};
-use std::collections::BTreeMap;
 
 mod withdrawal;
 pub(super) use withdrawal::Withdrawn;
@@ -16,17 +15,23 @@ pub(super) use withdrawal::Withdrawn;
 pub(super) struct Batch {
     width: u32,
     limit: u64,
-    claims: Vec<Option<TaskId>>,
+    records: Box<[Record]>,
     publisher: Option<TaskId>,
-    owners: BTreeMap<TaskId, usize>,
     jobs: Jobs,
     retirement: u64,
-    pending: BTreeMap<TaskId, (u32, u64)>,
-    summaries: BTreeMap<TaskId, (*mut super::ahead::cpu_handoff::Summary, Vec<u8>)>,
-    // Recording only. These charges have already passed Jobs and must never
-    // be offered to the budget frontier a second time.
-    settled_prefixes: BTreeMap<TaskId, Result<Stretch, Pause>>,
-    recorded_prefixes: BTreeMap<TaskId, Stretch>,
+}
+
+/// The bounded batch allocates all identity and retirement slots once. The
+/// ordinal retains its claim after completion, while `active` controls live
+/// task lookup. Saved frames keep owning their roots and pointed-to records.
+#[derive(Default)]
+struct Record {
+    task: Option<TaskId>,
+    active: bool,
+    pending_parent: Option<TaskId>,
+    summary: Option<(*mut super::ahead::cpu_handoff::Summary, Vec<u8>)>,
+    settled_prefix: Option<Result<Stretch, Pause>>,
+    recorded_prefix: Option<Stretch>,
 }
 
 pub(super) struct RetiredSummary {
@@ -42,47 +47,63 @@ impl Batch {
         Self {
             width,
             limit: grant.max_batch_bytes,
-            claims: vec![None; count],
+            records: (0..count).map(|_| Record::default()).collect(),
             publisher: None,
-            owners: BTreeMap::new(),
             jobs,
             retirement: 0,
-            pending: BTreeMap::new(),
-            summaries: BTreeMap::new(),
-            settled_prefixes: BTreeMap::new(),
-            recorded_prefixes: BTreeMap::new(),
         }
+    }
+
+    fn ordinal(&self, task: TaskId) -> Option<usize> {
+        self.records
+            .iter()
+            .position(|row| row.active && row.task == Some(task))
+    }
+
+    fn preclaim(&mut self, parent: TaskId, ordinal: u64) {
+        assert!(
+            self.records
+                .iter()
+                .all(|row| row.pending_parent != Some(parent))
+        );
+        let row = &mut self.records[ordinal as usize];
+        assert!(row.pending_parent.replace(parent).is_none());
     }
 
     pub(super) fn claim(&mut self, task: TaskId, width: u32, ordinal: u64) {
         assert_eq!(width, self.width, "claim uses its admitted width");
-        let ordinal = usize::try_from(ordinal).expect("bounded CPU ordinal");
-        let claim = self
-            .claims
-            .get_mut(ordinal)
+        assert!(self.ordinal(task).is_none(), "one job per task");
+        let row = self
+            .records
+            .get_mut(usize::try_from(ordinal).expect("bounded CPU ordinal"))
             .expect("claim belongs to batch");
-        assert!(claim.replace(task).is_none(), "one claim per CPU job");
-        assert!(
-            self.owners.insert(task, ordinal).is_none(),
-            "one job per task"
-        );
+        assert!(row.task.replace(task).is_none(), "one claim per CPU job");
+        row.active = true;
     }
 
     pub(super) fn job(&self, task: TaskId) -> Option<(u32, u64)> {
-        self.owners
-            .get(&task)
-            .map(|&ordinal| (self.width, ordinal as u64))
+        self.ordinal(task)
+            .map(|ordinal| (self.width, ordinal as u64))
     }
 
     pub(super) fn pending(&self, parent: TaskId, width: u32, ordinal: u64) -> bool {
-        self.pending.get(&parent) == Some(&(width, ordinal))
+        width == self.width
+            && self
+                .records
+                .get(ordinal as usize)
+                .is_some_and(|row| row.pending_parent == Some(parent))
     }
 
     pub(super) fn bind(&mut self, parent: TaskId, child: TaskId) -> bool {
-        if let Some((width, ordinal)) = self.pending.remove(&parent) {
+        if let Some(ordinal) = self
+            .records
+            .iter()
+            .position(|row| row.pending_parent == Some(parent))
+        {
+            self.records[ordinal].pending_parent = None;
             assert!(self.publisher.is_none_or(|owner| owner == parent));
             self.publisher = Some(parent);
-            self.claim(child, width, ordinal);
+            self.claim(child, self.width, ordinal as u64);
             true
         } else {
             false
@@ -93,37 +114,39 @@ impl Batch {
     /// Starting an early child here can monopolize its publisher's CPU and
     /// scheduler role before the remaining workers have any work to claim.
     pub(super) fn publishing(&self, task: TaskId, head: TaskId) -> bool {
-        self.publisher == Some(head) && self.owners.contains_key(&task)
+        self.publisher == Some(head) && self.ordinal(task).is_some()
     }
 
     pub(super) fn limit(&self, task: TaskId) -> Option<u64> {
-        self.owners.contains_key(&task).then_some(self.limit)
+        self.ordinal(task).is_some().then_some(self.limit)
     }
 
     pub(super) fn block_owner(
         &self,
         task: TaskId,
     ) -> Option<crate::pool::cpu_scoped::ledger::blocks::Owner> {
-        self.owners
-            .get(&task)
-            .map(|&ordinal| crate::pool::cpu_scoped::ledger::blocks::Owner {
+        self.ordinal(task)
+            .map(|ordinal| crate::pool::cpu_scoped::ledger::blocks::Owner {
                 task,
                 ordinal: ordinal as u64,
             })
     }
 
     pub(super) fn owns(&self, task: TaskId, ordinal: u64) -> bool {
-        self.owners.get(&task).copied().map(|n| n as u64) == Some(ordinal)
+        self.ordinal(task).map(|n| n as u64) == Some(ordinal)
     }
 
     pub(super) fn younger(&self, task: TaskId) -> Vec<TaskId> {
-        let Some(&ordinal) = self.owners.get(&task) else {
+        let Some(ordinal) = self.ordinal(task) else {
             return Vec::new();
         };
-        self.owners
+        let mut younger: Vec<_> = self.records[ordinal + 1..]
             .iter()
-            .filter_map(|(&owner, &job)| (job > ordinal).then_some(owner))
-            .collect()
+            .filter_map(|row| row.active.then_some(row.task).flatten())
+            .collect();
+        // Preserve the original task-key order used by backing withdrawal.
+        younger.sort_unstable();
+        younger
     }
 
     /// The saved call owns this value and its retained roots until retirement.
@@ -136,8 +159,9 @@ impl Batch {
         summary: *mut super::ahead::cpu_handoff::Summary,
         value: Vec<u8>,
     ) -> Result<(), Pause> {
-        let job = self.owners[&task];
-        let recorded = match self.settled_prefixes.remove(&task) {
+        let job = self.ordinal(task).expect("live CPU job");
+        let row = &mut self.records[job];
+        let recorded = match row.settled_prefix.take() {
             Some(prefix) => {
                 let mut prefix = prefix?;
                 prefix.append(&before)?;
@@ -145,8 +169,8 @@ impl Batch {
             }
             None => before.clone(),
         };
-        assert!(self.recorded_prefixes.insert(task, recorded).is_none());
-        assert!(self.summaries.insert(task, (summary, value)).is_none());
+        assert!(row.recorded_prefix.replace(recorded).is_none());
+        assert!(row.summary.replace((summary, value)).is_none());
         self.jobs.pause(job, before);
         Ok(())
     }
@@ -156,10 +180,11 @@ impl Batch {
         task: TaskId,
         state: &mut Settled,
     ) -> Option<RetiredSummary> {
-        let (summary, value) = self.summaries.get(&task)?;
+        let job = self.ordinal(task)?;
+        let row = &mut self.records[job];
+        let (summary, _) = row.summary.as_ref()?;
         let summary = *summary;
-        let value = value.clone();
-        let (charges, result) = self.jobs.retire_published_at(self.owners[&task], state);
+        let (charges, result) = self.jobs.retire_published_at(job, state);
         if let Err(stop) = result {
             return Some(RetiredSummary {
                 charges,
@@ -167,15 +192,14 @@ impl Batch {
                 record: None,
             });
         }
-        self.summaries.remove(&task);
-        // SAFETY: publication borrows a saved mapper's exclusive record.
-        // Only its logical head retires it, before returning to that frame.
+        let (_, value) = row.summary.take().unwrap();
+        // SAFETY: the saved mapper still exclusively owns this record.
         unsafe { (*summary).phase = super::ahead::cpu_handoff::SUMMARY_RETIRED };
         let settled = self.jobs.settled();
         let record = crate::io::CpuSummary {
             version: 2,
             retirement: self.retirement,
-            ordinal: self.owners[&task] as u64,
+            ordinal: job as u64,
             value,
             stop: None,
             native: Some(crate::io::CpuNativeSummary {
@@ -184,7 +208,7 @@ impl Batch {
                 descriptor: unsafe { (*summary).descriptor },
                 value_bytes: unsafe { (*summary).value_bytes },
                 retained_count: unsafe { (*summary).retained_count },
-                pieces: crate::io::CpuSummary::pieces(&self.recorded_prefixes[&task]),
+                pieces: crate::io::CpuSummary::pieces(row.recorded_prefix.as_ref().unwrap()),
                 level: settled.level,
                 limit: settled.limit,
                 fuel: settled.fuel,
@@ -194,7 +218,7 @@ impl Batch {
             .retirement
             .checked_add(1)
             .expect("CPU retirement overflow");
-        self.recorded_prefixes.remove(&task);
+        row.recorded_prefix = None;
         Some(RetiredSummary {
             charges,
             result: result.map_err(|stop| stop.kind),
@@ -209,19 +233,16 @@ impl Batch {
         state: &mut Settled,
         complete: bool,
     ) -> Option<Result<(), hirsel_run_schema::BudgetKind>> {
-        let &job = self.owners.get(&task)?;
+        let job = self.ordinal(task)?;
+        let row = &mut self.records[job];
         let result = self
             .jobs
             .retire_prefix_at(job, before.clone(), complete, state)
             .map_err(|stop| stop.kind);
         if result.is_ok() {
-            use std::collections::btree_map::Entry;
-            match self.settled_prefixes.entry(task) {
-                Entry::Vacant(entry) => {
-                    entry.insert(Ok(before.clone()));
-                }
-                Entry::Occupied(mut entry) => {
-                    let prefix = entry.get_mut();
+            match &mut row.settled_prefix {
+                None => row.settled_prefix = Some(Ok(before.clone())),
+                Some(prefix) => {
                     if let Ok(charges) = prefix
                         && let Err(pause) = charges.append(before)
                     {
@@ -231,8 +252,8 @@ impl Batch {
             }
         }
         if complete && result.is_ok() {
-            self.owners.remove(&task);
-            self.settled_prefixes.remove(&task);
+            row.active = false;
+            row.settled_prefix = None;
         }
         Some(result)
     }
@@ -353,8 +374,8 @@ pub(crate) fn control(
             5 => {
                 let batch = d.cpu_batch.as_mut().expect("preclaim follows CPU batch");
                 assert_eq!(width, batch.width);
-                assert!(count < batch.claims.len() as u64);
-                assert!(batch.pending.insert(task, (width, count)).is_none());
+                assert!(count < batch.records.len() as u64);
+                batch.preclaim(task, count);
             }
             3 => d
                 .cpu_batch
@@ -492,7 +513,7 @@ mod tests {
                         assert_eq!(state.limit, u64::MAX, "grant does not replace run limit");
                         assert_eq!(state.fuel, 94);
                         let batch = d.cpu_batch.as_mut().unwrap();
-                        assert!(batch.owners.is_empty());
+                        assert!(batch.records.iter().all(|row| !row.active));
                         assert_eq!(batch.jobs.retire(), Ok(2));
                     });
                     assert_eq!(control(ctx, width, 1, 0, || 0), Ok(0));
@@ -722,7 +743,7 @@ mod tests {
                     fuel: 19
                 }
             );
-            assert!(batch.owners.is_empty());
+            assert!(batch.records.iter().all(|row| !row.active));
         }
     }
 
@@ -892,7 +913,7 @@ mod tests {
                     engine::with_driver(ctx, |d| {
                         let batch = d.cpu_batch.as_mut().unwrap();
                         assert_eq!(batch.jobs.retire(), Ok(width as usize * 2));
-                        assert!(batch.owners.is_empty());
+                        assert!(batch.records.iter().all(|row| !row.active));
                     });
                     assert_eq!(control(ctx, width, 1, 0, || 0), Ok(0));
                     crate::stop::check(ctx, engine::root_end(ctx, 0));

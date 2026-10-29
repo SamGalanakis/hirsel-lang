@@ -4,7 +4,9 @@
 //! for the SeqCst accesses of the section handshake (loom models a SeqCst access as AcqRel
 //! and needs an SC fence beside it; GenMC checks the plain SeqCst form).
 
-pub use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+pub use std::sync::atomic::{
+    AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 pub use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// Interior mutability whose exclusion the protocol, not the type, guarantees.

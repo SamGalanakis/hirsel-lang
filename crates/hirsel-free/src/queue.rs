@@ -10,9 +10,8 @@
 //! sole producer. These keep the protocol independent of a runtime and let the
 //! same source run under loom. LIFO slots remain owner-local (schedule.rs).
 
-use crate::sync::{Arc, AtomicU32, AtomicU64, Cell, Ordering};
+use crate::sync::{Arc, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Cell, Ordering};
 use std::marker::PhantomData;
-use std::sync::OnceLock;
 
 /// The production capacity (Tokio: 256). Models instantiate four slots.
 pub const CAPACITY: usize = 256;
@@ -20,18 +19,104 @@ pub const CAPACITY: usize = 256;
 struct Inner<T, const N: usize> {
     head: AtomicU64,
     tail: AtomicU32,
-    buffer: OnceLock<Box<[Cell<Option<T>>]>>,
+    buffer: Ring<T, N>,
+    references: AtomicUsize,
+}
+
+/// The last handle of this queue releases its ring independently of the
+/// shared metadata arena. The owning marker preserves the original T: Send
+/// requirement, including for the atomic pointer's otherwise-erased pointee.
+struct Ring<T, const N: usize> {
+    pointer: AtomicPtr<Cell<Option<T>>>,
+    owns: PhantomData<Box<[Cell<Option<T>>]>>,
+}
+impl<T, const N: usize> Ring<T, N> {
+    fn new() -> Self {
+        Self {
+            pointer: AtomicPtr::new(std::ptr::null_mut()),
+            owns: PhantomData,
+        }
+    }
+    fn get(&self) -> Option<&[Cell<Option<T>>]> {
+        let pointer = self.pointer.load(Ordering::Acquire);
+        if pointer.is_null() {
+            None
+        } else {
+            // SAFETY: the caller holds a queue handle. Only its last handle
+            // clears this initialized N-element slice, after all users leave.
+            Some(unsafe { std::slice::from_raw_parts(pointer, N) })
+        }
+    }
+    fn prepare(&self) {
+        if self.get().is_none() {
+            let slots: Box<[Cell<Option<T>>]> = (0..N).map(|_| Cell::new(None)).collect();
+            // The sole producer initializes once, before publishing a tail.
+            self.pointer
+                .store(Box::into_raw(slots).cast(), Ordering::Release);
+        }
+    }
+    /// # Safety
+    /// The caller owns the queue's last handle, or the metadata arena itself.
+    unsafe fn clear(&self) {
+        let pointer = self.pointer.swap(std::ptr::null_mut(), Ordering::Acquire);
+        if !pointer.is_null() {
+            // SAFETY: prepare transferred this exact N-element Box. No handle
+            // can reach its cells after the last reference's acquire edge.
+            drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(pointer, N)) });
+        }
+    }
+}
+impl<T, const N: usize> Drop for Ring<T, N> {
+    fn drop(&mut self) {
+        // SAFETY: every handle retains the arena, so none outlives this Drop.
+        unsafe { self.clear() };
+    }
 }
 
 /// One producer/owner. It may move between threads, but cannot be shared.
 pub struct Local<T, const N: usize = CAPACITY> {
-    inner: Arc<Inner<T, N>>,
+    inner: Shared<T, N>,
     /// Cell is !Sync while remaining Send: only the owner pushes/pops.
     owner: PhantomData<std::cell::Cell<()>>,
 }
 
 /// Any number of thieves. A steal takes ceil(n/2) from the FIFO's front.
-pub struct Steal<T, const N: usize = CAPACITY>(Arc<Inner<T, N>>);
+pub struct Steal<T, const N: usize = CAPACITY>(Shared<T, N>);
+
+/// Metadata belongs to the whole ready topology, whose thieves already
+/// retain every local queue until run drain. Rings remain owner-initialized.
+struct Shared<T, const N: usize> {
+    arena: Arc<Vec<Inner<T, N>>>,
+    index: usize,
+}
+impl<T, const N: usize> Shared<T, N> {
+    fn new(arena: Arc<Vec<Inner<T, N>>>, index: usize) -> Self {
+        // Each queue count is bounded by the arena's Arc count, whose clone
+        // performs the standard overflow check before reaching this increment.
+        arena[index].references.fetch_add(1, Ordering::Relaxed);
+        Self { arena, index }
+    }
+}
+impl<T, const N: usize> Clone for Shared<T, N> {
+    fn clone(&self) -> Self {
+        Self::new(self.arena.clone(), self.index)
+    }
+}
+impl<T, const N: usize> Drop for Shared<T, N> {
+    fn drop(&mut self) {
+        let inner = &self.arena[self.index];
+        if inner.references.fetch_sub(1, Ordering::AcqRel) == 1 {
+            // SAFETY: all producers, thieves and their borrows have ended.
+            unsafe { inner.buffer.clear() };
+        }
+    }
+}
+impl<T, const N: usize> std::ops::Deref for Shared<T, N> {
+    type Target = Inner<T, N>;
+    fn deref(&self) -> &Self::Target {
+        &self.arena[self.index]
+    }
+}
 
 fn pack(steal: u32, real: u32) -> u64 {
     (u64::from(steal) << 32) | u64::from(real)
@@ -42,19 +127,36 @@ fn unpack(word: u64) -> (u32, u32) {
 }
 
 pub fn local<T, const N: usize>() -> (Local<T, N>, Steal<T, N>) {
+    locals(1).next().unwrap()
+}
+
+/// Construct the fixed topology's metadata once, without eagerly backing any
+/// ring. Each index still has exactly one producer and the original head CAS.
+pub(crate) fn locals<T, const N: usize>(
+    count: usize,
+) -> impl Iterator<Item = (Local<T, N>, Steal<T, N>)> {
     assert!(N >= 2 && N.is_power_of_two() && N <= u16::MAX as usize);
-    let inner = Arc::new(Inner {
-        head: AtomicU64::new(0),
-        tail: AtomicU32::new(0),
-        buffer: OnceLock::new(),
-    });
-    (
-        Local {
-            inner: inner.clone(),
-            owner: PhantomData,
-        },
-        Steal(inner),
-    )
+    assert!(count != 0);
+    let arena = Arc::new(
+        (0..count)
+            .map(|_| Inner {
+                head: AtomicU64::new(0),
+                tail: AtomicU32::new(0),
+                buffer: Ring::new(),
+                references: AtomicUsize::new(0),
+            })
+            .collect::<Vec<_>>(),
+    );
+    (0..count).map(move |index| {
+        let inner = Shared::new(arena.clone(), index);
+        (
+            Local {
+                inner: inner.clone(),
+                owner: PhantomData,
+            },
+            Steal(inner),
+        )
+    })
 }
 
 impl<T, const N: usize> Clone for Steal<T, N> {
@@ -95,9 +197,7 @@ impl<T, const N: usize> Local<T, N> {
     /// Thieves touch it only after acquiring the first published tail, so an
     /// unused queue needs no ring. The sole producer initializes it once.
     pub fn prepare(&mut self) {
-        self.inner
-            .buffer
-            .get_or_init(|| (0..N).map(|_| Cell::new(None)).collect());
+        self.inner.buffer.prepare();
     }
 
     /// Push one task. On overflow return the newest half plus this task for

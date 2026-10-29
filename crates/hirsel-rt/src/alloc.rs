@@ -890,7 +890,15 @@ impl Heap {
         diagnostic: bool,
         idle_cap: u64,
     ) -> Heap {
-        let meter = std::sync::Arc::<crate::budget::Meter>::default();
+        Self::with_meter(layouts, diagnostic, idle_cap, Default::default())
+    }
+
+    pub(crate) fn with_meter(
+        layouts: Box<[*const crate::Layout]>,
+        diagnostic: bool,
+        idle_cap: u64,
+        meter: std::sync::Arc<crate::budget::Meter>,
+    ) -> Heap {
         Heap {
             compiled: Compiled {
                 dup_max: 0,

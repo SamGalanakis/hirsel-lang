@@ -109,10 +109,11 @@ impl HeapRegistry {
         if id as usize > MAX_HEAPS {
             crate::environmental("a run created more heaps than it can register");
         }
-        let mut heap = Box::new(Heap::new(
+        let mut heap = Box::new(Heap::with_meter(
             template.layouts.clone(),
             template.diagnostic,
             template.idle_cap,
+            template.meter.clone(),
         ));
         heap.join(id, worker, self, template.meter.clone());
         if template.dup_max != 0 {

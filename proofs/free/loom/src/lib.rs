@@ -77,3 +77,10 @@ mod release {
         pub step_count: u64,
     }
 }
+
+#[path = "../../../../crates/hirsel-rt/src/parking.rs"]
+#[allow(dead_code)]
+pub mod parking;
+pub mod parking_sync;
+#[cfg(test)]
+mod queue_arena_tests;

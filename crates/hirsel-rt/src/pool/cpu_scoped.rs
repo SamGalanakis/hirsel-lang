@@ -3,7 +3,10 @@
 //! credit before handing any to workers. Unlike its wait list, CPU admission
 //! refuses immediately and leaves existing waiters their capacity.
 use super::{Exec, Execs, Kind, Owner, Permits, Post, RunPtr, RunShared, TaskCtx, Worker};
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 
 pub(crate) mod ledger;
 pub(crate) mod probe;
@@ -210,16 +213,47 @@ pub(super) unsafe fn start(
     unsafe { start_at(run, reservation, None, None) }
 }
 
+/// One claim-start record, shared by all acknowledgments. Workers retain it
+/// through notification, so reaching zero cannot free a live parking word.
+#[derive(Default)]
+pub(super) struct Startup {
+    pending: AtomicU32,
+    ready: crate::parking::Event,
+}
+impl Startup {
+    pub(super) fn acknowledge(&self) {
+        self.pending.fetch_sub(1, Ordering::Release);
+        self.ready.notify();
+    }
+    fn wait(&self) {
+        loop {
+            let ticket = self.ready.ticket();
+            if self.pending.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            self.ready.wait(ticket);
+        }
+    }
+}
+
 impl Workers {
     fn start_pending(
         &mut self,
         run: *mut RunShared,
-        indices: impl IntoIterator<Item = usize>,
+        indices: impl IntoIterator<Item = usize> + Clone,
         fail_at: Option<u32>,
     ) -> Result<(), Refusal> {
         let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
-        let (ready, acknowledgments) = std::sync::mpsc::sync_channel(self.execs.len());
-        let mut started = 0;
+        let ready = Arc::new(Startup::default());
+        // Prepare independent heaps before spawning. The native starts then
+        // run back to back, with no role work or heap construction between.
+        for index in indices.clone() {
+            if self.pending[index].is_some() {
+                let exec = &self.execs[index];
+                assert!(exec.worker.get().is_null());
+                exec.worker.set(unsafe { Worker::create_scoped(run) });
+            }
+        }
         for index in indices {
             let Some(assigned) = self.pending[index].take() else {
                 continue;
@@ -227,8 +261,6 @@ impl Workers {
             let exec = &self.execs[index];
             // The role owns attachment, and this dormant exec has no thread
             // that can reach its cell. Spawn publishes the initialized worker.
-            assert!(exec.worker.get().is_null());
-            exec.worker.set(unsafe { Worker::create_scoped(run) });
             if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
                 probe.event(
                     "start",
@@ -238,6 +270,7 @@ impl Workers {
                 );
             }
             execs.holders.count.fetch_add(1, Ordering::AcqRel);
+            ready.pending.fetch_add(1, Ordering::Relaxed);
             let thread = if fail_at == Some(index as u32) {
                 drop(assigned);
                 Err(std::io::Error::other("injected CPU worker startup failure"))
@@ -268,14 +301,8 @@ impl Workers {
                 return Err(Refusal::WorkerStartFailed);
             };
             self.threads.push(thread);
-            started += 1;
         }
-        drop(ready);
-        for _ in 0..started {
-            acknowledgments
-                .recv()
-                .expect("started scoped worker acknowledgement");
-        }
+        ready.wait();
         Ok(())
     }
     fn start_jobs(

@@ -3,7 +3,9 @@
 //! fence; load), which loom does model; the GenMC model checks the plain SC accesses.
 
 use loom::sync::atomic::fence;
-pub use loom::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+pub use loom::sync::atomic::{
+    AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 pub use loom::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// Interior mutability whose exclusion the protocol guarantees; loom checks every access.

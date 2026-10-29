@@ -52,7 +52,7 @@ pub(crate) struct Driver {
     pub(super) bounded_reads: BTreeSet<TaskId>,
     pub(super) host_returns: BTreeMap<TaskId, super::host::CompletedRead>,
     pub(super) fuel_initialized: bool,
-    pub(super) fuel_grants: BTreeMap<TaskId, u64>,
+    fuel_grants: Vec<(TaskId, u64)>,
     pub(super) stretches: BTreeMap<TaskId, crate::budget::stretch::Stretch>,
     pub(super) cpu_allocation_leases: BTreeMap<TaskId, super::engine::AllocationLease>,
     pub(super) cpu_batch: Option<super::cpu::Batch>,
@@ -102,7 +102,7 @@ impl Driver {
             host_returns: BTreeMap::new(),
             bounded_reads: BTreeSet::new(),
             fuel_initialized: false,
-            fuel_grants: BTreeMap::new(),
+            fuel_grants: Vec::new(),
             stretches: BTreeMap::new(),
             cpu_allocation_leases: BTreeMap::new(),
             cpu_batch: None,
@@ -120,6 +120,25 @@ impl Driver {
             moved: BTreeSet::new(),
             carriers: BTreeMap::new(),
         }
+    }
+
+    /// At most one outstanding chunk per physical owner. Removing a chunk
+    /// returns its slot to this run rather than allocating a tree node at
+    /// each save/resume. Full generation-qualified task keys remain intact.
+    pub(super) fn grant(&mut self, task: TaskId, value: u64) -> Option<u64> {
+        if let Some((_, old)) = self.fuel_grants.iter_mut().find(|(key, _)| *key == task) {
+            Some(std::mem::replace(old, value))
+        } else {
+            self.fuel_grants.push((task, value));
+            None
+        }
+    }
+
+    pub(super) fn release_grant(&mut self, task: TaskId) -> Option<u64> {
+        self.fuel_grants
+            .iter()
+            .position(|(key, _)| *key == task)
+            .map(|index| self.fuel_grants.swap_remove(index).1)
     }
 
     /// A committed spawn joins both the logical queue and physical candidates.

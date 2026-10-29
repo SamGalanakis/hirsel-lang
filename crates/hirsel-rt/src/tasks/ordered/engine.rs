@@ -197,8 +197,8 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
         .saturating_add(frontier.logged_fuel(task));
     let room = frontier.settled.fuel.saturating_sub(fuel);
     let grant = room.min(crate::budget::FUEL_CHUNK);
-    driver.fuel_grants.insert(task, grant);
     let level = frontier.settled.level;
+    driver.grant(task, grant);
     unsafe { (*ctx).heap_ref().meter.settled(level) };
     unsafe { (*ctx).heap().set_fuel(grant as i64) };
     unsafe { (*ctx).ordered_charge_trace.grant(grant as i64) };
@@ -238,10 +238,7 @@ fn capture_charges(ctx: *mut TaskCtx, task: TaskId, driver: &mut Driver) {
     unsafe { (*ctx).ordered_charge_trace.capture(word) };
     let remaining = word.max(0) as u64;
     capture_frees(ctx, task, driver);
-    let grant = driver
-        .fuel_grants
-        .insert(task, remaining)
-        .unwrap_or(remaining);
+    let grant = driver.grant(task, remaining).unwrap_or(remaining);
     let consumed = grant
         .saturating_sub(remaining)
         .saturating_add(u64::from(word < 0));
@@ -270,7 +267,7 @@ pub(crate) fn fuel_out(ctx: *mut TaskCtx) {
         .as_ref()
         .is_some_and(|f| f.head() != Some(task));
     driver.tuning.end(task, nonhead);
-    driver.fuel_grants.remove(&task);
+    driver.release_grant(task);
     unsafe { (*ctx).heap().set_fuel(0) };
 }
 

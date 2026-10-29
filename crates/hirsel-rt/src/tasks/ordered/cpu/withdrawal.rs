@@ -71,7 +71,7 @@ mod tests {
                 assert_eq!(withdrawn[0].charges, charges);
                 assert_eq!(withdrawn[0].value, value.to_le_bytes());
                 assert_eq!(summary.phase, SUMMARY_WITHDRAWN);
-                assert!(batch.summaries.is_empty());
+                assert!(batch.records.iter().all(|row| row.summary.is_none()));
                 assert!(batch.retire_summary(younger, &mut state).is_none());
                 assert!(batch.withdraw(head, &BTreeSet::from([younger])).is_empty());
                 assert_eq!(state, initial, "withdrawal cannot settle charges");
@@ -79,8 +79,14 @@ mod tests {
                 assert_eq!(summary.retained, roots.as_ptr());
                 batch.restore(withdrawn);
                 assert_eq!(summary.phase, SUMMARY_PUBLISHED);
-                assert_eq!(batch.summaries[&younger].0, &raw mut summary);
-                assert_eq!(batch.summaries[&younger].1, value.to_le_bytes());
+                assert_eq!(
+                    batch.records[1].summary.as_ref().unwrap().0,
+                    &raw mut summary
+                );
+                assert_eq!(
+                    batch.records[1].summary.as_ref().unwrap().1,
+                    value.to_le_bytes()
+                );
                 assert_eq!(state, initial, "restoration cannot settle charges");
             }
             assert_eq!(
@@ -114,22 +120,19 @@ impl Batch {
         head: TaskId,
         targets: &BTreeSet<TaskId>,
     ) -> Vec<Withdrawn> {
-        let head = self.owners[&head];
-        let published: BTreeMap<_, _> = self
-            .summaries
-            .keys()
-            .filter_map(|task| {
-                let ordinal = self.owners[task];
-                (ordinal > head).then_some((ordinal, *task))
-            })
-            .collect();
-        assert!(published.values().all(|task| targets.contains(task)));
+        let head = self.ordinal(head).expect("live head CPU job");
+        assert!(
+            self.records[head + 1..]
+                .iter()
+                .all(|row| row.summary.is_none() || targets.contains(&row.task.unwrap()))
+        );
         self.jobs
             .withdraw_younger(head)
             .into_iter()
             .map(|(ordinal, charges, complete)| {
-                let task = published[&ordinal];
-                let (summary, value) = self.summaries.remove(&task).unwrap();
+                let row = &mut self.records[ordinal];
+                let task = row.task.unwrap();
+                let (summary, value) = row.summary.take().unwrap();
                 // SAFETY: all publisher stacks are acknowledged and blocked
                 // from selection until restore returns their prefixes.
                 unsafe {
@@ -152,10 +155,11 @@ impl Batch {
     /// repeated, and no pointer or charge is reconstructed from the mapper.
     pub(in crate::tasks::ordered) fn restore(&mut self, withdrawn: Vec<Withdrawn>) {
         for row in withdrawn {
-            assert_eq!(self.owners[&row.task], row.ordinal);
+            assert_eq!(self.ordinal(row.task), Some(row.ordinal));
             assert!(
-                self.summaries
-                    .insert(row.task, (row.summary, row.value))
+                self.records[row.ordinal]
+                    .summary
+                    .replace((row.summary, row.value))
                     .is_none()
             );
             if row.complete {
