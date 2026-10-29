@@ -550,6 +550,12 @@ impl FnEmitter<'_, '_, '_> {
             CpuGrowthPlace::Address(_) => self.load_ptr(place.unwrap().ptr),
             CpuGrowthPlace::Copy { value, .. } => self.get1(value)?,
         };
+        if matches!(recipe.place, CpuGrowthPlace::Address(_))
+            && recipe.capacity.is_none()
+            && !self.tracking()
+        {
+            return Ok(true);
+        }
         let done =
             if matches!(recipe.place, CpuGrowthPlace::Address(_)) && recipe.capacity.is_none() {
                 let slow = self.b.create_block();

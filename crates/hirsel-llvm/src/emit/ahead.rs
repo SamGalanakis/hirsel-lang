@@ -381,9 +381,23 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             CpuGrowthPlace::Address(_) if recipe.capacity.is_some() => 1,
             CpuGrowthPlace::Address(_) => 4,
         };
+        // ArenaPush has no work for ordinary heap lists. Use the same
+        // program-wide tracking proof and root companions as the W1 body.
+        if kind == 4 && !self.tracking() {
+            return Ok(true);
+        }
         let done = if kind == 4 {
             let slow = self.module.append_block(self.function);
             let done = self.module.append_block(self.function);
+            if let Some(root) = self.sequence_state_at(place.unwrap()) {
+                let i1 = self.module.int_type(1);
+                let unique = self.builder.load(i1, root.unique, 1);
+                let untracked = self.builder.load(i1, root.untracked, 1);
+                let known = self.builder.binary(BinOp::Or, unique, untracked);
+                let test = self.module.append_block(self.function);
+                self.builder.cond_br(known, done, test);
+                self.builder.position(test);
+            }
             let tracked = crate::runtime::is_tracked(&self.builder, old);
             self.builder.cold_cond_br(tracked, slow, done);
             self.builder.position(slow);

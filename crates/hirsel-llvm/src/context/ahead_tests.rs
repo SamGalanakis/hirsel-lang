@@ -63,3 +63,24 @@ fn observable_atomic_fuel_and_unbounded_loops_keep_every_checkpoint() {
         assert!(ir.contains("call void @hirsel_rt_v2_ahead_handoff"), "{ir}");
     }
 }
+
+#[test]
+fn private_memory_chunks_keep_partial_exits_and_a_fixed_point_chain() {
+    let source = include_str!("../../tests/fixtures/ahead_memory_loop.ll");
+    let ir = optimized(source);
+    assert!(ir.contains("ahead.boundary"), "{ir}");
+    assert!(ir.contains("ahead.chunk"), "{ir}");
+    assert!(ir.contains("store i64"), "{ir}");
+    for source in [
+        source.replace("store i64 %value", "store volatile i64 %value"),
+        source.replace("%remaining2, %write", "%remaining, %write"),
+        source.replace("i32 1)", "i32 3)"),
+        source.replace(
+            "%refill2 = load",
+            "store i64 17, ptr %rows\n %refill2 = load",
+        ),
+    ] {
+        let ir = optimized(&source);
+        assert!(!ir.contains("ahead.boundary"), "{ir}");
+    }
+}

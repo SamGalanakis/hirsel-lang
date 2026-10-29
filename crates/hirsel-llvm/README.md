@@ -630,13 +630,14 @@ accept the uniform callable carrier and discard it when entering an unmarked dir
 target. Failure edges fill unknown records before cleanup and preserve anchored
 children; release glue and descriptor wrappers carry both codes explicitly.
 
-Pure scalar ahead loops run in 32-point chunks when both the unsigned source
-induction bound and the physical quota have more than 32 points left. The
-chunk carries scalar state in SSA, checks neither quota nor checkpoint inside
-its loop, and subtracts exactly 32 points on returning to the outer header.
-The original loop handles source and quota tails, so the 1024-point handoff
-position, every observable boundary and all logical fuel charges stay exact.
-Loops with memory accesses, other calls, additional exits or unproved bounds
-retain their original checkpoints. Fuel builds use that path. LLVM's final
+Ahead loops use the ordinary lowered body inside 32-trip chunks. A chunk
+starts only when its unsigned induction bound and physical quota cover all
+32 trips. A proved chain counts each trip's checkpoints once at the outer
+boundary; the inner loop retains its memory accesses and checked arithmetic.
+The original loop handles source and quota tails, preserving the exact
+1024-point handoff position. Partial failure exits retain their exact consumed
+quota and loop state through LCSSA exit PHIs. Volatile and atomic accesses,
+non-checkpoint calls, variable checkpoint paths and unproved bounds retain
+their original checkpoints. Fuel builds also retain that path. LLVM's final
 stack-size records cover chunk exits in the same function's frame; the separate
 certificate checker still derives its bound from the actual final object.

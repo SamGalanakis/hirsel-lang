@@ -75,3 +75,92 @@ int main(void) {
         assert_eq!(run(&target, &executable), "468 chunk boundaries passed\n");
     }
 }
+
+#[test]
+fn private_memory_chunks_preserve_stores_partial_exits_and_checkpoint_positions() {
+    let source = include_str!("../fixtures/ahead_memory_loop.ll");
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    for opt in [OptLevel::None, OptLevel::Default, OptLevel::Speed] {
+        let dir = scratch(&format!("ahead-memory-chunks-{opt:?}"));
+        let object = compile_ir(source, &target, opt).unwrap();
+        let harness = dir.join("ahead.c");
+        std::fs::write(
+            &harness,
+            r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+extern uint64_t reserved_ahead(uint64_t *, uint64_t *, uint64_t, uint64_t);
+static uint64_t rows[4097], expected_rows[4097], calls, positions[8196], expected_calls;
+static uint64_t grant(uint64_t call) {
+  static const uint64_t words[] = {1,33,1024,7,32,2};
+  return words[call % 6];
+}
+static uint64_t prefix(const uint64_t *data) {
+  uint64_t result = 0;
+  for (unsigned i = 0; i < 4097; ++i) result += data[i];
+  return result;
+}
+void hirsel_rt_v2_ahead_handoff(uint64_t *state, uint32_t reason) {
+  if (reason != 1 || *state != 0 || calls >= expected_calls ||
+      prefix(rows) != positions[calls]) abort();
+  *state = grant(++calls);
+}
+int main(void) {
+  const uint64_t sizes[] = {0,1,31,32,33,34,63,64,65,1023,1024,1025,4097};
+  const uint64_t quotas[] = {1,2,31,32,33,34,63,64,65,1023,1024,INT64_MAX};
+  const uint64_t stops[] = {0,1,31,32,33,63,64,65,1023,1024,UINT64_MAX};
+  unsigned cells = 0;
+  for (unsigned n = 0; n < sizeof sizes / sizeof *sizes; ++n)
+    for (unsigned q = 0; q < sizeof quotas / sizeof *quotas; ++q)
+      for (unsigned s = 0; s < sizeof stops / sizeof *stops; ++s) {
+        for (unsigned i = 0; i < 4097; ++i) rows[i] = expected_rows[i] = 7;
+        uint64_t expected = quotas[q], total = 0;
+        expected_calls = 0;
+        for (uint64_t i = 0;; ++i) {
+          if (--expected == 0) {
+            positions[expected_calls] = prefix(expected_rows);
+            expected = grant(++expected_calls);
+          }
+          if (i == sizes[n]) break;
+          if (--expected == 0) {
+            positions[expected_calls] = prefix(expected_rows);
+            expected = grant(++expected_calls);
+          }
+          if (i == stops[s]) break;
+          total += expected_rows[i] += i;
+        }
+        uint64_t state = quotas[q];
+        calls = 0;
+        uint64_t got = reserved_ahead(&state, rows, sizes[n], stops[s]);
+        if (got != total || state != expected || calls != expected_calls) abort();
+        for (unsigned i = 0; i < 4097; ++i) if (rows[i] != expected_rows[i]) abort();
+        ++cells;
+      }
+  printf("%u memory chunk boundaries passed\n", cells);
+  return 0;
+}
+"#,
+        )
+        .unwrap();
+        let object_path = dir.join("ahead.o");
+        std::fs::write(&object_path, &object.bytes).unwrap();
+        let executable = dir.join("program");
+        output(
+            std::process::Command::new(llvm_prefix().join("bin/clang"))
+                .arg(format!(
+                    "--ld-path={}",
+                    llvm_prefix().join("bin/ld.lld").display()
+                ))
+                .args(["-std=c11", "-O1", "-Wall", "-Werror"])
+                .arg(harness)
+                .arg(object_path)
+                .arg("-o")
+                .arg(&executable),
+        );
+        assert_eq!(
+            run(&target, &executable),
+            "1716 memory chunk boundaries passed\n"
+        );
+    }
+}

@@ -9,6 +9,7 @@
 #undef _GLIBCXX_USE_PTHREAD_MUTEX_CLOCKLOCK
 #undef _GLIBCXX_USE_PTHREAD_RWLOCK_CLOCKLOCK
 #endif
+#include <optional>
 #include <llvm/Analysis/AssumptionCache.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ScalarEvolution.h>
@@ -208,75 +209,106 @@ public:
 
 // Bounded loop cloning follows LLVM LoopVersioning.cpp:96-110. Unlike loop
 // versioning, the clone returns all loop-carried SSA values to the outer header.
-static bool chunkAhead(Loop &L, DominatorTree &DT) {
+static bool chunkAhead(Loop &L, LoopInfo &LI, DominatorTree &DT) {
   constexpr uint64_t K = 32;
   BasicBlock *H = L.getHeader(), *PH = L.getLoopPreheader();
-  BasicBlock *Latch = L.getLoopLatch(), *Exit = L.getExitingBlock();
-  if (!PH || !Latch || !Exit || !L.isInnermost() || L.getNumBlocks() > 12)
+  BasicBlock *Latch = L.getLoopLatch();
+  if (!PH || !Latch || !L.isInnermost() || L.getNumBlocks() > 64)
     return false;
-  CallInst *Handoff = nullptr;
+  struct Point {
+    CallInst *Handoff;
+    BasicBlock *Cold, *Test, *Join;
+    BinaryOperator *Dec;
+  };
+  SmallVector<Point, 8> Points;
   unsigned Instructions = 0;
   for (BasicBlock *B : L.blocks()) for (Instruction &I : *B) {
-    if (++Instructions > 128) return false;
+    if (++Instructions > 512) return false;
     if (auto *Call = dyn_cast<CallBase>(&I)) {
+      if (auto *II = dyn_cast<IntrinsicInst>(Call)) {
+        if (!II->mayReadOrWriteMemory() && !II->mayHaveSideEffects()) continue;
+        return false;
+      }
       auto *C = dyn_cast<CallInst>(Call);
       auto *F = C ? C->getCalledFunction() : nullptr;
-      if (!F || F->getName() != "hirsel_rt_v2_ahead_handoff" || Handoff ||
+      if (!F || F->getName() != "hirsel_rt_v2_ahead_handoff" ||
           C->arg_size() != 2 || !isa<ConstantInt>(C->getArgOperand(1)) ||
           !cast<ConstantInt>(C->getArgOperand(1))->isOne()) return false;
-      Handoff = C;
-    }
-  }
-  if (!Handoff) return false;
-  BasicBlock *Cold = Handoff->getParent(), *Point = Cold->getSinglePredecessor();
-  BasicBlock *Join = Cold->getSingleSuccessor();
-  auto *Check = Point ? dyn_cast<CondBrInst>(Point->getTerminator()) : nullptr;
-  if (!Check || !Join || !DT.dominates(Point, Latch) ||
-      !L.contains(Point) || !L.contains(Join)) return false;
-  auto *Expired = dyn_cast<ICmpInst>(Check->getCondition());
-  if (!Expired || Expired->getPredicate() != ICmpInst::ICMP_EQ ||
-      Check->getSuccessor(0) != Cold || Check->getSuccessor(1) != Join)
-    return false;
-  auto *Zero = dyn_cast<ConstantInt>(Expired->getOperand(1));
-  auto *Dec = dyn_cast<BinaryOperator>(Expired->getOperand(0));
-  if (!Zero || !Zero->isZero() || !Dec || Dec->getOpcode() != Instruction::Add)
-    return false;
-  auto *MinusOne = dyn_cast<ConstantInt>(Dec->getOperand(1));
-  auto *Quota = dyn_cast<PHINode>(Dec->getOperand(0));
-  if (!MinusOne || !MinusOne->isMinusOne() || !Quota ||
-      Quota->getParent() != H || !Quota->getType()->isIntegerTy(64)) return false;
-  SmallPtrSet<Value *, 8> Visiting;
-  auto Feedback = [&](auto &&Self, Value *V) -> bool {
-    if (V == Dec) return true;
-    auto *P = dyn_cast<PHINode>(V);
-    if (!P || P->getParent() == H || !L.contains(P) ||
-        !Visiting.insert(V).second) return false;
-    bool SawHot = false, OK = true;
-    for (unsigned I = 0; I != P->getNumIncomingValues(); ++I) {
-      if (P->getIncomingBlock(I) == Cold) continue;
-      SawHot = true;
-      if (!Self(Self, P->getIncomingValue(I))) { OK = false; break; }
-    }
-    Visiting.erase(V);
-    return SawHot && OK;
-  };
-  if (!Feedback(Feedback, Quota->getIncomingValueForBlock(Latch))) return false;
-  // No fuel, observable operation, failure call, or pointer access belongs in
-  // the inner loop. Only the checkpoint's own ordinary state load/store may go.
-  for (BasicBlock *B : L.blocks()) for (Instruction &I : *B) {
-    if (&I == Handoff) continue;
-    if (auto *Load = dyn_cast<LoadInst>(&I)) {
-      if (B != Cold || Load->isVolatile() || Load->isAtomic() ||
-          Load->getPointerOperand() != Handoff->getArgOperand(0)) return false;
+      BasicBlock *Cold = C->getParent(), *Test = Cold->getSinglePredecessor();
+      BasicBlock *Join = Cold->getSingleSuccessor();
+      auto *Check = Test ? dyn_cast<CondBrInst>(Test->getTerminator()) : nullptr;
+      if (!Check || !Join || !DT.dominates(Test, Latch) ||
+          !L.contains(Test) || !L.contains(Join)) return false;
+      auto *Expired = dyn_cast<ICmpInst>(Check->getCondition());
+      if (!Expired || Expired->getPredicate() != ICmpInst::ICMP_EQ ||
+          Check->getSuccessor(0) != Cold || Check->getSuccessor(1) != Join)
+        return false;
+      auto *Zero = dyn_cast<ConstantInt>(Expired->getOperand(1));
+      auto *Dec = dyn_cast<BinaryOperator>(Expired->getOperand(0));
+      if (!Zero || !Zero->isZero() || !Dec || Dec->getOpcode() != Instruction::Add)
+        return false;
+      auto *MinusOne = dyn_cast<ConstantInt>(Dec->getOperand(1));
+      if (!MinusOne || !MinusOne->isMinusOne()) return false;
+      Points.push_back({C, Cold, Test, Join, Dec});
+    } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
+      if (Load->isVolatile() || Load->isAtomic()) return false;
     } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
-      if (B != Cold || Store->isVolatile() || Store->isAtomic() ||
-          Store->getPointerOperand() != Handoff->getArgOperand(0)) return false;
+      if (Store->isVolatile() || Store->isAtomic()) return false;
     } else if (I.mayReadOrWriteMemory() || I.mayHaveSideEffects()) {
       if (!I.isTerminator()) return false;
     }
   }
-  // Every original trip contains exactly one physical point. Removing the
-  // header feedback must leave a DAG, including the handoff diamond.
+  if (Points.empty() || Points.size() > 8) return false;
+  for (const Point &P : Points) for (Instruction &I : *P.Cold) {
+    if (auto *Load = dyn_cast<LoadInst>(&I)) {
+      if (Load->getPointerOperand() != P.Handoff->getArgOperand(0)) return false;
+    } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+      if (Store->getPointerOperand() != P.Handoff->getArgOperand(0)) return false;
+    }
+  }
+  // Every path to the latch must consume this exact chain of physical points.
+  // A cold refill is the only permitted alternative at each join. Partial
+  // iterations keep their decrements on every source/failure exit.
+  PHINode *Quota = nullptr;
+  auto *Earliest = Points.front().Test;
+  for (const Point &P : Points)
+    if (DT.dominates(P.Test, Earliest)) Earliest = P.Test;
+  for (const Point &P : Points) if (P.Test == Earliest)
+    Quota = dyn_cast<PHINode>(P.Dec->getOperand(0));
+  if (!Quota || Quota->getParent() != H || !Quota->getType()->isIntegerTy(64) ||
+      Quota->getNumIncomingValues() != 2) return false;
+  SmallPtrSet<Value *, 16> Visiting;
+  auto Cost = [&](auto &&Self, Value *V) -> std::optional<unsigned> {
+    if (V == Quota) return 0;
+    if (!Visiting.insert(V).second) return std::nullopt;
+    std::optional<unsigned> Result;
+    for (const Point &P : Points) {
+      if (V == P.Dec) {
+        Result = Self(Self, P.Dec->getOperand(0));
+        if (Result) ++*Result;
+        break;
+      }
+    }
+    if (auto *Phi = dyn_cast<PHINode>(V); !Result && Phi &&
+        Phi->getParent() != H && L.contains(Phi)) {
+      bool OK = true;
+      for (unsigned I = 0; I != Phi->getNumIncomingValues(); ++I) {
+        BasicBlock *From = Phi->getIncomingBlock(I);
+        bool Cold = llvm::any_of(Points, [&](const Point &P) { return P.Cold == From; });
+        if (Cold) continue;
+        auto C = Self(Self, Phi->getIncomingValue(I));
+        if (!C || (Result && *Result != *C)) { OK = false; break; }
+        Result = C;
+      }
+      if (!OK) Result = std::nullopt;
+    }
+    Visiting.erase(V);
+    return Result;
+  };
+  auto PerTrip = Cost(Cost, Quota->getIncomingValueForBlock(Latch));
+  if (!PerTrip || *PerTrip != Points.size()) return false;
+  // Removing header feedback must leave a DAG, including all handoff
+  // diamonds. No hidden cycle may consume another point or write twice.
   DenseMap<BasicBlock *, unsigned> Degree;
   SmallVector<BasicBlock *, 16> Ready;
   for (BasicBlock *B : L.blocks()) Degree[B] = 0;
@@ -291,30 +323,36 @@ static bool chunkAhead(Loop &L, DominatorTree &DT) {
   }
   if (Visited != L.getNumBlocks()) return false;
 
-  auto *End = dyn_cast<CondBrInst>(Exit->getTerminator());
-  auto *Cmp = End ? dyn_cast<ICmpInst>(End->getCondition()) : nullptr;
-  if (!Cmp || !DT.dominates(Exit, Latch)) return false;
   PHINode *Index = nullptr;
   Value *Limit = nullptr;
-  for (PHINode &P : H->phis()) {
-    if (&P == Quota || !P.getType()->isIntegerTy(64) ||
-        P.getNumIncomingValues() != 2) continue;
-    auto *Next = dyn_cast_or_null<BinaryOperator>(P.getIncomingValueForBlock(Latch));
-    if (!Next || Next->getOpcode() != Instruction::Add || Next->getOperand(0) != &P)
-      continue;
-    auto *One = dyn_cast<ConstantInt>(Next->getOperand(1));
-    if (!One || !One->isOne()) continue;
-    for (unsigned Side = 0; Side != 2; ++Side) {
-      Value *V = Cmp->getOperand(Side), *Bound = Cmp->getOperand(1 - Side);
-      if ((V != &P && V != Next) || !L.isLoopInvariant(Bound) ||
-          !DT.dominates(Bound, PH->getTerminator())) continue;
-      auto Pred = Side ? Cmp->getSwappedPredicate() : Cmp->getPredicate();
-      bool TrueInside = L.contains(End->getSuccessor(0));
-      if ((Pred == ICmpInst::ICMP_EQ && !TrueInside) ||
-          (Pred == ICmpInst::ICMP_NE && TrueInside) ||
-          (Pred == ICmpInst::ICMP_ULT && TrueInside) ||
-          (Pred == ICmpInst::ICMP_UGE && !TrueInside)) {
-        Index = &P; Limit = Bound;
+  BasicBlock *Exit = nullptr;
+  CondBrInst *End = nullptr;
+  SmallVector<BasicBlock *, 8> Exiting;
+  L.getExitingBlocks(Exiting);
+  for (BasicBlock *Candidate : Exiting) {
+    auto *Branch = dyn_cast<CondBrInst>(Candidate->getTerminator());
+    auto *Cmp = Branch ? dyn_cast<ICmpInst>(Branch->getCondition()) : nullptr;
+    if (!Cmp || !DT.dominates(Candidate, Latch)) continue;
+    for (PHINode &P : H->phis()) {
+      if (&P == Quota || !P.getType()->isIntegerTy(64) ||
+          P.getNumIncomingValues() != 2) continue;
+      auto *Next = dyn_cast_or_null<BinaryOperator>(P.getIncomingValueForBlock(Latch));
+      if (!Next || Next->getOpcode() != Instruction::Add || Next->getOperand(0) != &P)
+        continue;
+      auto *One = dyn_cast<ConstantInt>(Next->getOperand(1));
+      if (!One || !One->isOne()) continue;
+      for (unsigned Side = 0; Side != 2; ++Side) {
+        Value *V = Cmp->getOperand(Side), *Bound = Cmp->getOperand(1 - Side);
+        if ((V != &P && V != Next) || !L.isLoopInvariant(Bound) ||
+            !DT.dominates(Bound, PH->getTerminator())) continue;
+        auto Pred = Side ? Cmp->getSwappedPredicate() : Cmp->getPredicate();
+        bool TrueInside = L.contains(Branch->getSuccessor(0));
+        if ((Pred == ICmpInst::ICMP_EQ && !TrueInside) ||
+            (Pred == ICmpInst::ICMP_NE && TrueInside) ||
+            (Pred == ICmpInst::ICMP_ULT && TrueInside) ||
+            (Pred == ICmpInst::ICMP_UGE && !TrueInside)) {
+          Index = &P; Limit = Bound; Exit = Candidate; End = Branch;
+        }
       }
     }
   }
@@ -323,6 +361,7 @@ static bool chunkAhead(Loop &L, DominatorTree &DT) {
     if (P.getNumIncomingValues() != 2 || P.getBasicBlockIndex(PH) < 0 ||
         P.getBasicBlockIndex(Latch) < 0) return false;
 
+  formLCSSA(L, DT, &LI, nullptr);
   Function *F = H->getParent();
   ValueToValueMapTy Map;
   SmallVector<BasicBlock *, 16> Cloned;
@@ -330,6 +369,18 @@ static bool chunkAhead(Loop &L, DominatorTree &DT) {
     Cloned.push_back(CloneBasicBlock(B, Map, ".ahead.chunk", F));
   for (unsigned I = 0; I != Cloned.size(); ++I) Map[L.getBlocks()[I]] = Cloned[I];
   remapInstructionsInBlocks(Cloned, Map);
+  SmallVector<BasicBlock *, 8> Exits;
+  L.getUniqueExitBlocks(Exits);
+  for (BasicBlock *Out : Exits) for (PHINode &P : Out->phis()) {
+    unsigned N = P.getNumIncomingValues();
+    for (unsigned I = 0; I != N; ++I) {
+      BasicBlock *From = P.getIncomingBlock(I);
+      if (!L.contains(From)) continue;
+      Value *V = P.getIncomingValue(I);
+      P.addIncoming(Map.count(V) ? static_cast<Value *>(Map[V]) : V,
+                    cast<BasicBlock>(Map[From]));
+    }
+  }
   auto *FastH = cast<BasicBlock>(Map[H]);
   auto *FastLatch = cast<BasicBlock>(Map[Latch]);
   auto *Outer = BasicBlock::Create(F->getContext(), "ahead.boundary", F, H);
@@ -347,7 +398,7 @@ static bool chunkAhead(Loop &L, DominatorTree &DT) {
   PH->getTerminator()->replaceSuccessorWith(H, Outer);
   Latch->getTerminator()->replaceSuccessorWith(H, Outer);
   IRBuilder<> B(Outer);
-  Value *Spent = B.CreateSub(Quota, B.getInt64(K), "ahead.chunk.remaining");
+  Value *Spent = B.CreateSub(Quota, B.getInt64(K * *PerTrip), "ahead.chunk.remaining");
   Quota->setIncomingValue(Quota->getBasicBlockIndex(FastLatch), Spent);
   // The original checkpoint may diverge before the source bound is read.
   // As in LoopUnrollRuntime.cpp:847-860, speculative guards must not turn
@@ -355,7 +406,7 @@ static bool chunkAhead(Loop &L, DominatorTree &DT) {
   Value *GuardQuota = B.CreateFreeze(Quota, "ahead.quota");
   Value *GuardIndex = B.CreateFreeze(Index, "ahead.index");
   Value *GuardLimit = B.CreateFreeze(Limit, "ahead.limit");
-  Value *Room = B.CreateICmpUGT(GuardQuota, B.getInt64(K));
+  Value *Room = B.CreateICmpUGT(GuardQuota, B.getInt64(K * *PerTrip));
   Value *Remaining = B.CreateSub(GuardLimit, GuardIndex);
   Value *Bounded = B.CreateAnd(B.CreateICmpULT(GuardIndex, GuardLimit),
                               B.CreateICmpUGT(Remaining, B.getInt64(K)));
@@ -363,10 +414,13 @@ static bool chunkAhead(Loop &L, DominatorTree &DT) {
   auto Force = [&](BasicBlock *Original, BasicBlock *Successor) {
     auto *BB = cast<BasicBlock>(Map[Original]);
     auto *Old = BB->getTerminator();
-    UncondBrInst::Create(cast<BasicBlock>(Map[Successor]), Old->getIterator());
+    auto *Next = cast<BasicBlock>(Map[Successor]);
+    for (BasicBlock *S : successors(BB))
+      if (S != Next) S->removePredecessor(BB);
+    UncondBrInst::Create(Next, Old->getIterator());
     Old->eraseFromParent();
   };
-  Force(Point, Join);
+  for (const Point &P : Points) Force(P.Test, P.Join);
   Force(Exit, L.contains(End->getSuccessor(0)) ? End->getSuccessor(0) : End->getSuccessor(1));
   B.SetInsertPoint(FastH, FastH->begin());
   auto *Trips = B.CreatePHI(B.getInt64Ty(), 2, "ahead.chunk.trip");
@@ -393,12 +447,17 @@ public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
     if (!F.getName().ends_with("_ahead")) return PreservedAnalyses::all();
     bool Changed = false;
-    {
+    SmallPtrSet<BasicBlock *, 16> Tried;
+    for (unsigned N = 0; N != 8; ++N) {
+      bool Progress = false;
       DominatorTree DT(F);
       LoopInfo LI(DT);
       for (Loop *L : LI.getLoopsInPreorder()) {
-        if (chunkAhead(*L, DT)) { Changed = true; break; }
+        BasicBlock *H = L->getHeader();
+        if (H->getName().contains(".ahead.chunk") || !Tried.insert(H).second) continue;
+        if (chunkAhead(*L, LI, DT)) { Progress = true; Changed = true; break; }
       }
+      if (!Progress) break;
     }
     if (!Changed) return PreservedAnalyses::all();
     AM.invalidate(F, PreservedAnalyses::none());
