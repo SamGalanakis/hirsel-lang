@@ -6518,6 +6518,12 @@ impl Checker<'_> {
                             let SignatureKind::Function(function) = &s.kind else {
                                 return None;
                             };
+                            let declared = self.t.row(function.result);
+                            if matches!(declared.kind, TypeKind::Parameter(_))
+                                && declared.modes.uniqueness != hirsel_types::Uniqueness::Unique
+                            {
+                                return None;
+                            }
                             self.imported_in(
                                 function.result,
                                 arguments,
@@ -6529,17 +6535,29 @@ impl Checker<'_> {
                     Callee::Indirect {
                         value, arguments, ..
                     } => match &self.t.row(self.place_type(value.place)).kind {
-                        TypeKind::Function(function) => self
-                            .imported_in(function.result, arguments, &self.generic_declarations())
-                            .map(|result| {
-                                (
-                                    result,
-                                    self.signatures
-                                        .get(self.definition.path)
-                                        .map(|s| s.metadata.roles.clone())
-                                        .unwrap_or_default(),
+                        TypeKind::Function(function) => {
+                            let declared = self.t.row(function.result);
+                            if matches!(declared.kind, TypeKind::Parameter(_))
+                                && declared.modes.uniqueness != hirsel_types::Uniqueness::Unique
+                            {
+                                None
+                            } else {
+                                self.imported_in(
+                                    function.result,
+                                    arguments,
+                                    &self.generic_declarations(),
                                 )
-                            }),
+                                .map(|result| {
+                                    (
+                                        result,
+                                        self.signatures
+                                            .get(self.definition.path)
+                                            .map(|s| s.metadata.roles.clone())
+                                            .unwrap_or_default(),
+                                    )
+                                })
+                            }
+                        }
                         _ => None,
                     },
                 };

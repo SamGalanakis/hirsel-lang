@@ -7877,6 +7877,17 @@ impl Checker<'_, '_> {
                 }
                 if !*constructor
                     && !replaced
+                    // A bare generic result keeps its declared aliased root.
+                    // Its instantiated actual is not an independent uniqueness
+                    // promise; parametric/inferred evidence is handled above.
+                    && self.ty(*callee).is_some_and(|ty| {
+                        let TypeKind::Function(function) = &self.t.row(ty).kind else {
+                            return false;
+                        };
+                        let result = self.t.row(function.result);
+                        !matches!(result.kind, TypeKind::Parameter(_))
+                            || result.modes.uniqueness == Uniqueness::Unique
+                    })
                     && let Some(root) = self.ty(*expression)
                     && matches!(
                         self.t.row(root).kind,
