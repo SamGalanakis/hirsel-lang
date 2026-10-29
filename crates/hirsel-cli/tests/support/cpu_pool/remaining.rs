@@ -198,7 +198,7 @@ fn ordered_remaining_mode(name: &str, template: &str, status: i32, allocating: b
             let boundaries = fs::read_to_string(probe.with_extension("probe.boundaries")).unwrap();
             let failed_domain: u64 = lifecycle
                 .lines()
-                .find(|line| line.starts_with("start "))
+                .find(|line| line.starts_with("caller ") || line.starts_with("start "))
                 .expect("the failed batch must start a CPU domain")
                 .split_whitespace()
                 .nth(1)
@@ -214,9 +214,11 @@ fn ordered_remaining_mode(name: &str, template: &str, status: i32, allocating: b
                         .collect()
                 })
                 .collect();
+            // Round-robin mapper owners now begin at slot zero, the caller
+            // when it is available. Keep both checked failures and their order.
             let older = intervals
                 .iter()
-                .filter(|fields| fields[0] == failed_domain && fields[1] == 1)
+                .filter(|fields| fields[0] == failed_domain && fields[1] == 0)
                 .count();
             assert!(older > 8, "{samples}");
             let boundaries: Vec<Vec<u64>> = boundaries
@@ -231,11 +233,11 @@ fn ordered_remaining_mode(name: &str, template: &str, status: i32, allocating: b
                 .collect();
             let older = boundaries
                 .iter()
-                .position(|fields| fields[1] == 1)
+                .position(|fields| fields[1] == 0)
                 .expect("job 0 must reach its checked failure boundary");
             let younger = boundaries
                 .iter()
-                .position(|fields| fields[1] == 2)
+                .position(|fields| fields[1] == 1)
                 .expect("job 1 must reach its checked failure boundary in the failed batch");
             // CONC-1 gives host scheduling no startup bound. A rejected on-CPU
             // sample is no failure event; observe the actual alternate handoffs.

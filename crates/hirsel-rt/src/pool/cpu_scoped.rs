@@ -9,6 +9,7 @@ use std::sync::{
 };
 
 pub(crate) mod ledger;
+mod placement;
 pub(crate) mod probe;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -62,6 +63,8 @@ pub(super) struct Assigned {
     permits: Arc<Permits>,
     exec: Arc<Exec>,
     topology: Option<Arc<ledger::Topology>>,
+    cpu: Option<usize>,
+    placement: Option<placement::Pin>,
 }
 
 impl Permits {
@@ -135,6 +138,8 @@ impl Reservation {
             permits: Arc::clone(&self.permits),
             exec,
             topology: None,
+            cpu: None,
+            placement: None,
         })
     }
 }
@@ -149,10 +154,24 @@ impl Drop for Reservation {
     }
 }
 
+impl Assigned {
+    pub(super) unsafe fn pin(&mut self, run: *mut RunShared) -> Result<(), Refusal> {
+        if let Some(cpu) = self.cpu {
+            let pin = placement::Pin::new(cpu)?;
+            if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+                probe.placement(self.exec.scoped_index().unwrap(), pin.tid(), cpu);
+            }
+            self.placement = Some(pin);
+        }
+        Ok(())
+    }
+}
+
 impl Drop for Assigned {
     fn drop(&mut self) {
         // The worker has exited compiled code. Its idle transitions did not
         // return this credit to the process, even after capacity contracted.
+        self.placement.take();
         let mut state = self.permits.state.lock().unwrap();
         assert!(self.exec.reserved.swap(false, Ordering::AcqRel));
         self.exec.held.store(false, Ordering::Release);
@@ -351,6 +370,9 @@ unsafe fn start_at(
         return Err(Refusal::Busy);
     }
     let width = reservation.unassigned;
+    let cpus = unsafe { (*run).cpu_grant.as_ref() }
+        .map(|_| placement::cpus())
+        .transpose()?;
     let topology = match unsafe { (*run).cpu_ledger.as_ref() } {
         Some(ledger) => Some(ledger.topology(width).ok_or(Refusal::ResourceLimit)?),
         None => None,
@@ -378,8 +400,10 @@ unsafe fn start_at(
         };
         let mut assigned = reservation.assign(Arc::clone(&exec)).unwrap();
         assigned.topology = topology.clone();
+        assigned.cpu = cpus.as_ref().map(|cpus| cpus[index as usize % cpus.len()]);
         if index == 0 && calling.is_some() {
             exec.scoped_slot.store(0, Ordering::Release);
+            unsafe { assigned.pin(run) }?;
             workers.calling = Some(assigned);
             workers.pending.push(None);
             if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
@@ -544,6 +568,7 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
             .expect("the calling executor belongs to this run")
     };
     let mut controllers = Vec::new();
+    let mut caller_is_controller = false;
     if crate::tasks::ordered::engine::on(ctx) {
         for owner in crate::tasks::cpu_control_owners(ctx) {
             let candidates = match owner {
@@ -582,9 +607,8 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
                 return Err(Refusal::ResourceLimit);
             }
             for exec in candidates {
-                if !Arc::ptr_eq(&calling, &exec)
-                    && !controllers.iter().any(|old| Arc::ptr_eq(old, &exec))
-                {
+                caller_is_controller |= Arc::ptr_eq(&calling, &exec);
+                if !controllers.iter().any(|old| Arc::ptr_eq(old, &exec)) {
                     controllers.push(exec);
                 }
             }
@@ -594,10 +618,15 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
     super::release_permit(ctx);
     let reservation = execs.permits.reserve_with_controllers(width, controllers);
     let owners = match reservation {
-        Ok((reservation, controllers)) => {
-            unsafe { start_at(run, reservation, None, Some(calling)) }
-                .map(|owners| (owners, controllers))
+        Ok((reservation, controllers)) => unsafe {
+            start_at(
+                run,
+                reservation,
+                None,
+                (!caller_is_controller).then_some(calling),
+            )
         }
+        .map(|owners| (owners, controllers)),
         Err(error) => Err(error),
     };
     let (owners, controllers) = match owners {

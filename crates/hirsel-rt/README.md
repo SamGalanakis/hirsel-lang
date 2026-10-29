@@ -1553,10 +1553,14 @@ sidecars and event traces retain their startup admission snapshots.
 Production workers grow with runnable work when every started worker is busy,
 up to the resolved width. An Ordered root starts on the caller. Explicit
 physical-worker test and embedding requests retain their requested topology.
-A scoped claim reserves its full width and storage, runs destination zero on
-the caller, and starts other destinations only when they have prepared jobs.
-The caller returns its ordinary credit before reserving the batch and takes
-it back after the joined drain. All started workers join before normal teardown.
+A scoped claim reserves its full width and storage and starts destinations only
+when they have prepared jobs. Destination zero uses the caller unless ordinary
+continuations need that executor for control; their independent credit and a
+separate mapper destination are then reserved before preparation. Each slot is
+pinned to its selected CPU in the admitted affinity. The caller's original mask
+is restored after the joined drain. The caller returns its ordinary credit
+before reserving the batch and takes it back after that drain. All started
+workers join before normal teardown.
 
 ### Spawn hints and the worker stack pool
 

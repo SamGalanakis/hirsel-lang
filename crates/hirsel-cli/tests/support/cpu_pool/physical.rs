@@ -309,34 +309,30 @@ fn run_width_policy_backends_mode(
         let before = physical_host_snapshot(child.id(), &cpus);
         let mut threads = PhysicalThreads::default();
         let mut pinned = BTreeSet::new();
+        let mut slot_threads = BTreeMap::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while pinned.len() < width && std::time::Instant::now() < deadline {
             threads.capture(child.id());
-            if let Ok(entries) = fs::read_dir(format!("/proc/{}/task", child.id())) {
-                for entry in entries.flatten() {
-                    let Ok(name) = fs::read_to_string(entry.path().join("comm")) else {
-                        continue;
-                    };
-                    let Some(worker) = name
-                        .trim()
-                        .strip_prefix("hirsel-cpu-")
-                        .and_then(|n| n.parse::<usize>().ok())
-                    else {
-                        continue;
-                    };
-                    if worker >= width || pinned.contains(&worker) {
-                        continue;
-                    }
-                    let tid = entry.file_name().to_string_lossy().parse::<i32>().unwrap();
-                    let mut selected = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
-                    unsafe { libc::CPU_SET(cpus[worker], &mut selected) };
-                    if unsafe {
-                        libc::sched_setaffinity(tid, std::mem::size_of_val(&selected), &selected)
-                    } == 0
-                    {
-                        pinned.insert(worker);
-                    }
+            // The runtime applies each slot's admitted CPU and records the
+            // native TID after sched_setaffinity succeeds. Include caller slot
+            // zero; on-CPU samples below independently check every placement.
+            let placements =
+                fs::read_to_string(root.join("probe.txt.placements")).unwrap_or_default();
+            for line in placements.lines() {
+                let fields: Vec<_> = line.split_whitespace().collect();
+                if fields.len() != 4 {
+                    continue; // A concurrent writer may not have completed its line.
                 }
+                assert_eq!(fields[0], "placement");
+                let slot: usize = fields[1].parse().unwrap();
+                let tid: u32 = fields[2].parse().unwrap();
+                let cpu: usize = fields[3].parse().unwrap();
+                assert!(slot < width && tid > 0, "{line}");
+                assert_eq!(cpu, cpus[slot], "slot {slot} exact admitted placement");
+                if let Some(previous) = slot_threads.insert(slot, tid) {
+                    assert_eq!(previous, tid, "one native owner per admitted slot");
+                }
+                pinned.insert(slot);
             }
             if child.try_wait().unwrap().is_some() {
                 break;
@@ -365,7 +361,21 @@ fn run_width_policy_backends_mode(
             width,
             "all fresh workers must receive the exact admitted placement\n{before}\n{after}\n{threads:?}\n{retired}"
         );
+        assert_eq!(
+            slot_threads
+                .values()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            width
+        );
         let samples = fs::read_to_string(&probe).unwrap();
+        for line in samples.lines() {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            let slot: usize = fields[2].parse().unwrap();
+            let cpu: usize = fields[3].parse().unwrap();
+            assert_eq!(cpu, cpus[slot], "{line}: mapper stayed on its admitted CPU");
+        }
         let rejected = fs::read_to_string(root.join("probe.txt.rejected")).unwrap();
         let observed = if private {
             &owned.as_ref().unwrap().cpus

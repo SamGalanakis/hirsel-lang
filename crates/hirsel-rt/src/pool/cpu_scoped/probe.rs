@@ -12,6 +12,7 @@ pub(crate) struct Probe {
     boundaries: Mutex<std::fs::File>,
     controls: Mutex<std::fs::File>,
     threads: Mutex<std::fs::File>,
+    placements: Mutex<std::fs::File>,
     jobs: std::sync::Arc<Mutex<std::fs::File>>,
     rejected_output: std::fs::File,
     rejected: [Mutex<Vec<(Sample, Sample)>>; 16],
@@ -41,6 +42,8 @@ impl Probe {
         jobs.push(".jobs");
         let mut rejected = path.as_os_str().to_os_string();
         rejected.push(".rejected");
+        let mut placements = path.as_os_str().to_os_string();
+        placements.push(".placements");
         let mut threads = path.as_os_str().to_os_string();
         threads.push(".threads");
         Ok(Self {
@@ -49,6 +52,7 @@ impl Probe {
             boundaries: Mutex::new(std::fs::File::create(boundaries)?),
             controls: Mutex::new(std::fs::File::create(controls)?),
             threads: Mutex::new(std::fs::File::create(threads)?),
+            placements: Mutex::new(std::fs::File::create(placements)?),
             jobs: std::sync::Arc::new(Mutex::new(std::fs::File::create(jobs)?)),
             rejected_output: std::fs::File::create(rejected)?,
             rejected: std::array::from_fn(|_| Mutex::new(Vec::new())),
@@ -71,6 +75,14 @@ impl Probe {
             "{kind} {domain} {owner} {value}"
         )
         .expect("CPU lifecycle probe write");
+    }
+
+    pub(crate) fn placement(&self, slot: u32, tid: libc::pid_t, cpu: usize) {
+        writeln!(
+            self.placements.lock().unwrap(),
+            "placement {slot} {tid} {cpu}"
+        )
+        .expect("CPU placement probe write");
     }
 
     pub(crate) fn control(&self, task: u64, width: u32, action: u32, count: u64, outcome: u32) {
@@ -310,6 +322,9 @@ pub(crate) unsafe fn resume(ctx: *mut TaskCtx) {
                 .map(|w| w.domain)
         };
         if let Some(domain) = domain {
+            // Native Ordered alternates can run directly on caller slot zero,
+            // bypassing the ordinary idle loop's lifecycle notification.
+            self::worker((*ctx).run_ptr(), &*super::super::own_exec(), "run");
             (*ctx)
                 .run_ref()
                 .cpu_probe
@@ -322,6 +337,9 @@ pub(crate) unsafe fn resume(ctx: *mut TaskCtx) {
 }
 
 pub(crate) unsafe fn begin(ctx: *mut TaskCtx, domain: u64, worker: u32) {
+    // Mapper entry is observable even when slot zero uses home's direct drive
+    // instead of the native worker's idle loop.
+    unsafe { self::worker((*ctx).run_ptr(), &*super::super::own_exec(), "run") };
     #[cfg(target_os = "linux")]
     unsafe {
         if let Some(probe) = (*ctx).run_ref().cpu_probe.as_ref() {

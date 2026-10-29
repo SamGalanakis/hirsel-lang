@@ -1368,10 +1368,14 @@ fn worker_main_reserved(
     run: RunPtr,
     exec: Arc<Exec>,
     holders: Arc<Holders>,
-    assigned: Option<cpu_scoped::Assigned>,
+    mut assigned: Option<cpu_scoped::Assigned>,
     ready: Option<Arc<cpu_scoped::Startup>>,
 ) {
     let run = run.0;
+    if let Some(assigned) = &mut assigned {
+        unsafe { assigned.pin(run) }
+            .unwrap_or_else(|_| environmental("a scoped CPU worker could not apply its placement"));
+    }
     EXEC.with(|e| e.set(Arc::as_ptr(&exec)));
     // SAFETY: this exec's own thread, before its first post: no role or section is held. A
     // starting executor may wait for a retiring one's slot.
