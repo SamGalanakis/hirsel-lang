@@ -229,8 +229,9 @@ impl TypeRecords {
         let record = RecordView::open(bytes)?;
         let mut pending = record.type_references()?;
         while let Some(reference) = pending.pop() {
-            if visit(reference.reference())? {
-                let component = types::component(self.store.as_ref(), reference)?;
+            let traverse = visit(reference.reference())?;
+            let component = types::component(self.store.as_ref(), reference)?;
+            if traverse {
                 pending.extend(
                     (0..component.dependency_count())
                         .map(|n| component.dependency(n))
@@ -672,6 +673,28 @@ mod tests {
             seen.len(),
             3,
             "the cycle shares one component above two dependencies"
+        );
+        let reference = RecordView::open(&record)
+            .unwrap()
+            .type_references()
+            .unwrap()[0];
+        let forged = IndexedEnvelope::encode(
+            &[],
+            &[
+                TypeRef {
+                    member: u32::MAX,
+                    ..reference
+                },
+                reference,
+            ],
+            &[],
+        )
+        .unwrap();
+        assert!(
+            encoder
+                .visit_record_types(&forged, |r| Some(seen.insert(r.output.0)))
+                .is_none(),
+            "copied component identity cannot validate a new member designation"
         );
         assert!(encoder.visit_record_types(&record, |_| None).is_none());
         drop(encoder);
