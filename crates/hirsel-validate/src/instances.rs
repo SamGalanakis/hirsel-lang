@@ -136,6 +136,30 @@ pub fn validate_instance_uses(
     owner: &DefPath,
     definition: &hirsel_tir::Definition,
 ) -> Vec<InstanceViolation> {
+    instance_uses(t, bodies, owner, &ReadDefinition::live(definition))
+}
+
+/// The same CT-5 obligations over live or checked indexed rows. Missing source
+/// or type bindings are a read failure, independent of the call verdict.
+pub fn validate_instance_rows(
+    t: &TypeInterner,
+    bodies: &InstanceBodies,
+    owner: &DefPath,
+    definition: hirsel_product_codec::TirView<'_>,
+) -> Option<Vec<InstanceViolation>> {
+    Some(instance_uses(
+        t,
+        bodies,
+        owner,
+        &ReadDefinition::new(definition)?,
+    ))
+}
+fn instance_uses(
+    t: &TypeInterner,
+    bodies: &InstanceBodies,
+    owner: &DefPath,
+    definition: &ReadDefinition<'_>,
+) -> Vec<InstanceViolation> {
     let mut violations = vec![];
     let mut uses = vec![];
     for body in &definition.bodies {

@@ -57,6 +57,26 @@ mod tests {
                 Arc::new(()),
             )
             .unwrap();
+        let raw = Artifact::archived(&archive, session(), |_| Some((path("main"), 0))).unwrap();
+        assert_eq!(
+            raw.identity,
+            Artifact::new(&definition, session(), |_| Some((path("main"), 0))).identity
+        );
+        let (direct, ran, accepted_raw) =
+            validate_with_receipt(&raw, &fixture.signatures, policy, None, &mut vec![]);
+        assert!(
+            ran,
+            "raw indexed V must derive its own verdict without a local receipt"
+        );
+        assert!(direct.violations.is_empty());
+        assert_eq!(accepted_raw, evidence.accepted);
+        assert!(output.matches_archive(
+            &archive,
+            session(),
+            |_| Some((path("main"), 0)),
+            policy,
+            &fixture.signatures
+        ));
         assert_eq!(archive.header().unwrap().path, definition.path);
         assert_eq!(archive.body_count() as usize, definition.bodies.len());
         assert_eq!(
@@ -78,6 +98,29 @@ mod tests {
             .contents()
             .put_content(hirsel_product_codec::CheckedTir::DOMAIN, &changed)
             .unwrap();
+        let malformed = hirsel_product_codec::CheckedTir::open(
+            cache.contents().get_content(changed).unwrap(),
+            changed,
+            cache.records(session()),
+            |_, _| Some(anchor),
+        )
+        .unwrap();
+        let raw = Artifact::archived(&malformed, session(), |_| Some((path("main"), 0))).unwrap();
+        let (refused, ran, accepted_raw) =
+            validate_with_receipt(&raw, &fixture.signatures, policy, None, &mut vec![]);
+        assert!(ran);
+        assert!(!refused.violations.is_empty());
+        assert!(
+            accepted_raw.is_none(),
+            "checksummed malformed TIR cannot mint acceptance"
+        );
+        assert!(!output.matches_archive(
+            &malformed,
+            session(),
+            |_| Some((path("main"), 0)),
+            policy,
+            &fixture.signatures
+        ));
         let mut missing = original;
         missing.len += 1;
         for child in [missing, changed] {
@@ -808,6 +851,27 @@ impl VerifiedDefinitionOutput {
                 .iter()
                 .all(|read| crate::input::read_holds_for_types(&types, read, signatures))
             && Artifact::new(definition, types, owner).identity == Some(self.artifact)
+    }
+    /// Bind the same existing local output to an independently identified
+    /// immutable archive. Content alone still cannot construct this capability.
+    pub fn matches_archive(
+        &self,
+        archive: &hirsel_product_codec::CheckedTir,
+        types: Arc<TypeInterner>,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+    ) -> bool {
+        archive
+            .header()
+            .is_some_and(|header| self.owner == header.path)
+            && self.policy == policy
+            && self
+                .reads
+                .iter()
+                .all(|read| crate::input::read_holds_for_types(&types, read, signatures))
+            && Artifact::archived(archive, types, owner)
+                .is_some_and(|artifact| artifact.identity == Some(self.artifact))
     }
     /// Query metadata remains producer data; the query owner checks it.
     pub fn metadata(&self) -> &[u8] {

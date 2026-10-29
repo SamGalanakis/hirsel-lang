@@ -42,6 +42,15 @@ and generic nesting. Represented capability declarations independently prove the
 summary, owner-only implementation ceiling, structural bounds and global scope
 retention. Global/scoped kind supplies no copying or cleanup proof. Source-less
 intrinsic/FFI declarations retain explicit trust.
+`validate_rows(TirView, ...)` runs the same independent semantic checker on
+live input or checked indexed TIR. A missing source or type binding returns
+`None`. Archive framing and scalar validation establish only safe access; V
+reconstructs all structural, typing, ownership and flow obligations and records
+its own signature reads. Demanded leaf rows remain in a temporary cache for
+that validation. No archived `Definition` or `Body` is reconstructed.
+`Artifact::archived` computes the established complete artifact identity from
+rows; only the existing verifier receipt path can issue acceptance.
+
 The report contains only `violations`. `hirsel_validate::assert_valid`
 panics for violations and returns unit; it is the helper for lowering's tests.
 The driver's mode-before-lowering and publication guards remain its responsibility.

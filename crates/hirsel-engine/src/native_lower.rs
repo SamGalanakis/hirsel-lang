@@ -200,21 +200,22 @@ impl NativeLowerReader {
     /// as the live native source attachment. No native stage is inferred.
     pub fn read(&self, path: &DefPath) -> Option<NativeLowerBody> {
         let selected = self.selected.get(path)?;
-        let definition = Arc::new(self.archive(path, self.anchors.clone())?.materialize()?);
-        if definition.path.path() != path
-            || definition.signature_hash != selected.signature
-            || !hirsel_validate::validate_instance_uses(
+        let archive = self.archive(path, self.anchors.clone())?;
+        let header = archive.header()?;
+        if header.path.path() != path
+            || header.signature_hash != selected.signature
+            || !hirsel_validate::validate_instance_rows(
                 self.anchors.record_types(),
                 &self.instances,
                 path,
-                &definition,
-            )
+                hirsel_product_codec::TirView::Archived(&archive),
+            )?
             .is_empty()
         {
             return None;
         }
         Some(NativeLowerBody {
-            definition,
+            definition: Arc::new(archive.materialize()?),
             output: selected.output.clone(),
             implementation_revision: selected.implementation_revision,
         })
@@ -418,22 +419,23 @@ impl NativeOriginalReader {
             });
         }
         let source = self.ordinary.get(path)?;
-        let definition = Arc::new(self.archive(path)?.materialize()?);
-        if definition.path.path() != path
-            || definition.signature_hash != source.signature
-            || !hirsel_validate::validate_instance_uses(
+        let archive = self.archive(path)?;
+        let header = archive.header()?;
+        if header.path.path() != path
+            || header.signature_hash != source.signature
+            || !hirsel_validate::validate_instance_rows(
                 self.verified.anchors.record_types(),
                 &self.verified.instances,
                 path,
-                &definition,
-            )
+                hirsel_product_codec::TirView::Archived(&archive),
+            )?
             .is_empty()
         {
             return None;
         }
         let output = if let Some((output, _, _)) = self.verified.input(path) {
-            if !output.matches_definition(
-                &definition,
+            if !output.matches_archive(
+                &archive,
                 self.verified.anchors.record_types().clone(),
                 |anchor| self.verified.anchors.record_owner(anchor),
                 self.verified.policy,
@@ -447,13 +449,17 @@ impl NativeOriginalReader {
         };
         let verification_ran = if output.is_none() && self.verify == Verify::On {
             let _time = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
-            let (report, ran, _, _) = hirsel_validate::validate_definition(
-                &definition,
+            let artifact = hirsel_validate::Artifact::archived(
+                &archive,
                 self.verified.anchors.record_types().clone(),
                 |anchor| self.verified.anchors.record_owner(anchor),
+            )?;
+            let (report, ran, _) = hirsel_validate::validate_with_receipt(
+                &artifact,
                 self.verified.signatures.validation(&path.0.package),
                 self.verified.policy,
                 self.verified.cache.as_deref(),
+                &mut vec![],
             );
             if ran {
                 hirsel_intern::timings::count(hirsel_intern::timings::Count::VRuns);
@@ -469,7 +475,7 @@ impl NativeOriginalReader {
         };
         Some(NativeOriginalBody {
             _owner: self.owner.clone(),
-            definition,
+            definition: Arc::new(archive.materialize()?),
             output,
             implementation_revision: source.implementation_revision,
             verification_ran,

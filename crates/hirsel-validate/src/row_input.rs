@@ -371,10 +371,19 @@ mod tests {
             let archive = CheckedTir::open(
                 store.get_content(reference).unwrap(),
                 reference,
-                records,
+                records.clone(),
                 |_, _| Some(hirsel_span::Anchor::default()),
             )
             .unwrap();
+            assert_eq!(
+                records
+                    .encode_tir_view(TirView::Archived(&archive), |_| Some((
+                        support::path("main"),
+                        0
+                    )))
+                    .unwrap(),
+                bytes
+            );
             let mut reads = vec![];
             let actual = crate::validate_rows(
                 TirView::Archived(&archive),

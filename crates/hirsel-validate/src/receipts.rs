@@ -163,7 +163,7 @@ const DOMAIN: Domain = Domain {
 /// An exact artifact identity computed here from every field and reachable type
 /// row. Its definition and interner stay bound to that identity for validation.
 pub struct Artifact<'a> {
-    definition: &'a Definition,
+    definition: hirsel_product_codec::TirView<'a>,
     types: Arc<TypeInterner>,
     identity: Option<ContentHash>,
     owners: std::collections::BTreeMap<Anchor, (DefPath, u32)>,
@@ -175,7 +175,12 @@ impl<'a> Artifact<'a> {
         types: Arc<TypeInterner>,
         owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
     ) -> Self {
-        Self::identify(definition, types, owner, None)
+        Self::identify(
+            hirsel_product_codec::TirView::Live(definition),
+            types,
+            owner,
+            None,
+        )
     }
     /// Identify a private artifact and its exact replacement signature in one
     /// pass. The ordinary body identity is not an intermediate product.
@@ -185,10 +190,30 @@ impl<'a> Artifact<'a> {
         signature: hirsel_types::SignatureRef,
         owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
     ) -> Self {
-        Self::identify(definition, types, owner, Some(signature))
+        Self::identify(
+            hirsel_product_codec::TirView::Live(definition),
+            types,
+            owner,
+            Some(signature),
+        )
+    }
+    /// Raw indexed input acquires no verifier authority here. This independently
+    /// identifies its complete content; validate_with_receipt alone issues acceptance.
+    pub fn archived(
+        definition: &'a hirsel_product_codec::CheckedTir,
+        types: Arc<TypeInterner>,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+    ) -> Option<Self> {
+        definition.bind_types()?;
+        Some(Self::identify(
+            hirsel_product_codec::TirView::Archived(definition),
+            types,
+            owner,
+            None,
+        ))
     }
     fn identify(
-        definition: &'a Definition,
+        definition: hirsel_product_codec::TirView<'a>,
         types: Arc<TypeInterner>,
         mut owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
         overlay: Option<hirsel_types::SignatureRef>,
@@ -211,7 +236,7 @@ impl<'a> Artifact<'a> {
         } else {
             (
                 "hirsel.validate.artifact.v1",
-                hirsel_product_codec::canonical_bytes(types.clone(), definition, &mut bind),
+                hirsel_product_codec::canonical_bytes(types.clone(), &definition, &mut bind),
             )
         };
         let identity = bytes.map(|bytes| ContentHash::of_parts(domain, [bytes.as_slice()]));
@@ -631,7 +656,7 @@ impl VerifierCache {
         }
         let records = self.records(artifact.types.clone());
         let Some(body) = records
-            .encode_tir(artifact.definition, |anchor| {
+            .encode_tir_view(artifact.definition, |anchor| {
                 artifact.owners.get(&anchor).cloned()
             })
             .and_then(|bytes| {
@@ -706,10 +731,10 @@ impl VerifierCache {
             overlay,
             owners,
         } = self.replay_rows(&record, types.clone(), &mut anchor, Arc::new(()))?;
-        let definition = Arc::new(archive.materialize()?);
+        let definition = hirsel_product_codec::TirView::Archived(&archive);
         if overlay
             .as_ref()
-            .is_some_and(|s| s.definition != definition.path)
+            .is_some_and(|s| Some(s.definition) != definition.header().map(|h| h.path))
         {
             return None;
         }
@@ -733,7 +758,7 @@ impl VerifierCache {
             return None;
         }
         Some(ReplayArtifact {
-            definition,
+            archive,
             overlay,
             identity: accepted.artifact,
             policy: accepted.policy,
@@ -769,7 +794,7 @@ impl VerifierCache {
             let accepted = AcceptedArtifact { artifact, policy };
             if changed {
                 let replay = self.replay_artifact(&accepted, types.clone(), &mut anchor)?;
-                let package = replay.definition.path.path().0.package.clone();
+                let package = replay.archive.header()?.path.path().0.package.clone();
                 if !contexts.iter().any(|(p, _)| *p == package) {
                     return None;
                 }
@@ -808,7 +833,7 @@ impl VerifierCache {
                 // replay_artifact independently identified this decoded
                 // closure. Its immutable fields have not changed since then.
                 let exact = Artifact {
-                    definition: &replay.definition,
+                    definition: hirsel_product_codec::TirView::Archived(&replay.archive),
                     types: types.clone(),
                     identity: Some(replay.identity),
                     owners: replay.owners,
@@ -930,7 +955,7 @@ struct ReplayRows {
 }
 /// Construction is verifier-private. These bytes alone are not acceptance.
 struct ReplayArtifact {
-    definition: hirsel_tir::DefinitionRef,
+    archive: hirsel_product_codec::CheckedTir,
     overlay: Option<hirsel_types::SignatureRef>,
     identity: ContentHash,
     policy: ContentHash,
@@ -1052,7 +1077,15 @@ pub fn validate_with_receipt(
         );
     }
     let mut own = vec![];
-    let report = crate::validate(artifact.definition, &artifact.types, signatures, &mut own);
+    let report = crate::validate_rows(artifact.definition, &artifact.types, signatures, &mut own)
+        .unwrap_or_else(|| Validation {
+            violations: vec![crate::Violation {
+                body: None,
+                block: None,
+                instruction: None,
+                kind: crate::ViolationKind::InvalidTypeGraph,
+            }],
+        });
     if report.violations.is_empty()
         && let (Some(cache), Some(key), Some(identity)) = (cache, key, artifact.identity)
     {

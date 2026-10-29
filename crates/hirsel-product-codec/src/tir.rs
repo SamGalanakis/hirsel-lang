@@ -143,89 +143,97 @@ pub struct TirBodyHeader {
 fn encode<T: Serialize>(value: &T) -> Option<Vec<u8>> {
     bincode::serialize(value).ok()
 }
-fn array<T: Serialize>(tag: u32, values: &[T]) -> Option<Vec<u8>> {
-    table(tag, values.iter().map(encode).collect::<Option<Vec<_>>>()?)
+fn array<T: Serialize>(
+    tag: u32,
+    count: usize,
+    mut row: impl FnMut(usize) -> Option<T>,
+) -> Option<Vec<u8>> {
+    table(
+        tag,
+        (0..count)
+            .map(|n| encode(&row(n)?))
+            .collect::<Option<Vec<_>>>()?,
+    )
 }
-fn encode_block(block: &Block) -> Option<Vec<u8>> {
+fn encode_block(block: crate::TirBlockView<'_>) -> Option<Vec<u8>> {
     table(
         BLOCK,
         [
-            encode(&block.span)?,
-            array(INSTRUCTIONS, &block.instructions)?,
-            encode(&block.terminator)?,
+            encode(&block.span()?)?,
+            array(INSTRUCTIONS, block.instruction_count(), |n| {
+                block.instruction(n)
+            })?,
+            encode(&block.terminator()?)?,
         ],
     )
 }
-fn encode_match(value: &MatchTable) -> Option<Vec<u8>> {
+fn encode_match(value: crate::TirMatchView<'_>) -> Option<Vec<u8>> {
     table(
         MATCH,
         [
-            encode(&value.scrutinee)?,
-            array(PATTERNS, &value.patterns)?,
-            array(ARMS, &value.arms)?,
+            encode(&value.scrutinee()?)?,
+            array(PATTERNS, value.pattern_count(), |n| value.pattern(n))?,
+            array(ARMS, value.arm_count(), |n| value.arm(n))?,
         ],
     )
 }
-fn encode_body(body: &Body) -> Option<Vec<u8>> {
+fn encode_body(body: crate::TirBodyView<'_>) -> Option<Vec<u8>> {
     table(
         BODY,
         [
-            encode(&TirBodyHeader {
-                arena_scope_grant: body.arena_scope_grant.clone(),
-                parameter_scope: body.parameter_scope,
-                entry: body.entry,
-                result: body.result,
-            })?,
-            array(LOCALS, &body.locals)?,
-            array(PLACES, &body.places)?,
-            array(SCOPES, &body.scopes)?,
+            encode(&body.header()?)?,
+            array(LOCALS, body.local_count(), |n| body.local(n))?,
+            array(PLACES, body.place_count(), |n| body.place(n))?,
+            array(SCOPES, body.scope_count(), |n| body.scope(n))?,
             table(
                 BLOCKS,
-                body.blocks
-                    .iter()
-                    .map(encode_block)
+                (0..body.block_count())
+                    .map(|n| encode_block(body.block(n)?))
                     .collect::<Option<Vec<_>>>()?,
             )?,
-            array(RVALUES, &body.rvalues)?,
-            array(CLEANUPS, &body.cleanups)?,
-            array(CLEANUP_NODES, &body.cleanup_nodes)?,
-            array(PARAMETERS, &body.parameters)?,
-            array(CURSORS, &body.borrow_cursors)?,
-            array(TAILS, &body.tail_sites)?,
+            array(RVALUES, body.rvalue_count(), |n| body.rvalue(n))?,
+            array(CLEANUPS, body.cleanup_count(), |n| body.cleanup(n))?,
+            array(CLEANUP_NODES, body.cleanup_node_count(), |n| {
+                body.cleanup_node(n)
+            })?,
+            array(PARAMETERS, body.parameter_count(), |n| body.parameter(n))?,
+            array(CURSORS, body.borrow_cursor_count(), |n| {
+                body.borrow_cursor(n)
+            })?,
+            array(TAILS, body.tail_site_count(), |n| body.tail_site(n))?,
             table(
                 MATCHES,
-                body.matches
-                    .iter()
-                    .map(encode_match)
+                (0..body.match_table_count())
+                    .map(|n| encode_match(body.match_table(n)?))
                     .collect::<Option<Vec<_>>>()?,
             )?,
-            array(SCOPED, &body.scoped_parameters)?,
+            array(SCOPED, body.scoped_parameter_count(), |n| {
+                body.scoped_parameter(n)
+            })?,
         ],
     )
 }
-fn encode_definition(definition: &Definition) -> Option<Vec<u8>> {
+fn encode_definition(definition: crate::TirView<'_>) -> Option<Vec<u8>> {
     table(
         ROOT,
         [
-            encode(&TirHeader {
-                version: TIR_VERSION,
-                inferred_unique: definition.inferred_unique.clone(),
-                path: definition.path,
-                signature_hash: definition.signature_hash,
-                entry: definition.entry,
+            encode(&definition.header()?)?,
+            array(CALLERS, definition.caller_body_count(), |n| {
+                definition.caller_body(n)
             })?,
-            array(CALLERS, &definition.caller_bodies)?,
-            array(ASSOCIATIONS, &definition.protocol_associations)?,
-            array(TYPES, &definition.types)?,
+            array(ASSOCIATIONS, definition.protocol_association_count(), |n| {
+                definition.protocol_association(n)
+            })?,
+            array(TYPES, definition.type_count(), |n| definition.type_id(n))?,
             table(
                 BODIES,
-                definition
-                    .bodies
-                    .iter()
-                    .map(encode_body)
+                (0..definition.body_count())
+                    .map(|n| encode_body(definition.body(n)?))
                     .collect::<Option<Vec<_>>>()?,
             )?,
-            array(CONTRACTS, &definition.contracts)?,
+            array(CONTRACTS, definition.contract_count(), |n| {
+                definition.contract(n)
+            })?,
         ],
     )
 }
@@ -245,6 +253,23 @@ impl TypeRecords {
     pub fn encode_tir_with_decode_bytes(
         &self,
         definition: &Definition,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+    ) -> Option<(Vec<u8>, u64)> {
+        self.encode_tir_view_with_decode_bytes(crate::TirView::Live(definition), owner)
+    }
+    /// Publish the complete type closure and indexed rows without rebuilding
+    /// an archived Definition or Body. Ordinary and V publication share this encoder.
+    pub fn encode_tir_view(
+        &self,
+        definition: crate::TirView<'_>,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+    ) -> Option<Vec<u8>> {
+        self.encode_tir_view_with_decode_bytes(definition, owner)
+            .map(|(bytes, _)| bytes)
+    }
+    fn encode_tir_view_with_decode_bytes(
+        &self,
+        definition: crate::TirView<'_>,
         owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
     ) -> Option<(Vec<u8>, u64)> {
         let mut types = TableBuilder::new(self.types.clone());
