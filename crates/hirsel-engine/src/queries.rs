@@ -481,6 +481,7 @@ impl QueryEngine {
     /// This visits immutable capacities without parsing or querying a provider.
     pub fn indexed_syntax_bytes(&self) -> Option<u64> {
         let mut metadata = crate::NativeMetadataWeight::default();
+        metadata.add(2 * size_of::<usize>() + size_of::<BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>>());
         metadata.tree::<DefPath, Vec<Arc<ItemSyntax>>>(self.items.len());
         let mut payload = 0u64;
         for (path, candidates) in &self.items {

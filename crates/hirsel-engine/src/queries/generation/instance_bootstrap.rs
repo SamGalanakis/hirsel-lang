@@ -260,16 +260,10 @@ impl QueryEngine {
         // Same finite selection walk bound as discover_front_instances. Every
         // unfinished iteration must add a canonical instance or missing body.
         'round: for round in 1..=65536 {
-            runtime = self
-                .prepare_private_inference(runtime)
-                .map_err(admission_error)?;
             accepted.clear();
             if !selected.is_empty() {
                 accepted.reserve_exact(selected.len());
                 for path in &selected {
-                    runtime = self
-                        .prepare_private_inference_with_registrations(runtime, &accepted)
-                        .map_err(admission_error)?;
                     if accepted
                         .iter()
                         .any(|registration| registration.validate(self).is_err())
@@ -373,6 +367,7 @@ impl QueryEngine {
                     drop(registration);
                     drop(lower);
                     drop(front);
+                    self.adopt_completed_headers();
                 }
             }
             let bound = metadata_bound(&ordinary, &selected, None)
@@ -383,9 +378,6 @@ impl QueryEngine {
             let mut paths = Vec::with_capacity(ordinary.len() + accepted.len());
             paths.extend(ordinary.iter().cloned());
             paths.extend(accepted.iter().map(|a| a.definition().clone()));
-            runtime = self
-                .prepare_private_inference_with_registrations(runtime, &accepted)
-                .map_err(admission_error)?;
             // New body proofs change V's universe. Re-execute generators in
             // that universe rather than carrying an earlier execution receipt
             // into the final front. The settled proofs remain for the next
@@ -394,7 +386,7 @@ impl QueryEngine {
                 .iter()
                 .any(|registration| registration.validate(self).is_err())
             {
-                continue;
+                continue 'round;
             }
             let front = self
                 .front_body_queries_with_registrations(
@@ -440,6 +432,16 @@ impl QueryEngine {
             finish(&mut executor, &mut runtime, &mut stats)?;
             drop(executor);
             drop(queries);
+            self.adopt_completed_headers();
+            // A demanded private fixed point can change a generator's recorded
+            // universe. Re-execute that generator before accepting its output.
+            if accepted
+                .iter()
+                .any(|registration| registration.validate(self).is_err())
+            {
+                drop(front);
+                continue 'round;
+            }
             let found = self
                 .discover_front_instances(roots, &[front.clone()], borrow(&discovery_pool)?)
                 .map_err(|error| Failure::Discovery {

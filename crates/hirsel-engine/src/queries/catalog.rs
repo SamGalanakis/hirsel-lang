@@ -171,7 +171,7 @@ struct Candidate {
 }
 #[derive(Default)]
 pub(crate) struct Catalog {
-    files: BTreeMap<FileId, FileContext>,
+    files: super::native_records::SourceTable<FileId, FileContext>,
     candidates: super::native_records::SourceTable<DefPath, Vec<Candidate>>,
     facts_cache:
         std::sync::RwLock<BTreeMap<hirsel_syntax::LexicalOwner, (ContentHash, SourceFacts)>>,
@@ -214,6 +214,7 @@ impl Catalog {
         &mut self,
         ownership: Arc<super::native_records::SourceOwnership>,
     ) {
+        self.files.bind(ownership.clone());
         self.candidates.bind(ownership);
     }
     pub(super) fn bindings(
@@ -230,6 +231,13 @@ impl Catalog {
     }
     fn payload_bytes(&self, cached_facts: bool, packed: bool) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
+        if !packed {
+            weight.add(
+                4 * size_of::<usize>()
+                    + size_of::<BTreeMap<FileId, FileContext>>()
+                    + size_of::<BTreeMap<DefPath, Vec<Candidate>>>(),
+            );
+        }
         let facts = |weight: &mut crate::NativeMetadataWeight, facts: &SourceFacts| {
             weight.flat_vec(&facts.comptime);
             weight.flat_vec(&facts.associations);

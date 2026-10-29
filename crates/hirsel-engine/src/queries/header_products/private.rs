@@ -4,6 +4,7 @@ use std::sync::{Mutex, atomic::AtomicU64};
 type Module = (crate::memo::PackageKey, crate::memo::ModuleKey);
 pub(super) struct ModuleProduct {
     facts: Facts,
+    complete: bool,
     work: hirsel_syntax::DefMap<usize>,
     accounted: AtomicBool,
 }
@@ -98,7 +99,7 @@ impl HeaderProducts {
                 // another settled module while its own publication is in progress.
                 let declared = self.declared();
                 let mut engine = declared.execution();
-                let facts = engine.infer_private_module(
+                let (facts, complete) = engine.infer_private_module(
                     working,
                     private.registrations.get().map_or(&[], Vec::as_slice),
                     id,
@@ -142,6 +143,7 @@ impl HeaderProducts {
                 self.generation.fetch_add(1, Ordering::Relaxed);
                 Ok(ModuleProduct {
                     facts,
+                    complete,
                     work,
                     accounted: AtomicBool::new(false),
                 })
@@ -225,6 +227,12 @@ impl HeaderProducts {
         }
         if changed {
             engine.publish_private_summaries(inferred)?;
+            if private.modules.values().all(|cell| {
+                cell.get()
+                    .is_some_and(|result| result.as_ref().is_ok_and(|product| product.complete))
+            }) {
+                engine.private_summary_revision = Some(engine.graph.revision());
+            }
         }
         Ok(())
     }
@@ -254,7 +262,6 @@ impl HeaderProducts {
             environment: self.environment.clone(),
             adapters: self.adapters.clone(),
             sources: self.sources.clone(),
-            ownership: self.ownership.clone(),
             owners: self.owners.clone(),
             provisional: true,
             failure: None,

@@ -1795,6 +1795,7 @@ impl QueryEngine {
             ));
         }
         if !registrations.is_empty() {
+            self.private_summary_revision = None;
             self.retire_snapshot();
         }
         let snapshot = self.signature_inputs();

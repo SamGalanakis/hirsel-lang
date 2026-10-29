@@ -656,6 +656,7 @@ impl QueryEngine {
                 accepted.validate(self)?;
             }
         }
+        self.prepare_private_summaries();
         let snapshot = self.signature_inputs();
         let original_context = self.native_original_context(definitions)?;
         let store = self

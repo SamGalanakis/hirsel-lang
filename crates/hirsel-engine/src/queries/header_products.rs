@@ -58,7 +58,6 @@ pub(crate) struct HeaderProducts {
     environment: QueryEnvironment,
     adapters: HeaderPhases,
     sources: SourceMap,
-    ownership: Arc<native_records::SourceOwnership>,
     owners: Arc<crate::NativeRecordContext>,
     provisional: bool,
     failure: Option<QueryError>,
@@ -115,7 +114,6 @@ impl HeaderProducts {
             environment: engine.environment.clone(),
             adapters: HeaderPhases::capture(&engine.adapters),
             sources: engine.sources.clone(),
-            ownership: engine.source_ownership.clone(),
             owners: owners.clone(),
             provisional: engine.private_summary_active,
             failure: engine.current_private_summary_failure().cloned(),
@@ -146,15 +144,18 @@ impl HeaderProducts {
         let mut engine =
             QueryEngine::new_with_hold_bytes(self.environment.clone(), self.adapters.adapters(), 0);
         engine.sources = self.sources.clone();
-        engine.source_ownership = self.ownership.clone();
+        engine.source_ownership = Arc::default();
         engine.private_summary_active = self.provisional;
         engine.private_summary_failure = self
             .failure
             .clone()
             .map(|error| (engine.graph.revision(), error));
-        engine.items = native_records::SourceTable::new(self.ownership.clone());
+        engine.items = native_records::SourceTable::new(engine.source_ownership.clone());
         engine.declarations = self.declarations.clone();
         engine.catalog = self.catalog.clone();
+        engine
+            .catalog
+            .bind_ownership(engine.source_ownership.clone());
         engine.types = self.types.clone();
         engine.memo = self.memo.clone();
         engine.builtins = self.builtins.clone();

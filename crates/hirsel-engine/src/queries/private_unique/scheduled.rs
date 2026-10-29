@@ -427,30 +427,34 @@ impl QueryEngine {
         working_bytes: u64,
         registrations: &[Arc<AcceptedFrontRegistration>],
         owner: DefId,
-    ) -> Result<Facts, QueryError> {
+    ) -> Result<(Facts, bool), QueryError> {
         self.private_summary_active = true;
-        self.infer_private_modules(
-            working_bytes,
-            registrations,
-            Some((
-                crate::memo::PackageKey::of(&owner.path().0.package),
-                crate::memo::ModuleKey::of(&owner.path().0.modules),
-            )),
-        )?;
-        self.local_inference()
-            .remove(&(
-                crate::memo::PackageKey::of(&owner.path().0.package),
-                crate::memo::ModuleKey::of(&owner.path().0.modules),
-            ))
-            .map_or_else(
-                || {
-                    Ok(Facts {
-                        proofs: vec![],
-                        reads: Reads::empty(),
-                    })
-                },
-                Ok,
-            )
+        let module = (
+            crate::memo::PackageKey::of(&owner.path().0.package),
+            crate::memo::ModuleKey::of(&owner.path().0.modules),
+        );
+        self.infer_private_modules(working_bytes, registrations, Some(module))?;
+        let facts = self.local_inference().remove(&module).unwrap_or(Facts {
+            proofs: vec![],
+            reads: Reads::empty(),
+        });
+        let declarations = self.declarations.frozen();
+        let complete = self
+            .source_paths()
+            .into_iter()
+            .filter(|path| {
+                hirsel_types::unique_summary::same_module(path, owner.path())
+                    && declarations
+                        .metadata()
+                        .definitions
+                        .get(path)
+                        .is_some_and(|metadata| !metadata.public)
+                    && self
+                        .source_facts(path)
+                        .is_some_and(|facts| facts.generator && !facts.instance_bodied)
+            })
+            .all(|path| facts.proofs.iter().any(|(id, _)| id.path() == &path));
+        Ok((facts, complete))
     }
     fn infer_private_modules(
         &mut self,
@@ -466,8 +470,12 @@ impl QueryEngine {
         else {
             return Ok(());
         };
-        for registration in registrations {
-            registration.validate(self)?;
+        // Immutable module producers receive the exact registrations validated
+        // by front capture. Mutable complete-universe callers validate here.
+        if selected.is_none() {
+            for registration in registrations {
+                registration.validate(self)?;
+            }
         }
         let mut local = self.local_inference();
         let mut inferred = hirsel_syntax::DefMap::default();

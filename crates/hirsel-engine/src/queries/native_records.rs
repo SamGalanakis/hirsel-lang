@@ -85,7 +85,7 @@ impl SourceOwnership {
 /// This also covers removals and rollback, without a separate host change log.
 #[derive(Clone)]
 pub(crate) struct SourceTable<K, V> {
-    values: BTreeMap<K, V>,
+    values: Arc<BTreeMap<K, V>>,
     ownership: Arc<SourceOwnership>,
 }
 impl<K, V> Default for SourceTable<K, V> {
@@ -96,7 +96,7 @@ impl<K, V> Default for SourceTable<K, V> {
 impl<K, V> SourceTable<K, V> {
     pub(super) fn new(ownership: Arc<SourceOwnership>) -> Self {
         Self {
-            values: BTreeMap::new(),
+            values: Arc::new(BTreeMap::new()),
             ownership,
         }
     }
@@ -111,17 +111,19 @@ impl<K, V> std::ops::Deref for SourceTable<K, V> {
         &self.values
     }
 }
-impl<K, V> std::ops::DerefMut for SourceTable<K, V> {
+impl<K: Clone, V: Clone> std::ops::DerefMut for SourceTable<K, V> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.ownership.changed();
-        &mut self.values
+        Arc::make_mut(&mut self.values)
     }
 }
-impl<K, V> IntoIterator for SourceTable<K, V> {
+impl<K: Clone, V: Clone> IntoIterator for SourceTable<K, V> {
     type Item = (K, V);
     type IntoIter = std::collections::btree_map::IntoIter<K, V>;
     fn into_iter(self) -> Self::IntoIter {
-        self.values.into_iter()
+        Arc::try_unwrap(self.values)
+            .unwrap_or_else(|shared| (*shared).clone())
+            .into_iter()
     }
 }
 impl<'a, K, V> IntoIterator for &'a SourceTable<K, V> {
@@ -134,7 +136,7 @@ impl<'a, K, V> IntoIterator for &'a SourceTable<K, V> {
 impl<K: Ord, V> FromIterator<(K, V)> for SourceTable<K, V> {
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
         Self {
-            values: iter.into_iter().collect(),
+            values: Arc::new(iter.into_iter().collect()),
             ownership: Default::default(),
         }
     }
