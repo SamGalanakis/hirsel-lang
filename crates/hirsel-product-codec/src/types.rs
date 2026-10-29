@@ -123,11 +123,8 @@ impl TypeRecords {
                         .collect()
                 },
                 |id, writer| {
-                    let mut row = self.types.row(id).clone();
-                    row.kind = row.kind.map_edges(|_| TypeId::DANGLING);
                     writer.bytes(
-                        &hirsel_types::with_session_ids(|| bincode::serialize(&row))
-                            .expect("type label"),
+                        &crate::indexed_types::label(self.types.row(id)).expect("type label"),
                     );
                     for edge in self.types.row(id).kind.graph_edges() {
                         match known.get(&edge.ty) {
@@ -159,11 +156,7 @@ impl TypeRecords {
                         })
                         .collect()
                 },
-                |id| {
-                    let mut row = self.types.row(id).clone();
-                    row.kind = row.kind.map_edges(|_| TypeId::DANGLING);
-                    hirsel_types::with_session_ids(|| bincode::serialize(&row)).ok()
-                },
+                |id| crate::indexed_types::label(self.types.row(id)),
             )?;
             let root = *numbers.get(order.first()?)?;
             let mut positions: HashMap<_, _> = order

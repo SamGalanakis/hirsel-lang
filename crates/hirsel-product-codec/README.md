@@ -58,3 +58,9 @@ Source strings and module iterators borrow the checked bytes. Payload subslices
 retain the same backing and admission. Each demanded type component checks its
 own bytes independently. A checked envelope does not validate the opaque inner
 payload or provide V authority; Lower/native schemas must supply their readers.
+
+Type labels always carry complete definition paths and symbol spellings. Opening
+a lazy component inside V's name numbering or an image decoding scope masks those
+enclosing tables for label validation and materialization, then restores them.
+Child validation cannot add names to a parent identity or interpret inline names
+as the parent's numeric slots. The same scope governs SCC labels and base labels.

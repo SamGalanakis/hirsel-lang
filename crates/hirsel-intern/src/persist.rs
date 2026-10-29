@@ -48,6 +48,8 @@ pub trait Source<K>: Send + Sync {
 pub enum Scope<K> {
     Encode(Numbering<K>),
     Decode(Arc<dyn Source<K>>),
+    /// Persist complete inline identities, independent of enclosing tables.
+    Inline,
 }
 pub type Scopes<K> = RefCell<Vec<Scope<K>>>;
 
@@ -92,6 +94,21 @@ pub fn with_source<K: 'static, R>(
     f()
 }
 
+/// Run `f` with complete inline identities, masking any enclosing name table.
+/// A nested immutable archive owns its own encoding and must not populate or
+/// decode through the caller's image or verifier numbering.
+pub fn with_inline<K: 'static, R>(stack: &'static LocalKey<Scopes<K>>, f: impl FnOnce() -> R) -> R {
+    stack.with_borrow_mut(|s| s.push(Scope::Inline));
+    struct Pop<K: 'static>(&'static LocalKey<Scopes<K>>);
+    impl<K: 'static> Drop for Pop<K> {
+        fn drop(&mut self) {
+            self.0.with_borrow_mut(|s| s.pop());
+        }
+    }
+    let _pop = Pop(stack);
+    f()
+}
+
 /// The number `id` serializes as, if the innermost scope encodes.
 pub fn encoded<K: Copy + Eq + Hash + 'static>(
     stack: &'static LocalKey<Scopes<K>>,
@@ -125,6 +142,11 @@ pub fn with_symbol_source<R>(source: Arc<dyn Source<Symbol>>, f: impl FnOnce() -
     with_source(&SYMBOLS, source, f)
 }
 
+/// Run `f` with symbols persisted as spellings, even inside a name table.
+pub fn with_symbol_spellings<R>(f: impl FnOnce() -> R) -> R {
+    with_inline(&SYMBOLS, f)
+}
+
 pub(crate) fn symbol_number(symbol: Symbol) -> Option<u32> {
     encoded(&SYMBOLS, symbol)
 }
@@ -136,6 +158,30 @@ pub(crate) fn symbol_source() -> Option<Arc<dyn Source<Symbol>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_scope_restores_numbering_after_unwind() {
+        let symbol = Symbol::intern("inline-name");
+        let mut numbering = Numbering::default();
+        with_symbol_numbering(&mut numbering, || {
+            assert_eq!(serde_json::to_string(&symbol).unwrap(), "0");
+            let panic = std::panic::catch_unwind(|| {
+                with_symbol_spellings(|| {
+                    assert_eq!(serde_json::to_string(&symbol).unwrap(), "\"inline-name\"");
+                    panic!("leave nested archive");
+                })
+            });
+            assert!(panic.is_err());
+            assert_eq!(serde_json::to_string(&symbol).unwrap(), "0");
+        });
+        assert_eq!(numbering.ids(), [symbol]);
+        with_symbol_source(Arc::new(Table(vec![symbol])), || {
+            let inline: Symbol =
+                with_symbol_spellings(|| serde_json::from_str("\"inline-name\"").unwrap());
+            assert_eq!(inline, symbol);
+            assert_eq!(serde_json::from_str::<Symbol>("0").unwrap(), symbol);
+        });
+    }
 
     struct Table(Vec<Symbol>);
     impl Source<Symbol> for Table {

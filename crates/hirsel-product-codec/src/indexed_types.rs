@@ -85,10 +85,22 @@ fn put32(bytes: &mut [u8], at: usize, value: u32) -> Option<()> {
 fn aligned(value: usize) -> Option<usize> {
     Some(value.checked_add(3)? & !3)
 }
-fn label(row: &Type) -> Option<Vec<u8>> {
+pub(crate) fn label(row: &Type) -> Option<Vec<u8>> {
     let mut row = row.clone();
     row.kind = row.kind.map_edges(|_| TypeId::DANGLING);
-    hirsel_types::with_session_ids(|| bincode::serialize(&row)).ok()
+    inline_names(|| hirsel_types::with_session_ids(|| bincode::serialize(&row))).ok()
+}
+
+// Name scopes belong to the enclosing serializer. Nested type components
+// always contain paths and spellings, including while V numbers a lazy view.
+pub(crate) fn inline_names<R>(f: impl FnOnce() -> R) -> R {
+    hirsel_syntax::with_def_paths(|| hirsel_intern::persist::with_symbol_spellings(f))
+}
+fn read_label(bytes: &[u8]) -> Option<Type> {
+    inline_names(|| {
+        hirsel_types::with_session_ids(|| crate::options(bytes.len()).deserialize(bytes))
+    })
+    .ok()
 }
 
 #[derive(Clone, Copy)]
@@ -377,9 +389,7 @@ impl CheckedTypeComponent {
             }
             let tag = row.tag();
             let label = bytes.get(start..end)?;
-            let value: Type =
-                hirsel_types::with_session_ids(|| crate::options(label.len()).deserialize(label))
-                    .ok()?;
+            let value = read_label(label)?;
             if TypeTag::of(&value.kind) != tag
                 || value.kind.graph_edges().len() != edge_count as usize
                 || value
@@ -387,10 +397,7 @@ impl CheckedTypeComponent {
                     .graph_edges()
                     .iter()
                     .any(|e| e.ty != TypeId::DANGLING)
-                || hirsel_types::with_session_ids(|| bincode::serialize(&value))
-                    .ok()?
-                    .as_slice()
-                    != label
+                || self::label(&value)?.as_slice() != label
             {
                 return None;
             }
@@ -498,10 +505,7 @@ impl TypeRow<'_> {
     /// Materialize one row for a transformation or the existing interner API.
     /// Read-only tag/edge traversal does not call this or construct a table.
     pub fn materialize(&self, mut resolve: impl FnMut(TypeEdge) -> Option<TypeId>) -> Option<Type> {
-        let mut value: Type = hirsel_types::with_session_ids(|| {
-            crate::options(self.label().len()).deserialize(self.label())
-        })
-        .ok()?;
+        let mut value = read_label(self.label())?;
         let mut edges = Vec::with_capacity(self.edge_count() as usize);
         for n in 0..self.edge_count() {
             edges.push(resolve(self.edge(n)?)?);
@@ -551,6 +555,86 @@ mod tests {
         };
         assert_eq!(order(&[0, 1]), vec![0, 1]);
         assert_eq!(order(&[1, 0]), vec![0, 1]);
+    }
+    #[test]
+    fn checked_type_labels_do_not_read_or_mutate_enclosing_name_tables() {
+        use hirsel_intern::{Symbol, persist::Numbering};
+        use hirsel_syntax::{DefId, DefPath, ItemPath, PackageId};
+        let path = DefPath(ItemPath {
+            package: PackageId {
+                name: "archive-scope".into(),
+                version: "1".into(),
+            },
+            modules: vec![],
+            name: "Named".into(),
+        });
+        let store = Arc::new(Memory::default());
+        let types = TypeInterner::new(None);
+        let nominal = types.intern(Type::with_kind(TypeKind::Named {
+            definition: DefId::intern(&path),
+            arguments: vec![].into(),
+        }));
+        let record = types.intern(Type::with_kind(TypeKind::Record(
+            vec![hirsel_types::Field {
+                growable: false,
+                name: Symbol::intern("field"),
+                ty: nominal,
+            }]
+            .into(),
+        )));
+        let records = TypeRecords::new(types, store.clone());
+        let references = records.encode(&[record, nominal]).unwrap();
+        let mut definitions = Numbering::default();
+        let mut symbols = Numbering::default();
+        hirsel_syntax::with_def_numbering(&mut definitions, || {
+            hirsel_intern::persist::with_symbol_numbering(&mut symbols, || {
+                for reference in &references {
+                    let checked = records
+                        .open_component(*reference)
+                        .expect("inline archive names");
+                    checked
+                        .row(reference.member())
+                        .unwrap()
+                        .materialize(|_| Some(nominal))
+                        .unwrap();
+                }
+                let fresh = TypeRecords::new(records.types.clone(), store.clone());
+                assert_eq!(fresh.encode(&[record, nominal]).unwrap(), references);
+            })
+        });
+        assert!(
+            definitions.ids().is_empty(),
+            "opening a child cannot add V view names"
+        );
+        assert!(
+            symbols.ids().is_empty(),
+            "opening a child cannot add V view symbols"
+        );
+        struct Missing;
+        impl hirsel_intern::persist::Source<DefId> for Missing {
+            fn id(&self, _: u32) -> Option<DefId> {
+                None
+            }
+        }
+        impl hirsel_intern::persist::Source<Symbol> for Missing {
+            fn id(&self, _: u32) -> Option<Symbol> {
+                None
+            }
+        }
+        hirsel_syntax::with_def_source(Arc::new(Missing), || {
+            hirsel_intern::persist::with_symbol_source(Arc::new(Missing), || {
+                for reference in references {
+                    let checked = records
+                        .open_component(reference)
+                        .expect("archive owns its name encoding");
+                    checked
+                        .row(reference.member())
+                        .unwrap()
+                        .materialize(|_| Some(nominal))
+                        .unwrap();
+                }
+            })
+        });
     }
     #[test]
     fn row_access_preserves_backing_and_admission_without_interning() {

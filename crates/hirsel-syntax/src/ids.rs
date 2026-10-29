@@ -171,6 +171,11 @@ pub fn with_def_source<R>(source: Arc<dyn persist::Source<DefId>>, f: impl FnOnc
     persist::with_source(&PERSIST, source, f)
 }
 
+/// Run `f` with definitions persisted as complete paths, even inside a table.
+pub fn with_def_paths<R>(f: impl FnOnce() -> R) -> R {
+    persist::with_inline(&PERSIST, f)
+}
+
 /// Persisted as its DefPath, or as its number in a persisted definition table
 /// (`with_def_numbering`); never as a session id.
 impl serde::Serialize for DefId {

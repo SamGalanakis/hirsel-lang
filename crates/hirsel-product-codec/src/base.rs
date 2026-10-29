@@ -21,7 +21,7 @@ fn label(row: &impl Serialize) -> Option<u64> {
     // writer API emits the same bytes directly, with one table-collection pass.
     let (bytes, _) = hirsel_types::with_table_collection(|| {
         let mut bytes = Vec::new();
-        bincode::serialize_into(&mut bytes, row).ok()?;
+        crate::indexed_types::inline_names(|| bincode::serialize_into(&mut bytes, row)).ok()?;
         Some(bytes)
     });
     let mut hash = IdHash::default();

@@ -29,7 +29,7 @@ Invariants and boundary:
   first-encounter order, and inside a decoding scope a number reads back
   through a `Source`. Symbols use `with_symbol_numbering`/`with_symbol_source`;
   hirsel-syntax keeps DefId's scope stack. Outside a scope a Symbol is its
-  spelling.
+  spelling. `with_symbol_spellings` masks an enclosing table while a nested archive persists its own complete names.
 
 `jobs::map(jobs, tasks, cost, work)` is the one fan-out path. Tasks start
 longest first by `cost`, ties by input index; results come back in input order.

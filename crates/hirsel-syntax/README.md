@@ -24,6 +24,7 @@ Invariants and boundary:
   hirsel-intern's, re-exported. A DefId (and a `LexicalOwner`'s) serializes as
   its DefPath, or inside `with_def_numbering`/`with_def_source` as its number
   in a definition table persisted beside the value (the std image).
+  `with_def_paths` masks an enclosing table for an independently encoded archive.
 - The token tape covers every source byte once, in order, plus empty EOF; comments and invalid tokens remain (LANG-1).
 - Origin ranges cover significant syntax. An item's tokens include its leading trivia and the rest of its last line; the file owns leftover EOF trivia.
 - `ItemSyntax.text_hash` hashes the exact bytes of the item's tokens, including attributes, contracts and drop; no newline normalization.
