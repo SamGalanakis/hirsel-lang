@@ -705,3 +705,51 @@ pub fn main()->u8 uses {} {generated(Value(x:7u8))}
         }
     });
 }
+
+#[test]
+fn demanded_private_headers_preserve_canonical_records_under_cache_verification() {
+    use hirsel_driver::{requests::*, resident::ObservedSession};
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(directory.path().join("main.hir"), "pub type State {value:u32}\npub fn finish(state:State)->u32{state.value}\nfn helper(s:State)->u32{finish(s)}\npub fn main()->u32{helper(State(value:1u32))}\n").unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"private_header_records","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let store = Arc::new(MemStore::default());
+        for verify_store in [
+            store::VerifyStore::Off,
+            store::VerifyStore::Off,
+            store::VerifyStore::Recompute,
+        ] {
+            let config = CompileConfig {
+                store: store.clone(),
+                verify_store,
+                jobs: hirsel_intern::jobs::Jobs::new(1),
+                ..Default::default()
+            };
+            let compiler = COMPILER.with_config(config.clone()).with_owned_engines();
+            let selector = CompilerRequests::new(
+                compiler.clone(),
+                config.clone(),
+                ProcessBudget::new(1 << 30),
+                RequestLimits {
+                    runtime_bytes: 512 << 20,
+                    snapshot_bytes: 128 << 20,
+                    transport_bytes: 32 << 20,
+                },
+            );
+            let limits = selector.input_limits();
+            let mut session =
+                ObservedSession::new(manifest.clone(), compiler, config, selector, limits, 3);
+            let output = session
+                .request(CompileOperation::Check {
+                    lowering: LoweringPolicy::Reachable,
+                })
+                .unwrap();
+            let CompileResult::Check(output) = &output.result else {
+                panic!("check result")
+            };
+            assert_eq!(output.completion, CheckCompletion::Complete);
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        }
+    });
+}

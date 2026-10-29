@@ -158,7 +158,11 @@ impl QueryEngine {
             .checked_add(owner_bytes)
             .ok_or_else(refused)?
             .checked_add(header_products::HeaderProducts::source_fact_index_bytes(
-                self.items.len(),
+                self.source_paths().len(),
+                self.adapters
+                    .modes
+                    .as_ref()
+                    .is_some_and(|modes| modes.infers_private_unique()),
             ))
             .ok_or_else(refused)?;
         Ok(FrontInputFootprint {

@@ -10,14 +10,25 @@ pub(super) struct ModuleProduct {
     accounted: AtomicBool,
     _standalone: Option<Arc<crate::runtime::MemoryReservation>>,
 }
+struct Candidate {
+    module: Module,
+    declared: Option<Arc<Entry<hirsel_types::SignatureRef>>>,
+}
 pub(super) struct PrivateProducts {
-    candidates: hirsel_syntax::DefMap<Module>,
+    candidates: hirsel_syntax::DefMap<Candidate>,
     modules: BTreeMap<Module, OnceLock<Result<ModuleProduct, QueryError>>>,
     working: AtomicU64,
     registrations: OnceLock<Vec<Arc<AcceptedFrontRegistration>>>,
     retention: OnceLock<Arc<Mutex<u64>>>,
 }
 impl PrivateProducts {
+    pub(super) fn index_bytes(definitions: usize) -> u64 {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(size_of::<Self>() + 4 * size_of::<usize>());
+        weight.tree::<DefId, Candidate>(definitions);
+        weight.tree::<Module, OnceLock<Result<ModuleProduct, QueryError>>>(definitions);
+        weight.bytes()
+    }
     pub(super) fn capture(engine: &QueryEngine) -> Option<Self> {
         if engine.private_summary_active
             || engine.private_summary_revision == Some(engine.graph.revision())
@@ -48,12 +59,17 @@ impl PrivateProducts {
                     crate::memo::PackageKey::of(&path.0.package),
                     crate::memo::ModuleKey::of(&path.0.modules),
                 );
-                (DefId::intern(&path), module)
+                let id = DefId::intern(&path);
+                let declared = engine
+                    .unmarked_signature(id)
+                    .and_then(|_| engine.signatures.get(&id))
+                    .map(project);
+                (id, Candidate { module, declared })
             })
             .collect::<hirsel_syntax::DefMap<_>>();
         let modules = candidates
             .values()
-            .map(|module| (*module, OnceLock::new()))
+            .map(|candidate| (candidate.module, OnceLock::new()))
             .collect();
         Some(Self {
             candidates,
@@ -67,7 +83,7 @@ impl PrivateProducts {
         self.candidates.contains_key(&id)
     }
     fn product(&self, id: DefId) -> Option<&Result<ModuleProduct, QueryError>> {
-        self.modules.get(self.candidates.get(&id)?)?.get()
+        self.modules.get(&self.candidates.get(&id)?.module)?.get()
     }
 }
 impl HeaderProducts {
@@ -91,10 +107,11 @@ impl HeaderProducts {
         let Some(private) = &self.private else {
             return Ok(None);
         };
-        let Some(module) = private.candidates.get(&id) else {
+        let Some(candidate) = private.candidates.get(&id) else {
             return Ok(None);
         };
-        private.modules[module]
+        let module = candidate.module;
+        private.modules[&module]
             .get_or_init(|| {
                 let working = private.working.load(Ordering::Relaxed);
                 if working == 0 {
@@ -104,6 +121,17 @@ impl HeaderProducts {
                 // another settled module while its own publication is in progress.
                 let declared = self.declared();
                 let mut engine = declared.execution();
+                engine.private_summaries = self
+                    .summaries
+                    .iter()
+                    .filter(|(id, _)| {
+                        private
+                            .candidates
+                            .get(id)
+                            .is_some_and(|candidate| candidate.module == module)
+                    })
+                    .map(|(id, summary)| (*id, summary.clone()))
+                    .collect();
                 let (facts, complete) = engine.infer_private_module(
                     working,
                     private.registrations.get().map_or(&[], Vec::as_slice),
@@ -131,7 +159,10 @@ impl HeaderProducts {
                     .iter()
                     .filter(|(definition, entry)| {
                         complete
-                            && private.candidates.get(definition) == Some(module)
+                            && private
+                                .candidates
+                                .get(definition)
+                                .is_some_and(|candidate| candidate.module == module)
                             && engine.unmarked_signature(**definition).is_some()
                             && entry.reads().iter().all(|(read, _)| match read {
                                 ReadKey::PrivateSummary(dependency)
@@ -140,7 +171,7 @@ impl HeaderProducts {
                                 | ReadKey::FailedSignature(dependency) => private
                                     .candidates
                                     .get(dependency)
-                                    .is_none_or(|dependency_module| dependency_module == module),
+                                    .is_none_or(|candidate| candidate.module == module),
                                 _ => true,
                             })
                     })
@@ -303,7 +334,29 @@ impl HeaderProducts {
     }
     fn declared(&self) -> Arc<Self> {
         Arc::new(Self {
-            rows: self.rows.keys().map(|id| (*id, OnceLock::new())).collect(),
+            rows: self
+                .rows
+                .iter()
+                .map(|(id, final_cell)| {
+                    let cell = OnceLock::new();
+                    let entry = final_cell
+                        .get()
+                        .and_then(|product| product.entry.as_ref())
+                        .or_else(|| self.private.as_ref()?.candidates.get(id)?.declared.as_ref());
+                    if let Some(entry) = entry {
+                        let _ = cell.set(HeaderProduct {
+                            result: entry.result(),
+                            entry: Some(entry.clone()),
+                            recomputes: 0,
+                            graph_work: 0,
+                            _standalone: None,
+                            origin: Weak::new(),
+                            accounted: AtomicBool::new(true),
+                        });
+                    }
+                    (*id, cell)
+                })
+                .collect(),
             generation: AtomicU64::new(0),
             retention: OnceLock::new(),
             environment: self.environment.clone(),
@@ -327,7 +380,7 @@ impl HeaderProducts {
             verify_store: self.verify_store,
             limits: self.limits,
             staged: self.staged.clone(),
-            summaries: Default::default(),
+            summaries: self.summaries.clone(),
             failures: Default::default(),
             private: None,
         })

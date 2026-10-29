@@ -78,7 +78,7 @@ pub(crate) struct HeaderProducts {
     verify_store: crate::store::VerifyStore,
     limits: crate::ComptimeLimits,
     staged: BTreeMap<DefPath, crate::comptime::StagedConstant>,
-    summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
+    summaries: Arc<hirsel_syntax::DefMap<hirsel_types::UniqueSummary>>,
     failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
 }
 impl HeaderProducts {
@@ -140,7 +140,7 @@ impl HeaderProducts {
             verify_store: engine.verify_store,
             limits: engine.comptime_limits,
             staged: engine.staged_constants.clone(),
-            summaries: engine.private_summaries.clone(),
+            summaries: Arc::new(engine.private_summaries.clone()),
             failures: engine.private_unique_failures.clone(),
         })
     }
@@ -180,8 +180,12 @@ impl HeaderProducts {
     pub(crate) fn source_facts(&self, id: DefId) -> Option<catalog::SourceFacts> {
         self.syntax.facts(id)
     }
-    pub(crate) fn source_fact_index_bytes(definitions: usize) -> u64 {
-        HeaderSources::facts_index_bytes(definitions)
+    pub(crate) fn source_fact_index_bytes(definitions: usize, private: bool) -> u64 {
+        HeaderSources::facts_index_bytes(definitions).saturating_add(if private {
+            private::PrivateProducts::index_bytes(definitions)
+        } else {
+            0
+        })
     }
     pub(crate) fn source_environment(&self) -> &QueryEnvironment {
         &self.environment
