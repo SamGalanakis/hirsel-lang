@@ -307,6 +307,7 @@ impl InstanceSourceFacts {
 pub struct DemandInstances {
     store: Arc<dyn ResultStore>,
     records: NativeRecords,
+    record_types: Arc<hirsel_types::TypeInterner>,
     queries: InstanceQueries,
     verify_store: hirsel_engine::store::VerifyStore,
     target: hirsel_lir::TargetSpec,
@@ -354,6 +355,7 @@ impl DemandInstances {
     ) -> Self {
         Self {
             records: NativeRecords::new(source.record_types().clone(), store.clone()),
+            record_types: source.record_types().clone(),
             queries: InstanceQueries::with_validator(store.clone(), native),
             verify_store: hirsel_engine::store::VerifyStore::Off,
             store,
@@ -1060,9 +1062,16 @@ impl DemandInstances {
         let receipt_graph = if request.recipe.domain == SOURCE_RECIPE
             && (request.receipt_roots.is_some() || inputs.receipt_required())
         {
+            // This independent source comparison can receive another admitted
+            // front interner. Reuse the codec only for its exact type owner.
+            let records = if Arc::ptr_eq(&self.record_types, inputs.record_types()) {
+                self.records.clone()
+            } else {
+                NativeRecords::new(inputs.record_types().clone(), self.store.clone())
+            };
             Some(super::receipt_requests::current(
                 inputs,
-                &self.records,
+                &records,
                 self.store.as_ref(),
                 &self.target,
                 request.receipt_roots,
