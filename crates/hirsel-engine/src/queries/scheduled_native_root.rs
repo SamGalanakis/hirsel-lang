@@ -10,7 +10,7 @@ use std::{sync::Mutex, task::Poll};
 pub const FRONT_NATIVE_ROOT_KIND: u32 = 0x4600_001a;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_001b,
-    schema: 1,
+    schema: 2,
 };
 const FAILURE: Domain = Domain {
     kind: 0x4600_001c,
@@ -431,6 +431,17 @@ impl Task {
                 })
                 .collect())
         })?;
+        let (staged, staged_bytes) = owner.definitions.staged_static_inputs(
+            &selected_set,
+            owner
+                .output_budget
+                .checked_sub(used)
+                .ok_or_else(|| invalid("native staged output admission"))?,
+        )?;
+        let used = used
+            .checked_add(staged_bytes)
+            .ok_or_else(|| invalid("native staged output overflow"))?;
+        constants.extend(staged.constants);
         let extra = crate::generic_graph::native_materialized(
             signatures.types(),
             constants
@@ -460,7 +471,7 @@ impl Task {
         let statics = crate::NativeStaticInputs {
             constants,
             definitions,
-            generated_signatures: BTreeMap::new(),
+            generated_signatures: staged.generated_signatures,
         };
         let catalogue = self
             .definitions
@@ -482,6 +493,7 @@ impl Task {
                     &roots.instance_bodies,
                     &statics.constants,
                     &statics.definitions,
+                    &statics.generated_signatures,
                     &extra,
                     (
                         run_product.address.0,
@@ -596,7 +608,7 @@ impl QueryEngine {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontNativeQueries>, QueryError> {
-        if !self.staged_constants.is_empty() || !self.staged_values.is_empty() {
+        if !self.staged_values.is_empty() {
             return Err(invalid(
                 "native staged products need their accepted immutable registration view",
             ));

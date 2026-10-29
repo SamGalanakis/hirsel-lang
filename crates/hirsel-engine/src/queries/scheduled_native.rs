@@ -110,6 +110,13 @@ impl FrontNativeDefinitionQueries {
     pub(crate) fn constant_reads(&self, path: &DefPath) -> Option<Arc<Reads>> {
         self.lower.settled_reads(path, QueryKind::Evaluate)
     }
+    pub(crate) fn staged_static_inputs(
+        &self,
+        selected: &BTreeSet<DefPath>,
+        allowance: u64,
+    ) -> Result<(crate::NativeStaticInputs, u64), QueryError> {
+        self.lower.staged_static_inputs(selected, allowance)
+    }
     pub fn original_context(&self) -> Arc<crate::NativeOriginalContext> {
         self.original_context.clone()
     }

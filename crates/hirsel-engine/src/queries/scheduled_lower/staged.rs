@@ -181,3 +181,81 @@ impl FrontLowerQueries {
         Some(error)
     }
 }
+
+impl FrontLowerQueries {
+    pub(crate) fn staged_static_inputs(
+        &self,
+        selected: &BTreeSet<DefPath>,
+        allowance: u64,
+    ) -> Result<(crate::NativeStaticInputs, u64), QueryError> {
+        let refused = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "native staged constants".into(),
+                message: "selected staged values exceed their native output admission".into(),
+            })
+        };
+        // Keep the same lock order as settled_constants. Only completed
+        // Evaluate products of a selected source owner enter native data.
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let selections = self
+            .staged
+            .selections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let values = || {
+            selections.iter().filter_map(|(address, selection)| {
+                if !selected.contains(selection.owner.path()) {
+                    return None;
+                }
+                let (_, outcome, _) = outcomes.get(&(FRONT_EVALUATE_KIND, *address))?;
+                let Ok(Value::Constant(value)) = &outcome.result else {
+                    return None;
+                };
+                Some((selection.instance.path(), value))
+            })
+        };
+        let declarations = || {
+            self.staged
+                .declarations
+                .iter()
+                .filter(|(_, declaration)| selected.contains(&declaration.owner))
+        };
+        let mut metadata = crate::NativeMetadataWeight::default();
+        metadata.tree::<DefPath, Materialized>(values().count());
+        metadata.tree::<DefPath, hirsel_types::SignatureRef>(declarations().count());
+        let mut working = 0;
+        for (path, value) in values() {
+            metadata.path(path);
+            metadata.add(value.root_clone_bytes().try_into().map_err(|_| refused())?);
+            working = working.max(value.working_bytes());
+        }
+        for (path, _) in declarations() {
+            metadata.path(path.path());
+        }
+        let retained = metadata.bytes();
+        if retained
+            .checked_add(working)
+            .is_none_or(|bytes| bytes > allowance)
+        {
+            return Err(refused());
+        }
+        let mut constants = BTreeMap::new();
+        for (path, value) in values() {
+            let (value, _) = value
+                .decoded(&self.records, &self.anchors, &*self.store, allowance)
+                .ok_or_else(refused)?;
+            constants.insert(path.clone(), value);
+        }
+        let generated_signatures = declarations()
+            .map(|(path, declaration)| (path.path().clone(), declaration.signature.clone()))
+            .collect();
+        Ok((
+            crate::NativeStaticInputs {
+                constants,
+                definitions: vec![],
+                generated_signatures,
+            },
+            retained,
+        ))
+    }
+}
