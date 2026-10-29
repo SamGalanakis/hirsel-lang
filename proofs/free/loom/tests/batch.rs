@@ -88,3 +88,49 @@ fn claim_storage_order_does_not_assign_retirement_order() {
         assert_eq!(first.path(), &[1, 3]);
     });
 }
+
+#[test]
+fn logical_retirement_keeps_the_active_borrow_and_generation_lease_until_physical_exit() {
+    use hirsel_free_loom::{batch::Identity, frame};
+    struct Lease(Arc<AtomicU32>);
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+    struct Image {
+        claim: Arc<Identity<Lease>>,
+        value: u32,
+    }
+    model(|| {
+        let freed = Arc::new(AtomicU32::new(0));
+        let identity = Arc::new(Identity::bind(
+            Key {
+                slot: 7,
+                generation: 3,
+            },
+            1,
+            vec![4, 2].into_boxed_slice(),
+            Lease(freed.clone()),
+        ));
+        let (wake, queued) = frame::prepared(Image {
+            claim: identity.clone(),
+            value: 0,
+        });
+        let mut active = queued.start();
+        let terminal = loom::thread::spawn(move || identity.retire());
+        active.value_mut().value = 42;
+        terminal.join().unwrap();
+        assert!(!active.value().claim.active());
+        assert_eq!(active.value().claim.path(), &[4, 2]);
+        assert_eq!(active.value().value, 42);
+        assert_eq!(
+            freed.load(Ordering::Acquire),
+            0,
+            "a terminal cut cannot free an active borrowed frame"
+        );
+        drop(active);
+        assert!(wake.notify().is_none());
+        assert_eq!(freed.load(Ordering::Acquire), 1);
+    });
+}

@@ -6,7 +6,9 @@ use crate::ordered::Next;
 use crate::ordered::footprint::TaskId;
 use crate::stop::{Stop, Stopped};
 
+mod claims;
 mod withdrawal;
+pub(crate) use claims::{ClaimIdentity, bind_frame};
 pub(super) use withdrawal::Withdrawn;
 
 /// The canonical claim binds an ordinal to a generation-qualified task, not
@@ -26,6 +28,7 @@ pub(super) struct Batch {
 /// task lookup. Saved frames keep owning their roots and pointed-to records.
 #[derive(Default)]
 struct Record {
+    identity: Option<std::sync::Arc<ClaimIdentity>>,
     task: Option<TaskId>,
     active: bool,
     pending_parent: Option<TaskId>,
@@ -253,6 +256,9 @@ impl Batch {
         }
         if complete && result.is_ok() {
             row.active = false;
+            if let Some(identity) = &row.identity {
+                identity.retire();
+            }
             row.settled_prefix = None;
         }
         Some(result)
@@ -365,31 +371,56 @@ pub(crate) fn control(
         engine::with_driver(ctx, |d| d.cpu_batch = None);
     } else if value == 0 {
         let task = engine::current(ctx);
-        engine::with_driver(ctx, |d| match action {
-            2 => {
-                assert!(d.cpu_batch.is_none(), "one bounded CPU batch");
-                let grant =
-                    unsafe { (*ctx).run_ref().cpu_grant.as_ref() }.expect("an admitted CPU grant");
-                d.cpu_batch = Some(Batch::new(
-                    grant,
-                    width,
-                    count,
-                    d.frontier.as_ref().unwrap().settled,
-                ));
-            }
-            5 => {
-                let batch = d.cpu_batch.as_mut().expect("preclaim follows CPU batch");
-                assert_eq!(width, batch.width);
-                assert!(count < batch.records.len() as u64);
-                batch.preclaim(task, count);
-            }
-            3 => d
-                .cpu_batch
-                .as_mut()
-                .expect("claim follows bounded CPU batch")
-                .claim(task, width, count),
-            _ => {}
+        let binding = (action == 3).then(|| {
+            super::super::role::with_role(ctx, |scheduler| {
+                let path = scheduler.task(task as u32).path.clone().into_boxed_slice();
+                (path, scheduler.lease(task as u32))
+            })
         });
+        let identity = engine::with_driver(ctx, |d| {
+            match action {
+                2 => {
+                    assert!(d.cpu_batch.is_none(), "one bounded CPU batch");
+                    let grant = unsafe { (*ctx).run_ref().cpu_grant.as_ref() }
+                        .expect("an admitted CPU grant");
+                    d.cpu_batch = Some(Batch::new(
+                        grant,
+                        width,
+                        count,
+                        d.frontier.as_ref().unwrap().settled,
+                    ));
+                }
+                5 => {
+                    let batch = d.cpu_batch.as_mut().expect("preclaim follows CPU batch");
+                    assert_eq!(width, batch.width);
+                    assert!(count < batch.records.len() as u64);
+                    batch.preclaim(task, count);
+                }
+                3 => {
+                    let batch = d
+                        .cpu_batch
+                        .as_mut()
+                        .expect("claim follows bounded CPU batch");
+                    batch.claim(task, width, count);
+                    let (path, lease) = binding.unwrap();
+                    return Some(batch.bind_identity(task, path, lease));
+                }
+                _ => {}
+            }
+            None
+        });
+        if let Some(identity) = identity {
+            let frame = super::super::role::with_role(ctx, |scheduler| {
+                scheduler.task(task as u32).dispatch.clone()
+            });
+            if let Some(frame) = frame {
+                claims::bind_identity_frame(&identity, frame);
+            }
+            let native = unsafe { (*ctx).ahead_physical }.cast::<super::ahead::native::Native>();
+            if !native.is_null() {
+                unsafe { (*native).cpu_claim = Some(identity) };
+            }
+        }
     }
     if action == 3 && value == 0 && super::ahead::cpu_worker::armed(ctx) {
         // The claim receipt retired at head. Its CPU-only tail may overlap

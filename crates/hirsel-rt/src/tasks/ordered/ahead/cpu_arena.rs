@@ -110,13 +110,7 @@ pub(super) unsafe fn adopt(
         if super::super::engine::with_driver(ctx, |driver| driver.budgets.fuel) {
             return;
         }
-        let task = super::super::engine::current(ctx);
-        let Some(owner) = super::super::engine::with_driver(ctx, |driver| {
-            driver
-                .cpu_batch
-                .as_ref()
-                .and_then(|batch| batch.block_owner(task))
-        }) else {
+        let Some(owner) = (unsafe { (*native).claimed_owner(ctx) }) else {
             return;
         };
         if (*native).arena.enabled != 0 {

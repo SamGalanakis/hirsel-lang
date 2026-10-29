@@ -278,6 +278,17 @@ pub(crate) unsafe fn spawn_certified(
             .as_mut()
             .is_some_and(|batch| batch.bind(parent, word))
     });
+    let cpu_claim = preclaimed.then(|| {
+        let lease = super::super::registry::TaskLease::new(TaskKey::new(index, generation));
+        task.control = Some(lease.clone());
+        engine::with_driver(ctx, |driver| {
+            driver.cpu_batch.as_mut().unwrap().bind_identity(
+                word,
+                task.path.clone().into_boxed_slice(),
+                lease,
+            )
+        })
+    });
     if let Some(probe) = unsafe { (*ctx).run_ref().cpu_probe.as_ref() }
         && let Some((width, ordinal)) = engine::with_driver(ctx, |d| {
             d.cpu_batch.as_ref().and_then(|batch| batch.job(word))
@@ -323,6 +334,7 @@ pub(crate) unsafe fn spawn_certified(
             let mut native =
                 super::ahead::native::Native::new(child, environment, operation_site, certificate);
             native.cpu_job = task.cpu_job.clone();
+            native.cpu_claim = cpu_claim;
             unsafe {
                 (*child).ahead_physical = &raw mut native.physical;
                 (*child).task_sp = task.stack.as_ref().unwrap().prepare(

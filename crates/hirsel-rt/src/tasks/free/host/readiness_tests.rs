@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 
 struct Probe {
     run: AtomicPtr<crate::context::RunShared>,
+    caller: AtomicPtr<TaskCtx>,
     recording: Arc<super::super::record::Recording>,
     calls: AtomicU32,
     waits: AtomicU32,
@@ -46,7 +47,22 @@ impl Home {
     fn check(&self) {
         assert_eq!(std::thread::current().id(), self.thread);
         assert_eq!(std::rc::Rc::strong_count(&self.affine), 1);
-        let guard = unsafe { role::IdleGuard::try_new(self.probe.run.load(Ordering::Acquire)) };
+        let run = self.probe.run.load(Ordering::Acquire);
+        let guard = loop {
+            let guard = unsafe { role::IdleGuard::try_new(run) };
+            if guard.is_some() {
+                break guard;
+            }
+            // A different idle worker may still be publishing the physical
+            // save. It owns no adapter borrow. The issuing caller must have
+            // released its own role before this synchronous home loan.
+            assert_ne!(
+                unsafe { (*run).role.driven_owner() },
+                Some(self.probe.caller.load(Ordering::Acquire).addr()),
+                "adapter caller retains its role"
+            );
+            std::thread::yield_now();
+        };
         assert!(guard.is_some(), "adapter call retains no role");
         drop(guard);
     }
@@ -144,6 +160,7 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
                 let install = recording.clone();
                 let probe = Arc::new(Probe {
                     run: AtomicPtr::default(),
+                    caller: AtomicPtr::default(),
                     recording: recording.clone(),
                     calls: 0.into(),
                     waits: 0.into(),
@@ -172,6 +189,7 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
                     move |ctx| unsafe {
                         let _role = role::Guard::new(ctx);
                         observed.run.store((*ctx).run_ptr(), Ordering::Release);
+                        observed.caller.store(ctx, Ordering::Release);
                         let result = crate::stop::check(
                             ctx,
                             request_home(
@@ -299,5 +317,43 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn readiness_no_role_control_still_rejects_the_issuing_callers_held_role() {
+    let mut ctx = std::ptr::null_mut();
+    unsafe {
+        assert_eq!(
+            crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+            0
+        );
+        role::enable(ctx);
+        role::enter(ctx);
+    }
+    let probe = Arc::new(Probe {
+        run: AtomicPtr::new(unsafe { (*ctx).run_ptr() }),
+        caller: AtomicPtr::new(ctx),
+        recording: super::super::record::Recording::new(b"readiness held-role control", false),
+        calls: 0.into(),
+        waits: 0.into(),
+        parks: 0.into(),
+        finishes: 0.into(),
+        delivered: false.into(),
+        cut: std::sync::Mutex::new(None),
+    });
+    let home = Home {
+        thread: std::thread::current().id(),
+        probe,
+        available: false,
+        token: None,
+        mode: 0,
+        affine: std::rc::Rc::new(()),
+    };
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| home.check())).is_err());
+    drop(home);
+    unsafe {
+        role::release(ctx);
+        crate::context::hirsel_rt_v2_ctx_destroy(ctx);
     }
 }

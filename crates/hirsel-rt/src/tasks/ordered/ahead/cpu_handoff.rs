@@ -177,18 +177,14 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
                 (*pointer).ordinal,
             )
         };
-        let task = super::super::engine::current(ctx);
+        let owner = unsafe { (*native).claimed_owner(ctx) };
+        let task = owner.map(|owner| owner.task);
         let valid = bytes <= 256
             && (bytes == 0 || !value.is_null())
             && count <= crate::budget::stretch::ENVELOPE_MAX as u32
             && (count == 0 || !retained.is_null())
             && descriptor < unsafe { (*ctx).heap_ref().layout_count() }
-            && super::super::engine::with_driver(ctx, |driver| {
-                driver
-                    .cpu_batch
-                    .as_ref()
-                    .is_some_and(|batch| batch.owns(task, ordinal))
-            });
+            && owner.is_some_and(|owner| owner.ordinal == ordinal);
         if !valid {
             unsafe {
                 (*native).summary_status = u32::from(NOT_CERTIFIED);
@@ -204,7 +200,10 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
             } else {
                 unsafe { std::slice::from_raw_parts(retained, count as usize) }
             };
-            let owner = crate::pool::cpu_scoped::ledger::blocks::Owner { task, ordinal };
+            let owner = crate::pool::cpu_scoped::ledger::blocks::Owner {
+                task: task.unwrap(),
+                ordinal,
+            };
             let Some(blocks) = ledger.blocks.lock().unwrap().retain(owner, retained) else {
                 unsafe {
                     (*native).summary_status = u32::from(NOT_CERTIFIED);

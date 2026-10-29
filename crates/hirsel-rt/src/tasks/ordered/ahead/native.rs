@@ -80,6 +80,7 @@ pub(crate) struct Native {
     pub(super) saved_roots: Option<super::cpu_roots::Saved>,
     pub(super) input_blocks: Vec<crate::pool::cpu_scoped::ledger::blocks::Observed>,
     pub(super) arena: super::cpu_arena::Arena,
+    pub(crate) cpu_claim: Option<std::sync::Arc<super::super::cpu::ClaimIdentity>>,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -283,6 +284,30 @@ pub(super) unsafe fn inert_source(ctx: *mut TaskCtx, root: u32) -> bool {
 }
 
 impl Native {
+    pub(crate) fn cpu_owner(&self) -> Option<crate::pool::cpu_scoped::ledger::blocks::Owner> {
+        let claim = self.cpu_claim.as_ref()?;
+        if !claim.active() {
+            return None;
+        }
+        let key = claim.key();
+        Some(crate::pool::cpu_scoped::ledger::blocks::Owner {
+            task: (u64::from(key.generation) << 32) | u64::from(key.slot),
+            ordinal: claim.ordinal() as u64,
+        })
+    }
+
+    pub(crate) fn claimed_owner(
+        &self,
+        ctx: *mut TaskCtx,
+    ) -> Option<crate::pool::cpu_scoped::ledger::blocks::Owner> {
+        self.cpu_owner().or_else(|| {
+            let task = super::super::engine::current(ctx);
+            super::super::engine::with_driver(ctx, |driver| {
+                driver.cpu_batch.as_ref()?.block_owner(task)
+            })
+        })
+    }
+
     pub(crate) fn new(
         ctx: *mut TaskCtx,
         environment: *mut Header,
@@ -346,6 +371,7 @@ impl Native {
             saved_roots: None,
             input_blocks,
             arena: super::cpu_arena::Arena::new(),
+            cpu_claim: None,
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -441,15 +467,16 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
         loop {
             crate::stop::set_running(std::ptr::null_mut());
             super::super::super::role::enter(ctx);
+            if let Some(claim) = &(*native).cpu_claim {
+                assert!(
+                    claim.lease().frame_bound(),
+                    "CPU adoption retains its actual saved-frame allocation"
+                );
+            }
             if let Some(saved) = (*native).saved_roots.take() {
-                let task = super::super::engine::current(ctx);
-                let owner = super::super::engine::with_driver(ctx, |driver| {
-                    driver
-                        .cpu_batch
-                        .as_ref()
-                        .and_then(|batch| batch.block_owner(task))
-                })
-                .expect("a saved CPU call retains its ordinal");
+                let owner = (*native)
+                    .claimed_owner(ctx)
+                    .expect("a saved CPU call retains its ordinal");
                 saved.check(ctx, &*native, owner);
             }
             let run = (*ctx).run_ptr();

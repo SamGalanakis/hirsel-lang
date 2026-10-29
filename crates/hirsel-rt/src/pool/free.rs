@@ -411,6 +411,9 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: TaskKey, owner: Owner)
                 stop_before_start: task.slot == 1 && dispatch.queued_stop_witness.is_some(),
             });
             *slot = Some(frame.clone());
+            if crate::tasks::ordered::engine::on(ctx) {
+                crate::tasks::ordered::cpu::bind_frame(run, task, &frame);
+            }
             Some(Saved {
                 queued,
                 frame,

@@ -5,7 +5,7 @@
 //! cooperative head, including holding rests and polls. Retained notifications
 //! own the old allocation and never look up a replacement by ordinal.
 use crate::frame::{self, Notification, Queued, Running};
-use crate::sync::Arc;
+use crate::sync::{Arc, AtomicBool, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Key {
@@ -32,12 +32,50 @@ pub struct Binding<L, T> {
     pub lease: L,
 }
 
-struct Claim<L, T> {
-    notification: Notification<T>,
+/// Canonical binding shared by a batch slot and its physical owner. The
+/// lifecycle owner supplies the lease before any work is published.
+pub struct Identity<L> {
+    active: AtomicBool,
     key: Key,
     ordinal: usize,
     path: Box<[u32]>,
-    _lease: L,
+    lease: L,
+}
+
+impl<L> Identity<L> {
+    pub fn bind(key: Key, ordinal: usize, path: Box<[u32]>, lease: L) -> Self {
+        Self {
+            active: AtomicBool::new(true),
+            key,
+            ordinal,
+            path,
+            lease,
+        }
+    }
+    pub fn key(&self) -> Key {
+        self.key
+    }
+    pub fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+    pub fn path(&self) -> &[u32] {
+        &self.path
+    }
+    pub fn lease(&self) -> &L {
+        &self.lease
+    }
+    /// Physical owners may retain this allocation after logical retirement.
+    pub fn retire(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+    pub fn active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+}
+
+struct Claim<L, T> {
+    notification: Notification<T>,
+    identity: Arc<Identity<L>>,
 }
 
 /// Complete, immutable membership. A new batch allocates a new directory.
@@ -90,11 +128,13 @@ impl<L, T> Directory<L, T> {
         for (ordinal, binding) in bindings.into_iter().enumerate() {
             let (notification, queued) = frame::prepared(binding.image);
             let claim = Arc::new(Claim {
-                key: binding.key,
-                ordinal,
-                path: binding.path,
-                _lease: binding.lease,
                 notification,
+                identity: Arc::new(Identity::bind(
+                    binding.key,
+                    ordinal,
+                    binding.path,
+                    binding.lease,
+                )),
             });
             claims.push(claim.clone());
             saved.push(Saved { claim, queued });
@@ -109,7 +149,7 @@ impl<L, T> Directory<L, T> {
 
     pub fn notice(&self, ordinal: usize, key: Key) -> Option<Notice<L, T>> {
         let claim = self.claims.get(ordinal)?;
-        (claim.key == key).then(|| Notice(claim.clone()))
+        (claim.identity.key == key).then(|| Notice(claim.clone()))
     }
 
     pub fn len(&self) -> usize {
@@ -122,13 +162,13 @@ impl<L, T> Directory<L, T> {
 
 impl<L, T> Notice<L, T> {
     pub fn key(&self) -> Key {
-        self.0.key
+        self.0.identity.key
     }
     pub fn ordinal(&self) -> usize {
-        self.0.ordinal
+        self.0.identity.ordinal
     }
     pub fn path(&self) -> &[u32] {
-        &self.0.path
+        &self.0.identity.path
     }
 
     /// A running wake latches in the frame. Only idle's later save can publish
@@ -152,13 +192,13 @@ impl<L, T> Saved<L, T> {
 
 impl<L, T> Active<L, T> {
     pub fn key(&self) -> Key {
-        self.claim.key
+        self.claim.identity.key
     }
     pub fn ordinal(&self) -> usize {
-        self.claim.ordinal
+        self.claim.identity.ordinal
     }
     pub fn path(&self) -> &[u32] {
-        &self.claim.path
+        &self.claim.identity.path
     }
     pub fn image(&self) -> &T {
         self.running.value()
