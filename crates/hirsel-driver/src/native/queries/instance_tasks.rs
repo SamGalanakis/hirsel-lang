@@ -326,8 +326,19 @@ impl InstanceTasks {
                     source_constants.materialized(value);
                 }
             }
+            let requests = registry
+                .entries
+                .values()
+                .map(|entry| entry.request.retained_metadata_bytes())
+                .sum::<u64>();
+            let descriptors = registry
+                .entries
+                .values()
+                .filter_map(|entry| entry.output.get())
+                .map(|output| output.retained_metadata_bytes())
+                .sum::<u64>();
             return Err(format!(
-                "native completed descriptor allowance exhausted for {}: requested {charge} bytes, retained {}, allowance {}, registered {}, ready {}, seal {}, freedom {}, discharge {}, source metadata {}, program constants {}, source constants {}, front bindings {}",
+                "native completed descriptor allowance exhausted for {}: requested {charge} bytes, retained {}, allowance {}, registered {}, ready {}, seal {}, freedom {}, discharge {}, source metadata {}, program constants {}, source constants {}, front bindings {}, request payloads {requests}, completed descriptors {descriptors}",
                 output.facts.seal_demand.owner().0,
                 registry.charged,
                 self.allowance.bytes(),
@@ -1048,7 +1059,14 @@ impl InstanceTasks {
                 .charged
                 .checked_add(retained)
                 .filter(|bytes| *bytes <= self.allowance.bytes())
-                .ok_or("callable graph metadata exceeds retained allowance")?;
+                .ok_or_else(|| format!(
+                    "callable graph metadata exceeds retained allowance: requested {retained} bytes, retained {}, allowance {}, original instances {}, callable instances {}, inline members {}",
+                    registry.charged,
+                    self.allowance.bytes(),
+                    entries.len(),
+                    scope.outputs.len(),
+                    scope.outputs.iter().map(|(_, output)| output.facts.emission.inline.len()).max().unwrap_or(0),
+                ))?;
         }
         let rows = scope
             .outputs
