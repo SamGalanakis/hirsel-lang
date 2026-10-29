@@ -542,10 +542,28 @@ mod tests {
                     assert_eq!(growth(&raw mut *native, &raw mut request), 0);
                     assert_eq!((*source).count, 1);
                     assert_eq!(native.arena.enabled, 1);
-                    (*ctx).view.compiled.dup_max = dup_bound;
-                    native.arena = Arena::new();
-                    (*ctx).heap().free(source);
+                    request.ordinal -= 1;
+                    assert_eq!(growth(&raw mut *native, &raw mut request), 1);
+                    assert_eq!((*source).count, 2);
+                    // This fixture's dead target has no logical meter entry.
+                    native.arena.entries[1] = Entry::default();
                     (*ctx).heap().free(target);
+                    canonical(ctx, &raw mut *native);
+                    assert_eq!(native.arena.enabled, 0);
+                    assert!(
+                        native
+                            .arena
+                            .entries
+                            .iter()
+                            .all(|entry| entry.pointer.is_null())
+                    );
+                    assert_eq!((*source).count, 2);
+                    assert_eq!(crate::alloc::payload(source).read(), 7);
+                    assert_eq!(release(&raw mut *native, source), 0);
+                    (*source).count -= 1;
+                    assert_eq!(crate::alloc::payload(source).read(), 7);
+                    (*ctx).view.compiled.dup_max = dup_bound;
+                    (*ctx).heap().free(source);
                 }
                 crate::STATUS_OK
             },

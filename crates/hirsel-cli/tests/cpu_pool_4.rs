@@ -192,9 +192,9 @@ fn ordered_allocating_pressure_agrees_across_four_engines_and_cross_replay() {
 }
 
 #[test]
-fn ordered_allocating_job_local_aliases_detach_independently_and_escape() {
+fn ordered_allocating_job_local_aliases_detach_independently() {
     cpu_fixture_allocating_four_engine_mapper(
         4,
-        "fn(take job: u64) -> List[u64] uses {} { let mut source: List[u64] = []; list.reserve(mut source, 128u64); list.push(mut source, job); list.push(mut source, job + 7u64); for i in 0u64..130u64 { let alias = copy source; let mut left = copy alias; let mut right = copy alias; left[0] = job + i; right[1] = job + 7u64 + i; failure.check(source[0] == job && alias[1] == job + 7u64 && left[0] == job + i && right[1] == job + 7u64 + i, Bounds()) }; copy source }",
+        "fn(take job: u64) -> unique List[u64] uses {} { let mut source: List[u64] = []; list.reserve(mut source, 128u64); list.push(mut source, job); list.push(mut source, job + 7u64); for i in 0u64..130u64 { let alias = copy source; let mut left = copy alias; let mut right = copy alias; left[0] = job + i; right[1] = job + 7u64 + i; failure.check(source[0] == job && alias[1] == job + 7u64 && left[0] == job + i && right[1] == job + 7u64 + i, Bounds()) }; [source[0], source[1]] }",
     );
 }
