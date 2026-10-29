@@ -469,6 +469,34 @@ impl SignatureSnapshot {
             .collect()
     }
     /// Every public opaque definition read by a body of its defining package.
+    pub(crate) fn comptime_runtime_types(
+        &self,
+        lowering: &dyn crate::LoweringPhase,
+    ) -> Result<Arc<hirsel_interp::aggregate::RuntimeTypes>, QueryError> {
+        self.validation_state();
+        let mut views = Vec::new();
+        for id in self.definitions() {
+            match self.representation(id) {
+                Some(Ok((view, digest))) => views.push((view.clone(), digest.0)),
+                Some(Err(error)) => return Err(error.clone()),
+                None => {}
+            }
+        }
+        crate::queries::runtime_type_catalog(self.types.clone(), views, |drop| {
+            let id = DefId::intern(drop);
+            if self.lookup.candidates.contains_key(&id) {
+                Ok(Some((drop.clone(), lowering.entry_body())))
+            } else if self.lookup.registry.get(drop).is_some() {
+                Ok(None)
+            } else {
+                Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "runtime types".into(),
+                    message: format!("missing finalizer {drop:?}"),
+                }))
+            }
+        })
+        .map(Arc::new)
+    }
     pub(crate) fn opaque_definitions(&self) -> impl Iterator<Item = DefId> + '_ {
         self.definitions().into_iter().filter(|d| {
             self.signature(*d).is_some_and(|s| {

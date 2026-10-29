@@ -2065,66 +2065,27 @@ impl QueryEngine {
         views: Vec<(hirsel_types::SignatureRef, ContentHash)>,
         eager: bool,
     ) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
-        let mut runtime = hirsel_interp::aggregate::RuntimeTypes {
-            trace_mode: hirsel_interp::TraceMode::Effects,
-            forget: Some(hirsel_syntax::DefPath::core(
-                hirsel_interp::library::FORGET_OPERATION,
-            )),
-            ..hirsel_interp::aggregate::RuntimeTypes::new(self.types().clone())
-        };
-        runtime.serialization = hirsel_interp::aggregate::Serialization::new(
-            views
-                .iter()
-                .map(|(s, digest)| (s.definition.path().clone(), s.clone(), *digest)),
-        );
-        for (signature, _) in views {
-            let hirsel_types::SignatureKind::Type(t) = &signature.kind else {
-                continue;
-            };
-            let fields = t
-                .representation
-                .and_then(|id| self.types().get(id))
-                .map(|r| match &r.kind {
-                    hirsel_types::TypeKind::Record(fs) => fs.len(),
-                    hirsel_types::TypeKind::Variant(vs) => {
-                        vs.iter().map(|v| v.fields.len()).max().unwrap_or(0)
-                    }
-                    _ => 1,
-                })
-                .unwrap_or(0);
-            let finalizer = match &t.drop {
-                Some(drop) if self.declared(drop) => {
-                    let entry = if eager {
-                        self.lower_to_tir(drop)?.value.entry
-                    } else {
-                        match &self.adapters.lowering {
-                            Some(lowering) => lowering.entry_body(),
-                            None => return self.missing(QueryKind::Lower),
-                        }
-                    };
-                    Some((drop.clone(), entry))
-                }
-                // The registry's File/AtomicFile are native handles: Library's
-                // drop_handle hook owns their cleanup, with no Hirsel body.
-                Some(drop) if self.registry.get(drop).is_some() => None,
-                Some(drop) => {
-                    return Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                        operation: "runtime types".into(),
-                        message: format!("missing finalizer {drop:?}"),
-                    }));
-                }
-                None => None,
-            };
-            runtime.nominals.push(hirsel_interp::aggregate::Nominal {
-                definition: signature.definition.path().clone(),
-                resource: t.resource,
-                distinct: t.distinct,
-                finalizer,
-                fields,
-                representation: t.representation,
-            });
-        }
-        Ok(runtime)
+        runtime_type_catalog(self.types.clone(), views, |drop| {
+            if self.declared(drop) {
+                let entry = if eager {
+                    self.lower_to_tir(drop)?.value.entry
+                } else {
+                    self.adapters
+                        .lowering
+                        .as_ref()
+                        .ok_or(QueryError::NotImplemented)?
+                        .entry_body()
+                };
+                Ok(Some((drop.clone(), entry)))
+            } else if self.registry.get(drop).is_some() {
+                Ok(None)
+            } else {
+                Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "runtime types".into(),
+                    message: format!("missing finalizer {drop:?}"),
+                }))
+            }
+        })
     }
     pub fn manifest_revision(&self) -> ContentHash {
         ContentHash::of_parts(
@@ -2787,4 +2748,52 @@ pub(crate) fn header_span(syntax: &ItemSyntax) -> Span {
         end,
         ..item.origin.span
     }
+}
+
+fn runtime_type_catalog(
+    types: Arc<hirsel_types::TypeInterner>,
+    views: Vec<(hirsel_types::SignatureRef, ContentHash)>,
+    mut finalizer: impl FnMut(&DefPath) -> Result<Option<(DefPath, hirsel_tir::BodyId)>, QueryError>,
+) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
+    let mut runtime = hirsel_interp::aggregate::RuntimeTypes {
+        trace_mode: hirsel_interp::TraceMode::Effects,
+        forget: Some(hirsel_syntax::DefPath::core(
+            hirsel_interp::library::FORGET_OPERATION,
+        )),
+        ..hirsel_interp::aggregate::RuntimeTypes::new(types.clone())
+    };
+    runtime.serialization = hirsel_interp::aggregate::Serialization::new(
+        views
+            .iter()
+            .map(|(s, digest)| (s.definition.path().clone(), s.clone(), *digest)),
+    );
+    for (signature, _) in views {
+        let hirsel_types::SignatureKind::Type(t) = &signature.kind else {
+            continue;
+        };
+        let fields = t
+            .representation
+            .and_then(|id| types.get(id))
+            .map(|r| match &r.kind {
+                hirsel_types::TypeKind::Record(fs) => fs.len(),
+                hirsel_types::TypeKind::Variant(vs) => {
+                    vs.iter().map(|v| v.fields.len()).max().unwrap_or(0)
+                }
+                _ => 1,
+            })
+            .unwrap_or(0);
+        let finalizer = match &t.drop {
+            Some(drop) => finalizer(drop)?,
+            None => None,
+        };
+        runtime.nominals.push(hirsel_interp::aggregate::Nominal {
+            definition: signature.definition.path().clone(),
+            resource: t.resource,
+            distinct: t.distinct,
+            finalizer,
+            fields,
+            representation: t.representation,
+        });
+    }
+    Ok(runtime)
 }

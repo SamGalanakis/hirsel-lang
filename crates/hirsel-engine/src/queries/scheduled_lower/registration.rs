@@ -466,7 +466,7 @@ impl FrontRegistrationQueries {
         );
         source.merge(&admission.reads);
         source.evidence.borrow_mut().executed = true;
-        let runtime = (*self.lower.runtime).clone();
+        let runtime = self.lower.runtime_types()?;
         let result = admission
             .result?
             .run_async(&self.lower.sources, self.lower.limits, &runtime, source)

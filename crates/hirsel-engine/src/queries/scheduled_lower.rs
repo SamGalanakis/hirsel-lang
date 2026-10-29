@@ -372,7 +372,7 @@ pub struct FrontLowerQueries {
     snapshot: Arc<SignatureSnapshot>,
     memo: Arc<hirsel_types::TypeMemo>,
     lowering: Arc<dyn LoweringPhase>,
-    runtime: Arc<hirsel_interp::aggregate::RuntimeTypes>,
+    runtime: std::sync::OnceLock<Result<Arc<hirsel_interp::aggregate::RuntimeTypes>, QueryError>>,
     instances: Arc<hirsel_tir::InstanceBodies>,
     sources: SourceMap,
     limits: crate::ComptimeLimits,
@@ -509,8 +509,10 @@ impl FrontLowerQueries {
     pub fn sources(&self) -> &SourceMap {
         &self.sources
     }
-    pub fn runtime_types(&self) -> Arc<hirsel_interp::aggregate::RuntimeTypes> {
-        self.runtime.clone()
+    pub fn runtime_types(&self) -> Result<Arc<hirsel_interp::aggregate::RuntimeTypes>, QueryError> {
+        self.runtime
+            .get_or_init(|| self.snapshot.comptime_runtime_types(&*self.lowering))
+            .clone()
     }
     pub fn signatures(&self) -> Arc<SignatureSnapshot> {
         self.snapshot.clone()
@@ -1957,7 +1959,7 @@ async fn evaluate(
     let admission =
         s1::ValidatedEvaluation::recorded(prepared, &owner.snapshot, owner.verify, site);
     source.merge(&admission.reads);
-    let runtime = (*owner.runtime).clone();
+    let runtime = owner.runtime_types()?;
     let product = admission
         .result?
         .run_async(&owner.sources, owner.limits, &runtime, &mut source)
@@ -2085,10 +2087,15 @@ impl QueryEngine {
         let snapshot = self.signature_inputs();
         let packages: std::collections::BTreeSet<_> =
             definitions.iter().map(|path| &path.0.package).collect();
-        let layouts: BTreeMap<_, _> = snapshot
-            .opaque_definitions()
-            .filter(|id| packages.contains(&id.path().0.package))
-            .filter_map(|id| Some((id, self.implementation_hash(id.path())?)))
+        let opaque = self
+            .declarations
+            .opaque_paths()
+            .cloned()
+            .collect::<Vec<_>>();
+        let layouts: BTreeMap<_, _> = opaque
+            .into_iter()
+            .filter(|path| packages.contains(&path.0.package))
+            .filter_map(|path| Some((DefId::intern(&path), self.implementation_hash(&path)?)))
             .collect();
         let layout_bytes = (layouts.len() as u64)
             .checked_mul(
@@ -2107,7 +2114,6 @@ impl QueryEngine {
                 .checked_sub(staged.retained_bytes())
                 .ok_or_else(refusal)?;
         }
-        let runtime = self.comptime_runtime_types()?;
         let paths = inputs
             .iter()
             .flat_map(|(path, input)| {
@@ -2127,7 +2133,7 @@ impl QueryEngine {
             snapshot,
             memo: self.memo.clone(),
             lowering,
-            runtime,
+            runtime: std::sync::OnceLock::new(),
             instances: Arc::new(self.instance_bodies(&definitions.iter().cloned().collect())),
             sources: self.sources.clone(),
             limits: self.comptime_limits,
