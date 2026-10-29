@@ -223,9 +223,9 @@ impl hirsel_engine::store::ResultStore for GeneratorInputUnavailable {
                 if bytes.len() != 56 {
                     continue;
                 }
-                // Schema 1 stores Reference (48 bytes), then the decode bound.
+                // Schema 2 stores Reference (48 bytes), then the decode bound.
                 if u32::from_le_bytes(bytes[32..36].try_into().unwrap()) != 0x4601_0006
-                    || u32::from_le_bytes(bytes[36..40].try_into().unwrap()) != 1
+                    || u32::from_le_bytes(bytes[36..40].try_into().unwrap()) != 2
                 {
                     continue;
                 }
@@ -235,7 +235,7 @@ impl hirsel_engine::store::ResultStore for GeneratorInputUnavailable {
                     )),
                     domain: hirsel_engine::store::Domain {
                         kind: 0x4601_0006,
-                        schema: 1,
+                        schema: 2,
                     },
                     len: u64::from_le_bytes(bytes[40..48].try_into().unwrap()),
                 };
