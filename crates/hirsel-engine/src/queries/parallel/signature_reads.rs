@@ -14,23 +14,39 @@ impl OrderedSignatureReads {
         for row in input {
             let next = rows.len();
             let Ok(next) = u32::try_from(next) else {
-                return Self { rows: input.into(), order: Box::new([]) };
+                return Self {
+                    rows: input.into(),
+                    order: Box::new([]),
+                };
             };
-            let index = *identities.entry((row.definition, row.fingerprint)).or_insert_with(|| {
-                rows.push(row.clone());
-                next
-            });
+            let index = *identities
+                .entry((row.definition, row.fingerprint))
+                .or_insert_with(|| {
+                    rows.push(row.clone());
+                    next
+                });
             order.push(index);
         }
         if rows.len() * size_of::<SignatureDependency>() + order.len() * size_of::<u32>()
-            >= size_of_val(input) {
-            Self { rows: input.into(), order: Box::new([]) }
+            >= size_of_val(input)
+        {
+            Self {
+                rows: input.into(),
+                order: Box::new([]),
+            }
         } else {
-            Self { rows: rows.into_boxed_slice(), order: order.into_boxed_slice() }
+            Self {
+                rows: rows.into_boxed_slice(),
+                order: order.into_boxed_slice(),
+            }
         }
     }
     pub(crate) fn len(&self) -> usize {
-        if self.order.is_empty() { self.rows.len() } else { self.order.len() }
+        if self.order.is_empty() {
+            self.rows.len()
+        } else {
+            self.order.len()
+        }
     }
     pub(crate) fn retained_bytes(&self) -> usize {
         size_of_val(&*self.rows) + size_of_val(&*self.order)
@@ -39,7 +55,10 @@ impl OrderedSignatureReads {
         if self.order.is_empty() {
             return Some(self.rows.to_vec());
         }
-        self.order.iter().map(|index| self.rows.get(*index as usize).cloned()).collect()
+        self.order
+            .iter()
+            .map(|index| self.rows.get(*index as usize).cloned())
+            .collect()
     }
 }
 
@@ -55,14 +74,18 @@ mod tests {
         let a = dependency("a", b"first");
         let b = dependency("b", b"second");
         let changed = dependency("a", b"changed");
-        let input = [a.clone(), b, a.clone(), changed, a].repeat(16);
+        let base = [a.clone(), b, a.clone(), changed, a];
+        let input: Vec<_> = (0..16).flat_map(|_| base.iter().cloned()).collect();
         let sequence = OrderedSignatureReads::new(&input);
         assert!(sequence.retained_bytes() < size_of_val(input.as_slice()));
         let encoded = bincode::serialize(&sequence).unwrap();
         let restored: OrderedSignatureReads = bincode::deserialize(&encoded).unwrap();
         assert_eq!(restored.len(), input.len());
         assert_eq!(restored.values().unwrap(), input);
-        let malformed = OrderedSignatureReads { rows: Box::new([]), order: Box::new([0]) };
+        let malformed = OrderedSignatureReads {
+            rows: Box::new([]),
+            order: Box::new([0]),
+        };
         assert!(malformed.values().is_none());
     }
 }

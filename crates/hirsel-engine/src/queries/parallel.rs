@@ -1,12 +1,12 @@
-mod signature_reads;
-pub(crate) use signature_reads::OrderedSignatureReads;
 //! Frozen per-definition front work, joined before deterministic memo publication.
 //! Go's compile queue (`cmd/compile/internal/gc/compile.go:166-184`) separates
 //! worker-local function work from completed products. Hirsel uses jobs::map
 //! and publishes by DefPath because subscriber and diagnostic order is semantic.
 use super::*;
+mod signature_reads;
 use hirsel_intern::jobs::{self, Jobs};
 use hirsel_types::SignatureRef;
+pub(crate) use signature_reads::OrderedSignatureReads;
 mod compact;
 mod scheduled;
 pub(crate) use compact::CompactCompleted;
