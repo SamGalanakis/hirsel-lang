@@ -239,3 +239,139 @@ fn lower_hits_replay_exact_staged_values_and_preserve_completion_authority() {
         products.runtime.shutdown();
     });
 }
+
+#[test]
+fn ordinary_staged_registrations_restore_from_heads_without_syntax_or_execution_authority() {
+    with_compiler_stack(|| {
+        use crate::staged_product_fixture::StagedProducts;
+        let source = "fn value[n:size]()->u64{comptime (n*n)}\n";
+        let owner = definition("value");
+        let store = Arc::new(store::MemStore::default());
+        let mut writer = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone());
+        let file = writer
+            .sources
+            .add("staged-heads.hir", source.into())
+            .unwrap();
+        writer.index_source(file, &default_context()).unwrap();
+        let mut products = StagedProducts::capture(&mut writer, 1).unwrap();
+        let request = products
+            .runtime
+            .request(&[products.lower.query(&owner).unwrap()]);
+        products.runtime.wait(request).unwrap();
+        let lowered = products.lower.settled_definition(&owner).unwrap();
+        let hidden = lowered
+            .bodies
+            .iter()
+            .flat_map(|b| &b.rvalues)
+            .find_map(|v| match v {
+                hirsel_tir::Rvalue::ReadConstant {
+                    definition,
+                    arguments,
+                } if !arguments.is_empty() => Some(definition.clone()),
+                _ => None,
+            })
+            .unwrap();
+        for n in [2, 3] {
+            let query = products.lower.staged_query(&hidden, &[n]).unwrap();
+            let request = products.runtime.request(&[query]);
+            products.runtime.wait(request).unwrap();
+        }
+        products.runtime.shutdown();
+        drop(products);
+        drop(writer);
+        let open = |store: Arc<dyn store::ResultStore>| {
+            let mut reader = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_result_store(store);
+            reader.sources.add("padding.hir", "\n".into()).unwrap();
+            let file = reader
+                .sources
+                .add("staged-heads.hir", source.into())
+                .unwrap();
+            reader.index_source(file, &default_context()).unwrap();
+            reader.adapters.lexer = None;
+            reader.adapters.parser = None;
+            reader.adapters.signature = None;
+            reader.adapters.modes = None;
+            reader.adapters.lowering = None;
+            reader
+        };
+        let mut reader = open(store.clone());
+        let mut products = StagedProducts::capture(&mut reader, 1).unwrap();
+        let request = products
+            .runtime
+            .request(&[products.lower.query(&owner).unwrap()]);
+        products.runtime.wait(request).unwrap();
+        for n in [2, 3] {
+            let query = products.lower.staged_query(&hidden, &[n]).unwrap();
+            let request = products.runtime.request(&[query]);
+            products.runtime.wait(request).unwrap();
+            assert_eq!(
+                products
+                    .lower
+                    .settled_constant(&hidden, &[n])
+                    .unwrap()
+                    .root
+                    .kind,
+                hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(u128::from(n * n)))
+            );
+        }
+        let query = products.lower.staged_query(&hidden, &[4]).unwrap();
+        let request = products.runtime.request(&[query]);
+        assert!(products.runtime.wait(request).is_err());
+        assert!(products.lower.staged_query(&hidden, &[2, 3]).is_err());
+        assert_eq!(reader.work_stats().parsed_bytes, 0);
+        assert!(
+            !products
+                .front
+                .work_snapshot()
+                .iter()
+                .any(|(p, kind, count)| p == &owner && *kind == QueryKind::Modes && *count != 0)
+        );
+        products.runtime.shutdown();
+        drop(products);
+        drop(reader);
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut untrusted = open(copied);
+        let mut products = StagedProducts::capture(&mut untrusted, 1).unwrap();
+        let query = products.lower.staged_query(&hidden, &[2]).unwrap();
+        let request = products.runtime.request(&[query]);
+        assert!(
+            products.runtime.wait(request).is_err(),
+            "ordinary registration carries no execution completion"
+        );
+        products.runtime.shutdown();
+        drop(products);
+        drop(untrusted);
+        let mut oracle = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store)
+            .with_verify_store(store::VerifyStore::Recompute);
+        let file = oracle
+            .sources
+            .add("staged-heads.hir", source.into())
+            .unwrap();
+        oracle.index_source(file, &default_context()).unwrap();
+        let mut products = StagedProducts::capture(&mut oracle, 1).unwrap();
+        let request = products
+            .runtime
+            .request(&[products.lower.query(&owner).unwrap()]);
+        products.runtime.wait(request).unwrap();
+        let query = products.lower.staged_query(&hidden, &[2]).unwrap();
+        let request = products.runtime.request(&[query]);
+        products.runtime.wait(request).unwrap();
+        assert_eq!(
+            products
+                .lower
+                .settled_constant(&hidden, &[2])
+                .unwrap()
+                .root
+                .kind,
+            hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4))
+        );
+        products.runtime.shutdown();
+    });
+}

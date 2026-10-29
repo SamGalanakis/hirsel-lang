@@ -65,11 +65,10 @@ impl Staged {
     }
 }
 impl FrontLowerQueries {
-    pub(super) fn staged_query(
-        &self,
-        path: &DefPath,
-        arguments: &[u64],
-    ) -> Result<QueryId, QueryError> {
+    /// Select a declared staged constant under its exact closed size actuals.
+    /// This only interns its admitted Evaluate address. The caller requests
+    /// the query on the ordinary runtime before reading a settled value.
+    pub fn staged_query(&self, path: &DefPath, arguments: &[u64]) -> Result<QueryId, QueryError> {
         let id = DefId::intern(path);
         let declaration = self
             .staged
