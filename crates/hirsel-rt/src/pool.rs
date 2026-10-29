@@ -1374,23 +1374,28 @@ fn worker_main_reserved(
     ready: Option<Arc<cpu_scoped::Startup>>,
 ) {
     let run = run.0;
-    if let Some(assigned) = &mut assigned {
-        unsafe { assigned.pin(run) }
-            .unwrap_or_else(|_| environmental("a scoped CPU worker could not apply its placement"));
+    let started = assigned
+        .as_mut()
+        .is_none_or(|assigned| unsafe { assigned.pin(run) }.is_ok());
+    if !started && ready.is_none() {
+        environmental("a scoped CPU worker could not apply its placement");
     }
     EXEC.with(|e| e.set(Arc::as_ptr(&exec)));
     // SAFETY: this exec's own thread, before its first post: no role or section is held. A
     // starting executor may wait for a retiring one's slot.
-    unsafe { exec.recording.register(&*run, recorder_slot(), true) };
+    if started {
+        unsafe { exec.recording.register(&*run, recorder_slot(), true) };
+    }
     if let Some(ready) = ready {
-        // A failed startup still serves Exit and retires its native state.
-        ready.acknowledge();
+        ready.acknowledge(started);
     }
     // The idle fiber of a worker thread is the thread's own stack, here.
     // SAFETY: this is the exec's own thread, idle between posts.
-    while unsafe { serve(run, &exec) } {}
-    // SAFETY: the exec's last phase ended; `exited` below acknowledges its retirement.
-    unsafe { exec.recording.retire(&*run) };
+    if started {
+        while unsafe { serve(run, &exec) } {}
+        // SAFETY: this executor registered and has finished its last phase.
+        unsafe { exec.recording.retire(&*run) };
+    }
     exec.scoped_placement.restore();
     unsafe { cpu_scoped::probe::worker(run, &exec, "exit") };
     EXEC.with(|e| e.set(std::ptr::null()));

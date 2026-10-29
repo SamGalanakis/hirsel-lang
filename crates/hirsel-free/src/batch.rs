@@ -5,7 +5,7 @@
 //! cooperative head, including holding rests and polls. Retained notifications
 //! own the old allocation and never look up a replacement by ordinal.
 use crate::frame::{self, Notification, Queued, Running};
-use crate::sync::{Arc, AtomicBool, Ordering};
+use crate::sync::{Arc, AtomicBool, AtomicU32, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Key {
@@ -218,3 +218,30 @@ impl<L, T> Active<L, T> {
 #[cfg(test)]
 #[path = "batch/tests.rs"]
 mod tests;
+
+/// Cold startup has one aggregate outcome. Count every required destination
+/// before publishing any worker, so an early acknowledgement cannot look final.
+pub struct Startup {
+    pending: AtomicU32,
+    failed: AtomicBool,
+}
+impl Startup {
+    pub fn new(count: u32) -> Self {
+        Self {
+            pending: AtomicU32::new(count),
+            failed: AtomicBool::new(false),
+        }
+    }
+    /// Returns true only for the last acknowledgement, which wakes admission.
+    pub fn acknowledge(&self, ready: bool) -> bool {
+        if !ready {
+            self.failed.store(true, Ordering::Relaxed);
+        }
+        let previous = self.pending.fetch_sub(1, Ordering::AcqRel);
+        assert_ne!(previous, 0, "one startup acknowledgement per worker");
+        previous == 1
+    }
+    pub fn outcome(&self) -> Option<bool> {
+        (self.pending.load(Ordering::Acquire) == 0).then(|| !self.failed.load(Ordering::Relaxed))
+    }
+}

@@ -3,10 +3,7 @@
 //! credit before handing any to workers. Unlike its wait list, CPU admission
 //! refuses immediately and leaves existing waiters their capacity.
 use super::{Exec, Execs, Kind, Owner, Permits, Post, RunPtr, RunShared, TaskCtx, Worker};
-use std::sync::{
-    Arc,
-    atomic::{AtomicU32, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 pub(crate) mod ledger;
 mod placement;
@@ -207,15 +204,21 @@ pub(super) struct Workers {
     contraction: u64,
     domain: u64,
     caller_task: u32,
+    draining: bool,
 }
 
 impl Workers {
     fn request_exit(&mut self) {
+        if std::mem::replace(&mut self.draining, true) {
+            return;
+        }
         // Dormant destinations own no native work. Return their credits even
         // when a stopped mapper keeps the run and its own guard alive.
         self.pending.clear();
         for exec in self.execs.iter().skip(usize::from(self.calling.is_some())) {
-            exec.post(Post::Exit, None);
+            if !exec.exited.load(Ordering::Acquire) {
+                exec.post(Post::Exit, None);
+            }
         }
     }
 
@@ -229,10 +232,10 @@ impl Workers {
     }
 }
 
-/// Reserve every destination before preparation, but start a native thread
-/// only when it has work. Go 1.25 runtime/proc.go:5144-5157 publishes runnable
-/// work before wakep, which starts an idle processor at :3203-3242.
-/// Hirsel keeps all W credits and backing reserved until the scoped drain.
+/// Reserve every destination and acknowledge all required native startups
+/// before preparation. Hirsel's fallible supplier contract requires earlier
+/// startup than Go 1.25 runtime/proc.go:5144-5157's lazy wakep at :3203-3242.
+/// Keep all W credits and backing reserved until the scoped drain.
 /// # Safety
 /// The caller holds the scheduler role for this live run, before publishing
 /// any scoped frame. Worker zero runs preparation; mappers keep their owners.
@@ -241,26 +244,30 @@ pub(super) unsafe fn start(
     run: *mut RunShared,
     reservation: Reservation,
 ) -> Result<Vec<super::Owner>, Refusal> {
-    unsafe { start_at(run, reservation, None, None) }
+    unsafe { start_at(run, reservation, None, None, 1) }
 }
 
 /// One claim-start record, shared by all acknowledgments. Workers retain it
 /// through notification, so reaching zero cannot free a live parking word.
-#[derive(Default)]
 pub(super) struct Startup {
-    pending: AtomicU32,
+    aggregate: hirsel_free::batch::Startup,
     ready: crate::parking::Event,
 }
 impl Startup {
-    pub(super) fn acknowledge(&self) {
-        self.pending.fetch_sub(1, Ordering::Release);
-        self.ready.notify();
+    pub(super) fn acknowledge(&self, success: bool) {
+        if self.aggregate.acknowledge(success) {
+            self.ready.notify();
+        }
     }
-    fn wait(&self) {
+    fn wait(&self) -> Result<(), Refusal> {
         loop {
             let ticket = self.ready.ticket();
-            if self.pending.load(Ordering::Acquire) == 0 {
-                return;
+            if let Some(success) = self.aggregate.outcome() {
+                return if success {
+                    Ok(())
+                } else {
+                    Err(Refusal::ResourceLimit)
+                };
             }
             self.ready.wait(ticket);
         }
@@ -275,7 +282,16 @@ impl Workers {
         fail_at: Option<u32>,
     ) -> Result<(), Refusal> {
         let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
-        let ready = Arc::new(Startup::default());
+        assert!(!self.draining, "no startup after scoped drain");
+        let count = indices
+            .clone()
+            .into_iter()
+            .filter(|&i| self.pending[i].is_some())
+            .count();
+        let ready = Arc::new(Startup {
+            aggregate: hirsel_free::batch::Startup::new(u32::try_from(count).unwrap()),
+            ready: crate::parking::Event::default(),
+        });
         // Prepare independent heaps before spawning. The native starts then
         // run back to back, with no role work or heap construction between.
         for index in indices.clone() {
@@ -301,7 +317,6 @@ impl Workers {
                 );
             }
             execs.holders.count.fetch_add(1, Ordering::AcqRel);
-            ready.pending.fetch_add(1, Ordering::Relaxed);
             let thread = if fail_at == Some(index as u32) {
                 drop(assigned);
                 Err(std::io::Error::other("injected CPU worker startup failure"))
@@ -333,8 +348,7 @@ impl Workers {
             };
             self.threads.push(thread);
         }
-        ready.wait();
-        Ok(())
+        ready.wait()
     }
     fn start_jobs(
         &mut self,
@@ -362,6 +376,7 @@ unsafe fn start_at(
     mut reservation: Reservation,
     fail_at: Option<u32>,
     calling: Option<Arc<Exec>>,
+    initial: u32,
 ) -> Result<Vec<super::Owner>, Refusal> {
     let execs = unsafe {
         (*(*run).execs.get())
@@ -393,6 +408,7 @@ unsafe fn start_at(
         contraction: execs.permits.state.lock().unwrap().contraction,
         domain: unsafe { (*run).cpu_probe.as_ref().map_or(0, |p| p.domain()) },
         caller_task: u32::MAX,
+        draining: false,
     };
     for index in 0..width {
         let exec = if index == 0 {
@@ -425,7 +441,7 @@ unsafe fn start_at(
         workers.execs.push(exec);
     }
     // Fault injection also exercises rollback of every eagerly started prefix.
-    let count = if fail_at.is_some() { width as usize } else { 1 };
+    let count = if fail_at.is_some() { width } else { initial } as usize;
     if let Err(error) = workers.start_pending(run, 0..count, fail_at) {
         workers.join();
         for exec in workers
@@ -628,6 +644,7 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
                 reservation,
                 None,
                 (!caller_is_controller).then_some(calling),
+                width,
             )
         }
         .map(|owners| (owners, controllers)),
@@ -864,6 +881,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
                     {
                         Ok(()) => 0,
                         Err(Refusal::WorkerStartFailed) => 7,
+                        Err(Refusal::ResourceLimit) => 10,
                         Err(_) => unreachable!(),
                     }
                 } else {
@@ -1058,7 +1076,7 @@ mod tests {
                 let permits = Arc::new(Permits::new(width));
                 for fail_at in (0..width).map(Some).chain([None]) {
                     let reservation = permits.try_reserve(width).unwrap();
-                    let owners = start_at(run, reservation, fail_at, None);
+                    let owners = start_at(run, reservation, fail_at, None, 1);
                     if fail_at.is_some() {
                         assert_eq!(owners, Err(Refusal::WorkerStartFailed));
                         assert!(workers(execs).is_empty());
@@ -1105,6 +1123,33 @@ mod tests {
                     .start_jobs(run, 4, Some(2));
             assert_eq!(deferred, Err(Refusal::WorkerStartFailed));
             drop(owners);
+            finish(run);
+            assert_eq!(permits.available(), 4);
+            assert!(workers(execs).is_empty());
+            assert_eq!(execs.holders.count.load(Ordering::Acquire), 1);
+            crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn placement_failure_is_an_aggregate_refusal_and_every_native_prefix_is_joined() {
+        unsafe {
+            let mut ctx = std::ptr::null_mut();
+            assert_eq!(
+                crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+                0
+            );
+            let run = (*ctx).run_ptr();
+            let execs = super::super::init_execs(ctx);
+            let permits = Arc::new(Permits::new(4));
+            start_at(run, permits.try_reserve(4).unwrap(), None, None, 0).unwrap();
+            let result = {
+                let mut slot = execs.scoped.lock().unwrap();
+                let workers = slot.as_mut().unwrap();
+                workers.pending[1].as_mut().unwrap().cpu = Some(usize::MAX);
+                workers.start_jobs(run, 4, None)
+            };
+            assert_eq!(result, Err(Refusal::ResourceLimit));
             finish(run);
             assert_eq!(permits.available(), 4);
             assert!(workers(execs).is_empty());

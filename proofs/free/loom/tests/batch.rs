@@ -134,3 +134,24 @@ fn logical_retirement_keeps_the_active_borrow_and_generation_lease_until_physica
         assert_eq!(freed.load(Ordering::Acquire), 1);
     });
 }
+
+#[test]
+fn startup_exposes_one_aggregate_only_after_every_success_or_failure() {
+    use hirsel_free_loom::batch::Startup;
+    model(|| {
+        let startup = Arc::new(Startup::new(2));
+        let first = startup.clone();
+        let a = loom::thread::spawn(move || first.acknowledge(true));
+        let second = startup.clone();
+        let b = loom::thread::spawn(move || second.acknowledge(false));
+        if let Some(outcome) = startup.outcome() {
+            assert!(!outcome);
+        }
+        assert_ne!(
+            a.join().unwrap(),
+            b.join().unwrap(),
+            "only the last acknowledgement wakes admission"
+        );
+        assert_eq!(startup.outcome(), Some(false));
+    });
+}
