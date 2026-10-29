@@ -255,3 +255,31 @@ fn checksummed_tir_tables_reject_wraparound_wrong_tags_counts_overlap_and_trunca
     wrong.domain.schema += 1;
     assert!(CheckedTir::open(encoded.into(), wrong, records, |_, _| Some(anchor)).is_none());
 }
+
+#[test]
+fn typed_tir_rows_ignore_enclosing_name_sources() {
+    struct Missing;
+    impl hirsel_intern::persist::Source<DefId> for Missing {
+        fn id(&self, _: u32) -> Option<DefId> {
+            None
+        }
+    }
+    impl hirsel_intern::persist::Source<hirsel_intern::Symbol> for Missing {
+        fn id(&self, _: u32) -> Option<hirsel_intern::Symbol> {
+            None
+        }
+    }
+    let (records, definition, anchor) = fixture(false);
+    let encoded = bytes(&records, &definition, anchor);
+    hirsel_syntax::with_def_source(Arc::new(Missing), || {
+        hirsel_intern::persist::with_symbol_source(Arc::new(Missing), || {
+            let checked = open(encoded, records, anchor).unwrap();
+            assert_eq!(checked.header().unwrap().path, definition.path);
+            assert_eq!(
+                checked.body(0).unwrap().header().unwrap().parameter_scope,
+                definition.bodies[0].parameter_scope
+            );
+            assert_eq!(checked.materialize().unwrap(), definition);
+        })
+    });
+}

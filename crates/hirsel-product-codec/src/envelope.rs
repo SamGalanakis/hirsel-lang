@@ -351,7 +351,11 @@ impl BoundIndexedEnvelope {
         hirsel_types::with_type_source(self.types.clone(), || {
             hirsel_span::with_anchor_codec(
                 &mut hirsel_span::AnchorCodec::DecodeShared(self.anchors.clone()),
-                || crate::options(bytes.len()).deserialize(bytes),
+                || {
+                    crate::indexed_types::inline_names(|| {
+                        crate::options(bytes.len()).deserialize(bytes)
+                    })
+                },
             )
         })
         .ok()
