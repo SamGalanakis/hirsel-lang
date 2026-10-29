@@ -908,3 +908,36 @@ fn native_products_19_receipt_declaration_absence_is_replayed_and_new_demand_ref
     }
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn native_product_binding_consumes_a_shared_typed_body_without_text_decode() {
+    use hirsel_lir::products::{Binding, LayoutClosure};
+    let mut fixture = Lir::<Value>::new(&[], None);
+    fixture.builder.ret(ENTRY, None);
+    let (unit, table, manifest) = fixture.finish();
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let operations = support::registry();
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let checked = hirsel_lir::validate::validate_value(unit, &inputs).unwrap();
+    let (closure, body) = LayoutClosure::capture(&checked, &inputs, &[]).unwrap();
+    let binding = Binding::new(&target, &[&closure]).unwrap();
+    let trace = hirsel_lir::construction::ValueTrace::default();
+    let observation = trace.enter();
+    let shared = body.clone();
+    drop(body);
+    assert_eq!(trace.totals(), Default::default());
+    let materialized = binding.materialize::<Value>(&shared).unwrap();
+    assert_eq!(trace.totals().decoded, 0);
+    assert_eq!(trace.totals().decoded_bytes, 0);
+    assert!(binding.materialize::<Ready>(&shared).is_err());
+    drop(observation);
+    let current = Inputs { layouts: &binding.table, ..inputs };
+    assert!(hirsel_lir::validate::validate_value(materialized, &current).is_ok());
+}
