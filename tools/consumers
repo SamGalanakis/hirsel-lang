@@ -27,10 +27,19 @@ MUST = {
                                 'unix_http_serves_itself_over_a_real_socket_and_replays_across_cli_backends'},
 }
 RUNTIME = re.compile(r'(?:^|/)(?:startup[^/]*|scheduler[^/]*|pool[^/]*|cpu[^/]*|managed_cores|ordered|launch)(?:[./]|$)')
+# Startup also lives in native entry emission and link-kit construction.
+STARTUP_PREFIXES = (
+    'crates/hirsel-rt/src/',
+    'crates/hirsel-driver/src/native',
+    'crates/hirsel-llvm/src/',
+    'crates/hirsel-cranelift/src/',
+    'crates/hirsel-engine/src/queries/native_records',
+    'tools/buck2/native-toolchain/link_kit',
+)
 
 
 def runtime_change(paths):
-    return any(RUNTIME.search(path) or path.startswith('crates/hirsel-rt/src/tasks/') for path in paths)
+    return any(RUNTIME.search(path) or path.startswith(STARTUP_PREFIXES) for path in paths)
 
 
 def buck(root, *args):

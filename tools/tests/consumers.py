@@ -24,7 +24,6 @@ def graph_for(inventories):
 
 class Consumers(unittest.TestCase):
     def test_cpu_pool_change_selects_native_launches_and_replay_before_other_shards(self):
-        path = 'crates/hirsel-rt/src/pool.rs'
         inventories = {binary: set(cases) for binary, cases in consumers.MUST.items()}
         inventories['hirsel-cli-test-free'] = {
             'native_returned_rest_completion_replays_across_engines',
@@ -33,13 +32,18 @@ class Consumers(unittest.TestCase):
         graph = graph_for(inventories)
         cpu_targets = {f'root//:hirsel-cli-test-cpu_pool_{width}' for width in (1, 4, 8, 16)}
         graph |= {target: dict(test_binary=target.split(':')[1]) for target in cpu_targets}
-        selected = consumers.select(ROOT, [path], graph, inventories)
         assignments = consumers.assignments(ROOT, graph, inventories)
         expected = cpu_targets | {assignments[binary, case] for binary, cases in consumers.MUST.items() for case in cases}
         expected.add(assignments['hirsel-cli-test-free', 'native_returned_rest_completion_replays_across_engines'])
         expected |= {'root//:hirsel-cli-test-cli-consumer-native-http',
                      'root//:hirsel-cli-test-cli-consumer-native-http-concurrent'}
-        self.assertLessEqual(expected, set(selected[:consumers.LIMIT]))
+        for path in ('crates/hirsel-rt/src/pool.rs', 'crates/hirsel-rt/src/free_launch.rs',
+                     'crates/hirsel-driver/src/native/kit.rs', 'crates/hirsel-llvm/src/c_entry.rs',
+                     'crates/hirsel-engine/src/queries/native_records.rs',
+                     'tools/buck2/native-toolchain/link_kit.py'):
+            with self.subTest(path=path):
+                selected = consumers.select(ROOT, [path], graph, inventories)
+                self.assertLessEqual(expected, set(selected[:consumers.LIMIT]))
 
     def test_std_module_selects_the_conformance_shard_that_uses_it(self):
         path = 'stdlib/std@1/toml.hir'
