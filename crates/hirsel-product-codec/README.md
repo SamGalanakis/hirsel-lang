@@ -41,3 +41,20 @@ member indices instead of relative Rust pointers or pointer-tree canonicality.
 The caller admits backing and validation scratch. `Bytes::visit_retained_allocations`
 reports the full backing through subslices to the existing shared-charge policy.
 Process allocation keys never enter portable records.
+
+`IndexedEnvelope` supplies the next ordinary envelope layout for the owner
+cutover. It is an explicit API; `TypeRecords::encode_record` still uses its
+current transport until that coordinated switch. Its 48-byte header contains
+`HIRREC02`, total length u64, anchor/type counts u32, type-array offset u64,
+payload offset u64 and payload length u64. It is followed by 16-byte anchor
+extent descriptors, 44-byte type references, contiguous source-owner rows and
+the payload. Source rows use u32 lengths/counts, UTF-8 strings and a u32
+occurrence. Integer reads copy fixed-endian bytes and require no Rust alignment.
+
+Opening checks an exact expected Reference and validates all framing, extents,
+counts, UTF-8 and source-row consumption without allocating paths or a type
+reference array. The owner retains that Reference and its complete backing.
+Source strings and module iterators borrow the checked bytes. Payload subslices
+retain the same backing and admission. Each demanded type component checks its
+own bytes independently. A checked envelope does not validate the opaque inner
+payload or provide V authority; Lower/native schemas must supply their readers.

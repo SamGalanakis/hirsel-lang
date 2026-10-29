@@ -4,7 +4,9 @@
 hirsel_guard::install!();
 
 mod base;
+mod envelope;
 mod indexed_types;
+pub use envelope::{AnchorRow, IndexedEnvelope};
 mod types;
 pub use base::{BaseIndex, SharedTypes};
 use bincode::Options;
