@@ -96,6 +96,10 @@ enum Value {
     Lower(Box<LowerProduct>),
     Constant(Box<Constants>),
 }
+struct Computed {
+    value: Value,
+    verification: Option<(DefinitionRef, hirsel_validate::VerifiedDefinition)>,
+}
 #[derive(Clone)]
 struct LowerProduct {
     definition: DefId,
@@ -1069,11 +1073,15 @@ impl FrontLowerQueries {
                 .validation_universe();
             source.merge(&observed.finish().map_err(|_| self.errors.protocol)?);
         }
-        let mut result = if source.framed && source.depth.borrow().limit() == 0 {
+        let computed = if source.framed && source.depth.borrow().limit() == 0 {
             Err(source.overflow(self.inputs[&path].site))
         } else {
             self.compute(id.kind, &path, selection.as_ref(), &mut source)
                 .await
+        };
+        let (mut result, verification) = match computed {
+            Ok(computed) => (Ok(computed.value), computed.verification),
+            Err(error) => (Err(error), None),
         };
         // A missing dependency outcome is a scheduler/transport refusal, not
         // a typed body error. Preserve its exact identity through all clones
@@ -1171,6 +1179,35 @@ impl FrontLowerQueries {
         } else {
             CONSTANT_DESCRIPTOR
         };
+        let execution_subject = persistent::evaluation_subject(key, &bytes);
+        if let Some((definition, evidence)) = verification
+            && let Ok(Value::Lower(lower)) = &mut result
+            && let Some(cache) = self.store.verifier()
+        {
+            // Keep the checked body alive only until V binds this exact
+            // descriptor, including its read/depth/selection/execution fields.
+            let working = lower.definition_decode_layout.retained
+                .checked_add(bytes.capacity() as u64)
+                .and_then(|n| n.checked_add((evidence.reads().capacity() * size_of::<hirsel_validate::VRead>()) as u64))
+                .ok_or(self.errors.resource)?;
+            if working > self.weight.scratch {
+                return Err(self.errors.resource);
+            }
+            lower.verified = cache.publish_definition(
+                execution_subject,
+                &definition,
+                self.snapshot.types().clone(),
+                self.snapshot.source_verification_policy(),
+                self.snapshot.validation(&path.0.package),
+                &evidence,
+                &[],
+            ).and_then(|output| {
+                let (authority, bytes) = cache.compact_definition_output(&output)?;
+                if bytes.len() as u64 > self.weight.scratch { return None; }
+                let metadata = self.store.put_content(LOWER_VERIFICATION, &bytes)?;
+                Some(StoredVerification { authority, metadata })
+            });
+        }
         let outcome = Outcome {
             result,
             reads: observed,
@@ -1179,7 +1216,7 @@ impl FrontLowerQueries {
             depth: depth.into(),
             executed,
             execution,
-            execution_subject: persistent::evaluation_subject(key, &bytes),
+            execution_subject,
         };
         self.remember_carry(id, key, &bytes, &outcome);
         self.publish(id, key, domain, &bytes, outcome, true)
@@ -1261,7 +1298,7 @@ impl FrontLowerQueries {
         path: &DefPath,
         selection: Option<&staged::Selection>,
         source: &mut Source,
-    ) -> Result<Value, QueryError> {
+    ) -> Result<Computed, QueryError> {
         let front = self.front.query(path).ok_or(QueryError::NotImplemented)?;
         let selected = source.reads.read_consuming(front).await;
         let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
@@ -1378,7 +1415,7 @@ impl FrontLowerQueries {
             )
             .await?
             .result?;
-            return Ok(Value::Constant(Box::new(Constants::new(value, constants))));
+            return Ok(Computed { value: Value::Constant(Box::new(Constants::new(value, constants))), verification: None });
         }
         if kind == FRONT_EVALUATE_KIND {
             let ItemKind::Const {
@@ -1428,7 +1465,7 @@ impl FrontLowerQueries {
             if is_dictionary && !constants.iter().any(|(id, _)| *id == expression) {
                 constants.push((expression, value.clone()));
             }
-            return Ok(Value::Constant(Box::new(Constants::new(value, constants))));
+            return Ok(Computed { value: Value::Constant(Box::new(Constants::new(value, constants))), verification: None });
         }
         let lowering = self.lowering.as_deref().ok_or(QueryError::NotImplemented)?;
         self.count(path, |work| work.lowerings += 1);
@@ -1449,7 +1486,7 @@ impl FrontLowerQueries {
                 dependency.fingerprint,
             );
         }
-        let mut verified = None;
+        let mut verification = None;
         let mut acceptance = None;
         if self.verify == Verify::On {
             let mut observed = ReadsBuilder::new();
@@ -1474,29 +1511,7 @@ impl FrontLowerQueries {
                     message: format!("{:?}", report.violations),
                 }));
             }
-            if let Some(evidence) = evidence
-                && let Some(cache) = self.store.verifier()
-            {
-                verified = cache
-                    .definition_output_from_evidence(
-                        &definition,
-                        self.snapshot.types().clone(),
-                        self.snapshot.source_verification_policy(),
-                        self.snapshot.validation(&path.0.package),
-                        &evidence,
-                    )
-                    .and_then(|output| {
-                        let (authority, bytes) = cache.compact_definition_output(&output)?;
-                        if bytes.len() as u64 > self.weight.scratch {
-                            return None;
-                        }
-                        let metadata = self.store.put_content(LOWER_VERIFICATION, &bytes)?;
-                        Some(StoredVerification {
-                            authority,
-                            metadata,
-                        })
-                    });
-            }
+            verification = evidence.map(|evidence| (definition.clone(), evidence));
         }
         if has_errors(&output.diagnostics) {
             return Err(QueryError::Diagnostics(output.diagnostics));
@@ -1537,18 +1552,18 @@ impl FrontLowerQueries {
         let mut dependencies = analyzed.dependencies.clone();
         dependencies.extend(output.dependencies);
         let constant_selection_bytes = constant_selection_bytes(&definition)?;
-        Ok(Value::Lower(Box::new(LowerProduct {
+        Ok(Computed { value: Value::Lower(Box::new(LowerProduct {
             constant_selection_bytes,
             definition: definition.path,
             body,
             diagnostics: output.diagnostics,
             dependencies: dependencies.into(),
             archived_metadata: None,
-            verified,
+            verified: None,
             acceptance,
             materialized,
             definition_decode_layout,
-        })))
+        }))), verification })
     }
 }
 struct Factory(Arc<FrontLowerQueries>);

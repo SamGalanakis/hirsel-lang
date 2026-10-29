@@ -129,6 +129,24 @@ impl FrontLowerQueries {
             let mut verified = None;
             let mut acceptance = None;
             if self.verify == Verify::On {
+                if self.lowering.is_none() {
+                    let output = self.store.verifier()?.definition_output(
+                        persistent::evaluation_subject(key, &descriptor),
+                        decoded.path,
+                        self.snapshot.types(),
+                        self.snapshot.source_verification_policy(),
+                        self.snapshot.validation(&path.0.package),
+                    )?;
+                    if !output.matches_definition(
+                        &decoded,
+                        self.snapshot.types().clone(),
+                        |anchor| self.anchors.record_owner(anchor),
+                        self.snapshot.source_verification_policy(),
+                        self.snapshot.validation(&path.0.package),
+                    ) {
+                        return None;
+                    }
+                }
                 let (report, ran, accepted, evidence) = self
                     .snapshot
                     .validate_source_artifact(&decoded, |anchor| self.anchors.record_owner(anchor));
@@ -150,6 +168,7 @@ impl FrontLowerQueries {
                         self.snapshot.source_verification_policy(),
                         self.snapshot.validation(&path.0.package),
                         &evidence,
+                        &[],
                     )
                     && let Some((authority, bytes)) = cache.compact_definition_output(&output)
                     && bytes.len() as u64 <= self.weight.scratch
