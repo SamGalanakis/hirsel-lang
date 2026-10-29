@@ -230,3 +230,88 @@ impl QueryEngine {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn shared_batch_backing_keeps_exact_membership_revision_and_foreign_policy() {
+        let a = DefPath::core("batch_a");
+        let b = DefPath::core("batch_b");
+        let leaf = DefPath::core("batch_leaf");
+        let node = |path: &DefPath, dependencies: &[DefPath]| {
+            Arc::new(hirsel_run_schema::ProgramNode {
+                identity: path.to_string(),
+                content: vec![path.to_string().into_bytes()],
+                dependencies: dependencies.iter().map(ToString::to_string).collect(),
+            })
+        };
+        let program = crate::queries::SemanticProgram {
+            nodes: vec![
+                node(&a, std::slice::from_ref(&leaf)),
+                node(&b, &[]),
+                node(&leaf, &[]),
+            ],
+            definitions: BTreeSet::from([a.clone(), b.clone(), leaf.clone()]),
+            uses: BTreeMap::from([
+                (a.clone(), BTreeSet::from([leaf.clone()])),
+                (b.clone(), BTreeSet::new()),
+                (leaf.clone(), BTreeSet::new()),
+            ]),
+        };
+        let expected = program.revision(&a).unwrap();
+        let mut engine = QueryEngine::new(crate::default_environment(), PhaseAdapters::default());
+        let sources = program
+            .definitions
+            .iter()
+            .map(|path| {
+                (
+                    path.clone(),
+                    (ContentHash::default(), ContentHash::default()),
+                )
+            })
+            .collect();
+        let backing = NativeSemanticProgram::new(
+            program,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            engine.signature_snapshot(),
+            sources,
+            vec![],
+            false,
+        );
+        let first = backing.select_definitions(BTreeSet::from([a.clone(), leaf.clone()]), false);
+        let second = backing.select_definitions(BTreeSet::from([b.clone()]), true);
+        assert!(Arc::ptr_eq(&first.shared, &second.shared));
+        assert_eq!(first.semantic_program_revision(&a).unwrap(), expected);
+        assert!(!first.semantic_contains(&b));
+        assert!(first.shared_node(Some(DefId::intern(&b))).is_none());
+        assert!(first.semantic_program_revision(&b).is_err());
+        assert_eq!(
+            first
+                .source_bindings()
+                .map(|(path, _, _)| path.clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([a, leaf])
+        );
+        assert_eq!(
+            second
+                .source_bindings()
+                .map(|(path, _, _)| path.clone())
+                .collect::<Vec<_>>(),
+            vec![b]
+        );
+        assert!(!first.foreign_unreplayable());
+        assert!(second.foreign_unreplayable());
+        let mut combined = crate::NativeMetadataWeight::default();
+        let mut shared = BTreeSet::new();
+        first.metadata_weight(&mut combined, &mut shared);
+        second.metadata_weight(&mut combined, &mut shared);
+        let mut separate = crate::NativeMetadataWeight::default();
+        first.metadata_weight(&mut separate, &mut BTreeSet::new());
+        second.metadata_weight(&mut separate, &mut BTreeSet::new());
+        assert!(combined.bytes() < separate.bytes());
+    }
+}
