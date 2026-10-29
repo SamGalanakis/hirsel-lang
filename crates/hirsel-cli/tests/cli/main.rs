@@ -1471,11 +1471,48 @@ fn standalone_hello_runs_directly_with_fresh_grants_and_only_floor_glibc() {
         );
         let readobj = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap())
             .join("bin/llvm-readobj");
-        let dynamic = Command::new(readobj)
-            .arg("--needed-libs")
-            .arg(&exe)
+        let needed = |executable: &std::path::Path| {
+            let output = Command::new(&readobj)
+                .arg("--needed-libs")
+                .arg(executable)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            output
+        };
+        let static_output = needed(&exe);
+        let static_text = String::from_utf8(static_output.stdout).unwrap();
+        assert!(
+            !static_text.lines().any(|line| line.contains(".so.")),
+            "{static_text}"
+        );
+
+        // A kit without static archives still exercises the dynamic ABI floor.
+        let dynamic_kit = tempfile::tempdir().unwrap();
+        let kit = std::path::PathBuf::from(std::env::var_os("HIRSEL_LINK_KIT").unwrap());
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(kit.join("manifest.json")).unwrap()).unwrap();
+        for (triple, target) in manifest["targets"].as_object_mut().unwrap() {
+            target.as_object_mut().unwrap().remove("static");
+            std::os::unix::fs::symlink(kit.join(triple), dynamic_kit.path().join(triple)).unwrap();
+        }
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        use sha2::Digest;
+        let digest = format!("{:x}", sha2::Sha256::digest(&manifest));
+        std::fs::write(dynamic_kit.path().join("manifest.json"), manifest).unwrap();
+        std::fs::write(dynamic_kit.path().join("digest"), digest).unwrap();
+        let dynamic_exe = source.with_extension("dynamic-exe");
+        let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .env("HIRSEL_LINK_KIT", dynamic_kit.path())
+            .arg("build")
+            .arg(&source)
+            .arg("-o")
+            .arg(&dynamic_exe)
             .output()
             .unwrap();
+        assert_eq!(built.status.code(), Some(0), "{built:?}");
+        assert!(built.stdout.is_empty(), "{built:?}");
+        let dynamic = needed(&dynamic_exe);
         assert!(dynamic.status.success(), "{dynamic:?}");
         let text = String::from_utf8(dynamic.stdout).unwrap();
         let libs: Vec<_> = text
@@ -1496,7 +1533,7 @@ fn standalone_hello_runs_directly_with_fresh_grants_and_only_floor_glibc() {
         ];
         assert!(libs.contains(&"libc.so.6"), "{text}");
         assert!(libs.iter().all(|lib| floor.contains(lib)), "{text}");
-        for path in [source, exe, run] {
+        for path in [source, exe, dynamic_exe, run] {
             std::fs::remove_file(path).unwrap();
         }
     });
