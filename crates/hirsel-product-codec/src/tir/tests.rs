@@ -283,3 +283,50 @@ fn typed_tir_rows_ignore_enclosing_name_sources() {
         })
     });
 }
+
+#[test]
+fn checked_row_stream_preserves_the_complete_definition_serde_contract() {
+    let (records, mut definition, anchor) = fixture(false);
+    // Include every nested indexed container, including otherwise empty match
+    // rows and several bodies, so the stream preserves their serde field order.
+    definition.bodies[0].matches.push(MatchTable {
+        scrutinee: PlaceId(0),
+        patterns: vec![MatchPattern {
+            place: PlaceId(0),
+            kind: MatchPatternKind::Literal(Constant::Bool(true)),
+        }],
+        arms: vec![MatchArm {
+            pattern: MatchPatternId(0),
+            guard: Some(BlockId(0)),
+            target: BlockId(0),
+        }],
+    });
+    definition.bodies.push(definition.bodies[0].clone());
+    definition.caller_bodies.push(BodyId(0));
+    definition.contracts.push((7, BodyId(1)));
+    let reader = open(
+        bytes(&records, &definition, anchor),
+        records.clone(),
+        anchor,
+    )
+    .unwrap();
+    let view = crate::TirView::Archived(&reader);
+    let plain = crate::canonical_bytes(records.types.clone(), &definition, |_| {
+        Some((definition.path.path().clone(), 0))
+    })
+    .unwrap();
+    let streamed = crate::canonical_bytes(records.types.clone(), &view, |_| {
+        Some((definition.path.path().clone(), 0))
+    })
+    .unwrap();
+    assert_eq!(streamed, plain);
+    let raw = |serialize: &dyn Fn() -> Vec<u8>| {
+        hirsel_types::with_session_ids(|| {
+            hirsel_span::with_anchor_codec(&mut AnchorCodec::Raw, serialize)
+        })
+    };
+    assert_eq!(
+        raw(&|| bincode::serialize(&view).unwrap()),
+        raw(&|| bincode::serialize(&definition).unwrap())
+    );
+}

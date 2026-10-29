@@ -8,6 +8,7 @@ mod envelope;
 mod indexed_types;
 pub use envelope::{AnchorRow, BoundIndexedEnvelope, IndexedEnvelope};
 mod tir;
+mod tir_serialize;
 mod tir_view;
 pub use tir_view::{TirBlockView, TirBodyView, TirMatchView, TirView};
 mod types;

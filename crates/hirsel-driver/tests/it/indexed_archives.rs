@@ -72,6 +72,11 @@ fn actual_lower_products_have_checked_indexed_body_and_instruction_rows() {
             }
             assert!(instructions > 0);
             assert_eq!(archived.materialize().unwrap(), *definition);
+            assert_eq!(
+                records.encode(context.as_ref(), &stored),
+                records.encode(context.as_ref(), &*definition),
+                "streamed checked rows preserve the complete canonical Definition contract"
+            );
         }
     });
 }
