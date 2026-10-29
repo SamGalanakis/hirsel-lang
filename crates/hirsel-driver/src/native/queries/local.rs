@@ -230,7 +230,7 @@ impl LocalReadyQueries {
             return Err("local emission context identity differs".into());
         }
         let mut chosen = BTreeMap::new();
-        let selected_summaries = arena.chosen_reads(key, &owner.callees)?;
+        let selected_summaries = arena.chosen_reads(key, &owner.facts.callees)?;
         for summary in &selected_summaries {
             let product = summary.product;
             let association = self
@@ -278,7 +278,7 @@ impl LocalReadyQueries {
             return Err("arena owner address differs".into());
         }
         let mut callees = Vec::new();
-        for callee in &owner.callees {
+        for callee in &owner.facts.callees {
             let (address, claim, summary) =
                 chosen.get(callee).ok_or("missing callee arena summary")?;
             let (instance, linkage) = instances.admitted(address, environment)?;
@@ -302,7 +302,7 @@ impl LocalReadyQueries {
             own.1,
             own.2,
             callee_reads,
-            owner.ready_source.encode()?,
+            owner.facts.ready_source.encode()?,
             (options.regions, options.elide, options.reuse),
             format!("{:?}", options.validation),
             format!("{:?}", options.discharge.sites(key.instance.definition())),
@@ -417,7 +417,7 @@ impl LocalReadyQueries {
             receipts: None,
             declarations: environment.operations,
             all_sources: false,
-            source: (!owner.templates.library)
+            source: (!owner.facts.templates.library)
                 .then_some((key.instance.definition(), key.instance.digest())),
             pretransfer: Some(adapters),
         };
@@ -436,7 +436,7 @@ impl LocalReadyQueries {
             ReadyMiss {
                 value,
                 options,
-                source: &owner.ready_source,
+                source: &owner.facts.ready_source,
                 guard,
                 finalizers: &finalizers,
                 inputs: &inputs,

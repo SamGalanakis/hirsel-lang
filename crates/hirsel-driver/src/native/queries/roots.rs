@@ -762,6 +762,7 @@ impl NativeRoots for RootProducts {
                     .instances
                     .admitted(key, &environment)?
                     .0
+                    .facts
                     .ready_source
                     .origin()
                 && self.source.functions().get(key.instance.definition())

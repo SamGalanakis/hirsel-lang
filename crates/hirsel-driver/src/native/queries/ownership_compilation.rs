@@ -155,7 +155,7 @@ impl OwnershipCompilation {
         if snapshot.needs_guard {
             let inputs = snapshot.instances.completed_inputs()?;
             let bytes = super::seal_demand::Plan::admission_bytes(
-                inputs.iter().map(|(_, output)| &output.seal_demand),
+                inputs.iter().map(|(_, output)| &output.facts.seal_demand),
             );
             let guard_allowance = allowance
                 .split(bytes)

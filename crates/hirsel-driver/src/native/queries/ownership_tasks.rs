@@ -265,7 +265,7 @@ impl OwnershipTasks {
                 receipts: None,
                 declarations: &declarations,
                 all_sources: false,
-                source: (!owner.templates.library).then_some((
+                source: (!owner.facts.templates.library).then_some((
                     request.owner(&self.native).instance.definition(),
                     request.owner(&self.native).instance.digest(),
                 )),
@@ -329,7 +329,7 @@ impl OwnershipTasks {
                 receipts: None,
                 declarations: &declarations,
                 all_sources: false,
-                source: (!owner.templates.library).then_some((
+                source: (!owner.facts.templates.library).then_some((
                     request.owner(&self.native).instance.definition(),
                     request.owner(&self.native).instance.digest(),
                 )),
@@ -642,7 +642,7 @@ impl OwnershipTasks {
             receipts: None,
             declarations: &declarations,
             all_sources: false,
-            source: (!owner.templates.library).then_some((
+            source: (!owner.facts.templates.library).then_some((
                 request.owner(&self.native).instance.definition(),
                 request.owner(&self.native).instance.digest(),
             )),

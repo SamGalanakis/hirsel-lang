@@ -55,15 +55,15 @@ impl NamedKey {
 
 /// Compact ordinary discovery data. A recipe's typed actuals are a separate
 /// content product and are decoded only when that particular instance misses.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub(super) struct Request(Arc<RequestData>);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct RequestData {
-    key: NamedKey,
+    key: Arc<NamedKey>,
     recipe: Reference,
-    lexical: NamedKey,
+    lexical: Arc<NamedKey>,
     receipt_roots: Option<Reference>,
     layouts: Option<Reference>,
     plan: Reference,
@@ -74,7 +74,18 @@ impl std::ops::Deref for Request {
         &self.0
     }
 }
+impl<'de> Deserialize<'de> for Request {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        RequestData::deserialize(deserializer).map(Self::new)
+    }
+}
 impl Request {
+    fn new(mut data: RequestData) -> Self {
+        if data.key == data.lexical {
+            data.lexical = data.key.clone();
+        }
+        Self(Arc::new(data))
+    }
     pub(super) fn has_receipt_roots(&self) -> bool {
         self.receipt_roots.is_some()
     }
@@ -89,9 +100,14 @@ impl Request {
         } = &*self.0;
         let mut weight = hirsel_engine::NativeMetadataWeight::default();
         weight.arc(&self.0);
-        for key in [key, lexical] {
+        let mut count = |key: &Arc<NamedKey>| {
+            weight.arc(key);
             weight.path(&key.definition);
             weight.flat_vec(&key.encoding);
+        };
+        count(key);
+        if !Arc::ptr_eq(key, lexical) {
+            count(lexical);
         }
         weight.bytes()
     }
@@ -119,6 +135,11 @@ struct Discovery {
 /// C's independently rechecked local receipt. It retains neither IR nor types.
 pub struct DiscoveredInstance {
     pub product: Arc<InstanceProduct>,
+    pub facts: Arc<InstanceFacts>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstanceFacts {
     pub ready_source: ReadySourceFacts,
     /// Ordinary physical-capacity equations, never source or C authority.
     /// These retain no Value body and are bound to this discovery output.
@@ -136,10 +157,32 @@ pub struct DiscoveredInstance {
 }
 
 impl DiscoveredInstance {
-    pub(super) fn retained_metadata_bytes(&self) -> u64 {
+    fn with_facts(
+        product: Arc<InstanceProduct>,
+        facts: InstanceFacts,
+        previous: Option<&Self>,
+    ) -> Self {
+        let facts = match previous {
+            Some(previous) if *previous.facts == facts => previous.facts.clone(),
+            _ => Arc::new(facts),
+        };
+        Self { product, facts }
+    }
+    pub(super) fn wrapper_bytes(&self) -> u64 {
         let mut weight = hirsel_engine::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + 2 * size_of::<usize>());
         weight.arc(&self.product);
+        weight.bytes()
+    }
+    pub(super) fn retained_metadata_bytes(&self) -> u64 {
+        self.wrapper_bytes()
+            .saturating_add(self.facts.retained_metadata_bytes())
+    }
+}
+impl InstanceFacts {
+    pub(super) fn retained_metadata_bytes(&self) -> u64 {
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.add(size_of::<Self>() + 2 * size_of::<usize>());
         weight.vec(&self.callees, |w, (path, _)| w.path(path));
         weight.vec(&self.dependencies, |w, key| {
             w.path(key.instance.definition());
@@ -412,7 +455,7 @@ impl DemandInstances {
             .ok_or_else(|| format!(
                 "native instance dependency lost current C admission: {} body {} instance {:?}, library={}, action {:?}, record {:?}",
                 key.instance.definition(), key.instance.body(), key.instance.digest(),
-                output.templates.library, output.product.product.action, output.product.product.record,
+                output.facts.templates.library, output.product.product.action, output.product.product.record,
             ))?;
         Ok((output.clone(), linkage))
     }
@@ -439,6 +482,7 @@ impl DemandInstances {
                 .map(|_| (key.instance.definition(), key.instance.digest())),
             pretransfer: Some(
                 output
+                    .facts
                     .adapters
                     .iter()
                     .map(|symbol| {
@@ -512,9 +556,15 @@ impl DemandInstances {
                 None,
             )
         };
-        Ok(Request(Arc::new(RequestData {
-            key: NamedKey::of(key),
-            lexical: NamedKey::of(instances.lexical_key(id)),
+        let named = Arc::new(NamedKey::of(key));
+        let lexical = if key == instances.lexical_key(id) {
+            named.clone()
+        } else {
+            Arc::new(NamedKey::of(instances.lexical_key(id)))
+        };
+        Ok(Request::new(RequestData {
+            key: named,
+            lexical,
             receipt_roots: (!instances.roles[id.index()].is_library()
                 && instances.roles[id.index()] != hirsel_rc::instance::InstanceRole::Finalizer)
                 .then_some(receipt_roots)
@@ -528,7 +578,7 @@ impl DemandInstances {
                     .encode(engine, &InstancePlan::capture(instances, id)?)
                     .ok_or("native original plan encoding failed")?,
             )?,
-        })))
+        }))
     }
     pub(super) fn admit(&mut self, request: Request) -> Result<InstanceAddress, String> {
         let key = request.key.bind()?;
@@ -859,20 +909,23 @@ impl DemandInstances {
             .into_iter()
             .map(|r| self.admit(r))
             .collect::<Result<Vec<_>, _>>()?;
-        let output = Arc::new(DiscoveredInstance {
+        let output = Arc::new(DiscoveredInstance::with_facts(
             product,
-            ready_source,
-            seal_demand: discovery.seal_demand,
-            callees: discovery.callees,
-            dependencies,
-            selection_reads: discovery.selection_reads,
-            constant_reads: discovery.constant_reads,
-            templates: discovery.templates,
-            operation_freedom: discovery.operation_freedom,
-            emission: discovery.emission,
-            discharge: discovery.discharge,
-            adapters,
-        });
+            InstanceFacts {
+                ready_source,
+                seal_demand: discovery.seal_demand,
+                callees: discovery.callees,
+                dependencies,
+                selection_reads: discovery.selection_reads,
+                constant_reads: discovery.constant_reads,
+                templates: discovery.templates,
+                operation_freedom: discovery.operation_freedom,
+                emission: discovery.emission,
+                discharge: discovery.discharge,
+                adapters,
+            },
+            None,
+        ));
         self.completed
             .insert(key.instance.encoding().to_vec(), output.clone());
         Ok(output)

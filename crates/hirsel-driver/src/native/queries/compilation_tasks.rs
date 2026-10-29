@@ -244,17 +244,19 @@ impl CompilationTasks {
         hirsel_intern::memory::checkpoint("global Value complete");
         let guard_bytes = if completed
             .iter()
-            .any(|(_, output)| output.seal_demand.has_seal())
+            .any(|(_, output)| output.facts.seal_demand.has_seal())
         {
             super::seal_demand::Plan::admission_bytes(
-                completed.iter().map(|(_, output)| &output.seal_demand),
+                completed
+                    .iter()
+                    .map(|(_, output)| &output.facts.seal_demand),
             )
         } else {
             0
         };
         let needs_execution = completed
             .iter()
-            .any(|(_, output)| output.templates.execution);
+            .any(|(_, output)| output.facts.templates.execution);
         let owners = completed
             .iter()
             .map(|(key, _)| key.clone())

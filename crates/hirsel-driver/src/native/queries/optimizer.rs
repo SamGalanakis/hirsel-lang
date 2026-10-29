@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 pub type Function = hirsel_rc::arena_credit::equations::Function;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TemplateFacts {
     pub small: bool,
     pub execution: bool,

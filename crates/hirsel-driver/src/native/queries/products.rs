@@ -98,7 +98,7 @@ pub struct NativeSnapshot {
     pub(super) owners: BTreeMap<ContentHash, InstanceAddress>,
     pub(super) summaries: BTreeMap<ContentHash, Arc<ArenaSummary>>,
     templates:
-        BTreeMap<super::optimizer::Function, (InstanceAddress, super::optimizer::TemplateFacts)>,
+        BTreeMap<super::optimizer::Function, (InstanceAddress, Arc<super::demand::InstanceFacts>)>,
     native: Arc<hirsel_lir::validate::NativeCache>,
     materializations: AtomicU64,
     pub(super) needs_guard: bool,
@@ -120,10 +120,9 @@ impl NativeSnapshot {
         m::manifest(&mut w, &self.manifest);
         w.packed_map(&mut self.owners, |w, _, key| m::address(w, key));
         w.packed_map(&mut self.summaries, |_, _, _| ());
-        w.packed_map(&mut self.templates, |w, (path, _), (key, facts)| {
+        w.packed_map(&mut self.templates, |w, (path, _), (key, _)| {
             w.path(path);
             m::address(w, key);
-            w.vec(&facts.references, |w, (path, _)| w.path(path));
         });
         w.flat_vec(&self.retained_allowances);
         w.bytes()
@@ -196,14 +195,14 @@ impl NativeSnapshot {
             .map(|(owner, output)| {
                 (
                     (owner.instance.definition().clone(), owner.instance.digest()),
-                    (owner, output.templates.clone()),
+                    (owner, output.facts.clone()),
                 )
             })
             .collect();
         let needs_guard = instances
             .completed_inputs()?
             .iter()
-            .any(|(_, output)| output.seal_demand.has_seal());
+            .any(|(_, output)| output.facts.seal_demand.has_seal());
         Ok(Arc::new(Self {
             execution: Default::default(),
             native: super::ready::ReadyQueries::validator(&store),
@@ -259,12 +258,12 @@ impl NativeSnapshot {
             |member| {
                 self.templates
                     .get(member)
-                    .map_or_else(Vec::new, |(_, facts)| facts.references.clone())
+                    .map_or_else(Vec::new, |(_, facts)| facts.templates.references.clone())
             },
             |member| {
                 self.templates.get(member).is_some_and(|(_, facts)| {
-                    facts.library
-                        || facts.small
+                    facts.templates.library
+                        || facts.templates.small
                         || self.emission.inline_instances.contains(&member.1)
                 })
             },

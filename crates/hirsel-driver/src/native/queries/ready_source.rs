@@ -4,7 +4,7 @@ use hirsel_rc::instance::{InstanceId, Instances};
 /// These are ordinary descriptor data, bound to the accepted instance's
 /// discovery output and current source observations by the query owner.
 /// Ready does not need the source body or an Instances registry to use them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReadySourceFacts {
     origin: hirsel_layout::instance::InstanceKey,
     parameters: u32,

@@ -11,16 +11,24 @@ impl Scope {
     pub(in crate::native::queries) fn retained_bytes<'a>(
         &mut self,
         admitted: impl IntoIterator<Item = &'a Request>,
+        facts: impl IntoIterator<Item = &'a Arc<InstanceFacts>>,
     ) -> u64 {
         let admitted = admitted
             .into_iter()
             .map(|request| Arc::as_ptr(&request.0))
             .collect::<std::collections::HashSet<_>>();
+        let mut facts = facts
+            .into_iter()
+            .map(Arc::as_ptr)
+            .collect::<std::collections::HashSet<_>>();
         let mut weight = hirsel_engine::NativeMetadataWeight::default();
         weight.vec(&self.outputs, |weight, (key, output)| {
             weight.path(key.instance.definition());
             weight.add(key.instance.retained_encoding_bytes());
-            weight.add(output.retained_metadata_bytes() as usize);
+            weight.add(output.wrapper_bytes() as usize);
+            if facts.insert(Arc::as_ptr(&output.facts)) {
+                weight.add(output.facts.retained_metadata_bytes() as usize);
+            }
         });
         weight.map(&self.requests, |weight, key, request| {
             weight.add(key.capacity());
@@ -105,6 +113,7 @@ impl DemandInstances {
                 all_sources: false,
                 pretransfer: Some(
                     original
+                        .facts
                         .adapters
                         .iter()
                         .map(|symbol| {
@@ -138,20 +147,23 @@ impl DemandInstances {
                 .collect::<Option<Vec<_>>>()?;
             outputs.push((
                 key,
-                Arc::new(DiscoveredInstance {
+                Arc::new(DiscoveredInstance::with_facts(
                     product,
-                    ready_source: ReadySourceFacts::decode(&discovery.ready_source).ok()?,
-                    seal_demand: discovery.seal_demand,
-                    callees: discovery.callees,
-                    dependencies,
-                    selection_reads: discovery.selection_reads,
-                    constant_reads: discovery.constant_reads,
-                    templates: discovery.templates,
-                    operation_freedom: discovery.operation_freedom,
-                    emission: discovery.emission,
-                    discharge: discovery.discharge,
-                    adapters: original.adapters.clone(),
-                }),
+                    InstanceFacts {
+                        ready_source: ReadySourceFacts::decode(&discovery.ready_source).ok()?,
+                        seal_demand: discovery.seal_demand,
+                        callees: discovery.callees,
+                        dependencies,
+                        selection_reads: discovery.selection_reads,
+                        constant_reads: discovery.constant_reads,
+                        templates: discovery.templates,
+                        operation_freedom: discovery.operation_freedom,
+                        emission: discovery.emission,
+                        discharge: discovery.discharge,
+                        adapters: original.facts.adapters.clone(),
+                    },
+                    Some(original),
+                )),
             ));
         }
         outputs.sort_by(|a, b| a.0.canonical_cmp(&b.0));
@@ -272,7 +284,7 @@ impl DemandInstances {
                 || request.key.body != key.instance.body()
                 || request.key.encoding != key.instance.encoding()
             {
-                Arc::make_mut(&mut request.0).key = NamedKey::of(&key.instance);
+                Arc::make_mut(&mut request.0).key = Arc::new(NamedKey::of(&key.instance));
             }
             requests.insert(key.instance.encoding().to_vec(), request);
         }
@@ -305,6 +317,7 @@ impl DemandInstances {
                 .into_iter()
                 .collect::<Vec<_>>();
             let finalizers = original
+                .facts
                 .dependencies
                 .iter()
                 .map(|k| (k.instance.definition().clone(), k.instance.digest()));
@@ -333,16 +346,16 @@ impl DemandInstances {
                 &serde_json::to_vec(&Discovery {
                     schema: INSTANCE_DISCOVERY_DOMAIN.schema,
                     owner: NamedKey::of(&key.instance),
-                    ready_source: original.ready_source.encode()?,
+                    ready_source: original.facts.ready_source.encode()?,
                     seal_demand: seal_demand.clone(),
                     callees: callees.clone(),
                     requests: dependency_requests,
-                    selection_reads: original.selection_reads.clone(),
-                    constant_reads: original.constant_reads.clone(),
+                    selection_reads: original.facts.selection_reads.clone(),
+                    constant_reads: original.facts.constant_reads.clone(),
                     templates: templates.clone(),
                     operation_freedom: freedom.clone(),
                     emission: emission.clone(),
-                    discharge: original.discharge.clone(),
+                    discharge: original.facts.discharge.clone(),
                 })
                 .map_err(|e| e.to_string())?,
             )?;
@@ -371,6 +384,7 @@ impl DemandInstances {
                 all_sources: false,
                 pretransfer: Some(
                     original
+                        .facts
                         .adapters
                         .iter()
                         .map(|symbol| {
@@ -409,20 +423,23 @@ impl DemandInstances {
             )?;
             outputs.push((
                 key.clone(),
-                Arc::new(DiscoveredInstance {
+                Arc::new(DiscoveredInstance::with_facts(
                     product,
-                    ready_source: original.ready_source.clone(),
-                    seal_demand,
-                    callees,
-                    dependencies,
-                    selection_reads: original.selection_reads.clone(),
-                    constant_reads: original.constant_reads.clone(),
-                    templates,
-                    operation_freedom: freedom,
-                    emission,
-                    discharge: original.discharge.clone(),
-                    adapters: original.adapters.clone(),
-                }),
+                    InstanceFacts {
+                        ready_source: original.facts.ready_source.clone(),
+                        seal_demand,
+                        callees,
+                        dependencies,
+                        selection_reads: original.facts.selection_reads.clone(),
+                        constant_reads: original.facts.constant_reads.clone(),
+                        templates,
+                        operation_freedom: freedom,
+                        emission,
+                        discharge: original.facts.discharge.clone(),
+                        adapters: original.facts.adapters.clone(),
+                    },
+                    Some(original),
+                )),
             ));
         }
         outputs.sort_by(|a, b| a.0.canonical_cmp(&b.0));
@@ -439,23 +456,123 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unchanged_callable_facts_share_backing_and_changed_dependencies_remain_distinct() {
+        let types = hirsel_types::TypeInterner::new(None);
+        let path = hirsel_syntax::DefPath::core("facts");
+        let key = InstanceKey::new(&path, 0, &[], &types, None, None).unwrap();
+        let record = INSTANCE_DISCOVERY_DOMAIN.reference(b"descriptor").unwrap();
+        let product = Arc::new(InstanceProduct {
+            product: ProductRef {
+                address: hirsel_engine::store::Address(record.output.0),
+                action: Action(record.output.0),
+                record,
+            },
+            value: record,
+            layout_closure: record,
+            local_equations: record,
+            discovery: record,
+            statics_finalizers: record,
+        });
+        let facts = InstanceFacts {
+            ready_source: ReadySourceFacts::decode(
+                &serde_json::to_vec(&(
+                    1u32,
+                    &path,
+                    0u32,
+                    key.encoding(),
+                    0u32,
+                    false,
+                    Vec::<u32>::new(),
+                ))
+                .unwrap(),
+            )
+            .unwrap(),
+            seal_demand: serde_json::from_value(serde_json::json!({
+                "schema": 1, "owner": (&path, record.output.0), "values": 0,
+                "parameters": [], "captures": [], "flow": [], "closures": [],
+                "calls": [], "returns": [], "seals": []
+            }))
+            .unwrap(),
+            callees: Vec::new(),
+            dependencies: Vec::new(),
+            selection_reads: Vec::new(),
+            constant_reads: Vec::new(),
+            templates: super::super::super::optimizer::TemplateFacts {
+                small: true,
+                execution: false,
+                library: false,
+                references: Vec::new(),
+            },
+            operation_freedom: serde_json::from_value(serde_json::json!({
+                "locally_safe": true, "callees": []
+            }))
+            .unwrap(),
+            emission: Default::default(),
+            discharge: Default::default(),
+            adapters: Vec::new(),
+        };
+        let original = DiscoveredInstance::with_facts(product.clone(), facts.clone(), None);
+        let unchanged =
+            DiscoveredInstance::with_facts(product.clone(), facts.clone(), Some(&original));
+        assert!(Arc::ptr_eq(&original.facts, &unchanged.facts));
+        let mut scope = Scope {
+            outputs: vec![(
+                InstanceAddress {
+                    instance: key,
+                    target_abi: record.output.0,
+                    policy: record.output.0,
+                },
+                Arc::new(unchanged),
+            )],
+            operations: hirsel_layout::operation::OperationRegistry {
+                seal_sources: BTreeMap::new(),
+                receipt_sources: BTreeMap::new(),
+                pretransfer_adapters: Vec::new(),
+                pretransfer_actuals: Vec::new(),
+                invocation_bodies: Vec::new(),
+                invocations: BTreeMap::new(),
+                types,
+                signatures: BTreeMap::new(),
+                type_declarations: BTreeMap::new(),
+                owners: Default::default(),
+            },
+            requests: BTreeMap::new(),
+        };
+        let independent = scope.retained_bytes(std::iter::empty(), std::iter::empty());
+        let shared = scope.retained_bytes(std::iter::empty(), [&original.facts]);
+        assert_eq!(
+            independent - shared,
+            original.facts.retained_metadata_bytes()
+        );
+        let mut edited = facts;
+        edited.templates.references.push((path, record.output.0));
+        let changed = DiscoveredInstance::with_facts(product, edited, Some(&original));
+        assert!(!Arc::ptr_eq(&original.facts, &changed.facts));
+        drop(original);
+        assert!(scope.outputs[0].1.facts.templates.references.is_empty());
+        assert_eq!(changed.facts.templates.references.len(), 1);
+    }
+
+    #[test]
     fn callable_requests_share_admitted_backing_and_specialization_keeps_lexical_identity() {
         let types = hirsel_types::TypeInterner::new(None);
         let path = hirsel_syntax::DefPath::core("request");
         let key = InstanceKey::new(&path, 0, &[], &types, None, None).unwrap();
         let reference = SOURCE_RECIPE.reference(b"request").unwrap();
-        let original = Request(Arc::new(RequestData {
-            key: NamedKey::of(&key),
-            lexical: NamedKey::of(&key),
+        let original = Request::new(RequestData {
+            key: Arc::new(NamedKey::of(&key)),
+            lexical: Arc::new(NamedKey::of(&key)),
             recipe: reference,
             receipt_roots: None,
             layouts: None,
             plan: reference,
-        }));
+        });
         let portable = serde_json::to_vec(&*original.0).unwrap();
         assert_eq!(serde_json::to_vec(&original).unwrap(), portable);
         let restored: Request = serde_json::from_slice(&portable).unwrap();
         assert_eq!(restored, original);
+        assert!(Arc::ptr_eq(&original.key, &original.lexical));
+        assert!(Arc::ptr_eq(&restored.key, &restored.lexical));
         assert!(!Arc::ptr_eq(&restored.0, &original.0));
         let mut scope = Scope {
             outputs: Vec::new(),
@@ -474,15 +591,15 @@ mod tests {
             requests: BTreeMap::from([(key.encoding().to_vec(), original.clone())]),
         };
         assert!(Arc::ptr_eq(&scope.requests[key.encoding()].0, &original.0));
-        let separate = scope.retained_bytes(std::iter::empty());
-        let shared = scope.retained_bytes([&original]);
+        let separate = scope.retained_bytes(std::iter::empty(), std::iter::empty());
+        let shared = scope.retained_bytes([&original], std::iter::empty());
         assert_eq!(separate - shared, original.retained_metadata_bytes());
         let request = scope.requests.get_mut(key.encoding()).unwrap();
-        Arc::make_mut(&mut request.0).key.body = 1;
+        Arc::make_mut(&mut Arc::make_mut(&mut request.0).key).body = 1;
         assert_eq!(original.key.body, 0);
         assert_eq!(request.lexical, original.lexical);
         assert!(!Arc::ptr_eq(&request.0, &original.0));
-        assert_eq!(scope.retained_bytes([&original]), separate);
+        assert!(scope.retained_bytes([&original], std::iter::empty()) > separate);
         drop(original);
         assert_eq!(scope.requests[key.encoding()].lexical.body, 0);
     }

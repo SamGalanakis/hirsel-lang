@@ -9,7 +9,7 @@ use hirsel_syntax::DefPath;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EmissionFacts {
     pub callbacks: Vec<DefPath>,
     pub tracking: bool,
@@ -54,17 +54,17 @@ pub(super) fn select(
     let mut tracking = false;
     for (owner, _) in instances.completed_inputs()? {
         let (current, _) = instances.admitted(&owner, environment)?;
-        if !current.emission.canonical() {
+        if !current.facts.emission.canonical() {
             return Err("noncanonical emission facts".into());
         }
         owners.insert(owner.instance.digest());
-        callbacks.extend(current.emission.callbacks.iter().cloned());
-        tracking |= current.emission.tracking;
-        inline.extend(&current.emission.inline);
-        if current.ready_source.origin() != &owner.instance {
+        callbacks.extend(current.facts.emission.callbacks.iter().cloned());
+        tracking |= current.facts.emission.tracking;
+        inline.extend(&current.facts.emission.inline);
+        if current.facts.ready_source.origin() != &owner.instance {
             if !owner
                 .instance
-                .is_same_or_derived_from(current.ready_source.origin())
+                .is_same_or_derived_from(current.facts.ready_source.origin())
             {
                 return Err("derived emission owner has another source origin".into());
             }

@@ -326,14 +326,14 @@ impl InstanceTasks {
             }
             return Err(format!(
                 "native completed descriptor allowance exhausted for {}: requested {charge} bytes, retained {}, allowance {}, registered {}, ready {}, seal {}, freedom {}, discharge {}, source metadata {}, program constants {}, source constants {}, front bindings {}",
-                output.seal_demand.owner().0,
+                output.facts.seal_demand.owner().0,
                 registry.charged,
                 self.allowance.bytes(),
                 registry.entries.len(),
-                output.ready_source.retained_metadata_bytes(),
-                output.seal_demand.retained_bytes(),
-                output.operation_freedom.retained_bytes(),
-                output.discharge.retained_metadata_bytes(),
+                output.facts.ready_source.retained_metadata_bytes(),
+                output.facts.seal_demand.retained_bytes(),
+                output.facts.operation_freedom.retained_bytes(),
+                output.facts.discharge.retained_metadata_bytes(),
                 self.source.retained_metadata_bytes(),
                 constants.bytes(),
                 source_constants.bytes(),
@@ -547,7 +547,7 @@ impl InstanceTasks {
             &self.options.discharge,
             completed
                 .iter()
-                .map(|(key, output)| (key.instance.definition(), &output.discharge)),
+                .map(|(key, output)| (key.instance.definition(), &output.facts.discharge)),
         )
     }
 }
@@ -884,6 +884,7 @@ impl DiscoveryTask {
                     self.seen.insert(address);
                     frontier.extend(
                         output
+                            .facts
                             .dependencies
                             .iter()
                             .map(|key| key.address(INSTANCE_KIND).0),
@@ -911,7 +912,7 @@ impl DiscoveryTask {
             entry
                 .output
                 .get()
-                .is_some_and(|out| out.templates.execution)
+                .is_some_and(|out| out.facts.templates.execution)
         });
         if needs_callable {
             match cx.read(self.tasks.callable_id()) {
@@ -941,7 +942,7 @@ impl DiscoveryTask {
                 .iter()
                 .map(|entry| {
                     let output = entry.output.get().ok_or("discovery output is unfinished")?;
-                    Ok((entry.key.instance.definition(), &output.discharge))
+                    Ok((entry.key.instance.definition(), &output.facts.discharge))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             super::discharge::complete(&self.tasks.options.discharge, facts)?;
@@ -1031,7 +1032,12 @@ impl InstanceTasks {
         )?;
         {
             let entries = self.entries();
-            let retained = scope.retained_bytes(entries.iter().map(|entry| &entry.request));
+            let retained = scope.retained_bytes(
+                entries.iter().map(|entry| &entry.request),
+                entries
+                    .iter()
+                    .filter_map(|entry| entry.output.get().map(|output| &output.facts)),
+            );
             let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
             registry.charged = registry
                 .charged
