@@ -1752,6 +1752,52 @@ fn generated_body_failure_uses_generated_source_in_every_engine() {
     });
 }
 
+fn generated_request_products(
+    source: &str,
+    store: std::sync::Arc<dyn hirsel_engine::store::ResultStore>,
+) -> (
+    std::sync::Arc<hirsel_engine::FrontNativeProducts>,
+    Observation,
+) {
+    use hirsel_driver::{COMPILER, requests::*};
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = directory.path().join("hirsel.json");
+    std::fs::write(directory.path().join("native.hir"), source).unwrap();
+    std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"native.hir","module":[]}],"dependencies":[]}"#).unwrap();
+    let config = hirsel_engine::CompileConfig {
+        store,
+        jobs: hirsel_intern::jobs::Jobs::new(2),
+        ..Default::default()
+    };
+    let mut requests = CompilerRequests::for_host(COMPILER.with_config(config.clone()), config);
+    let output = requests
+        .execute(&manifest, CompileOperation::Tir { definition: None })
+        .unwrap();
+    let CompileResult::Tir(prepared) = &output.result else {
+        panic!("expected TIR");
+    };
+    let execution = hirsel_driver::testing::observe_tir(
+        prepared,
+        &RunConfiguration {
+            entry: prepared.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        },
+        SimulationConfig::default(),
+        hirsel_interp::Limits::default(),
+        false,
+    )
+    .unwrap();
+    let reference = Observation::of_reference(execution.observation.as_ref().unwrap());
+    let output = requests
+        .execute(&manifest, CompileOperation::NativeSources { roots: vec![] })
+        .unwrap();
+    let CompileResult::NativeSources(facts) = &output.result else {
+        panic!("expected native sources");
+    };
+    (facts.clone(), reference)
+}
+
 #[test]
 fn generated_body_sites_and_objects_do_not_depend_on_id_assignment() {
     use hirsel_driver::native::{self, Backend, OptLevel, Validation};
@@ -1765,21 +1811,23 @@ fn generated_body_sites_and_objects_do_not_depend_on_id_assignment() {
                 let mut transcript = String::new();
                 for (_, source, _, _, _) in generated_failure_sources() {
                     let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
-                    let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
-                        .with_result_store(store.clone());
-                    let program = checked_in(&mut engine, &source);
-                    transcript.push_str(&format!("{:?}\n", program.reference));
+                    let (facts, reference) = generated_request_products(&source, store.clone());
+                    transcript.push_str(&format!("{reference:?}\n"));
                     for backend in [Backend::Cranelift, Backend::Llvm] {
                         let mut options = native::Options::new(x86());
                         options.validation = Validation::EveryStage;
-                        let ready = crate::native_object_products_19::compile(
-                            &mut engine,
+                        let (ready, ()) = crate::native_object_products_19::compile_front(
+                            facts.clone(),
                             store.clone(),
+                            std::slice::from_ref(&facts.run.entry),
                             backend,
                             OptLevel::None,
                             options,
                             true,
                             hirsel_intern::jobs::Jobs::new(2),
+                            hirsel_engine::store::VerifyStore::Off,
+                            |_, _, _| (),
+                            |_, _| (),
                         );
                         for (summary, object) in ready.summaries.iter().zip(&ready.objects) {
                             transcript.push_str(&format!("{:?}\n", object.digest()));
@@ -2045,22 +2093,30 @@ fn generated_body_debug_preserves_nested_body_sites() {
     use hirsel_driver::native::{self, Backend, OptLevel};
     with_compiler_stack(|| {
         for (name, source, _, line, column) in generated_failure_sources().into_iter().skip(2) {
-            let program = checked(&source);
-            let sources = native::profile_sources(program.validated.snapshot());
-            let ready = native::build(&program.validated, &native::Options::new(x86())).unwrap();
+            let store: std::sync::Arc<dyn hirsel_engine::store::ResultStore> =
+                std::sync::Arc::new(hirsel_engine::store::MemStore::default());
+            let (facts, _) = generated_request_products(&source, store.clone());
             for backend in [Backend::Cranelift, Backend::Llvm] {
-                let objects = native::emit_backend_objects(
-                    &ready,
+                let sources = std::cell::RefCell::new(None);
+                let (objects, ()) = crate::native_object_products_19::compile_front(
+                    facts.clone(),
+                    store.clone(),
+                    std::slice::from_ref(&facts.run.entry),
                     backend,
                     OptLevel::None,
-                    Partition::Whole,
-                    false,
-                    Some(&sources),
-                )
-                .unwrap();
+                    native::Options::new(x86()),
+                    true,
+                    hirsel_intern::jobs::Jobs::new(2),
+                    hirsel_engine::store::VerifyStore::Off,
+                    |view, root, _| {
+                        *sources.borrow_mut() = Some(view.profile_sources(root).unwrap())
+                    },
+                    |_, _| (),
+                );
+                let sources = sources.into_inner().unwrap();
                 let mut found = false;
                 let mut source_less_intrinsics = 0;
-                for function in objects.iter().flat_map(|o| &o.debug) {
+                for function in objects.objects.iter().flat_map(|o| &o.debug) {
                     assert!(function.well_formed());
                     for range in &function.ranges {
                         let item = range.item as usize;
