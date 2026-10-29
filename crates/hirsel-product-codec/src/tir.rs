@@ -110,6 +110,18 @@ impl<'a> Rows<'a> {
     fn section(self, n: u32, tag: u32) -> Option<Self> {
         Self::open(self.row(n)?, tag)
     }
+    // Only CheckedTir and its borrowed rows use this projection. Opening the
+    // immutable owner already checked every extent and nested section. Keep
+    // demand proportional to the selected row, not the containing array size.
+    fn checked(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            count: word(bytes, 12).expect("checked TIR count"),
+        }
+    }
+    fn checked_section(self, n: u32) -> Option<Self> {
+        Some(Self::checked(self.row(n)?))
+    }
 }
 
 /// Complete scalar definition metadata. Body and type arrays remain indexed.
@@ -416,7 +428,7 @@ impl CheckedTir {
         })
     }
     fn root(&self) -> Rows<'_> {
-        Rows::open(&self.payload, ROOT).expect("checked TIR root")
+        Rows::checked(&self.payload)
     }
     pub fn backing(&self) -> &Bytes {
         self.source.envelope().backing()
@@ -429,64 +441,64 @@ impl CheckedTir {
     }
     pub fn body_count(&self) -> u32 {
         self.root()
-            .section(4, BODIES)
+            .checked_section(4)
             .expect("checked bodies")
             .count
     }
     pub fn body(&self, n: u32) -> Option<TirBodyRows<'_>> {
-        let rows = self.root().section(4, BODIES)?;
+        let rows = self.root().checked_section(4)?;
         Some(TirBodyRows {
             owner: self,
-            rows: Rows::open(rows.row(n)?, BODY)?,
+            rows: Rows::checked(rows.row(n)?),
         })
     }
     pub fn type_count(&self) -> u32 {
-        self.root().section(3, TYPES).expect("checked types").count
+        self.root().checked_section(3).expect("checked types").count
     }
     pub fn type_reference(&self, n: u32) -> Option<TypeRef> {
-        let row = self.root().section(3, TYPES)?.row(n)?;
+        let row = self.root().checked_section(3)?.row(n)?;
         self.source.envelope().type_reference(word(row, 0)?)
     }
     pub fn type_id(&self, n: u32) -> Option<TypeId> {
-        self.source.decode(self.root().section(3, TYPES)?.row(n)?)
+        self.source.decode(self.root().checked_section(3)?.row(n)?)
     }
     pub fn caller_body_count(&self) -> u32 {
         self.root()
-            .section(1, CALLERS)
+            .checked_section(1)
             .expect("checked callers")
             .count
     }
     pub fn caller_body(&self, n: u32) -> Option<BodyId> {
-        self.source.decode(self.root().section(1, CALLERS)?.row(n)?)
+        self.source.decode(self.root().checked_section(1)?.row(n)?)
     }
     pub fn protocol_association_count(&self) -> u32 {
         self.root()
-            .section(2, ASSOCIATIONS)
+            .checked_section(2)
             .expect("checked associations")
             .count
     }
     pub fn protocol_association(&self, n: u32) -> Option<ProtocolAssociationReceipt> {
         self.source
-            .decode(self.root().section(2, ASSOCIATIONS)?.row(n)?)
+            .decode(self.root().checked_section(2)?.row(n)?)
     }
     pub fn contract_count(&self) -> u32 {
         self.root()
-            .section(5, CONTRACTS)
+            .checked_section(5)
             .expect("checked contracts")
             .count
     }
     pub fn contract(&self, n: u32) -> Option<(u32, BodyId)> {
         self.source
-            .decode(self.root().section(5, CONTRACTS)?.row(n)?)
+            .decode(self.root().checked_section(5)?.row(n)?)
     }
     pub fn caller_bodies(&self) -> Option<Vec<BodyId>> {
-        self.collect(self.root().section(1, CALLERS)?)
+        self.collect(self.root().checked_section(1)?)
     }
     pub fn protocol_associations(&self) -> Option<Vec<ProtocolAssociationReceipt>> {
-        self.collect(self.root().section(2, ASSOCIATIONS)?)
+        self.collect(self.root().checked_section(2)?)
     }
     pub fn contracts(&self) -> Option<Vec<(u32, BodyId)>> {
-        self.collect(self.root().section(5, CONTRACTS)?)
+        self.collect(self.root().checked_section(5)?)
     }
     fn collect<T: DeserializeOwned>(&self, rows: Rows<'_>) -> Option<Vec<T>> {
         (0..rows.count)
@@ -504,7 +516,7 @@ impl CheckedTir {
             caller_bodies: self.caller_bodies()?,
             protocol_associations: self.protocol_associations()?,
             types: self
-                .collect::<TypeId>(self.root().section(3, TYPES)?)?
+                .collect::<TypeId>(self.root().checked_section(3)?)?
                 .into(),
             bodies: (0..self.body_count())
                 .map(|n| self.body(n)?.materialize())
@@ -523,126 +535,126 @@ impl<'a> TirBodyRows<'a> {
         self.owner.source.decode(self.rows.row(0)?)
     }
     pub fn local_count(self) -> u32 {
-        self.rows.section(1, LOCALS).expect("checked locals").count
+        self.rows.checked_section(1).expect("checked locals").count
     }
     pub fn local(self, n: u32) -> Option<Local> {
         self.owner
             .source
-            .decode(self.rows.section(1, LOCALS)?.row(n)?)
+            .decode(self.rows.checked_section(1)?.row(n)?)
     }
     pub fn place_count(self) -> u32 {
-        self.rows.section(2, PLACES).expect("checked places").count
+        self.rows.checked_section(2).expect("checked places").count
     }
     pub fn place(self, n: u32) -> Option<Place> {
         self.owner
             .source
-            .decode(self.rows.section(2, PLACES)?.row(n)?)
+            .decode(self.rows.checked_section(2)?.row(n)?)
     }
     pub fn scope_count(self) -> u32 {
-        self.rows.section(3, SCOPES).expect("checked scopes").count
+        self.rows.checked_section(3).expect("checked scopes").count
     }
     pub fn scope(self, n: u32) -> Option<Scope> {
         self.owner
             .source
-            .decode(self.rows.section(3, SCOPES)?.row(n)?)
+            .decode(self.rows.checked_section(3)?.row(n)?)
     }
     pub fn block_count(self) -> u32 {
-        self.rows.section(4, BLOCKS).expect("checked blocks").count
+        self.rows.checked_section(4).expect("checked blocks").count
     }
     pub fn block(self, n: u32) -> Option<TirBlockRows<'a>> {
         Some(TirBlockRows {
             owner: self.owner,
-            rows: Rows::open(self.rows.section(4, BLOCKS)?.row(n)?, BLOCK)?,
+            rows: Rows::checked(self.rows.checked_section(4)?.row(n)?),
         })
     }
     pub fn rvalue_count(self) -> u32 {
         self.rows
-            .section(5, RVALUES)
+            .checked_section(5)
             .expect("checked rvalues")
             .count
     }
     pub fn rvalue(self, n: u32) -> Option<Rvalue> {
         self.owner
             .source
-            .decode(self.rows.section(5, RVALUES)?.row(n)?)
+            .decode(self.rows.checked_section(5)?.row(n)?)
     }
     pub fn cleanup_count(self) -> u32 {
         self.rows
-            .section(6, CLEANUPS)
+            .checked_section(6)
             .expect("checked cleanups")
             .count
     }
     pub fn cleanup(self, n: u32) -> Option<Cleanup> {
         self.owner
             .source
-            .decode(self.rows.section(6, CLEANUPS)?.row(n)?)
+            .decode(self.rows.checked_section(6)?.row(n)?)
     }
     pub fn cleanup_node_count(self) -> u32 {
         self.rows
-            .section(7, CLEANUP_NODES)
+            .checked_section(7)
             .expect("checked cleanup_nodes")
             .count
     }
     pub fn cleanup_node(self, n: u32) -> Option<CleanupNode> {
         self.owner
             .source
-            .decode(self.rows.section(7, CLEANUP_NODES)?.row(n)?)
+            .decode(self.rows.checked_section(7)?.row(n)?)
     }
     pub fn parameter_count(self) -> u32 {
         self.rows
-            .section(8, PARAMETERS)
+            .checked_section(8)
             .expect("checked parameters")
             .count
     }
     pub fn parameter(self, n: u32) -> Option<LocalId> {
         self.owner
             .source
-            .decode(self.rows.section(8, PARAMETERS)?.row(n)?)
+            .decode(self.rows.checked_section(8)?.row(n)?)
     }
     pub fn borrow_cursor_count(self) -> u32 {
         self.rows
-            .section(9, CURSORS)
+            .checked_section(9)
             .expect("checked borrow_cursors")
             .count
     }
     pub fn borrow_cursor(self, n: u32) -> Option<BorrowCursor> {
         self.owner
             .source
-            .decode(self.rows.section(9, CURSORS)?.row(n)?)
+            .decode(self.rows.checked_section(9)?.row(n)?)
     }
     pub fn tail_site_count(self) -> u32 {
         self.rows
-            .section(10, TAILS)
+            .checked_section(10)
             .expect("checked tail_sites")
             .count
     }
     pub fn tail_site(self, n: u32) -> Option<TailSite> {
         self.owner
             .source
-            .decode(self.rows.section(10, TAILS)?.row(n)?)
+            .decode(self.rows.checked_section(10)?.row(n)?)
     }
     pub fn match_table_count(self) -> u32 {
         self.rows
-            .section(11, MATCHES)
+            .checked_section(11)
             .expect("checked matches")
             .count
     }
     pub fn match_table(self, n: u32) -> Option<TirMatchRows<'a>> {
         Some(TirMatchRows {
             owner: self.owner,
-            rows: Rows::open(self.rows.section(11, MATCHES)?.row(n)?, MATCH)?,
+            rows: Rows::checked(self.rows.checked_section(11)?.row(n)?),
         })
     }
     pub fn scoped_parameter_count(self) -> u32 {
         self.rows
-            .section(12, SCOPED)
+            .checked_section(12)
             .expect("checked scoped_parameters")
             .count
     }
     pub fn scoped_parameter(self, n: u32) -> Option<ScopedParameter> {
         self.owner
             .source
-            .decode(self.rows.section(12, SCOPED)?.row(n)?)
+            .decode(self.rows.checked_section(12)?.row(n)?)
     }
     pub fn materialize(self) -> Option<Body> {
         let header = self.header()?;
@@ -651,22 +663,22 @@ impl<'a> TirBodyRows<'a> {
             parameter_scope: header.parameter_scope,
             entry: header.entry,
             result: header.result,
-            locals: self.owner.collect(self.rows.section(1, LOCALS)?)?,
-            places: self.owner.collect(self.rows.section(2, PLACES)?)?,
-            scopes: self.owner.collect(self.rows.section(3, SCOPES)?)?,
+            locals: self.owner.collect(self.rows.checked_section(1)?)?,
+            places: self.owner.collect(self.rows.checked_section(2)?)?,
+            scopes: self.owner.collect(self.rows.checked_section(3)?)?,
             blocks: (0..self.block_count())
                 .map(|n| self.block(n)?.materialize())
                 .collect::<Option<_>>()?,
-            rvalues: self.owner.collect(self.rows.section(5, RVALUES)?)?,
-            cleanups: self.owner.collect(self.rows.section(6, CLEANUPS)?)?,
-            cleanup_nodes: self.owner.collect(self.rows.section(7, CLEANUP_NODES)?)?,
-            parameters: self.owner.collect(self.rows.section(8, PARAMETERS)?)?,
-            borrow_cursors: self.owner.collect(self.rows.section(9, CURSORS)?)?,
-            tail_sites: self.owner.collect(self.rows.section(10, TAILS)?)?,
+            rvalues: self.owner.collect(self.rows.checked_section(5)?)?,
+            cleanups: self.owner.collect(self.rows.checked_section(6)?)?,
+            cleanup_nodes: self.owner.collect(self.rows.checked_section(7)?)?,
+            parameters: self.owner.collect(self.rows.checked_section(8)?)?,
+            borrow_cursors: self.owner.collect(self.rows.checked_section(9)?)?,
+            tail_sites: self.owner.collect(self.rows.checked_section(10)?)?,
             matches: (0..self.match_table_count())
                 .map(|n| self.match_table(n)?.materialize())
                 .collect::<Option<_>>()?,
-            scoped_parameters: self.owner.collect(self.rows.section(12, SCOPED)?)?,
+            scoped_parameters: self.owner.collect(self.rows.checked_section(12)?)?,
         })
     }
 }
@@ -681,14 +693,14 @@ impl TirBlockRows<'_> {
     }
     pub fn instruction_count(self) -> u32 {
         self.rows
-            .section(1, INSTRUCTIONS)
+            .checked_section(1)
             .expect("checked instructions")
             .count
     }
     pub fn instruction(self, n: u32) -> Option<Instruction> {
         self.owner
             .source
-            .decode(self.rows.section(1, INSTRUCTIONS)?.row(n)?)
+            .decode(self.rows.checked_section(1)?.row(n)?)
     }
     pub fn terminator(self) -> Option<Terminator> {
         self.owner.source.decode(self.rows.row(2)?)
@@ -696,7 +708,7 @@ impl TirBlockRows<'_> {
     pub fn materialize(self) -> Option<Block> {
         Some(Block {
             span: self.span()?,
-            instructions: self.owner.collect(self.rows.section(1, INSTRUCTIONS)?)?,
+            instructions: self.owner.collect(self.rows.checked_section(1)?)?,
             terminator: self.terminator()?,
         })
     }
@@ -712,28 +724,28 @@ impl TirMatchRows<'_> {
     }
     pub fn pattern_count(self) -> u32 {
         self.rows
-            .section(1, PATTERNS)
+            .checked_section(1)
             .expect("checked patterns")
             .count
     }
     pub fn pattern(self, n: u32) -> Option<MatchPattern> {
         self.owner
             .source
-            .decode(self.rows.section(1, PATTERNS)?.row(n)?)
+            .decode(self.rows.checked_section(1)?.row(n)?)
     }
     pub fn arm_count(self) -> u32 {
-        self.rows.section(2, ARMS).expect("checked arms").count
+        self.rows.checked_section(2).expect("checked arms").count
     }
     pub fn arm(self, n: u32) -> Option<MatchArm> {
         self.owner
             .source
-            .decode(self.rows.section(2, ARMS)?.row(n)?)
+            .decode(self.rows.checked_section(2)?.row(n)?)
     }
     pub fn materialize(self) -> Option<MatchTable> {
         Some(MatchTable {
             scrutinee: self.scrutinee()?,
-            patterns: self.owner.collect(self.rows.section(1, PATTERNS)?)?,
-            arms: self.owner.collect(self.rows.section(2, ARMS)?)?,
+            patterns: self.owner.collect(self.rows.checked_section(1)?)?,
+            arms: self.owner.collect(self.rows.checked_section(2)?)?,
         })
     }
 }
