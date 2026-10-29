@@ -180,7 +180,9 @@ fn summary(budgets: Budgets, charges: Vec<Charge>) -> Stretch {
                 piece.level = piece.level.saturating_sub(bytes as i64);
                 piece.net = piece.level;
             }
-            Charge::Credit(bytes) => stretch.pieces.push((bytes, Piece::default())),
+            Charge::Credit(bytes) => {
+                stretch.pieces.push((bytes, Piece::default()));
+            }
         }
     }
     stretch.exact = charges;

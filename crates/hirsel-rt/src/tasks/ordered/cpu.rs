@@ -396,7 +396,7 @@ pub(crate) fn control(
     count: u64,
     live: impl FnOnce() -> u32,
 ) -> Stopped<u32> {
-    engine::at_head(ctx)?;
+    let head = engine::head(ctx)?;
     // The physical lifecycle may migrate and save this same head. No frontier
     // borrow or adapter loan spans startup, migration or join.
     let value = match receipt(ctx, width, action, count, None)? {
@@ -407,8 +407,7 @@ pub(crate) fn control(
             value
         }
     };
-    let (_, progress) = engine::head_canonical(
-        ctx,
+    let (_, progress) = head.canonical(
         "cpu.control",
         || ((), if action == 5 { Next::Keep } else { Next::Yield }),
         |_| {

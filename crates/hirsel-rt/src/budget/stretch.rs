@@ -60,7 +60,8 @@ pub struct Piece {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Stretch {
     budgets: Budgets,
-    /// Pieces and, before each but the first, the credit event that opened it.
+    first: Piece,
+    /// Pieces following credit events. The first piece is always inline.
     pub(super) pieces: Vec<(u64, Piece)>,
     // Filled only by an explicitly enabled runtime witness (or protocol tests).
     pub(crate) exact: Vec<super::stretch_trace::Charge>,
@@ -70,12 +71,15 @@ impl Stretch {
     pub fn new(budgets: Budgets) -> Stretch {
         Stretch {
             budgets,
-            pieces: vec![(0, Piece::default())],
+            first: Piece::default(),
+            pieces: Vec::new(),
             exact: Vec::new(),
         }
     }
     pub(super) fn piece(&mut self) -> &mut Piece {
-        &mut self.pieces.last_mut().expect("a stretch has a piece").1
+        self.pieces
+            .last_mut()
+            .map_or(&mut self.first, |(_, piece)| piece)
     }
     /// One fuel charge.
     pub fn fuel(&mut self) {
@@ -93,12 +97,14 @@ impl Stretch {
     pub fn fuel_charges(&self) -> u64 {
         self.pieces
             .iter()
-            .fold(0, |total, (_, piece)| total.saturating_add(piece.fuel))
+            .fold(self.first.fuel, |total, (_, piece)| {
+                total.saturating_add(piece.fuel)
+            })
     }
     /// Whether appending this allocation needs an envelope pause. Inspecting
     /// the last piece avoids cloning a growing summary at every allocation.
     pub fn allocation_pauses(&self, bytes: u64) -> bool {
-        let piece = &self.pieces.last().expect("a stretch has a piece").1;
+        let piece = self.pieces.last().map_or(&self.first, |(_, piece)| piece);
         let level = piece.level.saturating_add(bytes as i64);
         let high = piece.envelope.last().map_or(0, |&(_, high)| high);
         let fuel = if self.budgets.fuel { piece.fuel } else { 0 };
@@ -139,7 +145,7 @@ impl Stretch {
     }
     /// A credit event of `bytes`, computed when its op commits: it opens a new piece.
     pub fn credit(&mut self, bytes: u64) -> Result<(), Pause> {
-        if self.pieces.len() == PIECES_MAX {
+        if self.pieces.len() + 1 == PIECES_MAX {
             return Err(Pause::Pieces);
         }
         self.pieces.push((bytes, Piece::default()));
@@ -149,19 +155,20 @@ impl Stretch {
     }
     /// The pieces, each with the credit event before it (0 for the first).
     pub fn pieces(&self) -> impl Iterator<Item = (u64, &Piece)> {
-        self.pieces.iter().map(|(credit, piece)| (*credit, piece))
+        std::iter::once((0, &self.first))
+            .chain(self.pieces.iter().map(|(credit, piece)| (*credit, piece)))
     }
 
     /// Join two consecutive charge prefixes without introducing a credit at
     /// their physical settlement boundary. Failure leaves the receiver intact.
     pub(crate) fn append(&mut self, next: &Self) -> Result<(), Pause> {
         assert_eq!(self.budgets, next.budgets);
-        if self.pieces.len() + next.pieces.len() - 1 > PIECES_MAX {
+        if self.pieces.len() + next.pieces.len() + 1 > PIECES_MAX {
             return Err(Pause::Pieces);
         }
         let mut joined = self.clone();
         let left = joined.piece();
-        let right = &next.pieces[0].1;
+        let right = &next.first;
         for &(fuel, high) in &right.envelope {
             let fuel = if self.budgets.fuel {
                 left.fuel.saturating_add(fuel)
@@ -181,7 +188,7 @@ impl Stretch {
         left.fuel = left.fuel.saturating_add(right.fuel);
         left.level = left.level.saturating_add(right.net);
         left.net = left.level;
-        joined.pieces.extend_from_slice(&next.pieces[1..]);
+        joined.pieces.extend_from_slice(&next.pieces);
         #[cfg(test)]
         joined.exact.extend_from_slice(&next.exact);
         *self = joined;
@@ -513,7 +520,7 @@ mod tests {
         assert_eq!(full, before);
         // Allocations at the same fuel offset replace a high even at the cap.
         full.append(&summarise(BOTH, &[Alloc(1)]).unwrap()).unwrap();
-        assert_eq!(full.pieces[0].1.envelope.len(), ENVELOPE_MAX);
+        assert_eq!(full.pieces().next().unwrap().1.envelope.len(), ENVELOPE_MAX);
         let mut full = summarise(BOTH, &vec![Credit(1); PIECES_MAX - 1]).unwrap();
         let before = full.clone();
         assert_eq!(

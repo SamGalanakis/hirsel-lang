@@ -425,7 +425,7 @@ pub(crate) unsafe fn finish(
         engine::at_head(ctx)?;
         return Ok(STATUS_OK);
     }
-    engine::at_head(ctx)?;
+    let head = engine::head(ctx)?;
     let me = role::with_role(ctx, |s| s.current);
     super::cpu::finish_job(ctx)?;
     unsafe { super::events::task_result(ctx, descriptor, slot) };
@@ -434,7 +434,7 @@ pub(crate) unsafe fn finish(
         // end commits after that cleanup, in complete().
         return Ok(STATUS_OK);
     }
-    let (parent, progress) = engine::head_effect(ctx, "task.end", || {
+    let (parent, progress) = head.effect("task.end", || {
         // SAFETY: caller contract.
         let (held, image) = unsafe { Slot::held(slot, none, size) };
         let parent = role::with_role(ctx, |s| {

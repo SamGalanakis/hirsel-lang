@@ -917,6 +917,58 @@ pub(super) fn head_canonical<T>(
     })
 }
 
+/// The same logical head across nonsemantic physical startup or receipt work.
+/// This owns no table borrow. Consuming it rechecks the generation-qualified
+/// identity and every retirement gate before applying the effect.
+pub(super) struct Head {
+    ctx: *mut TaskCtx,
+    task: TaskId,
+}
+
+pub(super) fn head(ctx: *mut TaskCtx) -> Stopped<Head> {
+    at_head(ctx)?;
+    Ok(Head {
+        ctx,
+        task: current(ctx),
+    })
+}
+
+impl Head {
+    pub(super) fn effect<T>(
+        self,
+        name: &'static str,
+        effect: impl FnOnce() -> (T, Next),
+    ) -> Stopped<(T, Progress)> {
+        self.outcome(name, effect, |_| Outcome::image(0, Vec::new()))
+    }
+
+    pub(super) fn canonical<T>(
+        self,
+        name: &'static str,
+        effect: impl FnOnce() -> (T, Next),
+        encode: impl FnOnce(&T) -> Option<super::events::Subevents>,
+    ) -> Stopped<(T, Progress)> {
+        self.outcome(name, effect, |value| {
+            let mut outcome = Outcome::image(0, Vec::new());
+            outcome.canonical = encode(value);
+            outcome
+        })
+    }
+
+    fn outcome<T>(
+        self,
+        name: &'static str,
+        effect: impl FnOnce() -> (T, Next),
+        outcome: impl FnOnce(&T) -> Outcome,
+    ) -> Stopped<(T, Progress)> {
+        with_current_driver(self.ctx, |task, driver| {
+            assert_eq!(task, self.task, "head authority belongs to this task");
+            assert!(driver.head_ready(task), "head authority retains every gate");
+        });
+        head_outcome_here(self.ctx, self.task, name, effect, outcome)
+    }
+}
+
 fn head_outcome<T>(
     ctx: *mut TaskCtx,
     name: &'static str,
@@ -924,7 +976,16 @@ fn head_outcome<T>(
     outcome: impl FnOnce(&T) -> Outcome,
 ) -> Stopped<(T, Progress)> {
     at_head(ctx)?;
-    let task = current(ctx);
+    head_outcome_here(ctx, current(ctx), name, effect, outcome)
+}
+
+fn head_outcome_here<T>(
+    ctx: *mut TaskCtx,
+    task: TaskId,
+    name: &'static str,
+    effect: impl FnOnce() -> (T, Next),
+    outcome: impl FnOnce(&T) -> Outcome,
+) -> Stopped<(T, Progress)> {
     accepted(ctx, task, false);
     let before = stretch(ctx);
     let observing = with_driver(ctx, |d| d.events.is_some());
