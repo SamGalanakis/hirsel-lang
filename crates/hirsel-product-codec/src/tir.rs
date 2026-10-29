@@ -143,95 +143,123 @@ pub struct TirBodyHeader {
 fn encode<T: Serialize>(value: &T) -> Option<Vec<u8>> {
     bincode::serialize(value).ok()
 }
-fn array<T: Serialize>(
+trait RowWriter {
+    type Row;
+    fn scalar<T: Serialize>(value: &T) -> Option<Self::Row>;
+    fn table(tag: u32, rows: impl IntoIterator<Item = Self::Row>) -> Option<Self::Row>;
+}
+struct Encoded;
+impl RowWriter for Encoded {
+    type Row = Vec<u8>;
+    fn scalar<T: Serialize>(value: &T) -> Option<Self::Row> {
+        encode(value)
+    }
+    fn table(tag: u32, rows: impl IntoIterator<Item = Self::Row>) -> Option<Self::Row> {
+        table(tag, rows)
+    }
+}
+struct Measured;
+impl RowWriter for Measured {
+    type Row = usize;
+    fn scalar<T: Serialize>(value: &T) -> Option<Self::Row> {
+        bincode::serialized_size(value).ok()?.try_into().ok()
+    }
+    fn table(_: u32, rows: impl IntoIterator<Item = Self::Row>) -> Option<Self::Row> {
+        let total = rows.into_iter().try_fold(HEADER, |total, len| {
+            total.checked_add(EXTENT)?.checked_add(len)
+        })?;
+        (total <= MAX_RECORD).then_some(total)
+    }
+}
+fn array<W: RowWriter, T: Serialize>(
     tag: u32,
     count: usize,
     mut row: impl FnMut(usize) -> Option<T>,
-) -> Option<Vec<u8>> {
-    table(
+) -> Option<W::Row> {
+    W::table(
         tag,
         (0..count)
-            .map(|n| encode(&row(n)?))
+            .map(|n| W::scalar(&row(n)?))
             .collect::<Option<Vec<_>>>()?,
     )
 }
-fn encode_block(block: crate::TirBlockView<'_>) -> Option<Vec<u8>> {
-    table(
+fn encode_block<W: RowWriter>(block: crate::TirBlockView<'_>) -> Option<W::Row> {
+    W::table(
         BLOCK,
         [
-            encode(&block.span()?)?,
-            array(INSTRUCTIONS, block.instruction_count(), |n| {
+            W::scalar(&block.span()?)?,
+            array::<W, _>(INSTRUCTIONS, block.instruction_count(), |n| {
                 block.instruction(n)
             })?,
-            encode(&block.terminator()?)?,
+            W::scalar(&block.terminator()?)?,
         ],
     )
 }
-fn encode_match(value: crate::TirMatchView<'_>) -> Option<Vec<u8>> {
-    table(
+fn encode_match<W: RowWriter>(value: crate::TirMatchView<'_>) -> Option<W::Row> {
+    W::table(
         MATCH,
         [
-            encode(&value.scrutinee()?)?,
-            array(PATTERNS, value.pattern_count(), |n| value.pattern(n))?,
-            array(ARMS, value.arm_count(), |n| value.arm(n))?,
+            W::scalar(&value.scrutinee()?)?,
+            array::<W, _>(PATTERNS, value.pattern_count(), |n| value.pattern(n))?,
+            array::<W, _>(ARMS, value.arm_count(), |n| value.arm(n))?,
         ],
     )
 }
-fn encode_body(body: crate::TirBodyView<'_>) -> Option<Vec<u8>> {
-    table(
+fn encode_body<W: RowWriter>(body: crate::TirBodyView<'_>) -> Option<W::Row> {
+    W::table(
         BODY,
         [
-            encode(&body.header()?)?,
-            array(LOCALS, body.local_count(), |n| body.local(n))?,
-            array(PLACES, body.place_count(), |n| body.place(n))?,
-            array(SCOPES, body.scope_count(), |n| body.scope(n))?,
-            table(
+            W::scalar(&body.header()?)?,
+            array::<W, _>(LOCALS, body.local_count(), |n| body.local(n))?,
+            array::<W, _>(PLACES, body.place_count(), |n| body.place(n))?,
+            array::<W, _>(SCOPES, body.scope_count(), |n| body.scope(n))?,
+            W::table(
                 BLOCKS,
                 (0..body.block_count())
-                    .map(|n| encode_block(body.block(n)?))
+                    .map(|n| encode_block::<W>(body.block(n)?))
                     .collect::<Option<Vec<_>>>()?,
             )?,
-            array(RVALUES, body.rvalue_count(), |n| body.rvalue(n))?,
-            array(CLEANUPS, body.cleanup_count(), |n| body.cleanup(n))?,
-            array(CLEANUP_NODES, body.cleanup_node_count(), |n| {
+            array::<W, _>(RVALUES, body.rvalue_count(), |n| body.rvalue(n))?,
+            array::<W, _>(CLEANUPS, body.cleanup_count(), |n| body.cleanup(n))?,
+            array::<W, _>(CLEANUP_NODES, body.cleanup_node_count(), |n| {
                 body.cleanup_node(n)
             })?,
-            array(PARAMETERS, body.parameter_count(), |n| body.parameter(n))?,
-            array(CURSORS, body.borrow_cursor_count(), |n| {
+            array::<W, _>(PARAMETERS, body.parameter_count(), |n| body.parameter(n))?,
+            array::<W, _>(CURSORS, body.borrow_cursor_count(), |n| {
                 body.borrow_cursor(n)
             })?,
-            array(TAILS, body.tail_site_count(), |n| body.tail_site(n))?,
-            table(
+            array::<W, _>(TAILS, body.tail_site_count(), |n| body.tail_site(n))?,
+            W::table(
                 MATCHES,
                 (0..body.match_table_count())
-                    .map(|n| encode_match(body.match_table(n)?))
+                    .map(|n| encode_match::<W>(body.match_table(n)?))
                     .collect::<Option<Vec<_>>>()?,
             )?,
-            array(SCOPED, body.scoped_parameter_count(), |n| {
+            array::<W, _>(SCOPED, body.scoped_parameter_count(), |n| {
                 body.scoped_parameter(n)
             })?,
         ],
     )
 }
-fn encode_definition(definition: crate::TirView<'_>) -> Option<Vec<u8>> {
-    table(
+fn encode_definition<W: RowWriter>(definition: crate::TirView<'_>) -> Option<W::Row> {
+    W::table(
         ROOT,
         [
-            encode(&definition.header()?)?,
-            array(CALLERS, definition.caller_body_count(), |n| {
+            W::scalar(&definition.header()?)?,
+            array::<W, _>(CALLERS, definition.caller_body_count(), |n| {
                 definition.caller_body(n)
             })?,
-            array(ASSOCIATIONS, definition.protocol_association_count(), |n| {
+            array::<W, _>(ASSOCIATIONS, definition.protocol_association_count(), |n| {
                 definition.protocol_association(n)
             })?,
-            array(TYPES, definition.type_count(), |n| definition.type_id(n))?,
-            table(
+            array::<W, _>(TYPES, definition.type_count(), |n| definition.type_id(n))?,
+            W::table(
                 BODIES,
                 (0..definition.body_count())
-                    .map(|n| encode_body(definition.body(n)?))
+                    .map(|n| encode_body::<W>(definition.body(n)?))
                     .collect::<Option<Vec<_>>>()?,
             )?,
-            array(CONTRACTS, definition.contract_count(), |n| {
+            array::<W, _>(CONTRACTS, definition.contract_count(), |n| {
                 definition.contract(n)
             })?,
         ],
@@ -276,13 +304,13 @@ impl TypeRecords {
         let mut anchors = AnchorCodec::Collect(vec![]);
         // Collect the semantic first-use order before portable-equivalent
         // children are merged. Pool sharing cannot choose archive positions.
-        drop(types.with_encoding(|| {
+        types.with_encoding(|| {
             hirsel_span::with_anchor_codec(&mut anchors, || {
-                crate::indexed_types::inline_names(|| encode_definition(definition))
+                crate::indexed_types::inline_names(|| encode_definition::<Measured>(definition))
             })
-        })?);
+        })?;
         self.indexed_record(types.roots(), anchors, owner, || {
-            encode_definition(definition)
+            encode_definition::<Encoded>(definition)
         })
     }
 }
