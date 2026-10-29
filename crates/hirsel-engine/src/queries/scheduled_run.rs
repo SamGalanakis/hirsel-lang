@@ -891,7 +891,7 @@ impl Task {
             )?,
         );
         let Some((batch, roots)) = &queries.batch else {
-            return self.complete_one(&self.root, self.query, hashes, checked_runtime, None);
+            return self.complete_one(&self.root, self.query, hashes, checked_runtime, None, None);
         };
         if self.query != *batch {
             return Err(operational("batch Run requires its batch root"));
@@ -917,6 +917,7 @@ impl Task {
         weight.tree::<DefPath, Arc<FrontRunOutput>>(roots.len());
         weight.tree::<ContentHash, (ProductRef, Arc<FrontRunOutput>)>(roots.len());
         weight.add(std::mem::size_of::<FrontRunBatchOutput>() + 2 * std::mem::size_of::<usize>());
+        let semantic = std::cell::RefCell::new(None);
         let result = (|| {
             let mut nodes = BTreeSet::new();
             let mut entries_seen = BTreeSet::new();
@@ -933,6 +934,7 @@ impl Task {
                     hashes.clone(),
                     checked_runtime.clone(),
                     entries,
+                    Some(&semantic),
                 )?;
                 let output = queries
                     .outcome(product)
@@ -1009,6 +1011,7 @@ impl Task {
         hashes: Arc<BTreeMap<DefPath, ContentHash>>,
         checked_runtime: Arc<hirsel_interp::checked::CheckedRuntime>,
         package_entries: Option<&Arc<BTreeMap<String, (CalleeFacts, CallForm)>>>,
+        batch_semantic: Option<&std::cell::RefCell<Option<Arc<crate::NativeSemanticProgram>>>>,
     ) -> Result<ProductRef, QueryError> {
         let queries = &self.queries;
         let snapshot = queries.lower.signatures();
@@ -1114,33 +1117,28 @@ impl Task {
             && !foreign.unmodeled.is_empty();
         let revision = program.revision(root)?;
         let code = reach(root)?;
-        let semantic_program = if queries.native_roots.is_empty() || queries.batch.is_some() {
-            program.clone()
+        let shared = batch_semantic.and_then(|cache| cache.borrow().clone());
+        let semantic = if let Some(shared) = shared {
+            Arc::new(shared.select_definitions(program.definitions, unreplayable))
         } else {
-            self.program_from(queries.native_roots.clone())?
-        };
-        let bindings = semantic_program
-            .definitions
-            .iter()
-            .filter_map(|path| {
+            let semantic_program = if queries.native_roots.is_empty() {
+                program.clone()
+            } else {
+                self.program_from(queries.native_roots.clone())?
+            };
+            let bindings = semantic_program.definitions.iter().filter_map(|path| {
                 let input = queries.inputs.get(path)?;
-                input.source.then(|| {
-                    (
-                        path.clone(),
-                        (input.implementation, input.signature.fingerprint),
-                    )
-                })
-            })
-            .collect();
-        let semantic = Arc::new(crate::NativeSemanticProgram::new(
-            semantic_program,
-            escapes,
-            queries.foreign_threads.clone(),
-            snapshot.clone(),
-            bindings,
-            queries.foreign_links.clone(),
-            unreplayable,
-        ));
+                input.source.then(|| (path.clone(), (input.implementation, input.signature.fingerprint)))
+            }).collect();
+            let shared = Arc::new(crate::NativeSemanticProgram::new(
+                semantic_program, escapes, queries.foreign_threads.clone(), snapshot.clone(),
+                bindings, queries.foreign_links.clone(), unreplayable,
+            ));
+            if let Some(cache) = batch_semantic {
+                *cache.borrow_mut() = Some(shared.clone());
+                Arc::new(shared.select_definitions(program.definitions, unreplayable))
+            } else { shared }
+        };
         let mut hash_bytes = crate::NativeMetadataWeight::default();
         let definition_hashes = if queries.export_hashes {
             hash_bytes.map(&hashes, |weight, path, _| weight.path(path));

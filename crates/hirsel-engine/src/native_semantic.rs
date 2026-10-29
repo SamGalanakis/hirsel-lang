@@ -7,28 +7,33 @@ use std::sync::Arc;
 /// runs the ordinary checked source queries; no artifact or native descriptor
 /// can construct this input. This conveys no native Value/Ready authority.
 pub struct NativeSemanticProgram {
+    shared: Arc<Shared>,
+    selected: Option<std::collections::BTreeSet<DefPath>>,
+    foreign_unreplayable: bool,
+}
+struct Shared {
     program: crate::queries::SemanticProgram,
     escapes: BTreeMap<DefPath, Escape>,
     foreign_threads: BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads>,
     signatures: Arc<SignatureSnapshot>,
     sources: BTreeMap<DefPath, (ContentHash, ContentHash)>,
     foreign_links: Vec<LinkInput>,
-    foreign_unreplayable: bool,
 }
 impl NativeSemanticProgram {
     pub(crate) fn shared_node(
         &self,
         definition: Option<DefId>,
     ) -> Option<Arc<hirsel_run_schema::ProgramNode>> {
+        if definition.is_some_and(|id| !self.semantic_contains(id.path())) { return None; }
         let identity = definition.map_or_else(
             || "$hirsel/runtime@1".to_owned(),
             |definition| definition.path().to_string(),
         );
-        self.program
+        self.shared.program
             .nodes
             .binary_search_by(|node| node.identity.cmp(&identity))
             .ok()
-            .map(|index| self.program.nodes[index].clone())
+            .map(|index| self.shared.program.nodes[index].clone())
     }
     pub(crate) fn metadata_weight(
         &self,
@@ -36,7 +41,13 @@ impl NativeSemanticProgram {
         nodes: &mut std::collections::BTreeSet<usize>,
     ) {
         weight.add(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>());
-        weight.vec(&self.program.nodes, |weight, node| {
+        if let Some(selected) = &self.selected {
+            weight.tree::<DefPath, ()>(selected.len());
+            for path in selected { weight.path(path); }
+        }
+        if !nodes.insert(Arc::as_ptr(&self.shared) as usize) { return; }
+        weight.arc(&self.shared);
+        weight.vec(&self.shared.program.nodes, |weight, node| {
             if !nodes.insert(Arc::as_ptr(node) as usize) {
                 return;
             }
@@ -47,29 +58,37 @@ impl NativeSemanticProgram {
                 weight.add(name.capacity())
             });
         });
-        weight.tree::<DefPath, ()>(self.program.definitions.len());
-        for path in &self.program.definitions {
+        weight.tree::<DefPath, ()>(self.shared.program.definitions.len());
+        for path in &self.shared.program.definitions {
             weight.path(path);
         }
-        weight.map(&self.program.uses, |weight, path, uses| {
+        weight.map(&self.shared.program.uses, |weight, path, uses| {
             weight.path(path);
             weight.tree::<DefPath, ()>(uses.len());
             for path in uses {
                 weight.path(path);
             }
         });
-        weight.map(&self.escapes, |weight, path, _| weight.path(path));
-        weight.map(&self.sources, |weight, path, _| weight.path(path));
-        weight.map(&self.foreign_threads, |weight, package, _| {
+        weight.map(&self.shared.escapes, |weight, path, _| weight.path(path));
+        weight.map(&self.shared.sources, |weight, path, _| weight.path(path));
+        weight.map(&self.shared.foreign_threads, |weight, package, _| {
             weight.add(package.name.capacity() + package.version.capacity());
         });
-        weight.vec(&self.foreign_links, |weight, link| match link {
+        weight.vec(&self.shared.foreign_links, |weight, link| match link {
             crate::LinkInput::Library(name) => weight.add(name.capacity()),
             crate::LinkInput::File(path) => weight.add(path.capacity()),
         });
     }
     pub(crate) fn definitions(&self) -> &std::collections::BTreeSet<DefPath> {
-        &self.program.definitions
+        self.selected.as_ref().unwrap_or(&self.shared.program.definitions)
+    }
+    pub(crate) fn select_definitions(
+        &self,
+        definitions: std::collections::BTreeSet<DefPath>,
+        foreign_unreplayable: bool,
+    ) -> Self {
+        debug_assert!(definitions.is_subset(&self.shared.program.definitions));
+        Self { shared: self.shared.clone(), selected: Some(definitions), foreign_unreplayable }
     }
 
     pub(crate) fn new(
@@ -85,12 +104,8 @@ impl NativeSemanticProgram {
             .nodes
             .sort_by(|left, right| left.identity.cmp(&right.identity));
         Self {
-            program,
-            escapes,
-            foreign_threads,
-            signatures,
-            sources,
-            foreign_links,
+            shared: Arc::new(Shared { program, escapes, foreign_threads, signatures, sources, foreign_links }),
+            selected: None,
             foreign_unreplayable,
         }
     }
@@ -98,18 +113,23 @@ impl NativeSemanticProgram {
         &self,
         entry: &DefPath,
     ) -> Result<hirsel_run_schema::ProgramRevision, QueryError> {
-        self.program.revision(entry)
+        if !self.semantic_contains(entry) {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "semantic program revision".into(), message: format!("entry is outside the selected closure: {entry}"),
+            }));
+        }
+        self.shared.program.revision(entry)
     }
     pub fn semantic_contains(&self, definition: &DefPath) -> bool {
-        self.program.definitions.contains(definition)
+        self.definitions().contains(definition)
     }
     /// The immutable signature/private-view snapshot used by this checked
     /// semantic closure. This is a local source binding, not native authority.
     pub fn signatures(&self) -> &Arc<SignatureSnapshot> {
-        &self.signatures
+        &self.shared.signatures
     }
     pub fn foreign_links(&self) -> &[LinkInput] {
-        &self.foreign_links
+        &self.shared.foreign_links
     }
     pub fn foreign_unreplayable(&self) -> bool {
         self.foreign_unreplayable
@@ -117,26 +137,27 @@ impl NativeSemanticProgram {
     pub fn foreign_threads(
         &self,
     ) -> &BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads> {
-        &self.foreign_threads
+        &self.shared.foreign_threads
     }
     /// Current source implementation and signature observations of this
     /// closure. A native launch constructor can check settled Lower bindings
     /// without reopening a source body or querying the semantic controller.
     pub fn source_bindings(&self) -> impl Iterator<Item = (&DefPath, ContentHash, ContentHash)> {
-        self.sources
+        self.shared.sources
             .iter()
+            .filter(|(path, _)| self.semantic_contains(path))
             .map(|(path, (implementation, signature))| (path, *implementation, *signature))
     }
     pub fn unsafe_reach(&self, entry: &DefPath) -> Option<UnsafeReach> {
-        self.program.reach(entry, &self.escapes)
+        self.semantic_contains(entry).then(|| self.shared.program.reach(entry, &self.shared.escapes)).flatten()
     }
     pub fn home_reach(&self, root: &DefPath) -> Option<UnsafeReach> {
-        let home = self
+        let home = self.shared
             .escapes
             .iter()
             .filter(|(path, escape)| {
                 **escape == Escape::Extern
-                    && self
+                    && self.shared
                         .foreign_threads
                         .get(&path.0.package)
                         .copied()
@@ -145,7 +166,7 @@ impl NativeSemanticProgram {
             })
             .map(|(path, escape)| (path.clone(), *escape))
             .collect();
-        self.program.reach(root, &home)
+        self.semantic_contains(root).then(|| self.shared.program.reach(root, &home)).flatten()
     }
 }
 impl QueryEngine {
