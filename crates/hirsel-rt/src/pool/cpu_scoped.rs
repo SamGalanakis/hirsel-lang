@@ -321,26 +321,20 @@ impl Workers {
                 drop(assigned);
                 Err(std::io::Error::other("injected CPU worker startup failure"))
             } else {
-                std::thread::Builder::new()
-                    .name(format!("hirsel-cpu-{index}"))
-                    .stack_size(2 * 1024 * 1024)
-                    .spawn({
-                        let (run, exec, holders, ready) = (
-                            RunPtr(run),
-                            Arc::clone(exec),
-                            Arc::clone(&execs.holders),
-                            ready.clone(),
-                        );
-                        move || {
-                            super::worker_main_reserved(
-                                run,
-                                exec,
-                                holders,
-                                Some(assigned),
-                                Some(ready),
-                            )
-                        }
-                    })
+                let builder = std::thread::Builder::new();
+                #[cfg(test)]
+                let builder = builder.name(format!("hirsel-cpu-{index}"));
+                builder.stack_size(2 * 1024 * 1024).spawn({
+                    let (run, exec, holders, ready) = (
+                        RunPtr(run),
+                        Arc::clone(exec),
+                        Arc::clone(&execs.holders),
+                        ready.clone(),
+                    );
+                    move || {
+                        super::worker_main_reserved(run, exec, holders, Some(assigned), Some(ready))
+                    }
+                })
             };
             let Ok(thread) = thread else {
                 execs.holders.count.fetch_sub(1, Ordering::AcqRel);
