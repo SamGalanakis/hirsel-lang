@@ -23,7 +23,11 @@ fn checked_dependency_readers_preserve_the_complete_generated_signature_sequence
         for name in ["B", "A", "B"] {
             path.0.name = name.into();
             let result = control.materialize_value(&path);
-            assert!(result.is_ok(), "{path}: {result:?}; phase={:?}", control.last_phase);
+            assert!(
+                result.is_ok(),
+                "{path}: {result:?}; phase={:?}",
+                control.last_phase
+            );
         }
         path.0.name = "chosen".into();
         let expected = control

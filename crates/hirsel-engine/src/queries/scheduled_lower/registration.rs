@@ -534,10 +534,18 @@ impl QueryEngine {
             // Generator declarations are absent from the ordinary-body front.
             // Capture their original header requests here, before workers run.
             let signature = self.signature_output(definition)?;
-            let prefix_len = signature.dependencies.len().checked_add(1).ok_or_else(refused)?;
-            required = required.checked_add(
-                prefix_len.checked_mul(size_of::<SignatureDependency>()).ok_or_else(refused)? as u64,
-            ).ok_or_else(refused)?;
+            let prefix_len = signature
+                .dependencies
+                .len()
+                .checked_add(1)
+                .ok_or_else(refused)?;
+            required = required
+                .checked_add(
+                    prefix_len
+                        .checked_mul(size_of::<SignatureDependency>())
+                        .ok_or_else(refused)? as u64,
+                )
+                .ok_or_else(refused)?;
             if required > allowance.bytes() {
                 return Err(refused());
             }
