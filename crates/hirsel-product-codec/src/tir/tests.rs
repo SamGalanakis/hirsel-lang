@@ -243,8 +243,15 @@ fn checksummed_tir_tables_reject_wraparound_wrong_tags_counts_overlap_and_trunca
             }
             _ => unreachable!(),
         }
+        let reference = DOMAIN.reference(&bad).unwrap();
         assert!(
-            open(bad, records.clone(), anchor).is_none(),
+            CheckedTir::open(
+                crate::checked_test_bytes(DOMAIN, &bad),
+                reference,
+                records.clone(),
+                |_, _| Some(anchor),
+            )
+            .is_none(),
             "fault {fault}"
         );
     }

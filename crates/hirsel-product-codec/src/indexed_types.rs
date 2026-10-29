@@ -277,7 +277,7 @@ impl CheckedTypeComponent {
     /// No serialized flag can skip these checks. The caller admits the backing
     /// and validation scratch before opening untrusted content.
     pub fn open(bytes: Bytes, reference: TypeRef) -> Option<Self> {
-        if DOMAIN.reference(&bytes)? != reference.reference()
+        if !bytes.matches_reference(reference.reference())
             || bytes.get(..8)? != MAGIC
             || size_at(&bytes, 24)? != bytes.len()
             || u32_at(&bytes, 20)? != 0
@@ -746,7 +746,8 @@ mod tests {
             let actual = DOMAIN.reference(&bad).unwrap();
             let forged = TypeRef::from_reference(actual, 0).unwrap();
             assert!(
-                CheckedTypeComponent::open(bad.into(), forged).is_none(),
+                CheckedTypeComponent::open(crate::checked_test_bytes(DOMAIN, &bad), forged)
+                    .is_none(),
                 "fault {fault}"
             );
         }

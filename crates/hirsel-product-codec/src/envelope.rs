@@ -209,7 +209,7 @@ impl IndexedEnvelope {
         Some(bytes)
     }
     pub fn open(bytes: Bytes, expected: Reference) -> Option<Self> {
-        if expected.domain.reference(&bytes)? != expected {
+        if !bytes.matches_reference(expected) {
             return None;
         }
         let layout = EnvelopeLayout::open(&bytes)?;
@@ -529,7 +529,7 @@ mod tests {
             }
             let reference = DOMAIN.reference(&bad).unwrap();
             assert!(
-                IndexedEnvelope::open(bad.into(), reference).is_none(),
+                IndexedEnvelope::open(crate::checked_test_bytes(DOMAIN, &bad), reference).is_none(),
                 "fault {fault}"
             );
         }

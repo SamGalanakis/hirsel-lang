@@ -385,6 +385,26 @@ impl DecodeOptions {
 }
 
 #[cfg(test)]
+fn checked_test_bytes(
+    domain: hirsel_artifact_store::Domain,
+    bytes: &[u8],
+) -> hirsel_artifact_store::Bytes {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "hirsel-codec-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let store = hirsel_artifact_store::Store::rebuildable(root.clone());
+    let reference = store.put(domain, bytes).unwrap();
+    let checked = store.get(reference).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    checked
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use hirsel_artifact_store::Memory;
