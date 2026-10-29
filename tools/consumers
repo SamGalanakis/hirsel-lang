@@ -2,6 +2,7 @@
 """Usage: tools/consumers <path>... prints affected Buck2 test targets, one per line."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -26,7 +27,6 @@ MUST = {
                                 'unix_http_serves_itself_over_a_real_socket_and_replays_across_cli_backends'},
 }
 RUNTIME = re.compile(r'(?:^|/)(?:startup[^/]*|scheduler[^/]*|pool[^/]*|cpu[^/]*|managed_cores|ordered|launch)(?:[./]|$)')
-ANSI = re.compile(r'\x1b\[[0-9;]*m')
 
 
 def runtime_change(paths):
@@ -38,34 +38,43 @@ def buck(root, *args):
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode:
         raise ValueError(result.stderr.strip() or result.stdout.strip())
-    return result.stdout + (result.stderr if args[0] == 'test' else '')
+    return result.stdout
 
 
 def test_graph(root, seeds):
     selection = f'rdeps(//:, {" + ".join(seeds)})' if seeds else '//:'
     return json.loads(buck(root, 'uquery', selection,
                            '--output-attribute', '^test_binary$', '--output-attribute', '^shard',
-                           '--output-attribute', '^costs$', '--output-attribute', '^extra_env$'))
+                           '--output-attribute', '^costs$', '--output-attribute', '^extra_env$',
+                           '--output-attribute', '^args$'))
 
 
 def listings(root, graph):
-    targets = [target for target, attrs in graph.items()
-               if attrs.get('test_binary') in BIG and attrs.get('shard_index', 0) == 0
-               and (attrs.get('shards', 0) > 0 or target == 'root//:' + attrs['test_binary'])]
-    if not targets:
+    binaries = {attrs['test_binary']: attrs.get('args', []) for target, attrs in graph.items()
+                if attrs.get('test_binary') in BIG and attrs.get('shard_index', 0) == 0
+                and (attrs.get('shards', 0) > 0 or target == 'root//:' + attrs['test_binary'])}
+    if not binaries:
         return {}
-    output = buck(root, 'test', *sorted(targets), '--', '--test-arg=--list',
-                  '--test-arg=--format=terse', '--test-arg=')
-    result, binary = {}, None
-    for line in output.splitlines():
-        line = re.sub(r'^\[[^\]]+\]\s*', '', ANSI.sub('', line)).strip()
-        if match := re.search(r'(?:Pass|Fail): (?:root)?//:(\S+)', line):
-            binary = re.sub(r'-shard-\d+$', '', match[1])
-        elif binary in BIG and (match := re.fullmatch(r'(\S+): test', line)):
-            result.setdefault(binary, set()).add(match[1])
-    missing = {graph[target]['test_binary'] for target in targets} - result.keys()
-    if missing:
-        raise ValueError('no case listing for ' + ', '.join(sorted(missing)))
+    print('consumers: discovering harness cases from shared-cache builds', file=sys.stderr)
+    targets = ['root//:' + binary + '-harness' for binary in sorted(binaries)]
+    outputs = json.loads(buck(root, 'build', *targets, '--show-json-output'))
+    result = {}
+    # --list needs neither SDK materialization nor the multi-GiB reservation
+    # of a real test action. Build with Buck, then discover under the normal
+    # local wrapper with one CPU. This executes no test bodies.
+    env = dict(os.environ, HIRSEL_JOBS='1')
+    env.setdefault('HIRSEL_MEMORY_LIMIT', '2G')
+    for binary in sorted(binaries):
+        harness = root / outputs['root//:' + binary + '-harness']
+        listed = subprocess.run([str(root / 'tools/capped'), '--timeout', '60', str(harness),
+                                 *binaries[binary], '--list', '--format', 'terse'], cwd=root, env=env,
+                                capture_output=True, text=True)
+        if listed.returncode:
+            raise ValueError(f'{binary}: case discovery failed: {listed.stderr.strip()}')
+        result[binary] = {line.removesuffix(': test') for line in listed.stdout.splitlines()
+                          if line.endswith(': test')}
+        if not result[binary]:
+            raise ValueError('no case listing for ' + binary)
     return result
 
 
@@ -124,6 +133,7 @@ class Sources:
         for file in files:
             source = file.read_text()
             masked = RUST_LITERAL.sub(lambda match: ' ' * len(match[0]), source)
+            imports = '\n'.join(re.findall(r'(?m)^use [^;]+;', source))
             for match in re.finditer(r'\bfn\s+(\w+)\s*(?:<[^;{]*>)?\s*\(', masked):
                 start = masked.find('{', match.end())
                 if start < 0:
@@ -133,7 +143,6 @@ class Sources:
                     depth += (masked[end] == '{') - (masked[end] == '}')
                     end += 1
                 key = file, match[1]
-                imports = '\n'.join(re.findall(r'(?m)^use [^;]+;', source))
                 body = imports + '\n' + source[match.start():end]
                 if key in self.functions:
                     self.functions[key] += '\n' + body
@@ -141,40 +150,74 @@ class Sources:
                     self.functions[key] = body
                     self.by_name.setdefault(match[1], []).append(key)
 
-    def case(self, name):
-        parts = name.split('::')
-        candidates = self.by_name.get(parts[-1], [])
-        matching = [key for key in candidates if len(parts) == 1 or parts[-2] in key[0].parts
-                    or key[0].stem == parts[-2]]
-        pending = list(matching or candidates)
-        seen, loaded, texts = set(), set(), []
-        if not pending and len(parts) > 1:
-            texts = [self.loaded(file, text, loaded) for file, text in self.files.items()
-                     if file.stem == parts[-2]]
-        while pending:
-            key = pending.pop()
-            if key in seen:
-                continue
-            seen.add(key)
-            text = self.functions[key]
-            texts.append(self.loaded(key[0], text, loaded))
-            calls = RUST_LITERAL.sub('', text)
-            for qualifier, called in re.findall(r'(?:(\w+)::)?\b(\w+)\s*\(', calls):
-                pending.extend(k for k in self.by_name.get(called, [])
-                               if k[0] == key[0] or qualifier and k[0].stem == qualifier)
-        return '\n'.join(texts)
+    def matching(self, names, pattern):
+        """Walk each helper graph using cached match facts, rather than copying
+        the same fixture and helper source into every case's expanded text."""
+        direct, calls, files = {}, {}, {}
 
-    def loaded(self, origin, text, seen):
-        texts = [origin.relative_to(self.root).as_posix(), text]
-        for literal in re.findall(r'"([^"\n]+\.(?:hir|json))"', text):
-            for file in (origin.parent / literal, self.root / literal):
-                file = file.resolve()
-                if file.is_file() and file.is_relative_to(self.root):
-                    if file not in seen:
-                        seen.add(file)
-                        texts.append(self.loaded(file, file.read_text(), seen))
+        def references(origin, text):
+            for literal in re.findall(r'"([^"\n]+\.(?:hir|json))"', text):
+                for file in (origin.parent / literal, self.root / literal):
+                    file = file.resolve()
+                    if file.is_file() and file.is_relative_to(self.root):
+                        yield file
+                        break
+
+        def file_matches(first):
+            if first in files:
+                return files[first]
+            pending, seen = [first], set()
+            while pending:
+                file = pending.pop()
+                if file in seen:
+                    continue
+                seen.add(file)
+                if files.get(file):
+                    files[first] = True
+                    return True
+                text = file.read_text()
+                if pattern.search(file.relative_to(self.root).as_posix()) or pattern.search(text):
+                    files[first] = True
+                    return True
+                pending.extend(references(file, text))
+            files[first] = False
+            return False
+
+        def text_matches(file, text):
+            return bool(pattern.search(file.relative_to(self.root).as_posix()) or pattern.search(text)
+                        or any(file_matches(loaded) for loaded in references(file, text)))
+
+        matched = set()
+        for name in names:
+            parts = name.split('::')
+            candidates = self.by_name.get(parts[-1], [])
+            matching = [key for key in candidates if len(parts) == 1 or parts[-2] in key[0].parts
+                        or key[0].stem == parts[-2]]
+            pending = list(matching or candidates)
+            if not pending and len(parts) > 1:
+                # Macro-generated cases share their declaring module's inputs.
+                if any(text_matches(file, text) for file, text in self.files.items()
+                       if file.stem == parts[-2]):
+                    matched.add(name)
+            seen = set()
+            while pending:
+                key = pending.pop()
+                if key in seen:
+                    continue
+                seen.add(key)
+                if key not in direct:
+                    text = self.functions[key]
+                    direct[key] = text_matches(key[0], text)
+                    calls[key] = [] if direct[key] else [called_key
+                                  for qualifier, called in re.findall(
+                                      r'(?:(\w+)::)?\b(\w+)\s*\(', RUST_LITERAL.sub('', text))
+                                  for called_key in self.by_name.get(called, [])
+                                  if called_key[0] == key[0] or qualifier and called_key[0].stem == qualifier]
+                if direct[key]:
+                    matched.add(name)
                     break
-        return '\n'.join(texts)
+                pending.extend(calls[key])
+        return matched
 
 
 def module_users(root, paths):
@@ -223,17 +266,17 @@ def select(root, paths, graph, inventories):
             mandatory.add(target)
         elif crates and binary and binary not in BIG:
             ordinary.add(target)
+    expressions = ([re.escape(crate) for crate in loaded_crates]
+                   + [re.escape(path) for path in paths]
+                   + [r'\b' + re.escape(module) + r'\.' for module in modules])
+    pattern = re.compile('|'.join(expressions))
     for binary, names in inventories.items():
-        sources = Sources(root, BIG[binary])
+        affected = Sources(root, BIG[binary]).matching(names, pattern)
         for name in names:
-            text = sources.case(name)
             if runtime and (name in MUST.get(binary, set()) or
                             binary == 'hirsel-cli-test-free' and name == 'native_returned_rest_completion_replays_across_engines'):
                 mandatory.add(mapped[binary, name])
-            if (any(crate in text for crate in loaded_crates)
-                    or any(path in text for path in paths)
-                    or any(re.search(r'\b' + re.escape(module) + r'\.', text) for module in modules)
-                    or runtime and re.search(r'pool|ordered|scheduler|cpu|tasks', name)):
+            if name in affected or runtime and re.search(r'pool|ordered|scheduler|cpu|tasks', name):
                 shards.add(mapped[binary, name])
     # Resolve std uses in corpus source, including uses through another std module.
     conformance = sorted((root / 'conformance').rglob('*.hir')) if modules else []

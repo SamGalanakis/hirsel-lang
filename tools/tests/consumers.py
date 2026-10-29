@@ -2,6 +2,9 @@
 """Consumer selection follows real launch bodies, source uses and shard assignment."""
 import importlib.machinery
 import importlib.util
+import json
+import subprocess
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -72,22 +75,46 @@ fn fixture() { let text = r###" } { "###; include_str!("loaded.hir"); }
 fn regression() { fixture(); }
 ''')
             source = consumers.Sources(root, 'main.rs')
-            selected = source.case('regression')
-            self.assertIn('toml.document', selected)
-            self.assertNotIn('fn unrelated', selected)
-            self.assertNotIn('toml.document', source.case('unrelated'))
+            self.assertEqual(source.matching({'regression', 'unrelated'}, re.compile(r'\btoml\.')),
+                             {'regression'})
 
-    def test_real_libtest_listing_format_resolves_cases_to_their_binary(self):
+    def test_libtest_discovery_builds_the_harness_and_does_not_book_a_test_action(self):
         binary = 'hirsel-cli-test-cli'
         graph = graph_for({binary: set()})
-        output = ('[2026-10-29T16:00:00] ✓ Pass: root//:hirsel-cli-test-cli-shard-1 (0.5s)\n'
-                  '[2026-10-29T16:00:00] ---- STDOUT ----\n'
-                  '[2026-10-29T16:00:00] https::verifies_replay: test\n')
-        with patch.object(consumers, 'buck', return_value=output):
+        outputs = json.dumps({'root//:' + binary + '-harness': 'built/cli'})
+        listing = subprocess.CompletedProcess([], 0, 'https::verifies_replay: test\n', '')
+        with patch.object(consumers, 'buck', return_value=outputs) as build, \
+                patch.object(consumers.subprocess, 'run', return_value=listing) as run:
             self.assertEqual(consumers.listings(ROOT, graph), {binary: {'https::verifies_replay'}})
-        with patch.object(consumers, 'buck', return_value=''):
+        self.assertEqual(build.call_args.args[1:], ('build', 'root//:' + binary + '-harness', '--show-json-output'))
+        self.assertEqual(run.call_args.args[0], [str(ROOT / 'tools/capped'), '--timeout', '60',
+                                              str(ROOT / 'built/cli'), '--list', '--format', 'terse'])
+        self.assertEqual(run.call_args.kwargs['env']['HIRSEL_JOBS'], '1')
+        with patch.object(consumers, 'buck', return_value=outputs), \
+                patch.object(consumers.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')):
             with self.assertRaisesRegex(ValueError, 'no case listing for hirsel-cli-test-cli'):
                 consumers.listings(ROOT, graph)
+
+    def test_discovery_keeps_configured_skips_out_of_the_shard_inventory(self):
+        binary = 'hirsel-driver-test-it'
+        graph = graph_for({binary: set()})
+        graph['root//:' + binary + '-shard-1']['args'] = ['--skip', 'held_case']
+        with tempfile.TemporaryDirectory() as directory:
+            harness = Path(directory) / 'harness'
+            harness.write_text('''#!/usr/bin/env python3
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument('--skip', action='append', default=[])
+p.add_argument('--list', action='store_true')
+p.add_argument('--format')
+args = p.parse_args()
+for case in ['held_case', 'active_case']:
+    if not any(skip in case for skip in args.skip): print(case + ': test')
+''')
+            harness.chmod(0o755)
+            outputs = json.dumps({'root//:' + binary + '-harness': str(harness)})
+            with patch.object(consumers, 'buck', return_value=outputs):
+                self.assertEqual(consumers.listings(ROOT, graph), {binary: {'active_case'}})
 
     def test_isolated_body_selects_its_dedicated_target_after_balancing(self):
         binary = 'hirsel-cli-test-free'
