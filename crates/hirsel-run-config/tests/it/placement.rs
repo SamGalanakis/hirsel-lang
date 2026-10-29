@@ -114,8 +114,17 @@ fn closed_placement_schema_rejects_unknowns_duplicates_and_invalid_values() {
 fn cores_override_preserves_other_placement_and_equals_record_member() {
     let original = record(json!({"cores": 2, "cpus": "0-3", "control": "/tmp/ctl"})).unwrap();
     let expected = record(json!({"cores": 8, "cpus": "0-3", "control": "/tmp/ctl"})).unwrap();
+    let clone = original.clone();
+    let bytes = original.launch_bytes();
+    let canonical = original.canonical().to_vec();
+    let identity = original.identity();
     assert_eq!(original.with_cores(8).unwrap(), expected);
     assert!(original.with_cores(0).is_err());
+    drop(original);
+    assert_eq!(clone.launch_bytes(), bytes);
+    assert_eq!(clone.canonical(), canonical);
+    assert_eq!(clone.identity(), identity);
+    assert_eq!(clone.with_cores(8).unwrap(), expected);
 }
 
 #[test]

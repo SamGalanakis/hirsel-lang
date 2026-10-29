@@ -520,7 +520,7 @@ pub(crate) unsafe fn convert_result<T>(
 #[derive(Default)]
 pub(crate) struct Spans(std::sync::Mutex<SpanState>);
 #[derive(Default)]
-pub(super) struct SpanState {
+pub(crate) struct SpanState {
     issued: crate::telemetry::Issued,
     rows: std::collections::BTreeMap<u64, (u64, Vec<u8>)>,
 }
@@ -568,6 +568,17 @@ impl SpanState {
             .map(|(_, bytes)| bytes.clone())
     }
     pub(super) fn observe(
+        &mut self,
+        request: &Request,
+        completion: &Result<Completion, AdapterError>,
+    ) -> Stopped<()> {
+        match crate::runtime_roots::telemetry() {
+            Some(provider) => (provider.observe_span)(self, request, completion),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn observe_linked(
         &mut self,
         request: &Request,
         completion: &Result<Completion, AdapterError>,

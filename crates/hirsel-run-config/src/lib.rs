@@ -139,6 +139,12 @@ fn invalid(field: &str, detail: &str) -> RunRefusal {
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedRun {
+    data: std::sync::Arc<ValidatedData>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ValidatedData {
+    program: [u8; 32],
     record: RunConfig,
     canonical: Vec<u8>,
     identity: [u8; 32],
@@ -382,7 +388,7 @@ impl RunConfig {
                 "incompatible depth semantics; expected hirsel.depth.invocations.v2",
             ));
         }
-        digest(&record.program)
+        let program = digest(&record.program)
             .ok_or_else(|| invalid("program", "expected 64 lowercase hex digits"))?;
         if !definition_path(&record.entry) {
             return Err(invalid(
@@ -509,9 +515,12 @@ impl RunConfig {
         }
         let identity = hash_parts(IDENTITY_DOMAIN, [&canonical[..]]);
         Ok(ValidatedRun {
-            record,
-            canonical,
-            identity,
+            data: std::sync::Arc::new(ValidatedData {
+                program,
+                record,
+                canonical,
+                identity,
+            }),
         })
     }
     /// The record's JSON, rejecting duplicates, unknown fields and noncanonical numbers,
@@ -528,18 +537,18 @@ impl RunConfig {
 impl ValidatedRun {
     /// Override only placement.cores, then pass through ordinary validation.
     pub fn with_cores(&self, cores: u64) -> Result<Self, RunRefusal> {
-        let mut record = self.record.clone();
+        let mut record = self.data.record.clone();
         record.placement.get_or_insert_default().cores = Cores::Fixed(cores);
         record.validated()
     }
     /// The complete validated launch record, retaining non-identity placement.
     pub fn launch_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(&self.record).expect("run serialization")
+        serde_json::to_vec(&self.data.record).expect("run serialization")
     }
     /// Acquisition policy for both real and simulated adapters. Io presence alone
     /// grants no projections; clocks retain their independent grant booleans.
     pub fn io_projections(&self) -> BTreeSet<String> {
-        let Some(io) = &self.record.io else {
+        let Some(io) = &self.data.record.io else {
             return BTreeSet::new();
         };
         [
@@ -560,18 +569,18 @@ impl ValidatedRun {
         .collect()
     }
     pub fn clock_grants(&self) -> (bool, bool) {
-        self.record.io.as_ref().map_or((false, false), |io| {
+        self.data.record.io.as_ref().map_or((false, false), |io| {
             (io.monotonic_clock.is_some(), io.wall_clock.is_some())
         })
     }
     /// The granted Random provider, if any.
     pub fn random_provider(&self) -> Option<ProviderContract> {
-        ProviderContract::parse(self.record.io.as_ref()?.random.as_ref()?)
+        ProviderContract::parse(self.data.record.io.as_ref()?.random.as_ref()?)
     }
     /// The granted Telemetry provider: its contract, identity seed and simulated exporter
     /// capacity (`telemetry.null@1` only).
     pub fn telemetry_provider(&self) -> Option<(ProviderContract, u64, Option<u64>)> {
-        let grant = self.record.io.as_ref()?.telemetry.as_ref()?;
+        let grant = self.data.record.io.as_ref()?.telemetry.as_ref()?;
         Some((
             ProviderContract::parse(&grant.provider)?,
             grant.seed.unwrap_or(0),
@@ -580,19 +589,19 @@ impl ValidatedRun {
     }
     /// Exact validated Net policy; peers supply data and never widen its rules.
     pub fn net_grant(&self) -> Option<&NetGrant> {
-        self.record.io.as_ref()?.net.as_ref()
+        self.data.record.io.as_ref()?.net.as_ref()
     }
     /// The run's `budgets.limits@2` entry, or None under `budgets.none@1`.
     pub fn budgets(&self) -> Option<&Budgets> {
-        self.record.budgets.as_ref()
+        self.data.record.budgets.as_ref()
     }
     /// Exact validated process policy; scripted runs never widen its rules.
     pub fn process_grant(&self) -> Option<&ProcessGrant> {
-        self.record.io.as_ref()?.process.as_ref()
+        self.data.record.io.as_ref()?.process.as_ref()
     }
     /// The observed signal kinds and their provider; a script never widens the kinds.
     pub fn signals_grant(&self) -> Option<&SignalsGrant> {
-        self.record.io.as_ref()?.signals.as_ref()
+        self.data.record.io.as_ref()?.signals.as_ref()
     }
     /// Bind launch to semantic code, independently of native artifact provenance.
     pub fn check_revision(
@@ -603,18 +612,19 @@ impl ValidatedRun {
         self.check_program(program.digest(), program.entry(), launch)
     }
     pub fn record(&self) -> &RunConfig {
-        &self.record
+        &self.data.record
     }
     /// Whether the run calls runners, and so has a run instance.
     pub fn calls(&self) -> bool {
-        self.record
+        self.data
+            .record
             .io
             .as_ref()
             .is_some_and(|io| !io.runners.is_empty())
     }
     /// A callee run's instance, derived from its call's key as its seeds are.
     pub fn instance(&self) -> Result<Option<[u8; 16]>, RunRefusal> {
-        let Some(call) = &self.record.call else {
+        let Some(call) = &self.data.record.call else {
             return Ok(None);
         };
         let cause = call.cause()?;
@@ -624,27 +634,34 @@ impl ValidatedRun {
         ))))
     }
     pub fn canonical(&self) -> &[u8] {
-        &self.canonical
+        &self.data.canonical
     }
     pub fn identity(&self) -> [u8; 32] {
-        self.identity
+        self.data.identity
     }
     pub fn program(&self) -> [u8; 32] {
-        digest(&self.record.program).expect("validated digest")
+        self.data.program
     }
     pub fn config(&self) -> Config {
         Config {
-            hash_seed: self.record.inputs.hash_seed,
-            random_seed: self.record.inputs.random_seed,
-            test_seed: self.record.inputs.test_seed,
+            hash_seed: self.data.record.inputs.hash_seed,
+            random_seed: self.data.record.inputs.random_seed,
+            test_seed: self.data.record.inputs.test_seed,
             scheduler: self
+                .data
                 .record
                 .inputs
                 .scheduler
                 .as_ref()
                 .map_or(0, |s| s.code().expect("validated scheduler")),
-            scheduler_seed: self.record.inputs.scheduler.as_ref().map_or(0, |s| s.seed),
-            run_identity: self.identity,
+            scheduler_seed: self
+                .data
+                .record
+                .inputs
+                .scheduler
+                .as_ref()
+                .map_or(0, |s| s.seed),
+            run_identity: self.data.identity,
         }
     }
     /// Compare against compiled semantic code selection before program entry.
@@ -657,8 +674,8 @@ impl ValidatedRun {
     ) -> Result<(), RunRefusal> {
         for (field, matches) in [
             ("program", self.program() == program),
-            ("entry", self.record.entry == entry),
-            ("launch", self.record.launch == launch),
+            ("entry", self.data.record.entry == entry),
+            ("launch", self.data.record.launch == launch),
         ] {
             if !matches {
                 return Err(RunRefusal::Binding {
@@ -671,11 +688,11 @@ impl ValidatedRun {
     pub fn require_roots(&self, roots: &[Root]) -> Result<(), RunRefusal> {
         for root in roots {
             let present = match root {
-                Root::Io => self.record.io.is_some(),
-                Root::Args => self.record.args.is_some(),
-                Root::Env => self.record.env.is_some(),
-                Root::Unsafe => self.record.unsafe_root,
-                Root::Test => self.record.launch == LaunchKind::Test,
+                Root::Io => self.data.record.io.is_some(),
+                Root::Args => self.data.record.args.is_some(),
+                Root::Env => self.data.record.env.is_some(),
+                Root::Unsafe => self.data.record.unsafe_root,
+                Root::Test => self.data.record.launch == LaunchKind::Test,
             };
             if !present {
                 return Err(RunRefusal::NotGranted {
@@ -693,7 +710,11 @@ impl ValidatedRun {
         self.check_program(facts.program, &facts.entry, facts.launch)?;
         self.require_roots(&facts.roots)?;
         if let (Some(policy), CodeReach::Escapes(path)) = (
-            self.record.admission.as_ref().and_then(|a| a.code.as_ref()),
+            self.data
+                .record
+                .admission
+                .as_ref()
+                .and_then(|a| a.code.as_ref()),
             &facts.code,
         ) && ProviderContract::parse(policy) == Some(ProviderContract::AdmitSafe)
         {
@@ -718,17 +739,17 @@ impl ValidatedRun {
         if recorded.canonical() != canonical {
             return Err(invalid("recording.run", "noncanonical header bytes"));
         }
-        if recorded.identity != identity {
+        if recorded.data.identity != identity {
             return Err(RunRefusal::Binding {
                 field: "recording.run_identity".into(),
             });
         }
-        if self.identity != identity {
+        if self.data.identity != identity {
             return Err(RunRefusal::Binding {
                 field: "run_identity".into(),
             });
         }
-        if let Some(admission) = &recorded.record.admission {
+        if let Some(admission) = &recorded.data.record.admission {
             if let Some(start) = admission.not_before
                 && evidence.at < start
             {
@@ -822,7 +843,7 @@ impl BoundRun {
     /// No time/revocation check is performed by operations on the admitted result.
     pub fn admit(&self, host: &mut dyn HostAuthority, now: i64) -> Result<AdmittedRun, RunRefusal> {
         let mut revocation = None;
-        if let Some(admission) = &self.run.record.admission {
+        if let Some(admission) = &self.run.data.record.admission {
             if let Some(not_before) = admission.not_before
                 && now < not_before
             {

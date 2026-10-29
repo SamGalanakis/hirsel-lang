@@ -1722,24 +1722,70 @@ unsafe fn launch(program: &Program, mut arguments: Vec<std::ffi::OsString>) -> R
     {
         return refuse("run record binding mismatch");
     }
-    use crate::host::Selection;
-    let selection = match selected {
+    let selection = match admit_selection(&host, selected, &sinks) {
+        Ok(selection) => selection,
+        Err(error) => return refuse(&error),
+    };
+    let mut run = host.start_stored(program, config, selection, arguments, sinks);
+    if let Some(path) = trace_events {
+        run = run.with_trace_events(path);
+    }
+    run.wait()
+}
+
+#[inline(never)]
+fn admit_selection(
+    host: &crate::host::Host,
+    selected: Option<crate::standalone::Selected>,
+    sinks: &crate::host::Sinks,
+) -> Result<crate::host::StoredSelection, String> {
+    use crate::host::StoredSelection as Selection;
+    Ok(match selected {
         None => Selection::Harness,
         Some(crate::standalone::Selected::Replay { run, io }) => Selection::Replay { run, io },
         Some(crate::standalone::Selected::Live {
             run,
             tape,
             revocations,
-        }) => match host.admit(&run, revocations.as_deref(), &sinks) {
-            Ok((admitted, io)) => Selection::Live { admitted, io, tape },
-            Err(error) => return refuse(&error.to_string()),
-        },
-    };
-    let mut run = host.start(program, config, selection, arguments, sinks);
-    if let Some(path) = trace_events {
-        run = run.with_trace_events(path);
-    }
-    run.wait()
+        }) => {
+            let (admitted, io) = host
+                .admit(&run, revocations.as_deref(), sinks)
+                .map_err(|error| error.to_string())?;
+            Selection::Live {
+                admitted,
+                io: Rc::new(RefCell::new(io)),
+                tape,
+            }
+        }
+    })
+}
+
+// Fixture and replay construction has large, rarely used adapter locals.
+// Keep its frame off live admission, which already owns its adapter.
+#[inline(never)]
+fn fixture_adapter(
+    prepare: impl FnOnce() -> Result<Box<dyn Adapter>, String>,
+) -> Result<Box<dyn Adapter>, String> {
+    prepare()
+}
+
+#[inline(never)]
+fn concurrent_adapter(
+    io: Rc<RefCell<RealIo>>,
+    policy: &str,
+) -> Result<std::sync::Arc<crate::io_real::ConcurrentIo>, String> {
+    let io = Rc::try_unwrap(io)
+        .map_err(|_| format!("{policy} admission retained a home adapter alias"))?
+        .into_inner();
+    let io = io
+        .into_concurrent()
+        .map_err(|_| format!("{policy} admission requires transportable streams"))?;
+    Ok(std::sync::Arc::new(io))
+}
+
+#[inline(never)]
+fn empty_adapter(tree: &Tree) -> Box<dyn Adapter> {
+    Box::new(SimIo::new(tree.clone(), Vec::new()))
 }
 
 /// A launched (not standalone) executable's selection: a replay, a run record the embedded
@@ -1750,15 +1796,12 @@ fn select_bound(
 ) -> Result<Option<crate::standalone::Selected>, String> {
     if arguments.first().is_some_and(|a| a == "--hirsel-replay") {
         return match arguments {
-            [_, path] => crate::host_launch::replay(std::path::Path::new(path))
-                .and_then(|(io, run)| {
-                    let facts = facts(program, &run)?;
-                    Ok(Some(crate::standalone::Selected::Replay {
-                        run: run.bind(&facts)?,
-                        io,
-                    }))
-                })
-                .map_err(|e| e.to_string()),
+            [_, path] => crate::standalone::replay_selected(std::path::Path::new(path), |run| {
+                let facts = facts(program, &run)?;
+                run.bind(&facts)
+            })
+            .map(Some)
+            .map_err(|e| e.to_string()),
             _ => Err("expected only --hirsel-replay <tape>".into()),
         };
     }
@@ -1795,7 +1838,7 @@ fn select_bound(
 pub(crate) unsafe fn execute(
     program: &Program,
     launch_config: &Config,
-    selection: crate::host::Selection,
+    selection: crate::host::StoredSelection,
     process_arguments: Vec<std::ffi::OsString>,
     sinks: &crate::host::Sinks,
     options: Options,
@@ -1814,19 +1857,21 @@ pub(crate) unsafe fn execute(
     let (result_size, layouts, layout_count) =
         (program.result_size, program.layouts, program.layout_count);
     let runner_instance = match &selection {
-        crate::host::Selection::Live { admitted, .. } => admitted.instance(),
-        crate::host::Selection::Replay { io, .. } => io.instance,
-        crate::host::Selection::Harness => None,
+        crate::host::StoredSelection::Live { admitted, .. } => admitted.instance(),
+        crate::host::StoredSelection::Replay { io, .. } => io.borrow().instance,
+        crate::host::StoredSelection::Harness => None,
     };
     let (requested, production_io, production_replay) = match selection {
-        crate::host::Selection::Harness => (None, None, None),
-        crate::host::Selection::Live { admitted, io, tape } => (
+        crate::host::StoredSelection::Harness => (None, None, None),
+        crate::host::StoredSelection::Live { admitted, io, tape } => (
             Some(admitted.run().clone()),
             Some((io, admitted, tape)),
             None,
         ),
         // A replay performs no host effect: no admission, clock or provider.
-        crate::host::Selection::Replay { run, io } => (Some(run.run().clone()), None, Some(io)),
+        crate::host::StoredSelection::Replay { run, io } => {
+            (Some(run.run().clone()), None, Some(io))
+        }
     };
     // Harness providers remain fixture-owned. Only an explicit validated placement
     // opts a fixture into physical execution; ordinary semantic fixtures keep their
@@ -1897,9 +1942,8 @@ pub(crate) unsafe fn execute(
         if let Some(path) = &options.trace_events {
             crate::free_replay::Report::check_input(path)?;
         }
-        let grants = production_io
-            .as_ref()
-            .map_or_else(Vec::new, |(io, _, _)| io.mount_pins());
+        let real_io = production_io.as_ref().map(|(io, _, _)| io.borrow());
+        let grants = real_io.as_ref().map_or_else(Vec::new, |io| io.mount_pins());
         if let Some(path) = production_io
             .as_ref()
             .and_then(|(_, _, tape)| tape.as_deref())
@@ -1911,8 +1955,8 @@ pub(crate) unsafe fn execute(
         None
     };
     if let Some(destination) = &trace_destination {
-        let io = production_io.as_ref().map(|(io, _, _)| io);
-        let grants = io.map_or_else(Vec::new, |io| io.mount_pins());
+        let real_io = production_io.as_ref().map(|(io, _, _)| io.borrow());
+        let grants = real_io.as_ref().map_or_else(Vec::new, |io| io.mount_pins());
         destination
             .check_with_files(&grants, &output_grants)
             .map_err(|e| e.to_string())?;
@@ -2130,10 +2174,10 @@ pub(crate) unsafe fn execute(
     // Preserve the admitted destination before live Free moves RealIo into
     // its concurrent owner. Callee tapes belong beside this root tape.
     let runner_tape = production_io.as_ref().and_then(|(_, _, tape)| tape.clone());
-    let mut adapter: Box<dyn Adapter> = if let Some((mut io, admitted, tape)) = production_io {
+    let mut adapter: Box<dyn Adapter> = if let Some((io, admitted, tape)) = production_io {
         if production_free {
             free_session = crate::free_launch::Session::record(
-                &mut io,
+                &mut io.borrow_mut(),
                 &admitted,
                 tape.as_deref(),
                 &output_grants,
@@ -2144,15 +2188,15 @@ pub(crate) unsafe fn execute(
             pending_host_journal = Some((admitted, tape));
         }
         if entry.is_test() {
-            io.test_context(seed);
+            io.borrow_mut().test_context(seed);
         }
-        io.discard_history();
-        let io = Rc::new(RefCell::new(io));
+        io.borrow_mut().discard_history();
         real = Some(io.clone());
         Box::new(Shared(io))
-    } else if let Some(mut io) = production_replay {
+    } else if let Some(io) = production_replay {
         if production_free {
             let bytes = io
+                .borrow_mut()
                 .free_tape
                 .take()
                 .ok_or("tasks.free@1 requires a Free phase tape")?;
@@ -2160,242 +2204,254 @@ pub(crate) unsafe fn execute(
                 &bytes,
                 free_projection.is_some() || trace_destination.is_some(),
             )?);
-        } else if io.free_tape.is_some() {
+        } else if io.borrow().free_tape.is_some() {
             return Err("Free phase tape requires tasks.free@1".into());
         }
         if entry.is_test() {
-            io.test_context(seed);
+            io.borrow_mut().test_context(seed);
         }
-        let io = Rc::new(RefCell::new(io));
         replay = Some(io.clone());
         Box::new(Shared(io))
     } else {
-        match std::env::var_os("HIRSEL_RT_REPLAY") {
-            Some(path) => {
-                let (tape, binary) = match std::fs::read(&path)
-                    .map_err(|e| e.to_string())
-                    .and_then(crate::tape_binary::replay)
-                {
-                    Ok(recording) => recording,
-                    Err(error) => return Err(format!("the replayed tape: {error}")),
-                };
-                if tape.run_identity != launch_config.run_identity
-                    || tape.hash_seed != launch_config.hash_seed
-                    || tape.random_seed != launch_config.random_seed
-                    || tape.test_seed != launch_config.test_seed
-                {
-                    return Err("recording configuration mismatch".into());
-                }
-                let bound_run = tape
-                    .binding
-                    .as_ref()
-                    .map(|_| tape.bound_run())
-                    .transpose()
-                    .map_err(|e| e.to_string())?;
-                arguments = tape.arguments;
-                let mut io = match binary {
-                    Some(binary) => SimIo::from_binary(tape.tree, binary),
-                    None => SimIo::new(tape.tree, tape.events),
-                };
-                if let Some(run) = &bound_run {
-                    crate::host_launch::configure_replay(&mut io, run)
-                        .map_err(|e| e.to_string())?;
-                } else {
-                    // Unbound historical harness tapes keep their explicit fixture inputs.
-                    if let Some(run) = &fixture_run {
-                        io.set_mounts(
-                            run.record()
-                                .io
-                                .iter()
-                                .flat_map(|io| &io.dirs)
-                                .map(|mount| (mount.path.clone(), mount.access)),
-                        )
-                        .map_err(|e| e.to_string())?;
-                    }
-                    if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
-                        io.deny_output();
-                    }
-                    io.set_net_rules(net_rules.clone());
-                    if let Some(env) = &env {
-                        io.set_env(env.clone());
-                    }
-                    io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
-                    if let Some(grant) = &process {
-                        io.set_process_grant(grant);
-                    }
-                    if let Some(grant) = &signals {
-                        io.set_signal_kinds(grant.bits());
-                    }
-                    if let Some((peers, listeners)) = net_script.clone()
-                        && let Err(error) = io.set_net_script(peers, listeners)
+        fixture_adapter(|| {
+            Ok(match std::env::var_os("HIRSEL_RT_REPLAY") {
+                Some(path) => {
+                    let (tape, binary) = match std::fs::read(&path)
+                        .map_err(|e| e.to_string())
+                        .and_then(crate::tape_binary::replay)
                     {
-                        return Err(format!("the network script: {error:?}"));
-                    }
-                }
-                if entry.is_test() {
-                    io.test_context(seed);
-                }
-                let io = Rc::new(RefCell::new(io));
-                replay = Some(io.clone());
-                Box::new(Shared(io))
-            }
-            None if entry.is_zero() => {
-                if let Some(path) = std::env::var_os("HIRSEL_RT_TAPE") {
-                    let record = Recording {
-                        arguments: vec![],
-                        run_identity: launch_config.run_identity,
-                        hash_seed: launch_config.hash_seed,
-                        random_seed: launch_config.random_seed,
-                        test_seed: launch_config.test_seed,
-                        binding: None,
-                        tree: initial_tree.clone(),
-                        events: vec![],
+                        Ok(recording) => recording,
+                        Err(error) => return Err(format!("the replayed tape: {error}")),
                     };
-                    let file = match crate::host_paths::RecorderDestination::pin(
-                        std::path::Path::new(&path),
-                    )
-                    .and_then(|destination| destination.open_with_files(&[], &output_grants))
+                    if tape.run_identity != launch_config.run_identity
+                        || tape.hash_seed != launch_config.hash_seed
+                        || tape.random_seed != launch_config.random_seed
+                        || tape.test_seed != launch_config.test_seed
                     {
-                        Ok(file) => file,
-                        Err(error) => return Err(error.to_string()),
-                    };
-                    match RecordingWriter::new(file, &record) {
-                        Ok(writer) => zero_recording = Some(writer),
-                        Err(error) => return Err(format!("the Io tape: {error}")),
+                        return Err("recording configuration mismatch".into());
                     }
-                }
-                Box::new(SimIo::new(initial_tree.clone(), vec![]))
-            }
-            // Without `HIRSEL_RT_ROOT` the root Io grants nothing (determinism.md, Run
-            // configuration): no mount and no projection.
-            None => match if let Some((files, mounts, stdin)) = fixture_files {
-                RealIo::fixture(files, mounts, stdin, sinks.stdout.clone())
-                    .map(|mut io| {
-                        io.set_stderr(sinks.stderr.clone());
-                        io
-                    })
-                    .map_err(std::io::Error::other)
-            } else {
-                std::env::var_os("HIRSEL_RT_ROOT").map_or_else(
-                    || {
-                        let mut io = RealIo::from_pinned_mounts([], sinks.stdout.clone())
-                            .expect("an empty mount set");
-                        io.set_projections(Default::default());
-                        Ok(io)
-                    },
-                    |root| {
-                        RealIo::grant_with_output(std::path::Path::new(&root), sinks.stdout.clone())
-                    },
-                )
-            } {
-                Ok(mut io) => {
-                    sinks.preserve_send_streams(&mut io);
-                    if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
-                        io.deny_output();
-                    }
-                    if let Some(ticks) = std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK") {
-                        let Some(ticks) = ticks.to_str().and_then(|s| s.parse::<u64>().ok()) else {
-                            return Err("invalid harness virtual clock".into());
-                        };
-                        io.virtual_clock(ticks);
-                    } else if signals.is_some() {
-                        // A scripted signal parks its waits: record them and each ready poll,
-                        // so replay interleaves them with the other parked requests.
-                        io.set_cooperative(crate::readiness::Readiness::default());
-                    }
-                    if let Some(text) = harness_text("HIRSEL_RT_FILE_READS")? {
-                        let scripts = serde_json::from_str(&text)
-                            .map_err(|e| format!("file read script: {e}"))?;
-                        io.set_file_read_script(scripts);
-                    }
-                    if let Some(scripts) = fixture_run
+                    let bound_run = tape
+                        .binding
                         .as_ref()
-                        .and_then(|run| run.record().inputs.fixture_file_faults.clone())
-                    {
-                        io.set_file_fault_script(scripts)
-                            .map_err(|e| format!("file fault script: {e}"))?;
-                    }
-                    io.set_net_rules(net_rules.clone());
-                    if let Some(env) = &env {
-                        io.set_env(env.clone());
-                    }
-                    io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
-                    // The harness launch draws the reference's seeded simulation.
-                    io.set_random(
-                        hirsel_run_schema::ProviderContract::RandomSplitMix64,
-                        launch_config.random_seed,
-                    );
-                    if let Some(grant) = &process {
-                        io.set_process_grant(grant);
-                    }
-                    if let Some(grant) = &signals {
-                        if let Err(error) = io.set_signal_grant(grant) {
-                            return Err(format!("the signals grant: {error:?}"));
-                        }
-                    }
-                    if let Some((peers, listeners)) = net_script.clone()
-                        && let Err(error) = io.set_net_script(peers, listeners)
-                    {
-                        return Err(format!("the network script: {error:?}"));
-                    }
-                    // A scripted read parks until another task's request advances the
-                    // script: cooperative waits park it and the tape records the wait
-                    // (DET-1), as the reference's host launch does.
-                    if net_script.is_some() && std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_none()
-                    {
-                        io.set_cooperative(crate::readiness::Readiness::default());
-                    }
-                    let tape = match std::env::var_os("HIRSEL_RT_TAPE") {
-                        Some(path) => match io.prepare_recording_with_files(
-                            std::path::Path::new(&path),
-                            &output_grants,
-                        ) {
-                            Ok(file) => Some(file),
-                            Err(error) => return Err(error.to_string()),
-                        },
-                        None => None,
+                        .map(|_| tape.bound_run())
+                        .transpose()
+                        .map_err(|e| e.to_string())?;
+                    arguments = tape.arguments;
+                    let mut io = match binary {
+                        Some(binary) => SimIo::from_binary(tape.tree, binary),
+                        None => SimIo::new(tape.tree, tape.events),
                     };
-                    if tape.is_some() {
-                        initial_tree = match io.snapshot() {
-                            Ok(tree) => tree,
-                            Err(error) => {
-                                return Err(format!("initial recording tree: {error:?}"));
-                            }
-                        };
-                    }
-                    if let Some(file) = tape {
-                        let record = Recording {
-                            arguments: arguments.clone(),
-                            run_identity: launch_config.run_identity,
-                            hash_seed: launch_config.hash_seed,
-                            random_seed: launch_config.random_seed,
-                            test_seed: launch_config.test_seed,
-                            binding: fixture_run
-                                .as_ref()
-                                .filter(|run| !entry.is_test() && !run.calls())
-                                .map(|run| RecordedRun {
-                                    canonical: run.canonical().to_vec(),
-                                    placement: run.record().placement.clone().map(Into::into),
-                                    admitted_at: 0,
-                                    revocation: None,
-                                    instance: None,
-                                }),
-                            tree: initial_tree.clone(),
-                            events: vec![],
-                        };
-                        pending_fixture_recording = Some((file, record));
+                    if let Some(run) = &bound_run {
+                        crate::host_launch::configure_replay(&mut io, run)
+                            .map_err(|e| e.to_string())?;
+                    } else {
+                        // Unbound historical harness tapes keep their explicit fixture inputs.
+                        if let Some(run) = &fixture_run {
+                            io.set_mounts(
+                                run.record()
+                                    .io
+                                    .iter()
+                                    .flat_map(|io| &io.dirs)
+                                    .map(|mount| (mount.path.clone(), mount.access)),
+                            )
+                            .map_err(|e| e.to_string())?;
+                        }
+                        if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
+                            io.deny_output();
+                        }
+                        io.set_net_rules(net_rules.clone());
+                        if let Some(env) = &env {
+                            io.set_env(env.clone());
+                        }
+                        io.clock_grants(
+                            std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(),
+                            false,
+                        );
+                        if let Some(grant) = &process {
+                            io.set_process_grant(grant);
+                        }
+                        if let Some(grant) = &signals {
+                            io.set_signal_kinds(grant.bits());
+                        }
+                        if let Some((peers, listeners)) = net_script.clone()
+                            && let Err(error) = io.set_net_script(peers, listeners)
+                        {
+                            return Err(format!("the network script: {error:?}"));
+                        }
                     }
                     if entry.is_test() {
                         io.test_context(seed);
                     }
-                    io.discard_history();
                     let io = Rc::new(RefCell::new(io));
-                    real = Some(io.clone());
+                    replay = Some(io.clone());
                     Box::new(Shared(io))
                 }
-                Err(error) => return Err(format!("the granted directory: {error}")),
-            },
-        }
+                None if entry.is_zero() => {
+                    if let Some(path) = std::env::var_os("HIRSEL_RT_TAPE") {
+                        let record = Recording {
+                            arguments: vec![],
+                            run_identity: launch_config.run_identity,
+                            hash_seed: launch_config.hash_seed,
+                            random_seed: launch_config.random_seed,
+                            test_seed: launch_config.test_seed,
+                            binding: None,
+                            tree: initial_tree.clone(),
+                            events: vec![],
+                        };
+                        let file = match crate::host_paths::RecorderDestination::pin(
+                            std::path::Path::new(&path),
+                        )
+                        .and_then(|destination| destination.open_with_files(&[], &output_grants))
+                        {
+                            Ok(file) => file,
+                            Err(error) => return Err(error.to_string()),
+                        };
+                        match RecordingWriter::new(file, &record) {
+                            Ok(writer) => zero_recording = Some(writer),
+                            Err(error) => return Err(format!("the Io tape: {error}")),
+                        }
+                    }
+                    Box::new(SimIo::new(initial_tree.clone(), vec![]))
+                }
+                // Without `HIRSEL_RT_ROOT` the root Io grants nothing (determinism.md, Run
+                // configuration): no mount and no projection.
+                None => match if let Some((files, mounts, stdin)) = fixture_files {
+                    RealIo::fixture(files, mounts, stdin, sinks.stdout.clone())
+                        .map(|mut io| {
+                            io.set_stderr(sinks.stderr.clone());
+                            io
+                        })
+                        .map_err(std::io::Error::other)
+                } else {
+                    std::env::var_os("HIRSEL_RT_ROOT").map_or_else(
+                        || {
+                            let mut io = RealIo::from_pinned_mounts([], sinks.stdout.clone())
+                                .expect("an empty mount set");
+                            io.set_projections(Default::default());
+                            Ok(io)
+                        },
+                        |root| {
+                            RealIo::grant_with_output(
+                                std::path::Path::new(&root),
+                                sinks.stdout.clone(),
+                            )
+                        },
+                    )
+                } {
+                    Ok(mut io) => {
+                        sinks.preserve_send_streams(&mut io);
+                        if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
+                            io.deny_output();
+                        }
+                        if let Some(ticks) = std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK") {
+                            let Some(ticks) = ticks.to_str().and_then(|s| s.parse::<u64>().ok())
+                            else {
+                                return Err("invalid harness virtual clock".into());
+                            };
+                            io.virtual_clock(ticks);
+                        } else if signals.is_some() {
+                            // A scripted signal parks its waits: record them and each ready poll,
+                            // so replay interleaves them with the other parked requests.
+                            io.set_cooperative(crate::readiness::Readiness::default());
+                        }
+                        if let Some(text) = harness_text("HIRSEL_RT_FILE_READS")? {
+                            let scripts = serde_json::from_str(&text)
+                                .map_err(|e| format!("file read script: {e}"))?;
+                            io.set_file_read_script(scripts);
+                        }
+                        if let Some(scripts) = fixture_run
+                            .as_ref()
+                            .and_then(|run| run.record().inputs.fixture_file_faults.clone())
+                        {
+                            io.set_file_fault_script(scripts)
+                                .map_err(|e| format!("file fault script: {e}"))?;
+                        }
+                        io.set_net_rules(net_rules.clone());
+                        if let Some(env) = &env {
+                            io.set_env(env.clone());
+                        }
+                        io.clock_grants(
+                            std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(),
+                            false,
+                        );
+                        // The harness launch draws the reference's seeded simulation.
+                        io.set_random(
+                            hirsel_run_schema::ProviderContract::RandomSplitMix64,
+                            launch_config.random_seed,
+                        );
+                        if let Some(grant) = &process {
+                            io.set_process_grant(grant);
+                        }
+                        if let Some(grant) = &signals {
+                            if let Err(error) = io.set_signal_grant(grant) {
+                                return Err(format!("the signals grant: {error:?}"));
+                            }
+                        }
+                        if let Some((peers, listeners)) = net_script.clone()
+                            && let Err(error) = io.set_net_script(peers, listeners)
+                        {
+                            return Err(format!("the network script: {error:?}"));
+                        }
+                        // A scripted read parks until another task's request advances the
+                        // script: cooperative waits park it and the tape records the wait
+                        // (DET-1), as the reference's host launch does.
+                        if net_script.is_some()
+                            && std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_none()
+                        {
+                            io.set_cooperative(crate::readiness::Readiness::default());
+                        }
+                        let tape = match std::env::var_os("HIRSEL_RT_TAPE") {
+                            Some(path) => match io.prepare_recording_with_files(
+                                std::path::Path::new(&path),
+                                &output_grants,
+                            ) {
+                                Ok(file) => Some(file),
+                                Err(error) => return Err(error.to_string()),
+                            },
+                            None => None,
+                        };
+                        if tape.is_some() {
+                            initial_tree = match io.snapshot() {
+                                Ok(tree) => tree,
+                                Err(error) => {
+                                    return Err(format!("initial recording tree: {error:?}"));
+                                }
+                            };
+                        }
+                        if let Some(file) = tape {
+                            let record = Recording {
+                                arguments: arguments.clone(),
+                                run_identity: launch_config.run_identity,
+                                hash_seed: launch_config.hash_seed,
+                                random_seed: launch_config.random_seed,
+                                test_seed: launch_config.test_seed,
+                                binding: fixture_run
+                                    .as_ref()
+                                    .filter(|run| !entry.is_test() && !run.calls())
+                                    .map(|run| RecordedRun {
+                                        canonical: run.canonical().to_vec(),
+                                        placement: run.record().placement.clone().map(Into::into),
+                                        admitted_at: 0,
+                                        revocation: None,
+                                        instance: None,
+                                    }),
+                                tree: initial_tree.clone(),
+                                events: vec![],
+                            };
+                            pending_fixture_recording = Some((file, record));
+                        }
+                        if entry.is_test() {
+                            io.test_context(seed);
+                        }
+                        io.discard_history();
+                        let io = Rc::new(RefCell::new(io));
+                        real = Some(io.clone());
+                        Box::new(Shared(io))
+                    }
+                    Err(error) => return Err(format!("the granted directory: {error}")),
+                },
+            })
+        })?
     };
     // A sole root needs no physical capacity or Ordered objects. Explicit
     // observers retain their admission snapshot before they can accept requests.
@@ -2554,14 +2610,11 @@ pub(crate) unsafe fn execute(
     // transportable state to the concurrent service.
     let mut free_adapter = None;
     if production_free && replay.is_none() {
-        adapter = Box::new(SimIo::new(initial_tree.clone(), Vec::new()));
-        let io = Rc::try_unwrap(real.take().expect("live Free Io"))
-            .map_err(|_| "Free admission retained a home adapter alias")?
-            .into_inner();
-        let io = io
-            .into_concurrent()
-            .map_err(|_| "Free admission requires transportable streams")?;
-        free_adapter = Some(std::sync::Arc::new(io));
+        adapter = empty_adapter(&initial_tree);
+        free_adapter = Some(concurrent_adapter(
+            real.take().expect("live Free Io"),
+            "Free",
+        )?);
     }
     let config = RuntimeConfig {
         layouts,
@@ -2872,21 +2925,11 @@ pub(crate) unsafe fn execute(
     {
         // The home binding's alias goes first; OrderedHome replaces it.
         drop(adapter);
-        let moved = Rc::try_unwrap(io)
-            .map_err(|_| "Ordered admission retained a home adapter alias".to_owned())
-            .and_then(|io| {
-                io.into_inner()
-                    .into_concurrent()
-                    .map_err(|_| "Ordered admission requires transportable streams".to_owned())
-            })
-            .map(std::sync::Arc::new)
-            .and_then(|io| {
-                unsafe {
-                    crate::tasks::ordered::host::concurrent::Service::install(ctx, io.clone())
-                }
+        let moved = concurrent_adapter(io, "Ordered").and_then(|io| {
+            unsafe { crate::tasks::ordered::host::concurrent::Service::install(ctx, io.clone()) }
                 .map(|()| io)
                 .map_err(|stop| format!("Ordered host admission: {stop:?}"))
-            });
+        });
         match moved {
             Ok(io) => {
                 adapter = Box::new(OrderedHome {

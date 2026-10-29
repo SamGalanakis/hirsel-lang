@@ -572,7 +572,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_root_drop(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if let Some(status) = unsafe { crate::tasks::free::tail::invoke_root_drop(ctx, block) } {
+    if let Some(provider) = crate::runtime_roots::free()
+        && let Some(status) = unsafe { (provider.root_drop)(ctx, block) }
+    {
         return status;
     }
     // SAFETY: caller owns a credit; consume handles exact atomic counts.

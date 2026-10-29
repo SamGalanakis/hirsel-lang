@@ -241,6 +241,38 @@ pub enum Selection {
     Replay { run: BoundRun, io: SimIo },
 }
 
+/// Admission stores adapter ownership once; launch frames move only the handle.
+pub(crate) enum StoredSelection {
+    Harness,
+    Live {
+        admitted: AdmittedRun,
+        io: std::rc::Rc<std::cell::RefCell<RealIo>>,
+        tape: Option<std::path::PathBuf>,
+    },
+    Replay {
+        run: BoundRun,
+        io: std::rc::Rc<std::cell::RefCell<SimIo>>,
+    },
+}
+
+impl From<Selection> for StoredSelection {
+    #[inline(never)]
+    fn from(selection: Selection) -> Self {
+        match selection {
+            Selection::Harness => Self::Harness,
+            Selection::Live { admitted, io, tape } => Self::Live {
+                admitted,
+                io: std::rc::Rc::new(std::cell::RefCell::new(io)),
+                tape,
+            },
+            Selection::Replay { run, io } => Self::Replay {
+                run,
+                io: std::rc::Rc::new(std::cell::RefCell::new(io)),
+            },
+        }
+    }
+}
+
 /// Admits runs and starts them; see the module documentation.
 pub struct Host {
     clock: fn() -> Option<i64>,
@@ -305,6 +337,17 @@ impl Host {
         program: &'p Program,
         config: Config,
         selection: Selection,
+        arguments: Vec<OsString>,
+        sinks: Sinks,
+    ) -> RunHandle<'p> {
+        self.start_stored(program, config, selection.into(), arguments, sinks)
+    }
+
+    pub(crate) fn start_stored<'p>(
+        &self,
+        program: &'p Program,
+        config: Config,
+        selection: StoredSelection,
         arguments: Vec<OsString>,
         sinks: Sinks,
     ) -> RunHandle<'p> {
@@ -404,7 +447,7 @@ pub struct RunStatus {
 pub struct RunHandle<'p> {
     program: &'p Program,
     config: Config,
-    selection: Selection,
+    selection: StoredSelection,
     arguments: Vec<OsString>,
     sinks: Sinks,
     execution: Execution,

@@ -2,6 +2,15 @@
 //! accepts, the span identities its provider supplies and the null provider's simulated
 //! exporter. Capture is not delivery: an accepted observation is the request on the tape,
 //! and nothing a provider or exporter does changes what the program observes.
+#[unsafe(export_name = "hirsel.runtime.telemetry.provider")]
+static PROVIDER: crate::runtime_roots::Telemetry = crate::runtime_roots::Telemetry {
+    observe_span: crate::tasks::free::host::native::SpanState::observe_linked,
+    draw: State::telemetry_draw,
+    context: State::telemetry_context,
+    execute: State::execute_telemetry,
+    sample: State::telemetry_sample,
+};
+
 use crate::handles::Grant;
 use crate::io::{AdapterError, Completion, IoError, Request, State};
 pub use hirsel_kernels::telemetry::{self as kernel, Issued, NullIds, Refusal};

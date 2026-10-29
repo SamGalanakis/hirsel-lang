@@ -5264,7 +5264,9 @@ fn mutex_release_op(ctx: *mut TaskCtx, word: u64, outcome: &str) {
 pub(crate) fn end_run(ctx: &mut TaskCtx) {
     let wide = crate::pool::wide(ctx.run_ref());
     // The run's code ran on one thread last, so its other threads are idle: they leave.
-    crate::pool::shutdown(ctx.run_ref());
+    if let Some(cleanup) = ctx.run_ref().pool_cleanup.get() {
+        (cleanup.shutdown)(ctx.run_ref());
+    }
     if let Some(metrics) = ctx.run_ref().worker_metrics.clone() {
         metrics.stack_rss(stack_rss(ctx));
     }

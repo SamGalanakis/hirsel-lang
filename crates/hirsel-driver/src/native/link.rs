@@ -2286,10 +2286,28 @@ fn write_link_objects(
                 || import.name.contains("_task_")
                 || import.name.contains("_cpu_")
         });
-    let root = format!(
+    let mut root = format!(
         "{root}@hirsel.runtime.tasks = hidden constant i8 {}\n",
         u8::from(tasks)
     );
+    let imports = || objects.iter().flat_map(|o| &o.imports);
+    // A standalone launch can select Free or grant an unused scripted world.
+    // Their admission/recording behavior does not depend on a Tasks/Net projection.
+    let telemetry = runners
+        || imports().any(|i| {
+            i.name.contains("_telemetry")
+                || i.name.contains("_capture_")
+                || i.name.contains("_span_")
+        });
+    for (feature, selected) in [("free", true), ("script", true), ("telemetry", telemetry)] {
+        if selected {
+            root.push_str(&format!("@hirsel.runtime.{feature}.provider = external constant i8\n@hirsel.runtime.{feature} = hidden constant ptr @hirsel.runtime.{feature}.provider\n"));
+        } else {
+            root.push_str(&format!(
+                "@hirsel.runtime.{feature} = hidden constant ptr null\n"
+            ));
+        }
+    }
     let root = hirsel_llvm::compile_ir(&root, &program.target, OptLevel::None)
         .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
     inputs.push(write(dir, "runtime-roots.o", &root.bytes)?);

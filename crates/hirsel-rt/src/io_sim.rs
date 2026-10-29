@@ -713,7 +713,7 @@ impl Adapter for SimIo {
         self.state.injected_wait(request)
     }
     fn telemetry_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
-        self.state.telemetry_context(telemetry, span).ok()
+        (crate::runtime_roots::telemetry()?.context)(&self.state, telemetry, span).ok()
     }
     /// The waits the recording re-issued at this scheduling point: the `ready` events at
     /// the tape's head whose wait has waited through exactly the recorded points.

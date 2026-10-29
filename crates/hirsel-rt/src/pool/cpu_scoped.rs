@@ -294,6 +294,11 @@ impl Workers {
     }
 }
 
+static CLEANUP: super::ScopedCleanup = super::ScopedCleanup {
+    request_exit,
+    shutdown,
+};
+
 unsafe fn start_at(
     run: *mut RunShared,
     mut reservation: Reservation,
@@ -305,6 +310,7 @@ unsafe fn start_at(
             .as_deref()
             .expect("scoped run executors")
     };
+    execs.scoped_cleanup.get_or_init(|| &CLEANUP);
     let mut slot = execs.scoped.lock().unwrap();
     if slot.is_some() {
         return Err(Refusal::Busy);

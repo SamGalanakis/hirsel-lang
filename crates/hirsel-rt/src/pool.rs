@@ -492,6 +492,12 @@ pub(crate) fn holders(run: &RunShared) -> Option<Arc<Holders>> {
     run.execs.as_deref().map(|execs| Arc::clone(&execs.holders))
 }
 
+/// Scoped CPU cleanup is linked only by its admitted start.
+pub(super) struct ScopedCleanup {
+    request_exit: fn(&Execs),
+    shutdown: fn(&Execs),
+}
+
 /// A run's threads beyond the one that admitted it: its compute workers from its start at
 /// width > 1, else from its first pool dispatch.
 pub(crate) struct Execs {
@@ -503,6 +509,7 @@ pub(crate) struct Execs {
     compute: Mutex<ComputeWorkers>,
     pool: Mutex<Vec<PoolThread>>,
     scoped: Mutex<Option<cpu_scoped::Workers>>,
+    scoped_cleanup: std::sync::OnceLock<&'static ScopedCleanup>,
     pub(crate) permits: Arc<Permits>,
     holders: Arc<Holders>,
     /// The next compute worker a task with no worker of its own goes to.
@@ -913,12 +920,19 @@ fn execs(ctx: *mut TaskCtx) -> &'static Execs {
     unsafe { init_execs(ctx) }
 }
 
+static CLEANUP: crate::context::PoolCleanup = crate::context::PoolCleanup {
+    shutdown,
+    detach,
+    forget,
+};
+
 unsafe fn init_execs(ctx: *mut TaskCtx) -> &'static mut Execs {
     // SAFETY: the context and its run are live for the whole run; the execs are reached by the
     // thread that runs the run's code, one at a time, and their shared parts are behind
     // locks or atomics.
     unsafe {
         let run = (*ctx).run_ptr();
+        (*run).pool_cleanup.get_or_init(|| &CLEANUP);
         (*(*run).execs.get()).get_or_insert_with(|| {
             if on_pool() {
                 fault("a run's first dispatch came from a pool thread");
@@ -931,6 +945,7 @@ unsafe fn init_execs(ctx: *mut TaskCtx) -> &'static mut Execs {
                 compute: Mutex::new(ComputeWorkers::default()),
                 pool: Mutex::new(Vec::new()),
                 scoped: Mutex::new(None),
+                scoped_cleanup: std::sync::OnceLock::new(),
                 permits: process_permits(),
                 holders: Arc::new(Holders {
                     count: AtomicU32::new(1),
@@ -2020,7 +2035,9 @@ pub(crate) fn shutdown(run: &RunShared) {
         return;
     };
     execs.home.close();
-    cpu_scoped::shutdown(execs);
+    if let Some(cleanup) = execs.scoped_cleanup.get() {
+        (cleanup.shutdown)(execs);
+    }
     let mut compute = execs.compute.lock().unwrap();
     for exec in compute.active.iter().chain(&compute.retiring) {
         exec.post(Post::Exit, None);
@@ -2100,7 +2117,9 @@ pub(crate) fn detach(run: &RunShared) -> bool {
         return false;
     };
     execs.home.close();
-    cpu_scoped::request_exit(execs);
+    if let Some(cleanup) = execs.scoped_cleanup.get() {
+        (cleanup.request_exit)(execs);
+    }
     let compute = execs.compute.lock().unwrap();
     for exec in compute.active.iter().chain(&compute.retiring) {
         exec.post(Post::Exit, None);

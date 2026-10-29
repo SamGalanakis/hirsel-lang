@@ -519,7 +519,9 @@ pub(crate) unsafe fn issue(
     }
     if crate::tasks::free::host::native::enabled(ctx) {
         let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-        return unsafe { crate::tasks::free::host::native::issue(ctx, request) };
+        let provider = crate::runtime_roots::free()
+            .unwrap_or_else(|| crate::fault("native Free Io without its provider"));
+        return unsafe { (provider.issue)(ctx, request) };
     }
     let ordered = crate::tasks::ordered::engine::on(ctx);
     if ordered && let Some(io) = unsafe { (*ctx).run_ref().ordered_io.get() } {

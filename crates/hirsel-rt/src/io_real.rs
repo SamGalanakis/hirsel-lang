@@ -23,7 +23,7 @@ pub type RealIo = RealCore<LocalStreams>;
 pub struct RealCore<S: Streams> {
     file_reads: crate::io_sim::ScriptedFileReads,
     file_faults: crate::io_sim::ScriptedFileFaults,
-    state: State,
+    state: Box<State>,
     disk: Disk,
     tape: Vec<Event>,
     fault: Option<Fault>,
@@ -457,7 +457,7 @@ impl RealIo {
                 .iter()
                 .map(|(path, access, _)| (path.clone(), *access)),
         )?;
-        let mut state = State::default();
+        let mut state = Box::new(State::default());
         state.mounts = access;
         Ok(Self {
             state,
@@ -1368,7 +1368,7 @@ impl<S: Streams> Adapter for RealCore<S> {
         self.state.injected_wait(request)
     }
     fn telemetry_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
-        self.state.telemetry_context(telemetry, span).ok()
+        (crate::runtime_roots::telemetry()?.context)(&self.state, telemetry, span).ok()
     }
     /// The tokens the Readiness finds ready, with the held requests a journal barrier
     /// released (which wait on no host interest), each recorded as its wait's `ready` event,
@@ -1822,7 +1822,9 @@ impl<S: Streams> RealCore<S> {
                 if fault.is_some() {
                     return Err(AdapterError::InvalidCompletion);
                 }
-                let input = self.state.telemetry_draw(&request)?;
+                let input = (crate::runtime_roots::telemetry()
+                    .ok_or(AdapterError::InvalidCompletion)?
+                    .draw)(&mut self.state, &request)?;
                 self.state.sample(&request, input)
             }
             Request::SleepUntil { clock, deadline } if self.state.test_clocks.contains(clock) => {

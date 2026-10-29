@@ -342,6 +342,13 @@ impl Worker {
     }
 }
 
+/// Executor-owned cleanup, registered before its first dispatch.
+pub(crate) struct PoolCleanup {
+    pub(crate) shutdown: fn(&RunShared),
+    pub(crate) detach: fn(&RunShared) -> bool,
+    pub(crate) forget: fn(&mut RunShared),
+}
+
 /// What every task of a run shares: its configuration, scheduler, Io binding, failure table and
 /// launcher.
 pub(crate) struct RunShared {
@@ -432,6 +439,7 @@ pub(crate) struct RunShared {
     /// The home thread and blocking-pool threads, from the first pool dispatch
     /// (`crate::pool`).
     pub(crate) execs: RoleCell<Option<Box<crate::pool::Execs>>>,
+    pub(crate) pool_cleanup: std::sync::OnceLock<&'static PoolCleanup>,
     /// The extern row's headroom counters, when metrics are enabled (`crate::pool`).
     pub(crate) extern_metrics: Option<std::sync::Arc<crate::pool::ExternMetrics>>,
     /// The scheduling rows' headroom counters, when metrics are enabled (`crate::pool`).
@@ -961,7 +969,12 @@ impl TaskCtx {
         if crate::pool::wide(self.run_ref()) {
             // Every thread of the run is idle: they leave, and the root, switched out where it
             // last ran, goes back to the home worker.
-            crate::pool::shutdown(self.run_ref());
+            (self
+                .run_ref()
+                .pool_cleanup
+                .get()
+                .expect("live pool cleanup")
+                .shutdown)(self.run_ref());
             self.home_again();
         } else {
             self.rebind();
@@ -1101,6 +1114,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         heaps,
         fuel: Default::default(),
         execs: RoleCell::new(None),
+        pool_cleanup: Default::default(),
         extern_metrics: None,
         worker_metrics: None,
         #[cfg(feature = "measurement")]
@@ -1246,7 +1260,11 @@ pub(crate) unsafe fn detach(ctx: *mut TaskCtx) {
     // SAFETY: caller contract.
     unsafe {
         let run = (*ctx).run;
-        if !crate::pool::detach(&*run) {
+        let retained = (*run)
+            .pool_cleanup
+            .get()
+            .is_some_and(|cleanup| (cleanup.detach)(&*run));
+        if !retained {
             reclaim(run);
         }
     }
@@ -1263,7 +1281,9 @@ pub(crate) unsafe fn reclaim(run: *mut RunShared) {
         // This Arc outlives execs and the run. A status reader must not see
         // reclamation complete while their task-local owners still exist.
         let holders = crate::pool::holders(&*run);
-        crate::pool::forget(&mut *run);
+        if let Some(cleanup) = (*run).pool_cleanup.get().copied() {
+            (cleanup.forget)(&mut *run);
+        }
         let (root, home) = ((*run).root_ctx, (*run).home);
         drop((*run).ordered_io.take());
         drop(Box::from_raw(run));

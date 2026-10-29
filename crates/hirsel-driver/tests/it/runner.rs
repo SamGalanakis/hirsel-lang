@@ -264,6 +264,18 @@ fn a_standalone_scalar_preserves_events_with_and_without_dispatch_observers() {
                     &dir,
                 )
                 .unwrap();
+                let process = || {
+                    let mut command = if target.triple.starts_with("aarch64") {
+                        let mut command =
+                            std::process::Command::new(tools.qemu_aarch64.as_ref().unwrap());
+                        command.arg(&executable);
+                        command
+                    } else {
+                        std::process::Command::new(&executable)
+                    };
+                    command.env_clear();
+                    command
+                };
                 for width in [1, 4] {
                     let grants = format!(
                         r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]}},"placement":{{"cores":{width},"commit":"shared","reorder":"auto"}}}}"#
@@ -271,14 +283,7 @@ fn a_standalone_scalar_preserves_events_with_and_without_dispatch_observers() {
                     let mut events = None;
                     for observing in [false, true] {
                         let tape = dir.join(format!("w{width}-{observing}.tape"));
-                        let mut command = if target.triple.starts_with("aarch64") {
-                            let mut command =
-                                std::process::Command::new(tools.qemu_aarch64.as_ref().unwrap());
-                            command.arg(&executable);
-                            command
-                        } else {
-                            std::process::Command::new(&executable)
-                        };
+                        let mut command = process();
                         command
                             .env_clear()
                             .env("HIRSEL_RT_WORKERS", width.to_string())
@@ -305,18 +310,65 @@ fn a_standalone_scalar_preserves_events_with_and_without_dispatch_observers() {
                         }
                     }
                 }
+                for (name, tasks, net) in [
+                    ("scalar-free", "tasks.free@1", None),
+                    (
+                        "unused-script",
+                        "tasks.cooperative@1",
+                        Some(serde_json::json!({
+                            "provider":"net.script@2", "rules":[], "peers":[], "listeners":[]
+                        })),
+                    ),
+                ] {
+                    let mut grants = serde_json::json!({
+                        "io": {"stdout":"stdout.bytes@1", "tasks":tasks, "dirs":[]},
+                        "placement":{"cores":1,"commit":"shared","reorder":"auto"}
+                    });
+                    if let Some(net) = net {
+                        grants["io"]["net"] = net;
+                    }
+                    let tape = dir.join(format!("{name}.tape"));
+                    let output = process()
+                        .env("HIRSEL_RT_WORKERS", "1")
+                        .arg("--hirsel-record")
+                        .arg(&tape)
+                        .args(["--hirsel-grants", &grants.to_string()])
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{name}: {output:?}");
+                    assert_eq!(output.stdout, b"line\npartial");
+                    assert!(output.stderr.is_empty(), "{name}: {output:?}");
+                    let replay = process()
+                        .env("HIRSEL_RT_WORKERS", "1")
+                        .arg("--hirsel-replay")
+                        .arg(&tape)
+                        .output()
+                        .unwrap();
+                    assert!(replay.status.success(), "{name}: {replay:?}");
+                    assert_eq!(replay.stdout, output.stdout);
+                    assert_eq!(replay.stderr, output.stderr);
+                }
             }
         }
     });
 }
 
 fn without_runner_provider(tools: &Toolchain, target: &TargetSpec, dir: &Path) -> Toolchain {
-    let archive = dir.join("missing-provider.a");
+    without_provider(tools, target, dir, "runners")
+}
+
+fn without_provider(
+    tools: &Toolchain,
+    target: &TargetSpec,
+    dir: &Path,
+    feature: &str,
+) -> Toolchain {
+    let archive = dir.join(format!("missing-{feature}-provider.a"));
     let renamed = std::process::Command::new(tools.clang.parent().unwrap().join("llvm-objcopy"))
-        .args([
-            "--redefine-sym",
-            "hirsel.runtime.runners.provider=missing.runner.provider",
-        ])
+        .arg("--redefine-sym")
+        .arg(format!(
+            "hirsel.runtime.{feature}.provider=missing.{feature}.provider"
+        ))
         .arg(tools.archive(&target.triple).unwrap())
         .arg(&archive)
         .output()
@@ -335,24 +387,26 @@ fn a_missing_runtime_feature_provider_refuses_the_link_on_both_targets_and_backe
         let tools = toolchain();
         for target in [x86(), arm()] {
             let dir = scratch(&format!("runner-missing-provider/{}", target.triple));
-            let tools = without_runner_provider(&tools, &target, &dir);
             for backend in [Backend::Llvm, Backend::Cranelift] {
                 let compiled = compiled(RUNNERS, &target, backend);
-                let error = link_objects(
-                    &compiled.program,
-                    &compiled.entry,
-                    &compiled.objects,
-                    &tools,
-                    &dir,
-                )
-                .unwrap_err();
-                assert!(
-                    error
-                        .message
-                        .contains("undefined symbol: hirsel.runtime.runners.provider"),
-                    "{} {backend:?}: {error:?}",
-                    target.triple,
-                );
+                for feature in ["runners", "free", "script", "telemetry"] {
+                    let tools = without_provider(&tools, &target, &dir, feature);
+                    let error = link_objects(
+                        &compiled.program,
+                        &compiled.entry,
+                        &compiled.objects,
+                        &tools,
+                        &dir,
+                    )
+                    .unwrap_err();
+                    assert!(
+                        error.message.contains(&format!(
+                            "undefined symbol: hirsel.runtime.{feature}.provider"
+                        )),
+                        "{} {backend:?} {feature}: {error:?}",
+                        target.triple,
+                    );
+                }
             }
         }
     });

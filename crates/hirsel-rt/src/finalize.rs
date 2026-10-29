@@ -93,13 +93,17 @@ pub(crate) unsafe fn run_close(
     if handle & crate::sync::MUTEX != 0 && handle & crate::channels::ENDPOINT == 0 {
         // SAFETY: the wrapper owns the cell; detach before invoking user code.
         return shielded(ctx, |ctx| unsafe {
-            crate::tasks::close_mutex(ctx, handle, anchor, operation_site)
+            (crate::runtime_roots::free()
+                .unwrap_or_else(|| fault("a mutex close without its task provider"))
+                .close_mutex)(ctx, handle, anchor, operation_site)
         });
     }
     if handle & crate::channels::ENDPOINT != 0 {
         // SAFETY: the dropped value owned this endpoint of the run.
         return shielded(ctx, |ctx| unsafe {
-            crate::tasks::close_endpoint(ctx, handle, anchor, operation_site)
+            (crate::runtime_roots::free()
+                .unwrap_or_else(|| fault("an endpoint close without its task provider"))
+                .close_endpoint)(ctx, handle, anchor, operation_site)
         });
     }
     let Some(close) = ctx.run_ref().close_handle else {
@@ -176,7 +180,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize(
     // code or releases a root enters the role itself.
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     unsafe { crate::tasks::role::task_owned(ctx) };
-    if let Some(status) = unsafe { crate::tasks::free::tail::invoke_finalize(ctx, index, value) } {
+    if let Some(provider) = crate::runtime_roots::free()
+        && let Some(status) = unsafe { (provider.finalize)(ctx, index, value) }
+    {
         assert!(
             live_mask.is_null(),
             "a bound inline cleanup has an unproved live mask"

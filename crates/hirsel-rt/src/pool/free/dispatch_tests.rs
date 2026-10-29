@@ -44,6 +44,7 @@ pub(super) fn topology(width: u16) -> Topology {
         }),
         pool: Mutex::new(Vec::new()),
         scoped: Mutex::new(None),
+        scoped_cleanup: Default::default(),
         permits: Arc::new(Permits::new(u32::from(width))),
         holders: Arc::new(Holders {
             count: AtomicU32::new(1),

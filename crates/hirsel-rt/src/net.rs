@@ -613,7 +613,11 @@ impl crate::io::State {
         peers: Vec<hirsel_run_schema::NetPeer>,
         listeners: Vec<hirsel_run_schema::NetListener>,
     ) -> Result<(), AdapterError> {
-        let script = crate::io_net_script::ScriptNet::new(peers, listeners)?;
+        let script = (crate::runtime_roots::script()
+            .ok_or_else(|| {
+                AdapterError::Unsupported("scripted network provider is not linked".into())
+            })?
+            .new)(peers, listeners)?;
         self.net_scripts.insert(0, script);
         self.net_world = NetWorld::Script(0);
         Ok(())
@@ -1137,8 +1141,11 @@ impl crate::io::State {
                 if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
                     return Err(AdapterError::InvalidHandle(*test));
                 }
-                let script =
-                    crate::io_net_script::ScriptNet::new(peers.clone(), listeners.clone())?;
+                let script = (crate::runtime_roots::script()
+                    .ok_or_else(|| {
+                        AdapterError::Unsupported("scripted network provider is not linked".into())
+                    })?
+                    .new)(peers.clone(), listeners.clone())?;
                 let rules = peers
                     .iter()
                     .map(|peer| NetRule {

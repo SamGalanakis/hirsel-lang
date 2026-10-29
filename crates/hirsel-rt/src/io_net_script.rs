@@ -2,6 +2,11 @@
 //! This is Hirsel's peer language, not a ported TCP stack. Rust std's
 //! library/std/src/net/tcp.rs supplies read/timeout/half-close conventions;
 //! reference vectors and script vectors live in tests/it/net_script.rs.
+#[unsafe(export_name = "hirsel.runtime.script.provider")]
+static PROVIDER: crate::runtime_roots::Script = crate::runtime_roots::Script {
+    new: ScriptNet::new,
+};
+
 use super::{
     io::AdapterError,
     net::{

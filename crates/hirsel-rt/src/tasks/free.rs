@@ -29,6 +29,16 @@ pub(crate) mod sets;
 mod spawn;
 pub(crate) mod tail;
 
+#[unsafe(export_name = "hirsel.runtime.free.provider")]
+static PROVIDER: crate::runtime_roots::Free = crate::runtime_roots::Free {
+    close_mutex: super::close_mutex,
+    close_endpoint: super::close_endpoint,
+    finalize: tail::invoke_finalize,
+    root_drop: tail::invoke_root_drop,
+    release: tail::invoke_release,
+    issue: host::native::issue,
+};
+
 #[derive(Default)]
 pub(crate) struct Driver {
     replay: Option<std::sync::Arc<replay::Replay>>,

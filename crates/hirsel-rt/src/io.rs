@@ -1462,7 +1462,9 @@ impl State {
             if fault.is_some() {
                 return Err(AdapterError::InvalidCompletion);
             }
-            return self.execute_telemetry(request);
+            return (crate::runtime_roots::telemetry()
+                .ok_or(AdapterError::InvalidCompletion)?
+                .execute)(self, request);
         }
         // Process outcomes are provider inputs too; only a host adapter can spawn.
         if self.is_process(request) {
@@ -1657,7 +1659,9 @@ impl State {
                 }
             }
             (Request::TelemetryBegin { .. }, Completion::Span { .. }) => {
-                return self.telemetry_sample(request, input);
+                return (crate::runtime_roots::telemetry()
+                    .ok_or(AdapterError::InvalidCompletion)?
+                    .sample)(self, request, input);
             }
             // A completed wait proves the clock reached its deadline: a later
             // recorded sample below it is not a monotonic reading.

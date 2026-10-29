@@ -38,7 +38,7 @@ pub(crate) enum Selected {
     },
     Replay {
         run: BoundRun,
-        io: crate::io_sim::SimIo,
+        io: std::rc::Rc<std::cell::RefCell<crate::io_sim::SimIo>>,
     },
 }
 impl Selected {
@@ -87,27 +87,27 @@ pub(crate) fn select(
                 detail: "expected only --hirsel-replay <tape>".into(),
             });
         };
-        let (io, mut run) = crate::host_launch::replay(std::path::Path::new(path))?;
-        if let Some(policy) = policy {
-            let admission = crate::tasks::ordered::admission::Admission::prepare(Some(&run))
-                .map_err(|error| replay_policy_error(&error))?;
-            if admission.is_none() {
-                return Err(replay_policy_error(
-                    "requires qualified FIFO cooperative execution",
-                ));
+        return replay_selected(std::path::Path::new(path), |mut run| {
+            if let Some(policy) = policy {
+                let admission = crate::tasks::ordered::admission::Admission::prepare(Some(&run))
+                    .map_err(|error| replay_policy_error(&error))?;
+                if admission.is_none() {
+                    return Err(replay_policy_error(
+                        "requires qualified FIFO cooperative execution",
+                    ));
+                }
+                let identity = run.identity();
+                let mut record = run.record().clone();
+                record.placement = Some(policy);
+                run = record.validated()?;
+                assert_eq!(
+                    run.identity(),
+                    identity,
+                    "replay policy never changes identity"
+                );
             }
-            let identity = run.identity();
-            let mut record = run.record().clone();
-            record.placement = Some(policy);
-            run = record.validated()?;
-            assert_eq!(
-                run.identity(),
-                identity,
-                "replay policy never changes identity"
-            );
-        }
-        let run = run.bind(&facts(program, entry, roots, escapes, fueled)?)?;
-        return Ok(Selected::Replay { run, io });
+            run.bind(&facts(program, entry, roots, escapes, fueled)?)
+        });
     }
     if policy.is_some() {
         return Err(replay_policy_error("requires --hirsel-replay <tape>"));
@@ -116,6 +116,19 @@ pub(crate) fn select(
         run: select_run(options.input, program, entry, roots, escapes, fueled)?,
         tape: options.tape,
         revocations: options.revocations,
+    })
+}
+
+#[inline(never)]
+pub(crate) fn replay_selected(
+    path: &std::path::Path,
+    bind: impl FnOnce(hirsel_run_config::ValidatedRun) -> Result<BoundRun, RunRefusal>,
+) -> Result<Selected, RunRefusal> {
+    let (io, run) = crate::host_launch::replay(path)?;
+    let run = bind(run)?;
+    Ok(Selected::Replay {
+        run,
+        io: std::rc::Rc::new(std::cell::RefCell::new(io)),
     })
 }
 
