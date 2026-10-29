@@ -330,15 +330,26 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 
 #[test]
 fn ordered_uncertified_refusal_replays_without_invoking_closed_callbacks() {
-    ordered_mapper_refusal("let xs = [job]; xs[0]");
+    ordered_mapper_replay(
+        "let xs = [job]; core@1/f64.bits(float.sqrt(core@1/f64.from_bits(xs[0])))",
+        false,
+    );
+}
+
+#[test]
+fn ordered_certified_allocating_mapper_runs_and_replays() {
+    ordered_mapper_replay("let xs = [job]; xs[0]", true);
 }
 
 #[test]
 fn ordered_unclassified_float_mapper_refuses_before_preparation_and_replays() {
-    ordered_mapper_refusal("core@1/f64.bits(float.sqrt(core@1/f64.from_bits(job)))");
+    ordered_mapper_replay(
+        "core@1/f64.bits(float.sqrt(core@1/f64.from_bits(job)))",
+        false,
+    );
 }
 
-fn ordered_mapper_refusal(mapper: &str) {
+fn ordered_mapper_replay(mapper: &str, certified: bool) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     fs::write(
@@ -347,13 +358,22 @@ fn ordered_mapper_refusal(mapper: &str) {
 pub fn main(rt: Io) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   let outcome = core@1/cpu.map_scoped(tasks, 1u32,
-    fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1] },
+    fn() -> List[u64] uses {} { failure.check(CERTIFIED, Bounds()); [1] },
     fn(take job: u64) -> u64 uses {} { MAPPER })
-  failure.check(outcome == Error(MapperNotCertified()), Bounds())
+  failure.check(outcome == EXPECTED, Bounds())
   Ok(())
 }
 "#
-        .replace("MAPPER", mapper),
+        .replace("MAPPER", mapper)
+        .replace("CERTIFIED", if certified { "true" } else { "false" })
+        .replace(
+            "EXPECTED",
+            if certified {
+                "Ok([1])"
+            } else {
+                "Error(MapperNotCertified())"
+            },
+        ),
     )
     .unwrap();
     let manifest = root.join("hirsel.json");
@@ -389,7 +409,9 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                 .output()
                 .unwrap(),
         );
-        assert!(fs::read(&probe).unwrap().is_empty());
+        if !certified {
+            assert!(fs::read(&probe).unwrap().is_empty());
+        }
         checked(
             Command::new(&executable)
                 .arg("--hirsel-replay")

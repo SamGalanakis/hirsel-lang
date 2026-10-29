@@ -300,7 +300,7 @@ fn cpu_scalar_scopes_agree_under_free_and_ordered_at_widths_1_4_8() {
 #[test]
 fn cpu_ordered_unknown_mapper_refuses_before_preparation() {
     for mapper in [
-        "let xs = [job]; xs[0u64]",
+        "let xs = [job]; core@1/f64.bits(float.sqrt(core@1/f64.from_bits(xs[0u64])))",
         "core@1/f64.bits(float.sqrt(core@1/f64.from_bits(job)))",
     ] {
         agree_in(
@@ -324,6 +324,28 @@ pub fn main(rt: Io) -> Result[(), GrantError] {{
             false,
         );
     }
+}
+
+#[test]
+fn cpu_ordered_allocating_mapper_is_certified() {
+    agree_in(
+        r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let rows = core@1/cpu.map_scoped(tasks, 1u32,
+    fn() -> List[u64] uses {} { [1u64] },
+    fn(take job: u64) -> u64 uses {} { let xs = [job]; xs[0u64] })
+  failure.check(rows == Ok([1u64]), Bounds())
+  let _ = out.print(io.stdout(rt)?, "cpu-certified\n")
+  Ok(())
+}
+"#,
+        Some(grant(1)),
+        b"cpu-certified\n",
+        false,
+        false,
+        false,
+    );
 }
 
 #[test]
