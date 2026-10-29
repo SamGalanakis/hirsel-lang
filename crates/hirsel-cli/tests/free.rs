@@ -5968,7 +5968,10 @@ fn f1_queued_never_started_divergent_child_full_projection_matrix() {
         let report = scratch.path("projection");
         let witness = scratch.path("queued-witness");
         let _ = std::fs::remove_file(&witness);
-        let grants = serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"placement":{"cores":8},"recording":level});
+        // This law requires an observed actual-eight pool before any child
+        // starts. Demand startup otherwise needs only the root and its child;
+        // the existing placement observer requests the full admitted topology.
+        let grants = serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"placement":{"cores":8,"metrics":scratch.path("capacity.json")},"recording":level});
         let mut command = Command::new(&executable);
         command
             .arg("--hirsel-record")
