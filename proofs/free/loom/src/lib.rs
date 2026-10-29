@@ -87,3 +87,6 @@ mod queue_arena_tests;
 #[path = "../../../../crates/hirsel-rt/src/tasks/role/owner.rs"]
 #[allow(dead_code)]
 mod role_owner;
+
+#[path = "../../../../crates/hirsel-free/src/batch.rs"]
+pub mod batch;

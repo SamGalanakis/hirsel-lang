@@ -446,3 +446,62 @@ fn exhausted_generations_refuse_reuse_against_a_map_oracle() {
         }
     }
 }
+
+#[test]
+fn frozen_batch_directory_keeps_task_storage_until_every_physical_and_notice_owner_leaves() {
+    use hirsel_free::batch::{Binding, Directory, Key};
+    for owner in [Owner::Active, Owner::Saved, Owner::Notified, Owner::Request] {
+        let (mut s, scope, children) = tree(1);
+        let child = children[0];
+        let old = s.task_key(child).unwrap();
+        let key = Key {
+            slot: old.slot,
+            generation: old.generation as u32,
+        };
+        let lease = s.lease(child);
+        let (directory, mut saved) = Directory::admit(vec![Binding {
+            key,
+            path: vec![7, 2].into_boxed_slice(),
+            lease,
+            image: 42u32,
+        }])
+        .unwrap();
+        let notice = directory.notice(0, key).unwrap();
+        let mut active = None;
+        if matches!(owner, Owner::Active | Owner::Notified | Owner::Request) {
+            active = Some(saved.pop().unwrap().start());
+        }
+        if matches!(owner, Owner::Notified | Owner::Request) {
+            drop(active.take());
+        }
+        drop(directory);
+        drop(retire(&mut s, scope, child));
+        assert!(!reused(&mut s, scope, 16).contains(&child));
+        assert_eq!(s.task_slots.retained(), vec![child]);
+        assert!(s.live_task(old).is_none());
+        drop(saved);
+        drop(active);
+        // A delayed notifier alone still pins the old allocation.
+        s.task_slots.reclaim_all();
+        assert_eq!(s.task_slots.retained(), vec![child]);
+        assert_eq!(notice.path(), &[7, 2]);
+        assert!(
+            notice.notify().is_none(),
+            "a retired or completed frame cannot restart"
+        );
+        drop(notice);
+        s.task_slots.reclaim_all();
+        assert!(s.task_slots.retained().is_empty());
+        let next = spawn(&mut s, scope, 99);
+        assert_eq!(next, child);
+        assert_eq!(s.task_key(next).unwrap().generation, old.generation + 1);
+    }
+    assert!(
+        Key {
+            slot: 7,
+            generation: u32::MAX
+        }
+        .successor()
+        .is_none()
+    );
+}

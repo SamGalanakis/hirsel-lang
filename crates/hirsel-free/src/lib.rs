@@ -34,3 +34,5 @@ pub mod tape;
 pub mod work;
 
 pub mod concurrent;
+
+pub mod batch;
