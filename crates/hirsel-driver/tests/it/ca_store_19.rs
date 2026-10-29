@@ -1201,13 +1201,23 @@ fn staged_lower_products_restore_own_declarations_before_admission_without_modes
         let store = Arc::new(store::MemStore::default());
         let mut seed = signature_session(store.clone(), source, true);
         let mut seed_products = StagedProducts::capture(&mut seed, 1).unwrap();
-        let request = seed_products.runtime.request(&[seed_products.lower.query(&path).unwrap()]);
+        let request = seed_products
+            .runtime
+            .request(&[seed_products.lower.query(&path).unwrap()]);
         seed_products.runtime.wait(request).unwrap();
         let expected = seed_products.lower.settled_definition(&path).unwrap();
-        let declaration = expected.bodies.iter().flat_map(|body| &body.rvalues).find_map(|value| match value {
-            hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()),
-            _ => None,
-        }).unwrap();
+        let declaration = expected
+            .bodies
+            .iter()
+            .flat_map(|body| &body.rvalues)
+            .find_map(|value| match value {
+                hirsel_tir::Rvalue::ReadConstant {
+                    definition,
+                    arguments,
+                } if !arguments.is_empty() => Some(definition.clone()),
+                _ => None,
+            })
+            .unwrap();
         let signature = seed.item_signature(&declaration).unwrap().value.fingerprint;
         seed_products.runtime.shutdown();
         drop(seed_products);
@@ -1221,9 +1231,22 @@ fn staged_lower_products_restore_own_declarations_before_admission_without_modes
         products.runtime.wait(request).unwrap();
         let actual = products.lower.settled_definition(&path).unwrap();
         assert_eq!(actual.path, expected.path);
-        assert_eq!(fresh.item_signature(&declaration).unwrap().value.fingerprint, signature);
+        assert_eq!(
+            fresh
+                .item_signature(&declaration)
+                .unwrap()
+                .value
+                .fingerprint,
+            signature
+        );
         assert_eq!(products.lower.work(&path).lowerings, 0);
-        assert!(!products.front.work_snapshot().iter().any(|(p, kind, count)| p == &path && *kind == QueryKind::Modes && *count != 0));
+        assert!(
+            !products
+                .front
+                .work_snapshot()
+                .iter()
+                .any(|(p, kind, count)| p == &path && *kind == QueryKind::Modes && *count != 0)
+        );
         products.runtime.shutdown();
         drop(products);
         drop(fresh);
@@ -1233,8 +1256,16 @@ fn staged_lower_products_restore_own_declarations_before_admission_without_modes
             store::ResultStore::put(&*store, &key, &bytes);
         }
         for (provider, text, message) in [
-            (copied as Arc<dyn store::ResultStore>, source.to_owned(), "declaration bytes cannot transfer V completion"),
-            (store.clone(), source.replace("field:u32", "field:u64"), "private V universe changes invalidate completion"),
+            (
+                copied as Arc<dyn store::ResultStore>,
+                source.to_owned(),
+                "declaration bytes cannot transfer V completion",
+            ),
+            (
+                store.clone(),
+                source.replace("field:u32", "field:u64"),
+                "private V universe changes invalidate completion",
+            ),
         ] {
             let mut invalid = signature_session(provider, &text, false);
             invalid.adapters.modes = None;
@@ -1242,7 +1273,9 @@ fn staged_lower_products_restore_own_declarations_before_admission_without_modes
             let accepted = match StagedProducts::capture(&mut invalid, 1) {
                 Err(_) => false,
                 Ok(mut products) => {
-                    let request = products.runtime.request(&[products.lower.query(&path).unwrap()]);
+                    let request = products
+                        .runtime
+                        .request(&[products.lower.query(&path).unwrap()]);
                     let accepted = products.runtime.wait(request).is_ok();
                     products.runtime.shutdown();
                     accepted
@@ -1250,9 +1283,12 @@ fn staged_lower_products_restore_own_declarations_before_admission_without_modes
             };
             assert!(!accepted, "{message}");
         }
-        let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+        let mut oracle =
+            signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
         let mut products = StagedProducts::capture(&mut oracle, 1).unwrap();
-        let request = products.runtime.request(&[products.lower.query(&path).unwrap()]);
+        let request = products
+            .runtime
+            .request(&[products.lower.query(&path).unwrap()]);
         products.runtime.wait(request).unwrap();
         products.runtime.shutdown();
     });
@@ -1357,13 +1393,26 @@ fn lower_hits_replay_exact_staged_values_and_preserve_completion_authority() {
         let store = Arc::new(store::MemStore::default());
         let mut seed = signature_session(store.clone(), source, true);
         let mut seed_products = StagedProducts::capture(&mut seed, 1).unwrap();
-        let request = seed_products.runtime.request(&[seed_products.lower.query(&definition("scaled")).unwrap(), seed_products.lower.query(&root).unwrap()]);
+        let request = seed_products.runtime.request(&[
+            seed_products.lower.query(&definition("scaled")).unwrap(),
+            seed_products.lower.query(&root).unwrap(),
+        ]);
         seed_products.runtime.wait(request).unwrap();
-        let generic = seed_products.lower.settled_definition(&definition("scaled")).unwrap();
-        let hidden = generic.bodies[generic.entry.0 as usize].rvalues.iter().find_map(|r| match r {
-            hirsel_tir::Rvalue::ReadConstant {definition, arguments} if !arguments.is_empty() => Some(definition.clone()),
-            _ => None,
-        }).unwrap();
+        let generic = seed_products
+            .lower
+            .settled_definition(&definition("scaled"))
+            .unwrap();
+        let hidden = generic.bodies[generic.entry.0 as usize]
+            .rvalues
+            .iter()
+            .find_map(|r| match r {
+                hirsel_tir::Rvalue::ReadConstant {
+                    definition,
+                    arguments,
+                } if !arguments.is_empty() => Some(definition.clone()),
+                _ => None,
+            })
+            .unwrap();
         let expected = seed_products.lower.settled_definition(&root).unwrap();
         assert!(seed_products.budget.reserved() > 0);
         seed_products.runtime.shutdown();
@@ -1379,10 +1428,31 @@ fn lower_hits_replay_exact_staged_values_and_preserve_completion_authority() {
             products.runtime.wait(request).unwrap();
             let actual = products.lower.settled_definition(&root).unwrap();
             assert_eq!(actual.path, expected.path);
-            assert_eq!(products.lower.work(&root).lowerings, 0, "resident Lower replays the same ledger");
-            assert!(!products.front.work_snapshot().iter().any(|(p, kind, count)| p == &root && *kind == QueryKind::Modes && *count != 0));
-            assert_eq!(products.lower.settled_constant(&hidden, &[2]).unwrap().root.kind, hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)));
-            assert!(products.lower.settled_constant(&hidden, &[3]).is_err(), "unselected size stays absent");
+            assert_eq!(
+                products.lower.work(&root).lowerings,
+                0,
+                "resident Lower replays the same ledger"
+            );
+            assert!(
+                !products
+                    .front
+                    .work_snapshot()
+                    .iter()
+                    .any(|(p, kind, count)| p == &root && *kind == QueryKind::Modes && *count != 0)
+            );
+            assert_eq!(
+                products
+                    .lower
+                    .settled_constant(&hidden, &[2])
+                    .unwrap()
+                    .root
+                    .kind,
+                hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4))
+            );
+            assert!(
+                products.lower.settled_constant(&hidden, &[3]).is_err(),
+                "unselected size stays absent"
+            );
         }
         products.runtime.shutdown();
         drop(products);
@@ -1398,16 +1468,21 @@ fn lower_hits_replay_exact_staged_values_and_preserve_completion_authority() {
         let accepted = match StagedProducts::capture(&mut remote, 1) {
             Err(_) => false,
             Ok(mut products) => {
-                let request = products.runtime.request(&[products.lower.query(&root).unwrap()]);
+                let request = products
+                    .runtime
+                    .request(&[products.lower.query(&root).unwrap()]);
                 let accepted = products.runtime.wait(request).is_ok();
                 products.runtime.shutdown();
                 accepted
             }
         };
         assert!(!accepted, "producer ledger cannot transfer V completion");
-        let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+        let mut oracle =
+            signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
         let mut products = StagedProducts::capture(&mut oracle, 1).unwrap();
-        let request = products.runtime.request(&[products.lower.query(&root).unwrap()]);
+        let request = products
+            .runtime
+            .request(&[products.lower.query(&root).unwrap()]);
         products.runtime.wait(request).unwrap();
         products.runtime.shutdown();
     });
