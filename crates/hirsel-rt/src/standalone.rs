@@ -331,12 +331,14 @@ fn select_run(
                 Ok(args) => record.args = Some(args),
                 // The selected record's own refusal comes first.
                 Err(refusal) => {
-                    record.validated()?.check_program(program, entry, launch)?;
+                    record
+                        .into_validated()?
+                        .check_program(program, entry, launch)?;
                     return Err(refusal);
                 }
             }
             // One validation: the record with its snapshot, checked against the code.
-            let run = record.validated()?;
+            let run = record.into_validated()?;
             run.check_program(program, entry, launch)?;
             return run.bind(&facts(program, entry, roots, escapes, fueled)?);
         }
@@ -352,7 +354,7 @@ fn select_run(
     // Preserve all configured inputs and grants; the process snapshot is the
     // only changed field and contributes to the admitted run's identity.
     record
-        .validated()?
+        .into_validated()?
         .bind(&facts(program, entry, roots, escapes, fueled)?)
 }
 

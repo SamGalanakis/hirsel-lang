@@ -196,7 +196,7 @@ impl RunConfig {
         entry: String,
         launch: LaunchKind,
     ) -> Result<ValidatedRun, RunRefusal> {
-        Self::template_at(bytes, program, entry, launch, None)?.validated()
+        Self::template_at(bytes, program, entry, launch, None)?.into_validated()
     }
 
     /// The record a grants template binds to the selected code, before validation.
@@ -278,7 +278,7 @@ impl RunConfig {
         entry: String,
         launch: LaunchKind,
     ) -> Result<ValidatedRun, RunRefusal> {
-        Self::grants_template(input, program, entry, launch)?.validated()
+        Self::grants_template(input, program, entry, launch)?.into_validated()
     }
 
     /// The record [`Self::grants_input`] validates, for a launcher that completes it (its
@@ -376,7 +376,14 @@ impl RunConfig {
     /// Parse human JSON, rejecting duplicates, unknown fields and noncanonical numbers.
     /// Member order, whitespace and string escapes may normalize; grants never widen.
     pub fn validate(bytes: &[u8]) -> Result<ValidatedRun, RunRefusal> {
-        let mut record = Self::parse(bytes)?;
+        Self::parse(bytes)?.into_validated()
+    }
+
+    /// Validate an owned typed record without serializing and reparsing it.
+    /// Human JSON must first pass the duplicate, field and integer checks in
+    /// `grants_template`, `record_template` or `validate`.
+    pub fn into_validated(mut self) -> Result<ValidatedRun, RunRefusal> {
+        let record = &mut self;
         if record.schema != SCHEMA {
             return Err(RunRefusal::Schema {
                 found: record.schema,
@@ -411,7 +418,7 @@ impl RunConfig {
                 return Err(invalid("inputs.scheduler.version", "zero version"));
             }
         }
-        object_stores::expand(&mut record)?;
+        object_stores::expand(record)?;
         if let Some(io) = &mut record.io {
             validate_io(io, "io")?;
             runners::validate(&mut io.runners, validate_io)?;
@@ -472,8 +479,8 @@ impl RunConfig {
                 "tasks.free@1 takes no scheduler",
             ));
         }
-        supported_providers(&record)?;
-        let canonical = canonical_bytes(&record);
+        supported_providers(record)?;
+        let canonical = canonical_bytes(record);
         let timed = record
             .io
             .as_ref()
@@ -517,7 +524,7 @@ impl RunConfig {
         Ok(ValidatedRun {
             data: std::sync::Arc::new(ValidatedData {
                 program,
-                record,
+                record: self,
                 canonical,
                 identity,
             }),
@@ -1296,7 +1303,7 @@ fn unique_env<'de, D: serde::Deserializer<'de>>(
     }
     de.deserialize_option(Entries)
 }
-fn canonical_bytes(record: &RunConfig) -> Vec<u8> {
+fn canonical_bytes(record: &mut RunConfig) -> Vec<u8> {
     struct Canonical;
     impl serde_json::ser::Formatter for Canonical {
         fn write_char_escape<W: ?Sized + std::io::Write>(
@@ -1319,14 +1326,14 @@ fn canonical_bytes(record: &RunConfig) -> Vec<u8> {
         }
     }
     // Placement is validated before this point, but never contributes to identity.
-    let mut semantic = record.clone();
-    semantic.placement = None;
+    let placement = record.placement.take();
     let mut bytes = vec![];
-    semantic
+    record
         .serialize(&mut serde_json::Serializer::with_formatter(
             &mut bytes, Canonical,
         ))
         .expect("run serialization");
+    record.placement = placement;
     bytes
 }
 
@@ -1365,6 +1372,11 @@ mod schema_diagnostic {
     use std::{cell::Cell, fmt};
 
     pub(super) fn from_slice<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, RunRefusal> {
+        // The same serde_json parser and typed visitors enforce the schema on
+        // success. Only a refusal needs path tracking and value redaction.
+        if let Ok(value) = serde_json::from_slice(bytes) {
+            return Ok(value);
+        }
         let missing = Cell::new(None);
         let mut deserializer = serde_json::Deserializer::from_slice(bytes);
         let value = serde_path_to_error::deserialize(Wrap(&mut deserializer, &missing)).map_err(

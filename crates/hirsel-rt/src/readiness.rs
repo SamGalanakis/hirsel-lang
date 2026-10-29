@@ -85,7 +85,21 @@ impl Signal {
 }
 
 #[derive(Clone, Default)]
-pub struct Readiness(Arc<Mutex<ReadyState>>, u64, Arc<AtomicU64>);
+pub struct Readiness(Arc<ReadySlot>, u64, Arc<AtomicU64>);
+
+/// Clones publish into the same driver, even when the first wait comes from
+/// another thread. OnceLock follows std's lazy publication protocol; the large
+/// registry is absent until an interest or driver configuration needs it.
+#[derive(Default)]
+struct ReadySlot(std::sync::OnceLock<Box<Mutex<ReadyState>>>);
+impl ReadySlot {
+    fn get(&self) -> Option<&Mutex<ReadyState>> {
+        self.0.get().map(Box::as_ref)
+    }
+    fn lock(&self) -> std::sync::LockResult<MutexGuard<'_, ReadyState>> {
+        self.0.get_or_init(|| Box::new(Mutex::default())).lock()
+    }
+}
 /// The token bits a run's tag occupies: above every interpreter and host wait token's
 /// counter, below the host's own token ranges (bits 62 and 63).
 const TAG_SHIFT: u32 = 48;
@@ -276,6 +290,9 @@ impl Readiness {
 
     /// No other host source or external stop descriptor needs this driver.
     pub(crate) fn exclusive_socket(&self) -> bool {
+        if self.0.get().is_none() {
+            return true;
+        }
         let state = self.0.lock().unwrap();
         !state.shared
             && state.wakes.is_empty()
@@ -287,6 +304,9 @@ impl Readiness {
     /// Shared execution drivers always decline: another run may need to progress.
     /// Rust a7c37f9f socket/unix.rs:180-229 supplies the poll/deadline/EINTR loop.
     pub(crate) fn wait_current(&self) -> Result<bool, AdapterError> {
+        if self.0.get().is_none() {
+            return Ok(false);
+        }
         let state = self.0.lock().unwrap();
         if state.shared
             || !state.wakes.is_empty()
@@ -361,6 +381,9 @@ impl Readiness {
     }
     /// The delivery `token` waits for arrived: it is ready at the next scheduling point.
     pub fn deliver(&self, token: u64) {
+        if self.0.get().is_none() {
+            return;
+        }
         let token = self.tag(token);
         let mut state = self.0.lock().unwrap();
         if state.pending.get(&token).is_some_and(|p| p.delivery) {
@@ -392,6 +415,9 @@ impl Readiness {
         self.pending().scripted = Some(ScriptedWait::UnansweredConnect);
     }
     pub(crate) fn pending_scripted_connect(&self) -> bool {
+        if self.0.get().is_none() {
+            return false;
+        }
         let token = self.2.load(Ordering::Relaxed);
         self.0
             .lock()
@@ -405,6 +431,9 @@ impl Readiness {
     /// A network request completed: parked scripted waits are retried at the next
     /// scheduling point.
     pub(crate) fn progressed(&self) {
+        if self.0.get().is_none() {
+            return;
+        }
         let mut state = self.0.lock().unwrap();
         state.progress += 1;
         let state = &mut *state;
@@ -425,9 +454,15 @@ impl Readiness {
         self.0.lock().unwrap().isolated_process_clock = true;
     }
     pub(crate) fn provider_deadline(&self, deadline: Option<u64>) {
+        if deadline.is_none() && self.0.get().is_none() {
+            return;
+        }
         self.0.lock().unwrap().provider_deadline = deadline;
     }
     pub(crate) fn virtual_time(&self) -> Option<u64> {
+        if self.0.get().is_none() {
+            return None;
+        }
         self.0.lock().unwrap().virtual_time
     }
     pub(crate) fn pending(&self) -> PendingGuard<'_> {
@@ -441,6 +476,9 @@ impl Readiness {
     /// Progress already committed by the current operation, without constructing
     /// a Pending row for the usual single successful send.
     pub(crate) fn offset(&self) -> usize {
+        if self.0.get().is_none() {
+            return 0;
+        }
         let state = self.0.lock().unwrap();
         state
             .pending
@@ -453,6 +491,9 @@ impl Readiness {
         self.2.store(self.tag(token), Ordering::Relaxed);
     }
     pub fn finish(&self, token: u64) {
+        if self.0.get().is_none() {
+            return;
+        }
         let token = self.tag(token);
         let mut state = self.0.lock().unwrap();
         // Every side index names a Pending row. A ready syscall creates none.
@@ -476,6 +517,9 @@ impl Readiness {
     /// The task of the request blocked under `token` parked: from the next scheduling point
     /// on, [`ready`](Self::ready) reports the token when its interest is ready.
     pub fn parked(&self, token: u64) {
+        if self.0.get().is_none() {
+            return;
+        }
         let token = self.tag(token);
         let mut state = self.0.lock().unwrap();
         let virtual_time = state.virtual_time;
@@ -496,6 +540,9 @@ impl Readiness {
     /// After a packet is sent or a write is accepted, the operation must complete
     /// with its own outcome rather than report an effect-free cancellation.
     pub fn cancellable(&self, token: u64) -> bool {
+        if self.0.get().is_none() {
+            return true;
+        }
         self.0
             .lock()
             .unwrap()
@@ -507,6 +554,9 @@ impl Readiness {
     /// ready, a deadline passed, or the token waits on nothing epoll can watch), in token
     /// order. Never blocks; each ready token's operation is re-issued by the caller.
     pub fn ready(&self) -> Result<Vec<u64>, AdapterError> {
+        if self.0.get().is_none() {
+            return Ok(Vec::new());
+        }
         let mut state = self.0.lock().unwrap();
         let woken = Self::poll(&mut state)?;
         let others: Vec<u64> = woken
@@ -539,6 +589,9 @@ impl Readiness {
     /// wake_on descriptors are readiness-neutral: poll removes WAKE_TOKEN;
     /// stop words are checked separately at the existing runtime entries.
     pub(crate) fn ready_deadline(&self) -> Option<Instant> {
+        if self.0.get().is_none() {
+            return None;
+        }
         let mut state = self.0.lock().unwrap();
         if state.shared
             || state.virtual_time.is_some()
@@ -559,6 +612,9 @@ impl Readiness {
     /// Whether [`ready`](Self::ready) would report a token of this run now, without taking
     /// any: what epoll and the timers found waits for that scheduling point.
     pub fn has_ready(&self) -> Result<bool, AdapterError> {
+        if self.0.get().is_none() {
+            return Ok(false);
+        }
         let mut state = self.0.lock().unwrap();
         let woken = Self::poll(&mut state)?;
         state.woken = woken;
@@ -742,6 +798,9 @@ impl Readiness {
     }
 
     pub(crate) fn wait_source(&self, include_wake_only: bool) -> Result<WaitSource, AdapterError> {
+        if self.0.get().is_none() {
+            return Ok(WaitSource::Empty);
+        }
         let mut state = self.0.lock().unwrap();
         state.sync()?;
         if state.isolated_process_clock && state.external_waits != 0 {
