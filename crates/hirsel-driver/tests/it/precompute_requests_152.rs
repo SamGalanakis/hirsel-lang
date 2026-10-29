@@ -201,18 +201,21 @@ fn checked_dependency_readers_preserve_the_complete_generated_signature_sequence
         let manifest = directory.path().join("hirsel.json");
         std::fs::write(directory.path().join("comptime.hir"), source).unwrap();
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"comptime.hir","module":[]}],"dependencies":[]}"#).unwrap();
-        let mut control = COMPILER
-            .with_owned_engines()
-            .load_check_package(&manifest)
+        let mut control = hirsel_engine::QueryEngine::new(
+            hirsel_engine::default_environment(),
+            hirsel_driver::compiler_adapters(),
+        );
+        let file = control.sources.add("comptime.hir", source.into()).unwrap();
+        control
+            .parse_file(file, &hirsel_engine::default_context())
             .unwrap();
-        let mut path = control.entry.clone();
+        let mut path = hirsel_engine::entry_path(&hirsel_engine::default_context());
         for name in ["B", "A", "B"] {
             path.0.name = name.into();
-            control.engine.materialize_value(&path).unwrap();
+            control.materialize_value(&path).unwrap();
         }
         path.0.name = "chosen".into();
         let expected = control
-            .engine
             .check_definition(&path)
             .unwrap()
             .dependencies
