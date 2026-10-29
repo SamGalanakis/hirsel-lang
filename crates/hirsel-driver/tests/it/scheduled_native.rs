@@ -103,7 +103,7 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 .map(|p| native.outcome(p).unwrap())
                 .collect::<Vec<_>>();
             for output in &outputs {
-                let product = output.product.product.unwrap();
+                let product = (output.product.product).clone().unwrap();
                 let bytes = store.get_content(product.record).unwrap();
                 if let Some(previous) = previous_products.insert(
                     (
@@ -161,7 +161,7 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 .find(|o| o.product.source.definition == program.entry)
                 .unwrap();
             let payload_bytes = store
-                .get_content(main_output.product.product.unwrap().record)
+                .get_content((main_output.product.product).clone().unwrap().record)
                 .unwrap();
             let payload = payload_bytes.len() as u64;
             // Reuse settled producers, but give a fresh native owner exactly
@@ -205,7 +205,7 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 let request = bounded_runtime.request(&[bounded.query(&program.entry).unwrap()]);
                 let result = bounded_runtime.wait(request);
                 if accepts {
-                    let product = result.expect("one payload fits exactly")[0];
+                    let product = result.expect("one payload fits exactly")[0].clone();
                     assert_eq!(store.get_content(product.record).unwrap(), payload_bytes);
                     assert_eq!(
                         bounded.outcome(product).unwrap().product.source.definition,

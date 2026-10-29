@@ -196,7 +196,7 @@ impl QueryFactory for Factory {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&id.address.0)
-            .map(|(p, _)| Ok(*p));
+            .map(|(p, _)| Ok(p.clone()));
         Ok(Box::new(Task {
             owner: self.0.clone(),
             path,
@@ -226,13 +226,13 @@ impl QueryTask for Task {
         self.owner.weight.retained
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        let result = if let Some(result) = self.terminal {
+        let result = if let Some(result) = self.terminal.clone() {
             result
         } else {
             match self.advance(cx) {
                 Poll::Pending => return QueryPoll::Waiting(self.waiting.into_iter().collect()),
                 Poll::Ready(result) => {
-                    self.terminal = Some(result);
+                    self.terminal = Some(result.clone());
                     result
                 }
             }
@@ -457,10 +457,10 @@ impl Task {
                 .insert(
                     self.id.address.0,
                     (
-                        product,
+                        product.clone(),
                         Arc::new(Data {
                             product: Arc::new(crate::NativeDiscoveryProduct {
-                                product: Some(product),
+                                product: Some(product.clone()),
                                 source: Arc::new(source),
                                 contracts,
                                 requirements,

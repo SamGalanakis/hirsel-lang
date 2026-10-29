@@ -166,8 +166,9 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
         let request = runtime.request(&[source.query()]);
         let completed = runtime
             .wait(request)
-            .unwrap_or_else(|r| panic!("{:?}", source.failure(r)))[0];
-        let input = export.input_for_native(&source, completed).unwrap();
+            .unwrap_or_else(|r| panic!("{:?}", source.failure(r)))[0]
+            .clone();
+        let input = export.input_for_native(&source, completed.clone()).unwrap();
         let table = hirsel_proof_export::build(&input);
         let checker = hirsel_proof_export::sidecar::Checker::parse("prover@1").unwrap();
         let records = table
@@ -195,7 +196,7 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
             records,
             trusted: vec![checker],
         };
-        let actual = source.outcome(completed).unwrap().products;
+        let actual = source.outcome(completed.clone()).unwrap().products;
         let declarations = native::queries::declarations::NativeDeclarations::from_settled(
             &actual.signatures,
             actual.roots.clone(),
@@ -221,8 +222,14 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
         drop(program);
         let trace = hirsel_lir::construction::ValueTrace::default();
         let _observe = trace.enter();
-        let proofs =
-            Proofs::assess_native(&export, &source, completed, &evidence, store.clone()).unwrap();
+        let proofs = Proofs::assess_native(
+            &export,
+            &source,
+            completed.clone(),
+            &evidence,
+            store.clone(),
+        )
+        .unwrap();
         assert!(!proofs.discharge.is_empty());
         assert_eq!(trace.totals(), Default::default());
         let wrong = ProductRef {
@@ -233,17 +240,23 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
         let mut untrusted = evidence.clone();
         untrusted.trusted.clear();
         assert!(
-            Proofs::assess_native(&export, &source, completed, &untrusted, store.clone())
-                .unwrap()
-                .discharge
-                .is_empty()
+            Proofs::assess_native(
+                &export,
+                &source,
+                completed.clone(),
+                &untrusted,
+                store.clone()
+            )
+            .unwrap()
+            .discharge
+            .is_empty()
         );
         let mut stale = evidence.clone();
         for record in &mut stale.records {
             record.revision = Default::default();
         }
         assert!(
-            Proofs::assess_native(&export, &source, completed, &stale, store.clone())
+            Proofs::assess_native(&export, &source, completed.clone(), &stale, store.clone())
                 .unwrap()
                 .discharge
                 .is_empty()
@@ -289,7 +302,8 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
                 "{}",
                 String::from_utf8_lossy(&store.get_content(r).unwrap())
             )
-        })[0];
+        })[0]
+            .clone();
         let removed = tasks.discharged(settled).unwrap();
         assert_eq!(removed, proofs.discharge);
         let report = proofs.report_discharged(&removed);

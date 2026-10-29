@@ -342,6 +342,9 @@ pub struct NativeRecords {
     types: Arc<hirsel_types::TypeInterner>,
 }
 impl NativeRecords {
+    pub(crate) fn uses_types(&self, types: &Arc<hirsel_types::TypeInterner>) -> bool {
+        Arc::ptr_eq(&self.types, types)
+    }
     /// Initial inline allocations of a fresh record codec. Its type interner
     /// and store are shared. Valid only before any record encode or decode;
     /// consumers that populate its caches must admit that work separately.

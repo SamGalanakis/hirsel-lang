@@ -78,9 +78,11 @@ fn native_upsert_initializer_preserves_prepared_map_entry_addresses() {
             };
             assert!(!objects.products.is_empty());
             for product in &objects.products {
-                let fragment =
-                    native::object_queries::fragment_product(objects.store.as_ref(), *product)
-                        .unwrap();
+                let fragment = native::object_queries::fragment_product(
+                    objects.store.as_ref(),
+                    product.clone(),
+                )
+                .unwrap();
                 let object =
                     native::object_queries::load_object(objects.store.as_ref(), fragment.object)
                         .unwrap();

@@ -67,7 +67,7 @@ fn ordinary_and_opaque_constants_publish_original_lower_and_evaluate_products() 
                 let products = runtime
                     .wait(request)
                     .unwrap_or_else(|r| panic!("Lower {path}: {:?}", lower.failure(r)));
-                let actual = lower.outcome(products[0]).unwrap();
+                let actual = lower.outcome((products[0]).clone()).unwrap();
                 let expected = program.engine.definition(&path).unwrap();
                 let records = NativeRecords::new(program.engine.types().clone(), store.clone());
                 assert_eq!(
@@ -160,7 +160,7 @@ fn std_opaque_constant_publishes_original_lower_and_evaluate_products() {
                 let products = runtime
                     .wait(request)
                     .unwrap_or_else(|r| panic!("Lower {path}: {:?}", lower.failure(r)));
-                let actual = lower.outcome(products[0]).unwrap();
+                let actual = lower.outcome((products[0]).clone()).unwrap();
                 let expected = program.engine.definition(&path).unwrap();
                 let records = NativeRecords::new(program.engine.types().clone(), store.clone());
                 assert_eq!(
@@ -254,7 +254,7 @@ fn std_constant_publishes_after_full_namespace_capture_and_body_eviction() {
                 let products = runtime
                     .wait(request)
                     .unwrap_or_else(|r| panic!("Lower {path}: {:?}", lower.failure(r)));
-                let actual = lower.outcome(products[0]).unwrap();
+                let actual = lower.outcome((products[0]).clone()).unwrap();
                 let expected = program.engine.definition(&path).unwrap();
                 let records = NativeRecords::new(program.engine.types().clone(), store.clone());
                 assert_eq!(
@@ -369,7 +369,7 @@ fn immutable_check_loader_std_constant_keeps_lower_and_evaluate_bindings() {
                 let products = runtime
                     .wait(request)
                     .unwrap_or_else(|r| panic!("Lower {path}: {:?}", lower.failure(r)));
-                let actual = lower.outcome(products[0]).unwrap();
+                let actual = lower.outcome((products[0]).clone()).unwrap();
                 let expected = program.engine.definition(&path).unwrap();
                 let records = NativeRecords::new(program.engine.types().clone(), store.clone());
                 assert_eq!(

@@ -307,27 +307,30 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
         // No Check or Growth factory is installed. The invalid sibling must
         // remain undemanded, and the library has no launch entry.
         let request = runtime.request(&[query]);
-        let product = runtime.wait(request).unwrap()[0];
-        let actual = run.semantic_node(product).unwrap();
+        let product = runtime.wait(request).unwrap()[0].clone();
+        let actual = run.semantic_node(product.clone()).unwrap();
         assert_eq!(actual.identity, expected.identity);
         assert_eq!(actual.content, expected.content);
         assert_eq!(actual.dependencies, expected.dependencies);
-        assert!(run.outcome(product).is_none());
-        let bytes = run.source_product_bytes(product).unwrap().unwrap();
+        assert!(run.outcome(product.clone()).is_none());
+        let bytes = run.source_product_bytes(product.clone()).unwrap().unwrap();
         assert!(
-            run.source_products_with_allowance(product, budget.reserve(bytes - 1).unwrap())
+            run.source_products_with_allowance(product.clone(), budget.reserve(bytes - 1).unwrap())
                 .is_err()
         );
         let products = run
-            .source_products_with_allowance(product, budget.reserve(bytes).unwrap())
+            .source_products_with_allowance(product.clone(), budget.reserve(bytes).unwrap())
             .unwrap()
             .unwrap();
         assert_eq!(products.audit(), &expected_audit);
         assert!(products.constant().is_none());
         drop(products);
         let request = runtime.request(&[run.semantic_query(&answer).unwrap()]);
-        let answer_product = runtime.wait(request).unwrap()[0];
-        let bytes = run.source_product_bytes(answer_product).unwrap().unwrap();
+        let answer_product = runtime.wait(request).unwrap()[0].clone();
+        let bytes = run
+            .source_product_bytes(answer_product.clone())
+            .unwrap()
+            .unwrap();
         let products = run
             .source_products_with_allowance(answer_product, budget.reserve(bytes).unwrap())
             .unwrap()
@@ -341,12 +344,12 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
         // 64-MiB working grant plus its existing 128-MiB worker stack. Completed node outputs have their own reservation.
         for query in queries {
             let request = runtime.request(&[query]);
-            let product = runtime.wait(request).unwrap()[0];
+            let product = runtime.wait(request).unwrap()[0].clone();
             assert!(run.semantic_node(product).is_ok());
         }
         let before = lower.work_snapshot();
         let repeated = runtime.request(&[query]);
-        assert_eq!(runtime.wait(repeated).unwrap(), vec![product]);
+        assert_eq!(runtime.wait(repeated).unwrap(), vec![product.clone()]);
         assert_eq!(lower.work_snapshot(), before);
         let mut wrong = product;
         wrong.action = hirsel_artifact_store::Action(hirsel_syntax::ContentHash::default());

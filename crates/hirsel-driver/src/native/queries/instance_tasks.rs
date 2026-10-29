@@ -425,7 +425,7 @@ impl InstanceTasks {
                             return Err("source instances selected different Lower outputs".into());
                         }
                     } else {
-                        selected.insert(path.clone(), (*product, original.clone()));
+                        selected.insert(path.clone(), (product.clone(), original.clone()));
                     }
                 }
             }
@@ -647,7 +647,7 @@ impl QueryTask for InstanceTask {
         std::mem::size_of::<Self>() as u64
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         let mut receipt_products = Vec::new();
@@ -695,7 +695,7 @@ impl QueryTask for InstanceTask {
                 };
                 let result = front
                     .products
-                    .lower_product(path, selected)
+                    .lower_product(path, selected.clone())
                     .and_then(|product| {
                         if &product.definition != path {
                             return Err("front Lower names another source definition".into());
@@ -782,7 +782,7 @@ impl QueryTask for InstanceTask {
                 let bytes =
                     producer.producer_inputs(&source, &self.entry.key, &self.tasks.options)?;
                 let product = self.tasks.put(self.id, &bytes)?;
-                if self.entry.input.set(product).is_err()
+                if self.entry.input.set(product.clone()).is_err()
                     && self.entry.input.get() != Some(&product)
                 {
                     return Err("native selected input completion changed".into());
@@ -802,7 +802,7 @@ impl QueryTask for InstanceTask {
                 .fetch_add(source.body_demands, Ordering::Relaxed);
             self.tasks.register(producer.registered_requests()?)?;
             self.tasks.charge_output(&output)?;
-            let product = output.product.product;
+            let product = output.product.product.clone();
             if let Err(other) = self.entry.output.set(output)
                 && self.entry.output.get().unwrap().product.product != other.product.product
             {
@@ -811,7 +811,7 @@ impl QueryTask for InstanceTask {
             Ok(product)
         })()
         .map_err(|error: String| self.tasks.failure(&error));
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         finish(result)
     }
 }
@@ -834,13 +834,13 @@ impl QueryTask for DiscoveryTask {
         self.tasks.weight.retained
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         let result = self.advance(cx);
         match result {
             Ok(Some(product)) => {
-                self.terminal = Some(Ok(product));
+                self.terminal = Some(Ok(product.clone()));
                 finish(Ok(product))
             }
             Ok(None) => QueryPoll::Waiting(if self.frontier.is_empty() {
@@ -973,7 +973,8 @@ impl DiscoveryTask {
                         .get()
                         .ok_or("discovery output is unfinished")?
                         .product
-                        .product;
+                        .product
+                        .clone();
                     Ok((
                         entry.key.instance.encoding().to_vec(),
                         product.address.0,
@@ -984,7 +985,7 @@ impl DiscoveryTask {
             rows.sort_by(|a, b| a.0.cmp(&b.0));
             let bytes = serde_json::to_vec(&rows).map_err(|e| e.to_string())?;
             let product = self.tasks.put(self.tasks.discovery, &bytes)?;
-            if self.tasks.completed.set(product).is_err()
+            if self.tasks.completed.set(product.clone()).is_err()
                 && self.tasks.completed.get() != Some(&product)
             {
                 return Err("native discovery completion changed".into());
@@ -1008,7 +1009,7 @@ impl InstanceTasks {
     }
     fn callable_scope(&self) -> Result<ProductRef, String> {
         if let Some((product, _)) = self.callables.get() {
-            return Ok(*product);
+            return Ok(product.clone());
         }
         let mut products = self.original_products()?;
         let operations = self.current_operations()?;
@@ -1079,7 +1080,7 @@ impl InstanceTasks {
             &serde_json::to_vec(&rows).map_err(|e| e.to_string())?,
         )?;
         self.callables
-            .set((product, scope))
+            .set((product.clone(), scope))
             .map_err(|_| "callable graph published twice")?;
         Ok(product)
     }
@@ -1103,7 +1104,7 @@ impl QueryTask for CallableTask {
         std::mem::size_of::<Self>() as u64
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         let mut waiting = Vec::new();
@@ -1138,7 +1139,7 @@ impl QueryTask for CallableTask {
                 .tasks
                 .callable_scope()
                 .map_err(|e| self.tasks.failure(&e));
-            self.terminal = Some(result);
+            self.terminal = Some(result.clone());
             finish(result)
         } else {
             let query = self.tasks.callable_id();
@@ -1172,9 +1173,9 @@ impl QueryTask for CallableTask {
                 .outputs
                 .iter()
                 .find(|(_, o)| o.product.product.address == self.id.address)
-                .map(|(_, o)| o.product.product)
+                .map(|(_, o)| o.product.product.clone())
                 .ok_or_else(|| self.tasks.failure("unregistered callable Value alias"));
-            self.terminal = Some(result);
+            self.terminal = Some(result.clone());
             finish(result)
         }
     }

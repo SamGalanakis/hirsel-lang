@@ -103,12 +103,12 @@ fn scope_case(source: &str, failed_front: bool, failed_lower: bool) {
             };
             assert!(
                 check
-                    .completed_scope(unknown, budget.reserve(1 << 20).unwrap())
+                    .completed_scope(unknown.clone(), budget.reserve(1 << 20).unwrap())
                     .is_err()
             );
             let request = runtime.request(&[query]);
-            let product = runtime.wait(request).unwrap()[0];
-            let output = check.outcome(product).unwrap();
+            let product = runtime.wait(request).unwrap()[0].clone();
+            let output = check.outcome(product.clone()).unwrap();
             assert_eq!(output.checked.completion, CheckCompletion::Complete);
             assert_eq!(
                 output
@@ -120,19 +120,19 @@ fn scope_case(source: &str, failed_front: bool, failed_lower: bool) {
             );
             assert!(
                 check
-                    .completed_scope(unknown, budget.reserve(1 << 20).unwrap())
+                    .completed_scope(unknown.clone(), budget.reserve(1 << 20).unwrap())
                     .is_err()
             );
             assert!(
                 check
-                    .completed_scope(product, budget.reserve(0).unwrap())
+                    .completed_scope(product.clone(), budget.reserve(0).unwrap())
                     .is_err()
             );
-            let required = check.completed_scope_bytes(product).unwrap();
+            let required = check.completed_scope_bytes(product.clone()).unwrap();
             assert!(check.completed_scope_bytes(unknown).is_err());
             assert!(
                 check
-                    .completed_scope(product, budget.reserve(required - 1).unwrap())
+                    .completed_scope(product.clone(), budget.reserve(required - 1).unwrap())
                     .is_err()
             );
             let scope = check

@@ -291,18 +291,18 @@ fn bootstrap_link_refusal(test_table: bool, emit_only: bool) {
                 let Poll::Ready(Ok(complete)) = result else {
                     panic!("expected actual Codegen completion, got {result:?}");
                 };
-                let (compilation, product, _) = bootstrap.outcome(complete[0]).unwrap();
+                let (compilation, product, _) = bootstrap.outcome(complete[0].clone()).unwrap();
                 assert_eq!(
                     calls.load(Ordering::SeqCst),
                     0,
                     "emit-only must not call Link"
                 );
-                let outputs = compilation.outputs(product).unwrap();
+                let outputs = compilation.outputs(product.clone()).unwrap();
                 assert!(!outputs.is_empty(), "actual emitted objects");
                 assert!(compilation.emitted_instances(product).unwrap() > 0);
                 for output in outputs {
                     let fragment =
-                        object_queries::fragment_product(store.as_ref(), *output).unwrap();
+                        object_queries::fragment_product(store.as_ref(), output.clone()).unwrap();
                     let object =
                         object_queries::load_object(store.as_ref(), fragment.object).unwrap();
                     assert!(!object.bytes.is_empty(), "real backend object bytes");
@@ -674,14 +674,14 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
             let [selected] = completed.as_slice() else {
                 panic!("exactly one bootstrap root")
             };
-            let (compilation, completion, facts) = bootstrap.outcome(*selected).unwrap();
-            let mut wrong = *selected;
+            let (compilation, completion, facts) = bootstrap.outcome(selected.clone()).unwrap();
+            let mut wrong = selected.clone();
             wrong.action = Action(ContentHash::of_bytes(b"another completion"));
             assert!(bootstrap.outcome(wrong).is_err());
-            let [linked] = compilation.outputs(completion).unwrap() else {
+            let [linked] = compilation.outputs(completion.clone()).unwrap() else {
                 panic!("exactly one native backend")
             };
-            let linked = *linked;
+            let linked = linked.clone();
             compilation.observation(completion).unwrap();
             assert_eq!(
                 calls.load(Ordering::SeqCst),
@@ -1075,14 +1075,14 @@ fn native_bootstrap_policy_case(bind_run: bool) {
             let [selected] = completed.as_slice() else {
                 panic!("exactly one bootstrap root")
             };
-            let (compilation, completion, facts) = bootstrap.outcome(*selected).unwrap();
-            let mut wrong = *selected;
+            let (compilation, completion, facts) = bootstrap.outcome(selected.clone()).unwrap();
+            let mut wrong = selected.clone();
             wrong.action = Action(ContentHash::of_bytes(b"another completion"));
             assert!(bootstrap.outcome(wrong).is_err());
-            let [linked] = compilation.outputs(completion).unwrap() else {
+            let [linked] = compilation.outputs(completion.clone()).unwrap() else {
                 panic!("exactly one native backend")
             };
-            let linked = *linked;
+            let linked = linked.clone();
             compilation.observation(completion).unwrap();
             assert_eq!(
                 calls.load(Ordering::SeqCst),
@@ -1098,7 +1098,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                         Some(platform.clone()),
                     )
                     .unwrap()
-                    .materialize(*selected)
+                    .materialize(selected.clone())
                     .unwrap(),
                 )
             } else {
@@ -1387,7 +1387,7 @@ fn proof_graph(
 /// Evidence for the export's two `bump` obligations, signed by `prover@1`.
 fn proof_evidence(graph: &mut ProofGraph) -> native::Evidence {
     let request = graph.runtime.request(&[graph.source.query()]);
-    let completed = graph.runtime.wait(request).unwrap()[0];
+    let completed = graph.runtime.wait(request).unwrap()[0].clone();
     let input = graph
         .export
         .input_for_native(&graph.source, completed)

@@ -208,10 +208,18 @@ mod tests {
                     panic!("front Lower completion returned before settlement")
                 }
             };
-            let selected = completed[0];
+            let selected = completed[0].clone();
             let polls = runtime.stats().polls;
-            let product = bridge.products.lower_product(&main, selected).unwrap();
-            assert!(bridge.products.lower_product(&other, selected).is_err());
+            let product = bridge
+                .products
+                .lower_product(&main, selected.clone())
+                .unwrap();
+            assert!(
+                bridge
+                    .products
+                    .lower_product(&other, selected.clone())
+                    .is_err()
+            );
             let mut crossed = selected;
             crossed.record = failure;
             assert!(bridge.products.lower_product(&main, crossed).is_err());

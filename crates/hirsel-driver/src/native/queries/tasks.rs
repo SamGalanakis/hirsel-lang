@@ -83,8 +83,8 @@ impl NativeTasks {
                 let mut locals = inputs
                     .iter()
                     .map(|(key, output)| super::seal_demand::Input {
-                        query: instance_query(key, output.product.product),
-                        product: output.product.product,
+                        query: instance_query(key, output.product.product.clone()),
+                        product: output.product.product.clone(),
                         equations: output.facts.body.seal_demand.clone(),
                     })
                     .collect::<Vec<_>>();
@@ -158,13 +158,13 @@ impl NativeTasks {
                     } else {
                         ARENA_CANDIDATES_KIND
                     },
-                    summary.product,
+                    summary.product.clone(),
                 ),
                 summary.product.record,
             ))
         };
         for (key, output) in &inputs {
-            let q = instance_query(key, output.product.product);
+            let q = instance_query(key, output.product.product.clone());
             requests.insert(
                 id(q),
                 Arc::new(Request {
@@ -181,7 +181,7 @@ impl NativeTasks {
                 let (member_key, input) = by_owner
                     .get(&member)
                     .ok_or("missing Ready instance dependency")?;
-                let q = instance_query(member_key, input.product.product);
+                let q = instance_query(member_key, input.product.product.clone());
                 reads.insert(id(q), (q, input.product.product.record));
                 let component = components
                     .get(&(true, member))
@@ -206,7 +206,7 @@ impl NativeTasks {
                 let (_, input) = by_owner
                     .get(&owner(member))
                     .ok_or("missing component instance")?;
-                let q = instance_query(member, input.product.product);
+                let q = instance_query(member, input.product.product.clone());
                 reads.insert(id(q), (q, input.product.product.record));
                 for callee in &input.facts.body.callees {
                     let component = components
@@ -364,7 +364,7 @@ impl QueryTask for NativeTask {
         std::mem::size_of::<Self>() as u64
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return match result {
                 Ok(p) => QueryPoll::Complete(p),
                 Err(e) => QueryPoll::Failed(e),
@@ -402,7 +402,7 @@ impl QueryTask for NativeTask {
                         .snapshot
                         .guard
                         .get()
-                        .is_some_and(|guard| guard.accepts(product)) =>
+                        .is_some_and(|guard| guard.accepts(product.clone())) =>
                 {
                     ()
                 }
@@ -420,16 +420,16 @@ impl QueryTask for NativeTask {
         }
         let mut products = DemandProducts::new(self.tasks.snapshot.clone());
         let result = match &self.request.work {
-            Work::Instance(key) => products.instance(key).map(|p| p.product),
-            Work::Arena(key) => products.arena_summary(key).map(|p| p.product),
-            Work::Ready(key) => products.ready(key).map(|p| p.product),
+            Work::Instance(key) => products.instance(key).map(|p| p.product.clone()),
+            Work::Arena(key) => products.arena_summary(key).map(|p| p.product.clone()),
+            Work::Ready(key) => products.ready(key).map(|p| p.product.clone()),
         }
         .map_err(|error| self.tasks.failure(&error));
         self.tasks.ready_transformations.fetch_add(
             products.local.queries.counts.transformations,
             Ordering::Relaxed,
         );
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         match result {
             Ok(p) => QueryPoll::Complete(p),
             Err(e) => QueryPoll::Failed(e),

@@ -219,7 +219,7 @@ impl QueryFactory for Factory {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .map(|(p, _)| Ok(*p));
+            .map(|(p, _)| Ok(p.clone()));
         Ok(Box::new(Task {
             owner: self.0.clone(),
             selected: None,
@@ -250,13 +250,13 @@ impl QueryTask for Task {
         self.owner.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        let result = if let Some(result) = self.terminal {
+        let result = if let Some(result) = self.terminal.clone() {
             result
         } else {
             match self.advance(cx) {
                 Poll::Pending => return QueryPoll::Waiting(self.waiting.into_iter().collect()),
                 Poll::Ready(result) => {
-                    self.terminal = Some(result);
+                    self.terminal = Some(result.clone());
                     result
                 }
             }
@@ -295,7 +295,7 @@ impl Task {
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Ready(Ok(product)) => product,
             };
-            let Some(output) = owner.run.outcome(product) else {
+            let Some(output) = owner.run.outcome(product.clone()) else {
                 return Poll::Ready(Err(owner.errors.protocol));
             };
             // Bootstrap binds every checked semantic declaration, including
@@ -347,10 +347,10 @@ impl Task {
     fn complete(&self) -> Result<ProductRef, QueryError> {
         let owner = &self.owner;
         let selected = self.selected.as_ref().ok_or(QueryError::NotImplemented)?;
-        let run_product = self.run_product.ok_or(QueryError::NotImplemented)?;
+        let run_product = self.run_product.clone().ok_or(QueryError::NotImplemented)?;
         let run = owner
             .run
-            .outcome(run_product)
+            .outcome(run_product.clone())
             .ok_or(QueryError::NotImplemented)?;
         let signatures = owner.definitions.signatures();
         let native_selected = selected
@@ -502,7 +502,11 @@ impl Task {
                     ),
                     catalogue
                         .iter()
-                        .map(|d| d.product.map(|p| (p.address.0, p.action.0, p.record)))
+                        .map(|d| {
+                            d.product
+                                .as_ref()
+                                .map(|p| (p.address.0, p.action.0, p.record))
+                        })
                         .collect::<Vec<_>>(),
                 ),
             )
@@ -545,7 +549,7 @@ impl Task {
             _owner: owner.ownership.clone(),
         };
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some((product, Arc::new(products)));
+            Some((product.clone(), Arc::new(products)));
         owner
             .store
             .associate_product(product.address, product.action, product.record);

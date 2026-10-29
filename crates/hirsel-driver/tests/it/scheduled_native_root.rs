@@ -166,7 +166,7 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                 let products = runtime
                     .wait(request)
                     .unwrap_or_else(|r| panic!("native root {r:?}: {:?}", native.failure(r)));
-                let output = native.outcome(products[0]).unwrap();
+                let output = native.outcome((products[0]).clone()).unwrap();
                 let actual = output.products.clone();
                 let anchors = NativeRecordContext::capture(&program.engine);
                 let codec = NativeRecords::new(program.engine.types().clone(), store.clone());

@@ -372,7 +372,7 @@ impl SettledProducts {
             if product.product != *read || ready.insert(read.address.0, product).is_some() {
                 return Err("duplicate or changed settled Ready dependency".into());
             }
-            inner.selected.insert(read.address.0, *read);
+            inner.selected.insert(read.address.0, read.clone());
         }
         Ok(Self { inner, ready })
     }
@@ -436,7 +436,7 @@ impl NativeProducts for SettledProducts {
 }
 impl NativeProducts for DemandProducts {
     fn execution_read(&self) -> Option<ProductRef> {
-        self.snapshot.execution.get().map(|p| p.product)
+        self.snapshot.execution.get().map(|p| p.product.clone())
     }
     fn instance(&mut self, key: &InstanceAddress) -> Result<Arc<InstanceProduct>, String> {
         self.snapshot
@@ -500,7 +500,7 @@ impl NativeProducts for DemandProducts {
             &self.snapshot.environment(),
         )?;
         self.selected
-            .insert(product.product.address.0, product.product);
+            .insert(product.product.address.0, product.product.clone());
         Ok(product)
     }
 

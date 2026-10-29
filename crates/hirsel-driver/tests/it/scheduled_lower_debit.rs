@@ -82,7 +82,7 @@ fn admitted_lower_retains_actual_metadata_and_refuses_an_insufficient_output_gra
                 } else {
                     let products = result
                         .unwrap_or_else(|r| panic!("Lower refusal {r:?}: {:?}", lower.failure(r)));
-                    let output = lower.outcome(products[0]).unwrap();
+                    let output = lower.outcome((products[0]).clone()).unwrap();
                     assert!(output.verified.is_some());
                     assert!(lower.retained_bytes() > input_bytes);
                     assert!(lower.retained_bytes() <= input_bytes + output_bytes);
@@ -180,7 +180,7 @@ fn admitted_lower_consumes_many_constant_dependencies_with_original_mailbox_boun
                     lower.work_snapshot()
                 )
             });
-            let output = lower.outcome(products[0]).unwrap();
+            let output = lower.outcome((products[0]).clone()).unwrap();
             assert!(!output.output.value.bodies.is_empty());
             let work = lower.work_snapshot();
             for index in 0..32 {

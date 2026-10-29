@@ -12,6 +12,7 @@ use std::sync::{
 
 mod carry;
 mod compact_store;
+pub(in crate::queries) use compact_store::load_publication as load_scheduled_publication;
 mod lint_facts;
 mod retained;
 use carry::CarryChanges;
@@ -155,6 +156,10 @@ struct Input {
 /// One immutable namespace/source view. A source registration transaction must
 /// select its view before constructing queries; producer completion cannot
 /// publish declarations, fuel or a later source root's diagnostics.
+struct FrontSourceBacking {
+    allowance: Mutex<MemoryReservation>,
+    _sources: SourceMap,
+}
 pub struct FrontBodyQueries {
     inputs: BTreeMap<Key, Input>,
     by_definition: Box<[(DefId, Key)]>,
@@ -196,7 +201,7 @@ pub struct FrontBodyQueries {
     // Own immutable snapshot and output metadata admission until every task and
     // external output reader releases this view.
     read_pool: std::sync::OnceLock<Mutex<crate::memo::ReadPool>>,
-    _allowance: Mutex<MemoryReservation>,
+    _allowance: Arc<FrontSourceBacking>,
 }
 /// A held output shares its snapshot reservation; dropping the runtime cannot
 /// release admission while a caller still retains the checked body or sources.
@@ -204,6 +209,25 @@ pub struct FrontBodyQueries {
 pub struct FrontBodyOutput {
     pub outcome: ModeResult,
     _snapshot: Arc<FrontBodyQueries>,
+}
+impl FrontBodyOutput {
+    pub fn into_live_body(
+        self,
+        product: ProductRef,
+        allowance: &mut MemoryReservation,
+    ) -> Option<LiveAnalyzedProduct> {
+        let source = ProductSource::new(
+            self._snapshot.anchors.as_ref().clone(),
+            self._snapshot.input_records.clone(),
+            self._snapshot._allowance.clone(),
+        )?;
+        LiveAnalyzedProduct::new(
+            (product.address, product.action),
+            self.outcome,
+            source,
+            allowance,
+        )
+    }
 }
 /// Checked-only source-growth input. It survives a later Modes failure and
 /// carries the checked stage's complete reads rather than a provisional union.
@@ -243,8 +267,11 @@ impl FrontBodyQueries {
         crate::runtime::LiveSummaryProduct::new(
             (product.address, product.action),
             value,
-            self.anchors.as_ref().clone(),
-            self.clone(),
+            ProductSource::new(
+                self.anchors.as_ref().clone(),
+                self.input_records.clone(),
+                self._allowance.clone(),
+            )?,
             allowance,
         )
     }
@@ -380,7 +407,11 @@ impl FrontBodyQueries {
                     + std::mem::size_of::<(DefId, Key)>()
                     + std::mem::size_of::<(Key, Key)>()) as u64,
             )?
-            .checked_add(std::mem::size_of::<Self>() as u64)
+            .checked_add(
+                (std::mem::size_of::<Self>()
+                    + std::mem::size_of::<FrontSourceBacking>()
+                    + 2 * std::mem::size_of::<usize>()) as u64,
+            )
     }
     /// Compact diagnostic retention within this source's original allowance.
     /// Ordinary requests retain their flat read representation.
@@ -393,7 +424,11 @@ impl FrontBodyQueries {
         };
         let mut pool = pool.lock().unwrap_or_else(|e| e.into_inner());
         let mut remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        let mut allowance = self._allowance.lock().unwrap_or_else(|e| e.into_inner());
+        let mut allowance = self
+            ._allowance
+            .allowance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         Some(Arc::new(pool.intern(
             reads,
             &mut allowance,
@@ -411,7 +446,11 @@ impl FrontBodyQueries {
         };
         let mut pool = pool.lock().unwrap_or_else(|e| e.into_inner());
         let mut remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        let mut allowance = self._allowance.lock().unwrap_or_else(|e| e.into_inner());
+        let mut allowance = self
+            ._allowance
+            .allowance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut shared = BTreeMap::<usize, Arc<Reads>>::new();
         let mut intern = |reads: &mut Arc<Reads>| -> Option<()> {
             let identity = Arc::as_ptr(reads) as usize;
@@ -496,7 +535,11 @@ impl FrontBodyQueries {
             .get()
             .map(|pool| pool.lock().unwrap_or_else(|e| e.into_inner()));
         let remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        let allowance = self._allowance.lock().unwrap_or_else(|e| e.into_inner());
+        let allowance = self
+            ._allowance
+            .allowance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         allowance.bytes() + pool.as_ref().map_or(0, |pool| pool.charged_bytes()) - *remaining
     }
 
@@ -507,6 +550,7 @@ impl FrontBodyQueries {
             .get()
             .map(|pool| pool.lock().unwrap_or_else(|e| e.into_inner()));
         self._allowance
+            .allowance
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .bytes()
@@ -879,7 +923,7 @@ impl FrontBodyQueries {
                 } else {
                     let bytes = self.store.get_content(reference)?;
                     let input = self.inputs.get(key)?;
-                    let mut restored = persistent::restore_frozen_mode(
+                    let restored = persistent::restore_frozen_mode(
                         &self.records,
                         &self.types,
                         self.syntax(input)?,
@@ -1027,7 +1071,7 @@ impl QueryTask for BodyTask {
         }
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         if self.materialize {
@@ -1047,14 +1091,14 @@ impl QueryTask for BodyTask {
                             address: self.query.address,
                             ..product
                         });
-                        self.terminal = Some(result);
+                        self.terminal = Some(result.clone());
                         return finish(result);
                     }
                 }
             }
         }
         let result = self.run();
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         finish(result)
     }
 }
@@ -1845,7 +1889,10 @@ impl QueryEngine {
             errors,
             retention: Mutex::new(allowance.bytes() - required),
             read_pool: std::sync::OnceLock::new(),
-            _allowance: Mutex::new(allowance),
+            _allowance: Arc::new(FrontSourceBacking {
+                allowance: Mutex::new(allowance),
+                _sources: self.sources.clone(),
+            }),
         }))
     }
 }

@@ -250,7 +250,7 @@ impl NativeBootstrap {
             .ok_or("native bootstrap dispatch is unavailable")?;
         Ok((
             prepared.compilation.clone(),
-            completed.compilation,
+            completed.compilation.clone(),
             prepared.facts.clone(),
         ))
     }
@@ -288,7 +288,7 @@ impl NativeBootstrap {
         }
         let facts = self
             .source
-            .outcome(product)
+            .outcome(product.clone())
             .ok_or("native source root is unavailable")?
             .products;
         hirsel_intern::memory::checkpoint("front complete");
@@ -305,7 +305,7 @@ impl NativeBootstrap {
                 native::Proofs::assess_native(
                     &proofs.export,
                     &self.source,
-                    product,
+                    product.clone(),
                     &proofs.evidence,
                     self.store.clone(),
                 )
@@ -498,7 +498,7 @@ impl NativeBootstrap {
             .get()
             .ok_or("native dispatch is unavailable")?
             .compilation
-            .outputs(compilation)?;
+            .outputs(compilation.clone())?;
         let bytes = serde_json::to_vec(&(
             compilation.address.0,
             compilation.action.0,
@@ -527,7 +527,7 @@ impl NativeBootstrap {
             .associate_product(product.address, product.action, product.record);
         self.completed
             .set(Completed {
-                product,
+                product: product.clone(),
                 compilation,
             })
             .map_err(|_| "duplicate native bootstrap completion")?;
@@ -566,7 +566,7 @@ impl QueryFactory for Factory {
         }
         Ok(Box::new(Task {
             owner: self.0.clone(),
-            terminal: self.0.completed.get().map(|c| Ok(c.product)),
+            terminal: self.0.completed.get().map(|c| Ok(c.product.clone())),
         }))
     }
 }
@@ -582,7 +582,7 @@ impl QueryTask for Task {
         self.owner.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        let result = if let Some(result) = self.terminal {
+        let result = if let Some(result) = self.terminal.clone() {
             result
         } else {
             let source = match cx.read(self.owner.source.query()) {
@@ -611,7 +611,7 @@ impl QueryTask for Task {
                 },
             }
         };
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         match result {
             Ok(product) => QueryPoll::Complete(product),
             Err(error) => QueryPoll::Failed(error),

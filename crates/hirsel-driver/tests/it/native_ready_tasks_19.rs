@@ -408,8 +408,9 @@ fn ready_case_inner_mutation(
                         "ownership compilation: {}",
                         String::from_utf8_lossy(&store.get_content(error).unwrap())
                     )
-                })[0];
-                let (roots, root) = compilation.outcome(completed).unwrap();
+                })[0]
+                    .clone();
+                let (roots, root) = compilation.outcome(completed.clone()).unwrap();
                 let outputs = roots.outputs(root).unwrap();
                 assert!(outputs.len() >= 3);
                 let mut resources = 0;
@@ -438,7 +439,7 @@ fn ready_case_inner_mutation(
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             });
-            let discovery_output = result[0];
+            let discovery_output = result[0].clone();
             let arena_request = runtime.request(&[arenas.query_id()]);
             let arena_output = runtime.wait(arena_request).unwrap_or_else(|error| {
                 panic!(
@@ -446,10 +447,11 @@ fn ready_case_inner_mutation(
                     runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
-            })[0];
+            })[0]
+                .clone();
             let graph = arenas.graph(arena_output).unwrap();
             assert!(!graph.candidates.is_empty() && !graph.chosen.is_empty());
-            let mut operations = tasks.source_operations(discovery_output).unwrap();
+            let mut operations = tasks.source_operations(discovery_output.clone()).unwrap();
             assert_eq!(
                 operations
                     .invocation_bodies
@@ -482,7 +484,7 @@ fn ready_case_inner_mutation(
                     _ => panic!("unknown original keyed inventory mutation"),
                 }
             }
-            let products = tasks.products(discovery_output).unwrap();
+            let products = tasks.products(discovery_output.clone()).unwrap();
             let before_snapshot = trace.totals();
             let snapshot = NativeSnapshot::new(
                 store.clone(),
@@ -662,8 +664,9 @@ fn ready_case_inner_mutation(
                         "ownership root: {}",
                         String::from_utf8_lossy(&store.get_content(error).unwrap())
                     )
-                })[0];
-                let outputs = roots.outputs(root).unwrap();
+                })[0]
+                    .clone();
+                let outputs = roots.outputs(root.clone()).unwrap();
                 assert_eq!(
                     outputs.len(),
                     tasks.completed_instances(discovery_output).unwrap().len()
@@ -675,10 +678,10 @@ fn ready_case_inner_mutation(
                 let mut total = 0;
                 let before = roots.transformations.load(Ordering::Relaxed);
                 for output in &outputs {
-                    let observed = roots.materialize(*output).unwrap();
+                    let observed = roots.materialize(output.clone()).unwrap();
                     assert_eq!(observed.recipes.len(), 10);
                     total += observed.initial.observations.len();
-                    let mut wrong = *output;
+                    let mut wrong = output.clone();
                     wrong.action = store::Action(hirsel_syntax::ContentHash::of_bytes(
                         b"forged ownership completion",
                     ));
@@ -692,7 +695,7 @@ fn ready_case_inner_mutation(
                 );
                 if ownership == 4 {
                     roots
-                        .with_ready(root, |units, emit, plans| {
+                        .with_ready(root.clone(), |units, emit, plans| {
                             assert_eq!(plans.len(), units.len());
                             assert!(plans.values().all(|plan| plan.selection
                                 == hirsel_lir::ownership_trace::Selection::Resources));
@@ -728,7 +731,7 @@ fn ready_case_inner_mutation(
                 continue;
             }
             if assemble {
-                for (key, _) in tasks.completed_instances(result[0]).unwrap() {
+                for (key, _) in tasks.completed_instances((result[0]).clone()).unwrap() {
                     let request = ready_runtime.request(&[key.ready_query_id()]);
                     ready_runtime.wait(request).unwrap_or_else(|error| {
                         panic!(
@@ -741,7 +744,7 @@ fn ready_case_inner_mutation(
                 use native::queries::NativeProducts;
                 let mut products = native::queries::products::DemandProducts::new(snapshot.clone());
                 let selected = tasks
-                    .completed_instances(result[0])
+                    .completed_instances((result[0]).clone())
                     .unwrap()
                     .iter()
                     .map(|(key, _)| products.ready(key).unwrap())
@@ -769,7 +772,7 @@ fn ready_case_inner_mutation(
                 assert_eq!(transformations, u64::from(!fresh || recompute));
             }
             assert_eq!(snapshot.ready_materializations(), 0);
-            let completed = tasks.completed_instances(result[0]).unwrap();
+            let completed = tasks.completed_instances((result[0]).clone()).unwrap();
             let specializations = completed
                 .iter()
                 .filter(|(key, _)| {
@@ -791,7 +794,7 @@ fn ready_case_inner_mutation(
             );
             let outputs = completed
                 .iter()
-                .map(|(_, output)| output.product.product)
+                .map(|(_, output)| output.product.product.clone())
                 .collect::<Vec<_>>();
             if fresh {
                 assert_eq!(expected.as_ref(), Some(&outputs));

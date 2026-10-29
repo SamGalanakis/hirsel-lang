@@ -253,7 +253,7 @@ impl FrontRegistrationQueries {
         self.outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(id.address.0, (product, data));
+            .insert(id.address.0, (product.clone(), data));
         if failed { Err(record) } else { Ok(product) }
     }
     fn storage_key(input: &Input) -> EntryKey {

@@ -195,7 +195,7 @@ impl Plan {
         Self::admission_bytes(self.inputs.iter().map(|input| &input.equations))
     }
     pub fn dependencies(&self) -> impl Iterator<Item = ProductRef> + '_ {
-        self.inputs.iter().map(|input| input.product)
+        self.inputs.iter().map(|input| input.product.clone())
     }
 
     /// Called only after the advertised dependencies settle. Current C and
@@ -382,12 +382,12 @@ impl hirsel_engine::runtime::QueryTask for GuardTask {
             Ok(p) => QueryPoll::Complete(p),
             Err(e) => QueryPoll::Failed(e),
         };
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         let mut waiting = vec![];
         for input in &self.owner.plan.inputs {
-            let expected = input.product;
+            let expected = input.product.clone();
             let key = input.query;
             match cx.read(key) {
                 Poll::Pending => waiting.push(key),
@@ -411,7 +411,7 @@ impl hirsel_engine::runtime::QueryTask for GuardTask {
             .execute(self.owner.store.as_ref())
             .and_then(|mut selection| {
                 selection.allowances = self.owner._allowances.clone();
-                let product = selection.product;
+                let product = selection.product.clone();
                 if let Some(previous) = self.owner.output.get() {
                     if previous.product != product {
                         return Err("seal-demand completion changed".into());
@@ -430,7 +430,7 @@ impl hirsel_engine::runtime::QueryTask for GuardTask {
                     .put_content(OUTPUT, error.as_bytes())
                     .unwrap_or(self.owner.failure)
             });
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         finish(result)
     }
 }

@@ -110,6 +110,7 @@ pub(crate) use program_revision::SemanticProgram;
 pub(crate) mod native_discovery;
 pub(crate) mod native_records;
 mod persistent;
+pub(crate) use persistent::encode_live_analyzed;
 mod retention;
 mod safety;
 mod summaries;

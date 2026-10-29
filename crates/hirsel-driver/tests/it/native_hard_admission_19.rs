@@ -22,7 +22,7 @@ impl QueryFactory for Factory {
     fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
         Ok(Box::new(Task {
             id,
-            product: self.product,
+            product: self.product.clone(),
             polls: self.polls.clone(),
             weight: self.weight,
         }))
@@ -37,7 +37,7 @@ impl QueryTask for Task {
     }
     fn poll(&mut self, _: &mut dyn QueryContext) -> QueryPoll {
         self.polls.fetch_add(1, Ordering::SeqCst);
-        QueryPoll::Complete(self.product)
+        QueryPoll::Complete(self.product.clone())
     }
 }
 #[test]
@@ -94,7 +94,7 @@ fn one_byte_short_refuses_with_resource_error_and_exact_need_executes() {
             .register(
                 query.kind,
                 Arc::new(Factory {
-                    product,
+                    product: product.clone(),
                     polls: polls.clone(),
                     weight,
                 }),
@@ -110,7 +110,7 @@ fn one_byte_short_refuses_with_resource_error_and_exact_need_executes() {
                 "oversized singleton was polled"
             );
         } else {
-            assert_eq!(result, Ok(vec![product]));
+            assert_eq!(result, Ok(vec![product.clone()]));
             assert_eq!(polls.load(Ordering::SeqCst), 1);
         }
         assert_eq!(

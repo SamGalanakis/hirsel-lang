@@ -147,7 +147,7 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             });
-            let completed = tasks.completed_instances(result[0]).unwrap();
+            let completed = tasks.completed_instances((result[0]).clone()).unwrap();
             // The same compact flow archive survives cold publication and a
             // fresh hit with lowering disabled. This observes no Value body.
             for (key, output) in &completed {
@@ -176,7 +176,7 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
             );
             let outputs = completed
                 .iter()
-                .map(|(_, output)| output.product.product)
+                .map(|(_, output)| output.product.product.clone())
                 .collect::<Vec<_>>();
             if fresh {
                 assert_eq!(expected.as_ref(), Some(&outputs));

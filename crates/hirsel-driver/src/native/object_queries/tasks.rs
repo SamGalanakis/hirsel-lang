@@ -101,7 +101,12 @@ pub trait ObjectTaskSnapshot: Send + Sync {
         ready
             .optimizer_reads
             .iter()
-            .map(|product| Ok((self.optimizer_query(*product)?, Some(*product))))
+            .map(|product| {
+                Ok((
+                    self.optimizer_query(product.clone())?,
+                    Some(product.clone()),
+                ))
+            })
             .collect()
     }
     fn link_dependencies(&self, manifest: ProductRef) -> Result<LinkDependencies, Reference>;
@@ -214,7 +219,10 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     .collect::<Vec<_>>();
                 let settled = self.read_codegen(cx, &ids)?;
                 for product in &settled {
-                    let ready = self.snapshot.ready_descriptor(*product).map_err(failed)?;
+                    let ready = self
+                        .snapshot
+                        .ready_descriptor(product.clone())
+                        .map_err(failed)?;
                     if ready.product != *product || !ready.optimizer_reads.is_empty() {
                         return Err(failed(
                             self.snapshot
@@ -227,10 +235,14 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     .codegen_whole(key)
                     .map_err(|e| failed(self.snapshot.failure(&e)))?
                     .product
+                    .clone()
             }
             ObjectTaskRequest::Codegen { key, ready, .. } => {
-                let own = self.read_codegen(cx, &[*ready])?[0];
-                let descriptor = self.snapshot.ready_descriptor(own).map_err(failed)?;
+                let own = self.read_codegen(cx, &[*ready])?[0].clone();
+                let descriptor = self
+                    .snapshot
+                    .ready_descriptor(own.clone())
+                    .map_err(failed)?;
                 if descriptor.product != own {
                     return Err(failed(self.snapshot.failure("Ready descriptor mismatch")));
                 }
@@ -255,7 +267,7 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     .zip(&dependencies)
                     .any(|(current, (id, expected))| {
                         current.address != id.address
-                            || expected.is_some_and(|old| {
+                            || expected.clone().is_some_and(|old| {
                                 current.address != old.address || current.record != old.record
                             })
                     })
@@ -271,10 +283,14 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     .codegen(key)
                     .map_err(|e| failed(self.snapshot.failure(&e)))?
                     .product
+                    .clone()
             }
             ObjectTaskRequest::Link { key, manifest, .. } => {
-                let manifest = read(cx, &[*manifest])?[0];
-                let deps = self.snapshot.link_dependencies(manifest).map_err(failed)?;
+                let manifest = read(cx, &[*manifest])?[0].clone();
+                let deps = self
+                    .snapshot
+                    .link_dependencies(manifest.clone())
+                    .map_err(failed)?;
                 let mut ids = deps.fragments.clone();
                 ids.push(deps.static_manifest);
                 ids.extend(&deps.runtime_archives);
@@ -287,23 +303,23 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                 let fragments = outputs[..n]
                     .iter()
                     .map(|p| {
-                        fragment_product(self.snapshot.store(), *p)
+                        fragment_product(self.snapshot.store(), p.clone())
                             .map_err(|e| self.snapshot.failure(&e))
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(failed)?;
                 let resolve = |p| self.snapshot.link_input(p).map_err(failed);
-                let static_manifest = resolve(outputs[n])?;
+                let static_manifest = resolve(outputs[n].clone())?;
                 let r = n + 1;
                 let f = r + deps.runtime_archives.len();
                 let l = f + deps.foreign_inputs.len();
                 let runtime_archives = outputs[r..f]
                     .iter()
-                    .map(|p| resolve(*p))
+                    .map(|p| resolve(p.clone()))
                     .collect::<Result<_, _>>()?;
                 let foreign_inputs = outputs[f..l]
                     .iter()
-                    .map(|p| resolve(*p))
+                    .map(|p| resolve(p.clone()))
                     .collect::<Result<_, _>>()?;
                 let inputs = LinkInputs {
                     execution: outputs[outputs.len() - deps.execution.len()..]
@@ -314,7 +330,7 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     static_manifest,
                     runtime_archives,
                     foreign_inputs,
-                    launch_manifest: resolve(outputs[l])?,
+                    launch_manifest: resolve(outputs[l].clone())?,
                 };
                 let mut settled = vec![manifest];
                 settled.extend(outputs);
@@ -323,6 +339,7 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     .link(key, &inputs)
                     .map_err(|e| failed(self.snapshot.failure(&e)))?
                     .product
+                    .clone()
             }
         };
         if product.address != self.request.id().address {
@@ -352,7 +369,7 @@ impl<S: ObjectTaskSnapshot> QueryTask for ObjectTask<S> {
         }
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return match result {
                 Ok(p) => QueryPoll::Complete(p),
                 Err(e) => QueryPoll::Failed(e),
@@ -360,7 +377,7 @@ impl<S: ObjectTaskSnapshot> QueryTask for ObjectTask<S> {
         }
         match self.compute(cx) {
             Ok(product) => {
-                self.terminal = Some(Ok(product));
+                self.terminal = Some(Ok(product.clone()));
                 QueryPoll::Complete(product)
             }
             Err(QueryPoll::Failed(error)) => {

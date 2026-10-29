@@ -300,7 +300,7 @@ impl LinkTasks {
             .observation_scope
             .get()
             .ok_or("native Link has no completed admitted observation scope")?;
-        let (mut products, root) = self.root.products(*root_ref, reads)?;
+        let (mut products, root) = self.root.products(root_ref.clone(), reads)?;
         products.observation_metadata(&root)
     }
 
@@ -340,7 +340,7 @@ impl LinkTasks {
         &self,
         manifest: ProductRef,
     ) -> Result<(Arc<Plan>, ProductRef, Arc<NativeRootProduct>), String> {
-        self.current(manifest)?;
+        self.current(manifest.clone())?;
         if manifest.record.domain != MANIFEST {
             return Err("wrong native Link manifest domain".into());
         }
@@ -362,7 +362,7 @@ impl LinkTasks {
             action: Action(action),
             record,
         };
-        let root = self.root.output(root_ref)?;
+        let root = self.root.output(root_ref.clone())?;
         Ok((plan.clone(), root_ref, root))
     }
 }
@@ -403,7 +403,7 @@ impl LeafTask {
                 Poll::Pending => return Err(QueryPoll::Waiting(vec![self.tasks.root.query_id()])),
                 Poll::Ready(Err(error)) => return Err(QueryPoll::Failed(error)),
                 Poll::Ready(Ok(product)) => Some((
-                    product,
+                    product.clone(),
                     self.tasks
                         .root
                         .output(product)
@@ -450,7 +450,7 @@ impl QueryTask for LeafTask {
         self.tasks.leaf_weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return match result {
                 Ok(p) => QueryPoll::Complete(p),
                 Err(e) => QueryPoll::Failed(e),
@@ -458,7 +458,7 @@ impl QueryTask for LeafTask {
         }
         match self.compute(cx) {
             Ok(product) => {
-                self.terminal = Some(Ok(product));
+                self.terminal = Some(Ok(product.clone()));
                 QueryPoll::Complete(product)
             }
             Err(QueryPoll::Failed(error)) => {
@@ -512,7 +512,7 @@ impl ObjectTaskSnapshot for LinkTasks {
     }
     fn link_input(&self, product: ProductRef) -> Result<Reference, Reference> {
         let read = || -> Result<Reference, String> {
-            self.current(product)?;
+            self.current(product.clone())?;
             if product.record.domain != INPUT {
                 return Err("wrong Link input descriptor domain".into());
             }
@@ -530,7 +530,10 @@ impl ObjectTaskSnapshot for LinkTasks {
     }
     fn products(&self, settled: &[ProductRef]) -> Result<Box<dyn ObjectProducts>, Reference> {
         let compute = || -> Result<Box<dyn ObjectProducts>, String> {
-            let manifest = *settled.first().ok_or("missing settled Link manifest")?;
+            let manifest = settled
+                .first()
+                .ok_or("missing settled Link manifest")?
+                .clone();
             let (plan, root_ref, root) = self.manifest(manifest)?;
             let mut expected = plan.fragments.clone();
             expected.push(plan.static_input);
@@ -555,10 +558,10 @@ impl ObjectTaskSnapshot for LinkTasks {
             let end = settled.len() - usize::from(execution_query.is_some());
             let reads = &settled[end - plan.ready.len()..end];
             let native = SettledProducts::new(self.root.native.snapshot.clone(), reads)?;
-            let (mut link, _) = self.root.products(root_ref, reads)?;
+            let (mut link, _) = self.root.products(root_ref.clone(), reads)?;
             let readies = reads
                 .iter()
-                .map(|read| super::ready_product(self.store(), *read).map(Arc::new))
+                .map(|read| super::ready_product(self.store(), read.clone()).map(Arc::new))
                 .collect::<Result<Vec<_>, _>>()?;
             // This boundary is executed before ObjectQueries selects either a
             // cached Link or a miss. Keep actual admitted refs, never reconstruct

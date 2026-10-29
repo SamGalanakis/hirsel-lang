@@ -123,12 +123,12 @@ impl OwnershipCompilation {
                 Err("ownership compilation dependencies changed".into())
             };
         }
-        let mut operations = self.instances.source_operations(discovery)?;
+        let mut operations = self.instances.source_operations(discovery.clone())?;
         let operations_bytes = metadata::operations(&mut operations);
         let mut snapshot = NativeSnapshot::new(
             self.instances.selected_store().clone(),
-            self.instances.products(discovery)?,
-            self.arena.graph(arena)?,
+            self.instances.products(discovery.clone())?,
+            self.arena.graph(arena.clone())?,
             self.instances.options().clone(),
             self.emission.clone(),
             self.instances.source_inputs().declarations.manifest()?,
@@ -234,15 +234,15 @@ impl OwnershipCompilation {
             .ok_or("ownership dispatch is unavailable")?
             .ownership
             .clone();
-        ownership.outputs(*root)?;
-        Ok((ownership, *root))
+        ownership.outputs(root.clone())?;
+        Ok((ownership, root.clone()))
     }
     fn publish(&self, root: ProductRef) -> Result<ProductRef, String> {
         let dispatch = self
             .dispatch
             .get()
             .ok_or("ownership dispatch is unavailable")?;
-        dispatch.ownership.outputs(root)?;
+        dispatch.ownership.outputs(root.clone())?;
         let bytes = serde_json::to_vec(&(root.address.0, root.action.0, root.record))
             .map_err(|e| e.to_string())?;
         let domain = Domain {
@@ -270,7 +270,7 @@ impl OwnershipCompilation {
         };
         store.associate_product(product.address, action, record);
         self.completed
-            .set((product, root))
+            .set((product.clone(), root))
             .map_err(|_| "ownership compilation completed twice")?;
         Ok(product)
     }
@@ -337,7 +337,10 @@ impl QueryTask for Task {
                 if !waiting.is_empty() {
                     return QueryPoll::Waiting(waiting);
                 }
-                self.terminal = match self.owner.initialize(selected[0], selected[1]) {
+                self.terminal = match self
+                    .owner
+                    .initialize(selected[0].clone(), selected[1].clone())
+                {
                     Err(error) => Some(Err(fail(error))),
                     Ok(dispatch) => match cx.read(dispatch.ownership.query_id()) {
                         Poll::Pending => {
@@ -349,7 +352,7 @@ impl QueryTask for Task {
                 };
             }
         }
-        match self.terminal.unwrap() {
+        match self.terminal.clone().unwrap() {
             Ok(product) => QueryPoll::Complete(product),
             Err(error) => QueryPoll::Failed(error),
         }

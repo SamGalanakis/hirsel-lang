@@ -59,7 +59,7 @@ impl CheckedReceipt {
         // and construction are released with `built`; the receipt keeps only
         // its output text and read maps charged.
         let scope = check
-            .completed_scope_bytes(product)
+            .completed_scope_bytes(product.clone())
             .map_err(|error| refused("scope sizing", error))?;
         let scope = Arc::new(
             check
@@ -442,7 +442,7 @@ impl GraphProducts for SourceProducts {
                                 ownership
                                     .as_ref()
                                     .ok_or_else(|| uninstalled())?
-                                    .materialize(*product)?,
+                                    .materialize(product.clone())?,
                             )
                         }
                         CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
@@ -459,7 +459,7 @@ impl GraphProducts for SourceProducts {
                                     .as_ref()
                                     .ok_or_else(|| uninstalled())?
                                     .readiness
-                                    .objects(*product)
+                                    .objects(product.clone())
                                 {
                                     Ok(objects) => CompileResult::NativeObjects(objects),
                                     Err(error) => CompileResult::NativeError(error),
@@ -469,7 +469,7 @@ impl GraphProducts for SourceProducts {
                                     .as_ref()
                                     .ok_or_else(|| uninstalled())?
                                     .readiness
-                                    .materialize(*product)
+                                    .materialize(product.clone())
                                 {
                                     Ok(execution) => CompileResult::Native(execution),
                                     Err(error) => CompileResult::NativeError(error),
@@ -486,7 +486,7 @@ impl GraphProducts for SourceProducts {
                             let (checked, reach) = safe
                                 .as_ref()
                                 .ok_or_else(|| uninstalled())?
-                                .outcome(*product)?;
+                                .outcome(product.clone())?;
                             CompileResult::SafeCheck { checked, reach }
                         }
                         CompileOperation::Artifacts { native: true } => {
@@ -497,7 +497,7 @@ impl GraphProducts for SourceProducts {
                                 native_artifacts
                                     .as_ref()
                                     .ok_or_else(|| uninstalled())?
-                                    .outcome(*product)?,
+                                    .outcome(product.clone())?,
                             )
                         }
                         CompileOperation::Artifacts { native: false }
@@ -511,7 +511,7 @@ impl GraphProducts for SourceProducts {
                             let (checked, tir) = export
                                 .as_ref()
                                 .ok_or_else(|| uninstalled())?
-                                .outcome(*product)?;
+                                .outcome(product.clone())?;
                             if matches!(operation, CompileOperation::ExportTir) {
                                 if checked.diagnostics.iter().any(|diagnostic| {
                                     diagnostic.severity == hirsel_diag::Severity::Error
@@ -547,7 +547,7 @@ impl GraphProducts for SourceProducts {
                             };
                             let output = run
                                 .as_ref()
-                                .and_then(|run| run.precompute_outcome(*product))
+                                .and_then(|run| run.precompute_outcome(product.clone()))
                                 .ok_or_else(|| uninstalled())?;
                             CompileResult::Precomputed {
                                 definitions: output.definitions,
@@ -564,7 +564,7 @@ impl GraphProducts for SourceProducts {
                             };
                             CompileResult::Hashes(
                                 run.as_ref()
-                                    .and_then(|run| run.outcome(*product))
+                                    .and_then(|run| run.outcome(product.clone()))
                                     .and_then(|output| output.definition_hashes.clone())
                                     .ok_or_else(|| uninstalled())?,
                             )
@@ -578,7 +578,7 @@ impl GraphProducts for SourceProducts {
                                     .as_ref()
                                     .ok_or_else(|| uninstalled())?
                                     .1
-                                    .outcome(*product)
+                                    .outcome(product.clone())
                                     .ok_or_else(|| uninstalled())?
                                     .products,
                             )
@@ -587,7 +587,9 @@ impl GraphProducts for SourceProducts {
                             let [product] = products else {
                                 return Err(uninstalled());
                             };
-                            let completed = check.outcome(*product).ok_or_else(|| uninstalled())?;
+                            let completed = check
+                                .outcome(product.clone())
+                                .ok_or_else(|| uninstalled())?;
                             if completed.checked.completion
                                 != hirsel_engine::CheckCompletion::Complete
                             {
@@ -625,7 +627,7 @@ impl GraphProducts for SourceProducts {
                                     "source check readiness received another root".into(),
                                 ));
                             }
-                            let completed = check.outcome(*product).ok_or_else(|| {
+                            let completed = check.outcome(product.clone()).ok_or_else(|| {
                                 ToolError::Runtime("selected check product is unavailable".into())
                             })?;
                             CompileResult::Check(completed.checked)
@@ -637,15 +639,15 @@ impl GraphProducts for SourceProducts {
                             if product.address != expected.address {
                                 return Err(uninstalled());
                             }
-                            let completed = check.outcome(*product).ok_or_else(|| {
+                            let completed = check.outcome(product.clone()).ok_or_else(|| {
                                 ToolError::Runtime("selected check product is unavailable".into())
                             })?;
                             let receipt = receipt.as_ref().ok_or_else(|| uninstalled())?;
                             // The digest commits to the full text either way.
                             let products = if *canonical {
-                                receipt.products(&check, *product, &entry)?
+                                receipt.products(&check, product.clone(), &entry)?
                             } else {
-                                receipt.digest_view(&check, *product, &entry)?
+                                receipt.digest_view(&check, product.clone(), &entry)?
                             };
                             CompileResult::CheckedProducts {
                                 checked: completed.checked,
@@ -661,7 +663,7 @@ impl GraphProducts for SourceProducts {
                             }
                             let entries = run
                                 .as_ref()
-                                .and_then(|run| run.batch_outcome(*product))
+                                .and_then(|run| run.batch_outcome(product.clone()))
                                 .ok_or_else(|| uninstalled())?;
                             CompileResult::TirBatch(Arc::new(super::TirBatchExecution {
                                 entries,
@@ -682,12 +684,10 @@ impl GraphProducts for SourceProducts {
                             }
                             let facts = run
                                 .as_ref()
-                                .and_then(|run| run.outcome(*product))
+                                .and_then(|run| run.outcome(product.clone()))
                                 .ok_or_else(|| {
-                                    ToolError::Runtime(
-                                        "selected TIR run facts are unavailable".into(),
-                                    )
-                                })?;
+                                ToolError::Runtime("selected TIR run facts are unavailable".into())
+                            })?;
                             CompileResult::Tir(super::tir_products::materialize(
                                 facts,
                                 lower.clone(),
@@ -1588,6 +1588,10 @@ pub(super) fn install(
         .split(plan.source_index_bytes)
         .ok_or_else(|| uninstalled())?;
     let source = Arc::new(source);
+    // Product source views outlive this graph and its meter. Give every view
+    // the admitted source owner before a producer captures or clones the map.
+    program.engine.sources =
+        std::mem::take(&mut program.engine.sources).replace_owner(source.clone());
     let query_error = |error| ToolError::Query {
         error,
         phase: None,

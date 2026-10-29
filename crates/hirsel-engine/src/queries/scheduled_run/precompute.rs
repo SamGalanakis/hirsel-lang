@@ -79,7 +79,7 @@ pub(super) fn create(queries: &Arc<FrontRunQueries>, query: QueryId) -> Option<B
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .as_ref()
-        .map(|(product, _)| Ok(*product));
+        .map(|(product, _)| Ok(product.clone()));
     Some(Box::new(Task {
         queries: queries.clone(),
         query,
@@ -113,7 +113,7 @@ impl QueryTask for Task {
         self.weight().retained
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        let result = if let Some(result) = self.terminal {
+        let result = if let Some(result) = self.terminal.clone() {
             result
         } else {
             match self.advance(cx) {
@@ -121,7 +121,7 @@ impl QueryTask for Task {
                 Poll::Ready(result) => result,
             }
         };
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         match result {
             Ok(product) => QueryPoll::Complete(product),
             Err(error) => QueryPoll::Failed(error),
@@ -215,7 +215,7 @@ impl Task {
             *queries
                 .precomputed
                 .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some((product, output));
+                .unwrap_or_else(|error| error.into_inner()) = Some((product.clone(), output));
             queries
                 .store
                 .associate_product(product.address, product.action, product.record);

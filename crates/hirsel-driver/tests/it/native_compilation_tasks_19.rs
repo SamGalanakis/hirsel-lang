@@ -639,18 +639,19 @@ fn run_program_case_with_frame(
                 "jobs={jobs} literal={literal} fresh={fresh}: {}",
                 String::from_utf8_lossy(&store.get_content(error).unwrap())
             )
-        })[0];
+        })[0]
+            .clone();
         let from_compilation = observation_only.then(|| {
             let before = trace.totals();
-            let metadata = compilation.observation(selected).unwrap();
-            let mut wrong = selected;
+            let metadata = compilation.observation(selected.clone()).unwrap();
+            let mut wrong = selected.clone();
             wrong.action = store::Action(ContentHash::of_bytes(b"wrong compilation action"));
-            assert!(compilation.observation(wrong).is_err());
+            assert!(compilation.observation(wrong.clone()).is_err());
             assert!(compilation.discharged(wrong).is_err());
             assert_eq!(trace.totals(), before);
             metadata
         });
-        let outputs = compilation.outputs(selected).unwrap();
+        let outputs = compilation.outputs(selected.clone()).unwrap();
         let backend_count = if observation_only { 1 } else { 2 };
         assert_eq!(outputs.len(), backend_count);
         let current_addresses = outputs
@@ -669,7 +670,7 @@ fn run_program_case_with_frame(
                 backend_count as u64
             }
         );
-        let native = compilation.native(selected).unwrap();
+        let native = compilation.native(selected.clone()).unwrap();
         if fresh {
             assert_eq!(instances.imports.load(Ordering::Relaxed), 0);
             assert_eq!(instances.source_body_demands.load(Ordering::Relaxed), 0);
@@ -686,10 +687,10 @@ fn run_program_case_with_frame(
                 assert_eq!(trace.totals(), Default::default());
             }
         }
-        let roots = compilation.roots(selected).unwrap();
+        let roots = compilation.roots(selected.clone()).unwrap();
         let request = runtime.request(&[instances.discovery_id()]);
-        let discovery = runtime.wait(request).unwrap()[0];
-        let completed = instances.completed_instances(discovery).unwrap();
+        let discovery = runtime.wait(request).unwrap()[0].clone();
+        let completed = instances.completed_instances(discovery.clone()).unwrap();
         if observation_only {
             let before = trace.totals();
             assert_eq!(
@@ -750,11 +751,13 @@ fn run_program_case_with_frame(
         reads.extend(completed.iter().map(|(owner, _)| owner.ready_query_id()));
         let request = runtime.request(&reads);
         let selected = runtime.wait(request).unwrap();
-        let (mut view, root) = roots.products(selected[0], &selected[1..]).unwrap();
+        let (mut view, root) = roots
+            .products((selected[0]).clone(), &selected[1..])
+            .unwrap();
         let ready = selected[1..]
             .iter()
             .map(|product| {
-                Arc::new(native::queries::ready_product(store.as_ref(), *product).unwrap())
+                Arc::new(native::queries::ready_product(store.as_ref(), product.clone()).unwrap())
             })
             .collect::<Vec<_>>();
         let records = outputs
@@ -789,7 +792,7 @@ fn run_program_case_with_frame(
             metadata
         });
         for (index, output) in outputs.iter().enumerate() {
-            let linked = linked_product(store.as_ref(), *output).unwrap();
+            let linked = linked_product(store.as_ref(), output.clone()).unwrap();
             let destination = directory
                 .path()
                 .join(format!("restored-{literal}-{fresh}-{index}"));

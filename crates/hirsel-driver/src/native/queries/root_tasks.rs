@@ -56,7 +56,7 @@ impl NativeRootTasks {
             .into_iter()
             .map(|(key, result)| {
                 (
-                    instance_query(&key, result.product.product),
+                    instance_query(&key, result.product.product.clone()),
                     result.product.product.record,
                 )
             })
@@ -143,7 +143,7 @@ impl QueryTask for RootTask {
         self.inputs.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return match result {
                 Ok(p) => QueryPoll::Complete(p),
                 Err(e) => QueryPoll::Failed(e),
@@ -184,10 +184,10 @@ impl QueryTask for RootTask {
                 return Err("native root completion changed within immutable snapshot".into());
             }
             self.inputs.publications.fetch_add(1, Ordering::Relaxed);
-            Ok(root.product)
+            Ok(root.product.clone())
         })()
         .map_err(|e: String| self.inputs.native.failure(&e));
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         match result {
             Ok(p) => QueryPoll::Complete(p),
             Err(e) => QueryPoll::Failed(e),

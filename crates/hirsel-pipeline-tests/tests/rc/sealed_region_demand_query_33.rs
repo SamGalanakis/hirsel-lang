@@ -150,7 +150,7 @@ fn original_scalar_guard_query_uses_only_metadata_and_rechecks_dependency_output
                             action,
                             record,
                         };
-                        records.push(product);
+                        records.push(product.clone());
                         Input {
                             query: hirsel_engine::runtime::QueryId {
                                 kind: 0x4e00_0001,
@@ -207,7 +207,7 @@ fn original_scalar_guard_query_uses_only_metadata_and_rechecks_dependency_output
     let changed = store
         .put_content(domain, b"changed ordinary descriptor")
         .unwrap();
-    let first = records[0];
+    let first = records[0].clone();
     store.associate_product(first.address, first.action, changed);
     assert!(
         query

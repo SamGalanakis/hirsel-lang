@@ -392,12 +392,14 @@ fn compile_settled<R>(
             String::from_utf8_lossy(&store.get_content(error).unwrap())
         )
     });
-    let completed = instances.completed_instances(selected[0]).unwrap();
-    let operations = instances.source_operations(selected[0]).unwrap();
+    let completed = instances
+        .completed_instances((selected[0]).clone())
+        .unwrap();
+    let operations = instances.source_operations((selected[0]).clone()).unwrap();
     let snapshot = NativeSnapshot::new(
         store.clone(),
-        instances.products(selected[0]).unwrap(),
-        arenas.graph(selected[1]).unwrap(),
+        instances.products((selected[0]).clone()).unwrap(),
+        arenas.graph((selected[1]).clone()).unwrap(),
         options,
         emission,
         manifest,
@@ -499,16 +501,20 @@ fn compile_settled<R>(
         .map(|product| {
             load_object(
                 store.as_ref(),
-                fragment_product(store.as_ref(), *product).unwrap().object,
+                fragment_product(store.as_ref(), product.clone())
+                    .unwrap()
+                    .object,
             )
             .unwrap()
         })
         .collect::<Vec<_>>();
     let ready = &selected[count..count * 2];
-    let (mut products, root) = roots.products(selected[count * 2], ready).unwrap();
+    let (mut products, root) = roots
+        .products((selected[count * 2]).clone(), ready)
+        .unwrap();
     let readies = ready
         .iter()
-        .map(|product| queries::ready_product(store.as_ref(), *product).map(Arc::new))
+        .map(|product| queries::ready_product(store.as_ref(), product.clone()).map(Arc::new))
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     inspect(&mut products, &root, &readies);
@@ -535,7 +541,7 @@ fn compile_settled<R>(
             hits,
             products: keys
                 .into_iter()
-                .zip(selected[..count].iter().copied())
+                .zip(selected[..count].iter().cloned())
                 .collect(),
             instance_imports: instances.imports.load(std::sync::atomic::Ordering::Relaxed),
             ready_products: ready.to_vec(),

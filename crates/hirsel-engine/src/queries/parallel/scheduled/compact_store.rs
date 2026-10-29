@@ -34,6 +34,74 @@ fn address(key: Key) -> hirsel_artifact_store::Address {
         [key.0.as_slice()],
     ))
 }
+/// Scalar Summary demand consumes the same checked compact facts written by
+/// scheduled P. It does not reconstruct or execute the separate body product.
+pub(in crate::queries) fn load_publication(
+    engine: &mut QueryEngine,
+    path: &DefPath,
+) -> Option<PublishedResult> {
+    if engine.verify_store == crate::store::VerifyStore::Recompute {
+        return None;
+    }
+    let store = engine
+        .result_store
+        .clone()
+        .filter(|s| s.query_cache_enabled())?;
+    let key = engine.store_key(path, QueryKind::Modes)?;
+    let selected = store.lookup_product(address(key.0))?;
+    if selected.reference.domain != OUTPUT
+        || selected.reference.len > crate::store::MAX_RECORD as u64
+    {
+        return None;
+    }
+    let bytes = store.get_content(selected.reference)?;
+    let record: Record = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(selected.reference.len)
+        .reject_trailing_bytes()
+        .deserialize(&bytes)
+        .ok()?;
+    if record.key != key.0
+        || record.body.domain != crate::store::product_domain(QueryKind::Modes)
+        || record.body.len > crate::store::MAX_RECORD as u64
+        || selected
+            .reference
+            .len
+            .checked_mul(8)?
+            .checked_add(record.decode_bytes)?
+            > (crate::store::MAX_RECORD as u64).checked_mul(8)?
+        || selected.action != crate::store::query_action(&key, key.1, &record.reads)
+        || record
+            .reads
+            .first_changed(|read| engine.observe(path, read))
+            .is_some()
+    {
+        return None;
+    }
+    let facts: carry::Facts = engine.decode_record(&record.facts)?;
+    let summary = facts.summary?;
+    if summary.storage.is_some() || has_errors(&facts.diagnostics) {
+        return None;
+    }
+    let checked = facts.checked?;
+    engine.adopt_publication(
+        path,
+        persistent::PublicationRecord {
+            summary,
+            diagnostics: facts.diagnostics,
+            phases: facts.diagnostic_phases,
+            detail: DependencyReads {
+                signatures: checked.2.values()?,
+                ..Default::default()
+            },
+            dead_arms: facts.dead_arms,
+            lowering: facts.lowering,
+        },
+        Arc::new(record.reads),
+        (checked.0, checked.1),
+    )
+}
+
 impl BodyTask {
     pub(super) fn store_compact(
         &self,
@@ -125,6 +193,133 @@ impl BodyTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_summary_adopts_checked_facts_without_a_body_and_refuses_substitutions() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..10 {
+                let store = Arc::new(crate::store::MemStore::default());
+                let mut engine =
+                    QueryEngine::new(crate::default_environment(), PhaseAdapters::default())
+                        .with_result_store(store.clone());
+                let file = engine
+                    .sources
+                    .add("summary-cache.hir", "fn main(){}".into())
+                    .unwrap();
+                let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
+                let context = crate::default_context();
+                let mut parsed = hirsel_parser::parse(file, tokens, &context, &mut engine.sources);
+                assert!(parsed.diagnostics.is_empty());
+                engine.index(&mut parsed.syntax, &context).unwrap();
+                let syntax = &parsed.syntax.items[0];
+                let path = &syntax.item.definition;
+                let key = engine.store_key(path, QueryKind::Modes).unwrap();
+                let checked_summary = Arc::new(CheckedSummary {
+                    summary: DefinitionSummary {
+                        owner: syntax.owner().def,
+                        frames: vec![crate::summary::Frame {
+                            site: hirsel_types::NameSite::Item,
+                            parent: None,
+                            kind: crate::summary::FrameKind::Item,
+                            generic: false,
+                            size_bindings: Box::new([]),
+                        }]
+                        .into(),
+                        calls: Box::new([]),
+                        staged: Box::new([]),
+                    },
+                    growth: Default::default(),
+                });
+                let reads = Arc::new(Reads::empty());
+                let mut summary = PublishedSummary {
+                    definition: checked_summary.summary.owner,
+                    summary: checked_summary.summary.clone(),
+                    growth: checked_summary.growth.clone(),
+                    storage: None,
+                    checked: Some(checked_summary.clone()),
+                    reads: reads.clone(),
+                    text: engine.key_text(path, QueryKind::Summary).unwrap(),
+                };
+                let mut checked = Some((
+                    checked_summary,
+                    reads.clone(),
+                    Arc::new(OrderedSignatureReads::new(&[])),
+                ));
+                match fault {
+                    1 => summary.text = ContentHash::default(),
+                    2 => summary.checked = None,
+                    3 => summary.summary.frames[0].parent = Some(0),
+                    4 => checked = None,
+                    5 => {
+                        Arc::make_mut(&mut checked.as_mut().unwrap().0)
+                            .summary
+                            .owner = DefId::intern(&DefPath::core("substituted"))
+                    }
+                    _ => (),
+                }
+                let facts = carry::FactsRef {
+                    summary: Some(Arc::new(summary)),
+                    checked: &checked,
+                    dead_arms: &None,
+                    diagnostics: &vec![],
+                    diagnostic_phases: &vec![],
+                    lowering: &None,
+                    table_keys: None,
+                };
+                let mut record = Record {
+                    key: key.0,
+                    // Body-free publication must not fetch this absent archive.
+                    body: crate::store::product_domain(QueryKind::Modes)
+                        .reference(b"absent body")
+                        .unwrap(),
+                    reads: Reads::empty(),
+                    decode_bytes: 0,
+                    facts: engine.encode_record(&facts).unwrap(),
+                };
+                if fault == 6 {
+                    record.reads =
+                        Reads::from_vec(vec![(ReadKey::Environment, ContentHash::default())])
+                            .unwrap();
+                }
+                if fault == 8 {
+                    record.decode_bytes = u64::MAX;
+                }
+                if fault == 9 {
+                    record.body.domain = OUTPUT;
+                }
+                let action = if fault == 7 {
+                    hirsel_artifact_store::Action(ContentHash::default())
+                } else {
+                    crate::store::query_action(&key, key.1, &record.reads)
+                };
+                store.cache_product(
+                    address(key.0),
+                    action,
+                    OUTPUT,
+                    &bincode::serialize(&record).unwrap(),
+                );
+                assert!(store.get_content(record.body).is_none());
+                engine.verify_store = verify;
+                let hit = engine.load_publication(path);
+                let accepted = fault == 0 && verify == crate::store::VerifyStore::Off;
+                assert_eq!(hit.is_some(), accepted, "fault {fault}, {verify:?}");
+                assert_eq!(engine.store_adoptions(), u64::from(accepted));
+                assert_eq!(engine.summaries.is_empty(), !accepted);
+                assert_eq!(engine.checked_summaries.is_empty(), !accepted);
+                for kind in [
+                    QueryKind::Resolve,
+                    QueryKind::Check,
+                    QueryKind::Modes,
+                    QueryKind::Summary,
+                ] {
+                    assert_eq!(engine.recompute_count(path, kind), 0);
+                }
+            }
+        }
+    }
 
     #[test]
     fn compact_fact_bytes_preserve_the_stored_sequence_and_its_bounds() {

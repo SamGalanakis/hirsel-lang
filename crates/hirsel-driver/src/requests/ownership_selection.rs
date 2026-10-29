@@ -59,7 +59,7 @@ impl OwnershipExecution {
     /// and a second source compilation cannot substitute for these products.
     pub fn emit(self: &Arc<Self>, backend: native::Backend) -> Result<OwnershipObjects, String> {
         let objects = self.tasks.with_execution_context(
-            self.root,
+            self.root.clone(),
             &self.link,
             &self.entry,
             |program, units, inputs, plans| {
@@ -85,7 +85,7 @@ impl OwnershipExecution {
             .map_err(|error| format!("{error}; {}", objects.retained_summary()))?;
         Ok(OwnershipObjects {
             objects,
-            root: self.root,
+            root: self.root.clone(),
             _owner: self.clone(),
             _allowance: allowance,
         })
@@ -100,13 +100,17 @@ impl OwnershipExecution {
         if objects.root != self.root || !std::ptr::eq(&*objects._owner, self) {
             return Err("ownership objects belong to another selected completion".into());
         }
-        self.tasks
-            .with_execution_context(self.root, &self.link, &self.entry, |program, _, _, _| {
+        self.tasks.with_execution_context(
+            self.root.clone(),
+            &self.link,
+            &self.entry,
+            |program, _, _, _| {
                 objects
                     .objects
                     .launch(program, tools, directory, event_limit)
                     .map_err(|error| error.to_string())
-            })
+            },
+        )
     }
     /// Bind explicit grants or a replay to the same immutable source facts
     /// used by this diagnostic compilation. This performs no compiler queries.
@@ -194,13 +198,17 @@ impl OwnershipExecution {
             }
             _ => return Err("ownership launch binding changed form".into()),
         };
-        self.tasks
-            .with_execution_context(self.root, &self.link, &self.entry, |program, _, _, _| {
+        self.tasks.with_execution_context(
+            self.root.clone(),
+            &self.link,
+            &self.entry,
+            |program, _, _, _| {
                 objects
                     .objects
                     .launch_selected(program, tools, directory, event_limit, Some(&run), tape)
                     .map_err(|e| e.to_string())
-            })
+            },
+        )
     }
     /// Decode the ordinary launch record against this exact selected source
     /// and object owner. Ownership rows and exit codes cannot invent a failure
@@ -213,8 +221,11 @@ impl OwnershipExecution {
         if objects.root != self.root || !std::ptr::eq(&*objects._owner, self) {
             return Err("ownership objects belong to another selected completion".into());
         }
-        self.tasks
-            .with_execution_context(self.root, &self.link, &self.entry, |program, _, _, _| {
+        self.tasks.with_execution_context(
+            self.root.clone(),
+            &self.link,
+            &self.entry,
+            |program, _, _, _| {
                 let sites = self.link.sites();
                 match native::observe_run(launched, program, &sites)
                     .map_err(|error| error.to_string())?
@@ -227,7 +238,8 @@ impl OwnershipExecution {
                     }
                     native::Observed::Stopped(outcome) => Ok(outcome),
                 }
-            })
+            },
+        )
     }
     /// Each selected body re-enters C before a diagnostic consumer sees it.
     /// This read never runs source discovery or compiler transformations.
@@ -389,12 +401,12 @@ impl OwnershipSelection {
     pub fn materialize(&self, selected: ProductRef) -> Result<Arc<OwnershipExecution>, ToolError> {
         let (compilation, completion, source) = self
             .bootstrap
-            .outcome(selected)
+            .outcome(selected.clone())
             .map_err(ToolError::Runtime)?;
         let (tasks, root) = compilation
             .outcome(completion)
             .map_err(ToolError::Runtime)?;
-        let units = tasks.outputs(root).map_err(ToolError::Runtime)?;
+        let units = tasks.outputs(root.clone()).map_err(ToolError::Runtime)?;
         if let Some(completed) = self.completed.get() {
             if completed.product != selected {
                 return Err(ToolError::Runtime(

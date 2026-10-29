@@ -121,7 +121,7 @@ impl ArenaTasks {
                 Err("arena discovery changed within immutable snapshot".into())
             };
         }
-        let completed = self.instances.completed_instances(discovery)?;
+        let completed = self.instances.completed_instances(discovery.clone())?;
         let nodes = completed
             .iter()
             .map(|(key, output)| ArenaNode {
@@ -156,7 +156,7 @@ impl ArenaTasks {
         let outputs = (0..ids.len()).map(|_| OnceLock::new()).collect();
         let instances = completed
             .into_iter()
-            .map(|(key, output)| (key.address(INSTANCE_KIND).0, output.product.product))
+            .map(|(key, output)| (key.address(INSTANCE_KIND).0, output.product.product.clone()))
             .collect();
         let mut plan = Plan {
             discovery,
@@ -224,7 +224,7 @@ impl ArenaTasks {
             action,
             record,
         };
-        if let Err(other) = self.completed.set((product, graph))
+        if let Err(other) = self.completed.set((product.clone(), graph))
             && self.completed.get().unwrap().0 != other.0
         {
             return Err("arena graph completion changed".into());
@@ -290,13 +290,13 @@ impl QueryTask for ArenaTask {
         std::mem::size_of::<Self>() as u64
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         let result = self.advance(cx);
         match result {
             Ok(Ok(product)) => {
-                self.terminal = Some(Ok(product));
+                self.terminal = Some(Ok(product.clone()));
                 finish(Ok(product))
             }
             Ok(Err(waiting)) => QueryPoll::Waiting(waiting),
@@ -337,8 +337,8 @@ impl ArenaTask {
         let mut waiting = Vec::new();
         if let Some(index) = self.index {
             for member in &plan.queries.component_keys[index].members {
-                let expected = plan.instances[&member.address(INSTANCE_KIND).0];
-                let query = instance_query(member, expected);
+                let expected = plan.instances[&member.address(INSTANCE_KIND).0].clone();
+                let query = instance_query(member, expected.clone());
                 match cx.read(query) {
                     Poll::Pending => waiting.push(query),
                     Poll::Ready(Err(error)) => return Err(error),
@@ -379,7 +379,7 @@ impl ArenaTask {
             tasks
                 .charge(output.retained_metadata_bytes())
                 .map_err(fail)?;
-            let product = summary.product;
+            let product = summary.product.clone();
             if let Err(other) = plan.outputs[index].set(summary)
                 && plan.outputs[index].get().unwrap().product != other.product
             {

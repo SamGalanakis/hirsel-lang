@@ -199,7 +199,8 @@ impl OutputReadiness for ExecutableOutput {
         let [product] = products else {
             return Err("executable request requires exactly one linked root".into());
         };
-        let linked = crate::native::object_queries::linked_product(self.store.as_ref(), *product)?;
+        let linked =
+            crate::native::object_queries::linked_product(self.store.as_ref(), product.clone())?;
         crate::native::object_queries::materialize_executable(
             self.store.as_ref(),
             &linked,

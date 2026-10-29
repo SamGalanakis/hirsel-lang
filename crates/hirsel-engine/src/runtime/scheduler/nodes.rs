@@ -83,7 +83,7 @@ impl Nodes {
     }
     pub fn result(&self, id: NodeId) -> Option<Outcome> {
         match &self.get_id(id)?.status {
-            Status::Settled(result) => Some(**result),
+            Status::Settled(result) => Some((**result).clone()),
             _ => None,
         }
     }

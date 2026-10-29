@@ -97,7 +97,7 @@ pub(super) fn source_calls_granted_with_log(
         let execution = execution.clone();
         for product in execution.units() {
             execution
-                .with_unit(*product, |unit| {
+                .with_unit((*product).clone(), |unit| {
                     let native = hirsel_lir::ownership_trace::native::LeafPlan::from_relocated(
                         &unit.unit,
                         &unit.layouts,

@@ -48,7 +48,7 @@ impl StagedProducts {
                         .failure(reference)
                         .unwrap_or(QueryError::NotImplemented)
                 })?;
-                let output = stage.outcome(products[0]).unwrap();
+                let output = stage.outcome(products[0].clone()).unwrap();
                 let bytes = output.installation_bytes()?;
                 engine.accept_front_staged(&output, budget.reserve(bytes).unwrap())?;
             }

@@ -124,7 +124,7 @@ impl QueryTask for Task {
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
         {
-            return QueryPoll::Complete(completed.product);
+            return QueryPoll::Complete(completed.product.clone());
         }
         let exported = match cx.read(owner.export.query()) {
             Poll::Pending => return QueryPoll::Waiting(vec![owner.export.query()]),
@@ -159,7 +159,7 @@ impl QueryTask for Task {
                     })
                 }
                 Ok((compilation, product, _source)) => {
-                    let Ok(tasks) = compilation.native(product) else {
+                    let Ok(tasks) = compilation.native(product.clone()) else {
                         return QueryPoll::Failed(owner.errors.protocol);
                     };
                     let mut reads = Vec::new();
@@ -179,7 +179,7 @@ impl QueryTask for Task {
                     }
                     let result = (|| {
                         let receipts = tasks.receipts(&reads)?;
-                        let count = compilation.emitted_instances(product)?;
+                        let count = compilation.emitted_instances(product.clone())?;
                         let outputs = compilation.outputs(product)?;
                         if count == 0 || outputs.len() != 2 * count {
                             return Err("oracle native backend outputs are incomplete".into());
@@ -193,7 +193,7 @@ impl QueryTask for Task {
                                     .map(|product| {
                                         let fragment = object_queries::fragment_product(
                                             owner.store.as_ref(),
-                                            *product,
+                                            product.clone(),
                                         )?;
                                         object_queries::load_object(
                                             owner.store.as_ref(),
@@ -246,7 +246,7 @@ impl QueryTask for Task {
             record,
         };
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some(Completed {
-            product,
+            product: product.clone(),
             artifacts,
             _allowance: allowance,
         });

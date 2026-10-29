@@ -1062,8 +1062,9 @@ fn native_discovery_reports_actual_removals_on_cold_and_body_free_fresh_hits() {
                     "{}",
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
-            })[0];
-            let actual = tasks.discharged(settled).unwrap();
+            })[0]
+                .clone();
+            let actual = tasks.discharged(settled.clone()).unwrap();
             assert_eq!(&actual, &expected.as_ref().unwrap().0);
             assert_eq!(
                 proofs.report_discharged(&actual),

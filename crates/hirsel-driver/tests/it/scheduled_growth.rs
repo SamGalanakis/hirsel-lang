@@ -88,7 +88,7 @@ fn admitted_source_growth_demands_unexecuted_required_roots() {
                     .unwrap();
                 let request = runtime.request(&[growth.query()]);
                 let products = runtime.wait(request).unwrap();
-                let output = growth.outcome(products[0]).unwrap();
+                let output = growth.outcome((products[0]).clone()).unwrap();
                 assert_eq!(
                     output.diagnostics.len(),
                     usize::from(expected_rule.is_some())
@@ -183,7 +183,7 @@ fn growth_output_admission_does_not_spend_its_grant_on_the_runtime_frame() {
                     None
                 } else {
                     let products = result.unwrap();
-                    let output = growth.outcome(products[0]).unwrap();
+                    let output = growth.outcome((products[0]).clone()).unwrap();
                     assert!(output.diagnostics.is_empty());
                     assert!(
                         output.facets.components.iter().any(|component| component
@@ -270,7 +270,7 @@ fn changed_source_member_stops_at_equal_settled_component() {
                 .unwrap();
             let request = runtime.request(&[growth.query()]);
             let selected = runtime.wait(request).unwrap();
-            let output = growth.outcome(selected[0]).unwrap();
+            let output = growth.outcome((selected[0]).clone()).unwrap();
             assert_eq!(
                 runtime.stats().claims,
                 definitions.len() as u64 + 1,
@@ -296,6 +296,7 @@ fn changed_source_member_stops_at_equal_settled_component() {
                 .find(|component| component.members.iter().any(|id| id.path().0.name == name))
                 .unwrap()
                 .product
+                .clone()
         };
         let before = component(&first, "left");
         let after = component(&changed, "left");

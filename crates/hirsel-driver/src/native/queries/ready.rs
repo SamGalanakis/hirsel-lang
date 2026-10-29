@@ -297,7 +297,7 @@ impl ReadyQueries {
         let mut seen = std::collections::BTreeSet::new();
         for dependency in &miss.optimizer_reads {
             if !seen.insert(dependency.address.0)
-                || ready_product(self.store.as_ref(), *dependency).is_err()
+                || ready_product(self.store.as_ref(), dependency.clone()).is_err()
             {
                 return Err("unsettled or duplicate Ready optimizer dependency".into());
             }

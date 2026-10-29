@@ -154,7 +154,7 @@ impl Fixture {
             .wait(request)
             .unwrap_or_else(|error| panic!("{error:?}"));
         assert_eq!(outputs[0], outputs[1]);
-        outputs[0]
+        (outputs[0]).clone()
     }
 }
 const SOURCE: &str = "type Token {value:u64}\nfn helper(x:u64)->u64{Token(value:x).value+1u64}\nfn idle()->u64{5u64}\npub fn main()->u64{let f=fn(x:u64)->u64{helper(x)};f(2u64)}";
@@ -173,8 +173,11 @@ fn preparation_demands_one_source_and_keeps_closure_and_layout_views_after_regis
             let source_bytes = budget.reserved() - (256 << 20) - (1 << 20);
             let main = f.path("main");
             let output = f.complete(&preparation, "main");
-            let facts = preparation.outcome(output).unwrap();
-            assert!(Arc::ptr_eq(&facts, &preparation.outcome(output).unwrap()));
+            let facts = preparation.outcome(output.clone()).unwrap();
+            assert!(Arc::ptr_eq(
+                &facts,
+                &preparation.outcome(output.clone()).unwrap()
+            ));
             let declaration = facts.declaration().unwrap();
             assert_eq!(declaration.declaration.definition, main);
             assert_eq!(
@@ -205,7 +208,7 @@ fn preparation_demands_one_source_and_keeps_closure_and_layout_views_after_regis
             // Nominal layout facts are separately demanded and have no entry.
             let token = preparation.query(&f.path("Token")).unwrap();
             let request = f.runtime.request(&[token]);
-            let token = f.runtime.wait(request).unwrap()[0];
+            let token = f.runtime.wait(request).unwrap()[0].clone();
             let layout = preparation.outcome(token).unwrap();
             assert!(layout.declaration().is_none());
             assert!(layout.definition().representation.is_some());
@@ -245,6 +248,7 @@ impl QueryContext for Selected {
     fn read(&mut self, query: QueryId) -> Poll<Result<ProductRef, Reference>> {
         assert_eq!(query, self.query);
         self.product
+            .clone()
             .map_or(Poll::Pending, |product| Poll::Ready(Ok(product)))
     }
 }
@@ -265,7 +269,7 @@ fn preparation_enforces_exact_view_admission_and_refuses_crossed_or_damaged_prod
         );
         drop(task);
         let output = f.complete(&preparation, "main");
-        let facts = preparation.outcome(output).unwrap();
+        let facts = preparation.outcome(output.clone()).unwrap();
         let required = preparation.input_bytes() + facts.retained_metadata_bytes();
         selected.product = Some(facts.source_product());
         for (bytes, succeeds) in [(required - 1, false), (required, true)] {
@@ -297,13 +301,13 @@ fn preparation_enforces_exact_view_admission_and_refuses_crossed_or_damaged_prod
             )
             .is_err()
         );
-        let mut crossed = output;
+        let mut crossed = output.clone();
         crossed.action.0 = hirsel_syntax::ContentHash::of_bytes(b"another action");
         assert!(preparation.outcome(crossed).is_none());
         assert!(preparation.outcome(facts.source_product()).is_none());
         for damaged in [None, Some(Bytes::from(b"corrupt preparation".as_slice()))] {
             *f.store.damaged.lock().unwrap() = Some((output.record, damaged));
-            assert!(preparation.outcome(output).is_none());
+            assert!(preparation.outcome(output.clone()).is_none());
         }
         *f.store.damaged.lock().unwrap() = None;
         let candidate = f.preparation(1 << 20);
@@ -344,7 +348,7 @@ fn preparation_binds_body_signature_and_private_layout_edits_without_verify_off_
             let mut f = fixture(&text, verify, 1);
             let preparation = f.preparation(1 << 20);
             let product = f.complete(&preparation, selected);
-            let facts = preparation.outcome(product).unwrap();
+            let facts = preparation.outcome(product.clone()).unwrap();
             if verify == Verify::Off {
                 assert!(facts.definition().lower.is_none());
                 assert!(facts.original().unwrap().verified.is_none());

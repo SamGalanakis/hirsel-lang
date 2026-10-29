@@ -341,7 +341,7 @@ impl ArenaQueryPlan {
                     .iter()
                     .find(|(key, _)| key == owner)
                     .ok_or("outgoing arena component omits selected owner")?;
-                (owner.clone(), candidates.clone(), output.product)
+                (owner.clone(), candidates.clone(), output.product.clone())
             } else {
                 self.external
                     .get(&function(owner))

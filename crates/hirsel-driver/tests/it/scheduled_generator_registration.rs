@@ -111,7 +111,7 @@ fn admitted_generator_text_waits_on_lower_with_one_worker_and_keeps_detached_evi
                         .map(|o| o.text().map(str::to_owned))
                 )
             });
-            let output = registration.outcome(products[0]).unwrap();
+            let output = registration.outcome((products[0]).clone()).unwrap();
             assert_eq!(output.text().unwrap(), expected);
             assert!(output.has_execution_acceptance());
             assert!(output.reads().iter().any(
@@ -371,7 +371,7 @@ fn accepted_generator_view_checks_and_lowers_the_literal_without_changing_raw_so
                         .map(|o| o.text().map(str::to_owned))
                 )
             });
-            let output = registration.outcome(products[0]).unwrap();
+            let output = registration.outcome((products[0]).clone()).unwrap();
             assert_eq!(output.text().unwrap(), expected);
             assert!(output.has_execution_acceptance());
             let raw = program.engine.definition_items(&program.entry).unwrap()[0].clone();
@@ -431,7 +431,7 @@ fn accepted_generator_view_checks_and_lowers_the_literal_without_changing_raw_so
             let result = checked_runtime
                 .wait(request)
                 .unwrap_or_else(|failure| panic!("accepted Lower failed: {failure:?}, resource={}, protocol={}, typed={:?}, work={:?}, runtime={:?}", failure == errors.resource, failure == errors.protocol, accepted_lower.failure(failure), accepted_front.work_snapshot(), checked_runtime.stats()));
-            let actual = accepted_lower.outcome(result[0]).unwrap();
+            let actual = accepted_lower.outcome((result[0]).clone()).unwrap();
             assert_eq!(actual.output.value.path.path(), &program.entry);
             assert!(actual.execution.is_some());
             checked_runtime.shutdown();
@@ -553,7 +553,7 @@ fn accepted_output_control_with(
     let query = registration.query(&program.entry).unwrap();
     let request = runtime.request(&[query]);
     let complete = runtime.wait(request).unwrap();
-    let output = registration.outcome(complete[0]).unwrap();
+    let output = registration.outcome((complete[0]).clone()).unwrap();
     runtime.shutdown();
     drop(runtime);
     drop(registration);
@@ -1015,7 +1015,7 @@ fn generator_bootstrap_finishes_before_final_admitted_check_and_preserves_its_sc
             let complete = runtime
                 .wait(request)
                 .unwrap_or_else(|reference| panic!("final check {:?}", check.failure(reference)));
-            let output = check.outcome(complete[0]).unwrap();
+            let output = check.outcome((complete[0]).clone()).unwrap();
             assert_eq!(output.checked.completion, expected.completion);
             assert_eq!(output.checked.diagnostics, expected.diagnostics);
             runtime.shutdown();
@@ -1247,7 +1247,7 @@ fn accepted_generated_native_catalogue_preserves_raw_source_and_actual_lower_aut
                 let products = runtime
                     .wait(request)
                     .unwrap_or_else(|reference| panic!("{:?}", native.failure(reference)));
-                let output = native.outcome(products[0]).unwrap();
+                let output = native.outcome((products[0]).clone()).unwrap();
                 let source = &output.product.source;
                 assert_eq!(source.definition, program.entry);
                 assert_eq!(source.source.implementation_revision, original.text_hash);

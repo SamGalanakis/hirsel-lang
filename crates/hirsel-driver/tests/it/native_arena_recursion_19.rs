@@ -146,7 +146,7 @@ fn observe(store: Arc<dyn ResultStore>, text: &str, fresh: bool, jobs: usize) ->
             String::from_utf8_lossy(&store.get_content(error).unwrap()),
         )
     });
-    let graph = arenas.graph(outputs[1]).unwrap();
+    let graph = arenas.graph((outputs[1]).clone()).unwrap();
     for summaries in [&graph.candidates, &graph.chosen] {
         assert!(
             summaries.iter().any(|summary| {
@@ -166,13 +166,14 @@ fn observe(store: Arc<dyn ResultStore>, text: &str, fresh: bool, jobs: usize) ->
             .flat_map(|summary| {
                 summary.candidates.iter().filter_map(|(owner, claims)| {
                     let name = &owner.instance.definition().0.name;
-                    selected(name).then(|| (name.clone(), (summary.product, claims.clone())))
+                    selected(name)
+                        .then(|| (name.clone(), (summary.product.clone(), claims.clone())))
                 })
             })
             .collect::<BTreeMap<_, _>>()
     };
     let values = tasks
-        .completed_instances(outputs[0])
+        .completed_instances((outputs[0]).clone())
         .unwrap()
         .iter()
         .filter_map(|(owner, output)| {

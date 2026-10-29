@@ -216,7 +216,7 @@ fn check_case(
         let request = runtime.request(&[check.query()]);
         let actual = runtime
             .wait(request)
-            .map(|products| check.outcome(products[0]).unwrap())
+            .map(|products| check.outcome((products[0]).clone()).unwrap())
             .map_err(|reference| {
                 check
                     .failure(reference)

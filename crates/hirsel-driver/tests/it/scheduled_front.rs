@@ -185,7 +185,7 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
             let products = runtime
                 .wait(request)
                 .unwrap_or_else(|error| panic!("{:?}", lower.failure(error)));
-            let metadata = lower.native_product(products[0]).unwrap();
+            let metadata = lower.native_product((products[0]).clone()).unwrap();
             assert!(
                 metadata.verified.is_some(),
                 "preserve the actual opaque source V output"
@@ -235,7 +235,7 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
                     |(key, _)| key.def.path() == &program.entry && key.kind == QueryKind::Lower
                 )
             );
-            let actual = lower.outcome(products[0]).unwrap();
+            let actual = lower.outcome((products[0]).clone()).unwrap();
             assert_eq!(
                 lower_rows
                     .iter()
@@ -321,7 +321,7 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
             runtime.shutdown();
             drop(runtime);
             drop(program);
-            let detached = lower.outcome(products[0]).unwrap();
+            let detached = lower.outcome((products[0]).clone()).unwrap();
             assert_eq!(
                 records
                     .encode(&detached_source, &detached.materialized)
@@ -487,8 +487,8 @@ fn admitted_lower_reserves_outputs_only_for_demanded_definitions() {
             .register_local(FRONT_EVALUATE_KIND, lower.factory())
             .unwrap();
         let request = runtime.request(&[lower.query(&program.entry).unwrap()]);
-        let product = runtime.wait(request).unwrap()[0];
-        assert!(lower.outcome(product).is_some());
+        let product = runtime.wait(request).unwrap()[0].clone();
+        assert!(lower.outcome(product.clone()).is_some());
         assert_eq!(lower.work(&program.entry).lowerings, 1);
         assert_eq!(
             lower.work(&spare).lowerings,
@@ -711,7 +711,7 @@ fn admitted_front_zero_hold_retains_only_archives_after_settlement() {
         runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
         let query = front.query(&program.entry).unwrap();
         let request = runtime.request(&[query]);
-        let product = runtime.wait(request).unwrap()[0];
+        let product = runtime.wait(request).unwrap()[0].clone();
         assert_eq!(
             front.live_body_count(),
             0,
@@ -732,7 +732,7 @@ fn admitted_front_zero_hold_retains_only_archives_after_settlement() {
         assert_eq!(front.live_body_count(), 0);
         runtime.evict_to(0);
         let request = runtime.request(&[query]);
-        let repeated = runtime.wait(request).unwrap()[0];
+        let repeated = runtime.wait(request).unwrap()[0].clone();
         assert_eq!(product, repeated);
         assert_eq!(front.live_body_count(), 0);
         for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
@@ -814,8 +814,9 @@ fn admitted_storage_recipe_waits_for_checked_body_and_matches_scalar_adapter() {
             let request = runtime.request(&[query]);
             let product = runtime
                 .wait(request)
-                .unwrap_or_else(|error| panic!("{:?}", storage.failure(error)))[0];
-            let actual = storage.outcome(product).unwrap();
+                .unwrap_or_else(|error| panic!("{:?}", storage.failure(error)))[0]
+                .clone();
+            let actual = storage.outcome(product.clone()).unwrap();
             assert_eq!(storage.executions(), 1);
             assert_eq!(
                 front.live_body_count(),

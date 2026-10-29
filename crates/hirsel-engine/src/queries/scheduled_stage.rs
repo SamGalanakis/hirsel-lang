@@ -108,7 +108,7 @@ impl FrontStageQueries {
     pub fn outcome(self: &Arc<Self>, product: ProductRef) -> Option<FrontStageOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let (selected, data) = outcomes.get(&product.address.0)?;
-        (*selected == Ok(product)).then(|| FrontStageOutput {
+        (*selected == Ok(product.clone())).then(|| FrontStageOutput {
             query: QueryId {
                 kind: FRONT_STAGE_KIND,
                 address: product.address,
@@ -200,7 +200,7 @@ impl FrontStageQueries {
         let mut remaining = self.remaining.lock().unwrap_or_else(|e| e.into_inner());
         let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((result, _)) = outcomes.get(&id.address.0) {
-            return *result;
+            return result.clone();
         }
         let mut before = crate::NativeMetadataWeight::default();
         let mut after = crate::NativeMetadataWeight::default();
@@ -232,7 +232,7 @@ impl FrontStageQueries {
             record,
         };
         let result = if failed { Err(record) } else { Ok(product) };
-        outcomes.insert(id.address.0, (result, Arc::new(data)));
+        outcomes.insert(id.address.0, (result.clone(), Arc::new(data)));
         *remaining = next;
         drop(outcomes);
         drop(remaining);
@@ -254,7 +254,7 @@ impl QueryFactory for Factory {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&id.address.0)
-            .map(|(result, _)| *result);
+            .map(|(result, _)| result.clone());
         Ok(Box::new(Task {
             queries: self.0.clone(),
             id,
@@ -278,7 +278,7 @@ impl QueryTask for Task {
         self.queries.weight.retained
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         let input = &self.queries.inputs[&self.id.address.0];
@@ -348,7 +348,7 @@ impl QueryTask for Task {
                 sites,
             },
         );
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         finish(result)
     }
 }

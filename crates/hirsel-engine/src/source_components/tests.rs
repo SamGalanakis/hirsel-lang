@@ -3,6 +3,11 @@ use crate::{DefinitionSummary, GenericParameterRef, ParameterGrowth, QueryEngine
 use hirsel_syntax::LexicalOwner;
 use hirsel_types::{NameSite, TypeParamId, TypeParameterRef};
 
+const SELECTED: Domain = Domain {
+    kind: 0x4600_0020,
+    schema: 1,
+};
+
 fn parameter(id: DefId) -> (DefId, GenericParameterRef) {
     (
         id,
@@ -71,7 +76,7 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
         scratch: 8 << 20,
     };
     let reads = ReadsBuilder::new().finish().unwrap();
-    let selected = FACT.reference(b"accepted checked output").unwrap();
+    let selected = SELECTED.reference(b"accepted checked output").unwrap();
     let make = |extra, grows| {
         let mut edges = vec![(parameter(ids[0]), parameter(ids[1]), grows, sites[0])];
         if extra {
@@ -181,7 +186,7 @@ fn changed_observations_are_republished_before_equal_fact_cutoff() {
         namespace: Address(ContentHash::of_bytes(b"observations")),
         scratch: 8 << 20,
     };
-    let selected = FACT.reference(b"accepted checked output").unwrap();
+    let selected = SELECTED.reference(b"accepted checked output").unwrap();
     for key in [
         crate::ReadKey::PrivateSummary(ids[0]),
         crate::ReadKey::Lookup(crate::memo::LookupKey::of(
@@ -209,14 +214,20 @@ fn changed_observations_are_republished_before_equal_fact_cutoff() {
                 )
                 .unwrap()
         };
+        let before = store.len();
         let a = make(b"before");
         let b = make(b"after");
-        assert_ne!(a.product.action, b.product.action);
-        assert_eq!(a.product.record, b.product.record);
-        assert_eq!(
-            store.lookup_product(b.product.address).unwrap().action,
-            b.product.action
-        );
+        assert_eq!(store.len(), before, "typed facts do not publish records");
+        assert_ne!(a.observed, b.observed);
+        assert_eq!(a.calls, b.calls);
+        assert_eq!(a.summary.growth, b.summary.growth);
+        let a = producer.settle(&[a]).unwrap();
+        let b = producer.settle(&[b]).unwrap();
+        let a = &a.components[0].product;
+        let b = &b.components[0].product;
+        assert_ne!(a.action, b.action);
+        assert_eq!(a.record, b.record);
+        assert_eq!(store.lookup_product(b.address).unwrap().action, b.action);
     }
 }
 
@@ -236,7 +247,7 @@ fn independently_selected_roots_sharing_a_lexical_owner_all_contribute() {
         scratch: 8 << 20,
     };
     let reads = ReadsBuilder::new().finish().unwrap();
-    let selected = FACT.reference(b"accepted checked output").unwrap();
+    let selected = SELECTED.reference(b"accepted checked output").unwrap();
     let a = producer
         .fact(
             Address(ids[0].path().fingerprint()),
@@ -256,7 +267,7 @@ fn independently_selected_roots_sharing_a_lexical_owner_all_contribute() {
             selected,
         )
         .unwrap();
-    assert_ne!(a.product.address, b.product.address);
+    assert_ne!(a.definition, b.definition);
     let facets = producer.settle(&[a, b]).unwrap();
     assert_eq!(facets.components.len(), 1);
     assert_eq!(&*facets.components[0].growing, &[sites[0]]);
@@ -285,7 +296,7 @@ fn reordered_sources_preserve_canonical_settled_component_bytes() {
             scratch: 8 << 20,
         };
         let reads = ReadsBuilder::new().finish().unwrap();
-        let selected = FACT.reference(b"accepted checked output").unwrap();
+        let selected = SELECTED.reference(b"accepted checked output").unwrap();
         let facts: Vec<_> = (0..2)
             .map(|i| {
                 producer
@@ -341,7 +352,7 @@ fn stored_component_bytes_cannot_silence_an_unexecuted_growing_cycle() {
                 vec![(parameter(ids[0]), parameter(ids[0]), true, sites[0])],
             ),
             &reads,
-            FACT.reference(b"accepted checked output").unwrap(),
+            SELECTED.reference(b"accepted checked output").unwrap(),
         )
         .unwrap();
     let facets = producer.settle(std::slice::from_ref(&fact)).unwrap();

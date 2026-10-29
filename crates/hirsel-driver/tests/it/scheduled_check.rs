@@ -192,7 +192,7 @@ fn check_case(
     let request = runtime.request(&[check.query()]);
     let actual = runtime
         .wait(request)
-        .map(|products| check.outcome(products[0]).unwrap())
+        .map(|products| check.outcome((products[0]).clone()).unwrap())
         .map_err(|reference| {
             check
                 .failure(reference)
@@ -445,7 +445,7 @@ fn check_settled_front_eviction(demand_lower: bool, carry_across_graphs: bool, e
             let products = runtime
                 .wait(request)
                 .expect("accepted front facts survive body eviction");
-            let output = check.outcome(products[0]).unwrap();
+            let output = check.outcome((products[0]).clone()).unwrap();
             assert_eq!(output.checked.completion, CheckCompletion::Complete);
             assert!(output.checked.diagnostics.is_empty());
             assert_eq!(store.reads_after_eviction.load(Ordering::Relaxed), 0);
@@ -475,7 +475,7 @@ fn check_settled_front_eviction(demand_lower: bool, carry_across_graphs: bool, e
                 let products = runtime
                     .wait(request)
                     .expect("a demanded body rematerializes under its own admission");
-                let held = lower.outcome(products[0]).unwrap();
+                let held = lower.outcome((products[0]).clone()).unwrap();
                 assert_eq!(held.output.value.path.path(), &program.entry);
                 assert_eq!(
                     front.recompute_count(&program.entry, QueryKind::Modes),

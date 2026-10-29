@@ -149,7 +149,7 @@ fn execute(
     });
     // A caller cannot turn arbitrary product bytes into private execution
     // acceptance: only this producer's exact completed product is transportable.
-    let mut forged = products[0];
+    let mut forged = products[0].clone();
     forged.action = hirsel_artifact_store::Action(hirsel_syntax::ContentHash::default());
     assert!(registration.outcome(forged).is_none());
     let outputs: Vec<_> = products

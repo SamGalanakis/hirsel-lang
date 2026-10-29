@@ -148,9 +148,13 @@ impl FrontLowerQueries {
                 .staged_query(declaration.path(), arguments)
                 .map_err(|_| self.errors.resource)?;
             let selected = reads.read_consuming(id).await;
-            let outcome = self
-                .selected(id, selected)
-                .ok_or_else(|| selected.err().unwrap_or(self.errors.protocol))?;
+            let outcome = self.selected(id, selected.clone()).ok_or_else(|| {
+                selected
+                    .as_ref()
+                    .err()
+                    .copied()
+                    .unwrap_or(self.errors.protocol)
+            })?;
             if !matches!(outcome.result, Ok(Value::Constant(_))) {
                 return Err(selected.err().unwrap_or(self.errors.protocol));
             }

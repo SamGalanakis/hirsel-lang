@@ -283,7 +283,7 @@ impl FrontRunQueries {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&id.address.0)
-            .map(|(product, _)| *product)
+            .map(|(product, _)| product.clone())
     }
     pub fn outcome(&self, product: ProductRef) -> Option<Arc<FrontRunOutput>> {
         let values = self.completed.lock().unwrap_or_else(|e| e.into_inner());
@@ -331,7 +331,7 @@ impl QueryFactory for Factory {
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .as_ref()
-                    .map(|(product, _)| *product),
+                    .map(|(product, _)| product.clone()),
             )
         } else {
             let root = self
@@ -346,7 +346,7 @@ impl QueryFactory for Factory {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .get(&query.address.0)
-                .map(|(product, _)| *product);
+                .map(|(product, _)| product.clone());
             (root, completed)
         };
         // A root's potentially retained graph is admitted before any work.
@@ -392,13 +392,13 @@ impl QueryTask for Task {
         self.queries.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        let result = if let Some(result) = self.terminal {
+        let result = if let Some(result) = self.terminal.clone() {
             result
         } else {
             match self.advance(cx) {
                 Poll::Pending => return QueryPoll::Waiting(self.waiting.into_iter().collect()),
                 Poll::Ready(result) => {
-                    self.terminal = Some(result);
+                    self.terminal = Some(result.clone());
                     result
                 }
             }
@@ -937,7 +937,7 @@ impl Task {
                     Some(&semantic),
                 )?;
                 let output = queries
-                    .outcome(product)
+                    .outcome(product.clone())
                     .ok_or_else(|| operational("batch entry output disappeared"))?;
                 weight.path(root);
                 weight.arc(&output);
@@ -990,7 +990,8 @@ impl Task {
             *queries
                 .completed_batch
                 .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some((product, Arc::new(outputs)));
+                .unwrap_or_else(|error| error.into_inner()) =
+                Some((product.clone(), Arc::new(outputs)));
             Ok(product)
         })();
         if result.is_err() {
@@ -1219,7 +1220,7 @@ impl Task {
             .completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(query.address.0, (product, output));
+            .insert(query.address.0, (product.clone(), output));
         Ok(product)
     }
 }

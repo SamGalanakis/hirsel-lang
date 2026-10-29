@@ -19,7 +19,7 @@ struct Context {
 }
 impl QueryContext for Context {
     fn read(&mut self, id: QueryId) -> Poll<Result<ProductRef, hirsel_engine::store::Reference>> {
-        let (expected_kind, mut output) = self.inputs[&id.address.0];
+        let (expected_kind, mut output) = (self.inputs[&id.address.0]).clone();
         assert_eq!(id.kind, expected_kind);
         if self.pending {
             return Poll::Pending;
@@ -89,7 +89,7 @@ fn original_guard_task_waits_for_dependencies_and_keeps_its_existing_grant_with_
                         } else {
                             hirsel_driver::native::queries::instance::CALLABLE_VALUE_KIND
                         };
-                        context.inputs.insert(address.0, (kind, product));
+                        context.inputs.insert(address.0, (kind, product.clone()));
                         Input {
                             query: QueryId { kind, address },
                             product,

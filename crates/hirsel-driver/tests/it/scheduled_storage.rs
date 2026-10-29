@@ -180,7 +180,8 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
                         check.failure(r),
                         graph.failure(r)
                     )
-                })[0];
+                })[0]
+                    .clone();
                 let output = check.outcome(product).unwrap();
                 assert_eq!(output.checked.completion, CheckCompletion::Complete);
                 let expected = program.check(LoweringPolicy::Comptime).unwrap();
@@ -215,7 +216,7 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
                     "the storage root owns recipe continuations, not scheduler nodes"
                 );
                 let again = runtime.request(&[graph.query()]);
-                let graph_product = runtime.wait(again).unwrap()[0];
+                let graph_product = runtime.wait(again).unwrap()[0].clone();
                 let held = graph.outcome(graph_product).unwrap();
                 assert_eq!(graph.executions(), 1, "settled root coalesces");
                 if !reject {

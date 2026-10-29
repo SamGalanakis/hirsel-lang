@@ -113,7 +113,7 @@ impl ProofExport {
         let input = Rc::new(
             self.capture
                 .input_with_allowance(
-                    product,
+                    product.clone(),
                     stage(self.capture.input_bytes(product).map_err(error)?, "input")?,
                 )
                 .map_err(error)?,
@@ -163,14 +163,14 @@ impl QueryTask for Task {
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
         {
-            return QueryPoll::Complete(settled.product);
+            return QueryPoll::Complete(settled.product.clone());
         }
         let product = match cx.read(owner.safe.query()) {
             Poll::Pending => return QueryPoll::Waiting(vec![owner.safe.query()]),
             Poll::Ready(Err(error)) => return QueryPoll::Failed(error),
             Poll::Ready(Ok(product)) => product,
         };
-        let (check, run) = match owner.safe.settled(product) {
+        let (check, run) = match owner.safe.settled(product.clone()) {
             Ok(output) => output,
             Err(_) => return QueryPoll::Failed(owner.errors.protocol),
         };
@@ -203,7 +203,7 @@ impl QueryTask for Task {
             Err(error) => (Err(error), None),
         };
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Settled {
-            product,
+            product: product.clone(),
             check,
             text,
             _copy: copy,

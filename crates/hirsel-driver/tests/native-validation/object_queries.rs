@@ -709,21 +709,21 @@ impl ObjectProducts for TaskProducts {
         _: &super::whole::WholeCodegenKey,
     ) -> Result<Arc<FragmentProduct>, String> {
         Ok(Arc::new(FragmentProduct {
-            product: self.result,
+            product: self.result.clone(),
             object: self.reference,
             summary: self.reference,
         }))
     }
     fn codegen(&mut self, _: &CodegenKey) -> Result<Arc<FragmentProduct>, String> {
         Ok(Arc::new(FragmentProduct {
-            product: self.result,
+            product: self.result.clone(),
             object: self.reference,
             summary: self.reference,
         }))
     }
     fn link(&mut self, _: &LinkKey, _: &LinkInputs) -> Result<Arc<LinkedProduct>, String> {
         Ok(Arc::new(LinkedProduct {
-            product: self.result,
+            product: self.result.clone(),
             executable: self.reference,
         }))
     }
@@ -758,7 +758,7 @@ impl ObjectTaskSnapshot for TaskSnapshot {
         assert!(!settled.is_empty());
         self.makes.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(TaskProducts {
-            result: self.result,
+            result: self.result.clone(),
             reference: self.result.record,
         }))
     }
@@ -777,7 +777,7 @@ impl QueryContext for TaskContext {
         self.settled
             .iter()
             .find(|(q, _)| *q == id)
-            .map_or(Poll::Pending, |(_, p)| Poll::Ready(*p))
+            .map_or(Poll::Pending, |(_, p)| Poll::Ready(p.clone()))
     }
 }
 fn query(product: ProductRef) -> QueryId {
@@ -800,10 +800,10 @@ fn task_snapshot(
             execution: vec![],
             fragments: vec![],
             native_reads: vec![],
-            static_manifest: query(result),
+            static_manifest: query(result.clone()),
             runtime_archives: vec![],
             foreign_inputs: vec![],
-            launch_manifest: query(result),
+            launch_manifest: query(result.clone()),
         },
         result,
         store,
@@ -847,8 +847,8 @@ fn codegen_stages_local_ready_while_execution_waits_and_preserves_failure_order(
                 ..product(store.as_ref(), "emitted")
             };
             let execution_product = product(store.as_ref(), "execution");
-            let execution = query(execution_product);
-            let mut snapshot = task_snapshot(request, ready.clone(), store.clone(), result);
+            let execution = query(execution_product.clone());
+            let mut snapshot = task_snapshot(request, ready.clone(), store.clone(), result.clone());
             Arc::get_mut(&mut snapshot).unwrap().execution = Some(execution);
             let mut task = ObjectTaskFactory::new(snapshot.clone()).create(id).unwrap();
             let mut cx = TaskContext::default();
@@ -909,7 +909,7 @@ fn codegen_task_create_is_lazy_and_waits_for_complete_optimizer_inventory() {
     ];
     let key = key("caller");
     let id = key.query_id();
-    let owner = query(ready.product);
+    let owner = query(ready.product.clone());
     let result = ProductRef {
         address: id.address,
         ..product(store.as_ref(), "emitted")
@@ -922,7 +922,7 @@ fn codegen_task_create_is_lazy_and_waits_for_complete_optimizer_inventory() {
         },
         ready.clone(),
         store.clone(),
-        result,
+        result.clone(),
     );
     assert!(matches!(
         ObjectTaskFactory::new(denied.clone()).create(id),
@@ -942,18 +942,18 @@ fn codegen_task_create_is_lazy_and_waits_for_complete_optimizer_inventory() {
         },
         ready.clone(),
         store,
-        result,
+        result.clone(),
     );
     let mut task = ObjectTaskFactory::new(snapshot.clone()).create(id).unwrap();
     let mut cx = TaskContext::default();
     assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
     assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p==&vec![owner]));
     cx.settled.push((owner, Ok(ready.product)));
-    let copies: Vec<_> = ready.optimizer_reads.iter().copied().map(query).collect();
+    let copies: Vec<_> = ready.optimizer_reads.iter().cloned().map(query).collect();
     assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p==&copies));
     assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
     for (q, p) in copies.iter().zip(&ready.optimizer_reads) {
-        cx.settled.push((*q, Ok(*p)));
+        cx.settled.push((*q, Ok((*p).clone())));
     }
     assert!(matches!(task.poll(&mut cx),QueryPoll::Complete(p) if p==result));
     assert!(matches!(task.poll(&mut cx),QueryPoll::Complete(p) if p==result));
@@ -966,10 +966,10 @@ fn codegen_task_rejects_stale_optimizer_and_dependency_failure_before_emission()
         let store = Arc::new(hirsel_engine::store::MemStore::default());
         let mut ready = ready(store.as_ref());
         let copy = product(store.as_ref(), "old copy");
-        ready.optimizer_reads = vec![copy];
+        ready.optimizer_reads = vec![copy.clone()];
         let key = key("caller");
         let id = key.query_id();
-        let owner = query(ready.product);
+        let owner = query(ready.product.clone());
         let result = ProductRef {
             address: id.address,
             ..product(store.as_ref(), "emitted")
@@ -1014,7 +1014,7 @@ fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
     let key = link_key();
     let id = key.query_id();
     let manifest = product(store.as_ref(), "manifest");
-    let manifest_id = query(manifest);
+    let manifest_id = query(manifest.clone());
     let result = ProductRef {
         address: id.address,
         ..product(store.as_ref(), "linked")
@@ -1031,7 +1031,7 @@ fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
         },
         ready,
         store,
-        result,
+        result.clone(),
     );
     Arc::get_mut(&mut snapshot).unwrap().link = LinkDependencies {
         execution: vec![],
@@ -1039,11 +1039,11 @@ fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
             kind: super::tasks::CODEGEN_KIND,
             address: fragment.product.address,
         }],
-        native_reads: vec![query(native)],
-        static_manifest: query(static_p),
-        runtime_archives: vec![query(runtime)],
+        native_reads: vec![query(native.clone())],
+        static_manifest: query(static_p.clone()),
+        runtime_archives: vec![query(runtime.clone())],
         foreign_inputs: vec![],
-        launch_manifest: query(launch),
+        launch_manifest: query(launch.clone()),
     };
     let mut task = ObjectTaskFactory::new(snapshot.clone()).create(id).unwrap();
     let mut cx = TaskContext::default();

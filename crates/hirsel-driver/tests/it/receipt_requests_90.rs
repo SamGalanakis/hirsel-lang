@@ -449,7 +449,13 @@ impl runtime::QueryContext for LowerReads {
         if self.waiting == Some(query) {
             return std::task::Poll::Pending;
         }
-        std::task::Poll::Ready(Ok(self.rows.iter().find(|(id, _)| *id == query).unwrap().1))
+        std::task::Poll::Ready(Ok(self
+            .rows
+            .iter()
+            .find(|(id, _)| *id == query)
+            .unwrap()
+            .1
+            .clone()))
     }
 }
 

@@ -135,7 +135,7 @@ impl QueryTask for Task {
         self.queries.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         match self.advance(cx) {
@@ -148,7 +148,7 @@ impl QueryTask for Task {
                     .collect(),
             ),
             Poll::Ready(result) => {
-                self.terminal = Some(result);
+                self.terminal = Some(result.clone());
                 finish(result)
             }
         }
@@ -169,8 +169,8 @@ impl Task {
                 self.selected[i] = Some(result);
             }
         }
-        while let Some(Some(selected)) = self.selected.get(self.cursor).copied() {
-            let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
+        while let Some(Some(selected)) = self.selected.get(self.cursor).cloned() {
+            let reference = selected.clone().map(|p| p.record).unwrap_or_else(|r| r);
             let Some(checked) = self.queries.front.checked(reference) else {
                 return Poll::Ready(Err(selected.err().unwrap_or(self.queries.errors.protocol)));
             };
@@ -337,7 +337,8 @@ impl Task {
             action,
             record,
         };
-        *queries.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some((product, data));
+        *queries.completed.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((product.clone(), data));
         queries
             .store
             .associate_product(product.address, product.action, product.record);

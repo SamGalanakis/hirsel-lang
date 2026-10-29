@@ -43,7 +43,7 @@ impl QueryReads {
         let selected = if consuming {
             reads.completed.remove(&key(query))
         } else {
-            reads.completed.get(&key(query)).copied()
+            reads.completed.get(&key(query)).cloned()
         };
         if let Some(result) = selected {
             return Poll::Ready(result);
@@ -141,7 +141,7 @@ impl LocalFutureTask {
                 .poll(&mut Context::from_waker(Waker::noop()))
             {
                 Poll::Ready(result) => {
-                    self.terminal = Some(result);
+                    self.terminal = Some(result.clone());
                     return finish(result);
                 }
                 Poll::Pending if self.reads.0.borrow().requested.is_empty() => {
@@ -169,7 +169,7 @@ impl LocalQueryTask for LocalFutureTask {
         self.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         self.advance(cx)

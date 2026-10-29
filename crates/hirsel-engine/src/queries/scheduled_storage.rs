@@ -138,7 +138,7 @@ impl QueryFactory for Factory {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .map(|(product, _)| Ok(*product));
+            .map(|(product, _)| Ok(product.clone()));
         Ok(Box::new(Task {
             owner: self.0.clone(),
             initialized: false,
@@ -180,13 +180,13 @@ impl QueryTask for Task {
         self.owner.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        let result = if let Some(result) = self.terminal {
+        let result = if let Some(result) = self.terminal.clone() {
             result
         } else {
             match self.advance(cx) {
                 Poll::Pending => return QueryPoll::Waiting(self.waiting.into_iter().collect()),
                 Poll::Ready(result) => {
-                    self.terminal = Some(result);
+                    self.terminal = Some(result.clone());
                     result
                 }
             }
@@ -526,7 +526,7 @@ impl Task {
             .store
             .put_content(OUTPUT, &bytes)
             .ok_or(QueryError::NotImplemented)?;
-        let input = self.input.ok_or(QueryError::NotImplemented)?;
+        let input = self.input.clone().ok_or(QueryError::NotImplemented)?;
         let action = hirsel_artifact_store::Action(ContentHash::of_parts(
             "hirsel.front.storage-graph.action.v1",
             [input.action.0.0.as_slice(), record.output.0.0.as_slice()],
@@ -537,7 +537,7 @@ impl Task {
             record,
         };
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some((
-            product,
+            product.clone(),
             Arc::new(Data {
                 profiles: Arc::new(profiles),
                 diagnostics: Arc::new(diagnostics),

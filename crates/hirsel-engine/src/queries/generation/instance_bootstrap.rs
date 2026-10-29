@@ -360,7 +360,7 @@ impl QueryEngine {
                         return Err(refused("generator completed another root inventory"));
                     };
                     let output = registration
-                        .outcome(*product)
+                        .outcome(product.clone())
                         .ok_or_else(|| refused("generator output is unavailable"))?;
                     accepted.push(
                         self.accept_front_registration(output, borrow(&syntax_pool)?)

@@ -220,7 +220,7 @@ impl QueryEngine {
                     return Err(refused("bootstrap completed another root inventory"));
                 };
                 let output = registration
-                    .outcome(*product)
+                    .outcome(product.clone())
                     .ok_or_else(|| refused("bootstrap completed text is unavailable"))?;
                 registrations.push(
                     self.accept_front_registration(output, allowance)

@@ -196,12 +196,12 @@ fn products_case_with_decode_layout(
             };
             assert!(
                 check
-                    .completed_scope(unknown, budget.reserve(1 << 20).unwrap())
+                    .completed_scope(unknown.clone(), budget.reserve(1 << 20).unwrap())
                     .is_err()
             );
             let request = runtime.request(&[query]);
-            let product = runtime.wait(request).unwrap()[0];
-            let output = check.outcome(product).unwrap();
+            let product = runtime.wait(request).unwrap()[0].clone();
+            let output = check.outcome(product.clone()).unwrap();
             assert_eq!(output.checked.completion, CheckCompletion::Complete);
             assert_eq!(
                 output
@@ -218,7 +218,7 @@ fn products_case_with_decode_layout(
             );
             assert!(
                 check
-                    .completed_scope(product, budget.reserve(0).unwrap())
+                    .completed_scope(product.clone(), budget.reserve(0).unwrap())
                     .is_err()
             );
             let scope = Arc::new(

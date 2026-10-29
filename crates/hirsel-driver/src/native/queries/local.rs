@@ -232,7 +232,7 @@ impl LocalReadyQueries {
         let mut chosen = BTreeMap::new();
         let selected_summaries = arena.chosen_reads(key, &owner.facts.body.callees)?;
         for summary in &selected_summaries {
-            let product = summary.product;
+            let product = summary.product.clone();
             let association = self
                 .store
                 .lookup_product(product.address)

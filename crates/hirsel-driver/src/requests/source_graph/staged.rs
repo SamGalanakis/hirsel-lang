@@ -81,7 +81,9 @@ pub(super) fn install(
         let [product] = products.as_slice() else {
             return Err(uninstalled());
         };
-        let output = stage.outcome(*product).ok_or_else(|| uninstalled())?;
+        let output = stage
+            .outcome(product.clone())
+            .ok_or_else(|| uninstalled())?;
         let installed = output
             .installation_bytes()
             .map_err(|error| program.error(error))?;

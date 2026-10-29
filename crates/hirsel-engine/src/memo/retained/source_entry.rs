@@ -5,7 +5,7 @@ use super::{Weight, arc_bytes, retained_signature_payload_bytes};
 use hirsel_types::{ContextualName, Resolution, ResolvedName};
 
 impl Weight<'_> {
-    fn resolution(&mut self, value: &Resolution) {
+    pub(super) fn resolution(&mut self, value: &Resolution) {
         let Resolution {
             reads,
             contextual,

@@ -58,10 +58,13 @@ impl NativeBuildReadiness {
             .objects
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let products = compilation.outputs(product).map_err(failed)?.to_vec();
+        let products = compilation
+            .outputs(product.clone())
+            .map_err(failed)?
+            .to_vec();
         for selected in &products {
-            let fragment =
-                object_queries::fragment_product(self.store.as_ref(), *selected).map_err(failed)?;
+            let fragment = object_queries::fragment_product(self.store.as_ref(), selected.clone())
+                .map_err(failed)?;
             // Reopen the actual completed backend bytes, with the ordinary
             // fragment/object/domain checks. No output is treated as a Link.
             object_queries::load_object(self.store.as_ref(), fragment.object).map_err(failed)?;
@@ -108,8 +111,9 @@ impl NativeBuildReadiness {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if let Some(execution) = completed.as_ref() {
-            let artifact = object_queries::linked_product(self.store.as_ref(), execution.product)
-                .map_err(failed)?;
+            let artifact =
+                object_queries::linked_product(self.store.as_ref(), execution.product.clone())
+                    .map_err(failed)?;
             object_queries::materialize_executable(
                 self.store.as_ref(),
                 &artifact,
@@ -121,7 +125,7 @@ impl NativeBuildReadiness {
                 .map_err(failed)?;
             return Ok(execution.clone());
         }
-        let [linked] = compilation.outputs(product).map_err(failed)? else {
+        let [linked] = compilation.outputs(product.clone()).map_err(failed)? else {
             return Err(failed(
                 "native Build readiness requires one selected backend".into(),
             ));
@@ -136,7 +140,7 @@ impl NativeBuildReadiness {
                 "native Build readiness received another source entry".into(),
             ));
         }
-        let observation = compilation.observation(product).map_err(failed)?;
+        let observation = compilation.observation(product.clone()).map_err(failed)?;
         // Report the removals the completed discovery actually validated;
         // the assessed plan alone never certifies a report.
         let report = match (&self.request.evidence, self.bootstrap.proofs()) {
@@ -157,7 +161,7 @@ impl NativeBuildReadiness {
         let directory = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
         let executable = directory.path().join("program");
         let artifact =
-            object_queries::linked_product(self.store.as_ref(), *linked).map_err(failed)?;
+            object_queries::linked_product(self.store.as_ref(), linked.clone()).map_err(failed)?;
         object_queries::materialize_executable(self.store.as_ref(), &artifact, &executable)
             .map_err(failed)?;
         platform.validate_image(&executable).map_err(failed)?;
@@ -199,7 +203,7 @@ impl NativeBuildReadiness {
         });
         let execution = Arc::new(NativeExecution {
             executable,
-            product: *linked,
+            product: linked.clone(),
             platform: platform.clone(),
             store: self.store.clone(),
             observation,

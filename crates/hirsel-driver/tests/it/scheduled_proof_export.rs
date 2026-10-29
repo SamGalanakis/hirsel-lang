@@ -221,20 +221,20 @@ fn export_case_with_ownership(
                 action: hirsel_artifact_store::Action(query.address.0),
                 record: errors.protocol,
             };
-            assert!(export.input(unknown).is_err());
+            assert!(export.input(unknown.clone()).is_err());
             let request =
                 runtime.request(&[native.as_ref().map_or(query, |native| native.query())]);
-            let completed = runtime.wait(request).unwrap()[0];
+            let completed = runtime.wait(request).unwrap()[0].clone();
             let product = match &native {
-                Some(native) => native.completed_run_product(completed).unwrap(),
-                None => completed,
+                Some(native) => native.completed_run_product(completed.clone()).unwrap(),
+                None => completed.clone(),
             };
-            assert!(export.input(unknown).is_err());
+            assert!(export.input(unknown.clone()).is_err());
             let before_lower = lower.work_snapshot();
             let before_front = front.work_snapshot();
             let mut owned = if admitted {
                 let before_reads = counted.reads.load(Ordering::Relaxed);
-                let required = export.input_bytes(product).unwrap();
+                let required = export.input_bytes(product.clone()).unwrap();
                 assert!(required > 0);
                 assert_eq!(
                     counted.reads.load(Ordering::Relaxed),
@@ -244,7 +244,10 @@ fn export_case_with_ownership(
                 assert!(export.input_bytes(unknown).is_err());
                 assert!(
                     export
-                        .input_with_allowance(product, budget.reserve(required - 1).unwrap())
+                        .input_with_allowance(
+                            product.clone(),
+                            budget.reserve(required - 1).unwrap()
+                        )
                         .is_err()
                 );
                 assert_eq!(
@@ -254,7 +257,7 @@ fn export_case_with_ownership(
                 );
                 Some(std::rc::Rc::new(
                     export
-                        .input_with_allowance(product, budget.reserve(required).unwrap())
+                        .input_with_allowance(product.clone(), budget.reserve(required).unwrap())
                         .unwrap(),
                 ))
             } else {
@@ -263,7 +266,7 @@ fn export_case_with_ownership(
             let ordinary = if owned.is_none() {
                 Some(match &native {
                     Some(native) => export.input_for_native(native, completed).unwrap(),
-                    None => export.input(product).unwrap(),
+                    None => export.input(product.clone()).unwrap(),
                 })
             } else {
                 None
@@ -380,7 +383,7 @@ fn export_case_with_ownership(
             assert_eq!(front.work_snapshot(), before_front);
             let expected = program.engine.proof_export_input(&program.entry).unwrap();
             assert_eq!(actual, hirsel_proof_export::export(&expected));
-            let read_rows = export.reads(product).unwrap();
+            let read_rows = export.reads(product.clone()).unwrap();
             assert!(read_rows.contains_key(&unused));
             drop(owned);
             drop(ordinary);

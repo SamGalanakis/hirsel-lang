@@ -454,7 +454,7 @@ mod tests {
             }
         }
         fn poll(&mut self, _: &mut dyn QueryContext) -> QueryPoll {
-            QueryPoll::Complete(self.0)
+            QueryPoll::Complete(self.0.clone())
         }
     }
     struct Factory(ProductRef);
@@ -463,7 +463,7 @@ mod tests {
             &self,
             _: QueryId,
         ) -> Result<Box<dyn QueryTask>, hirsel_artifact_store::Reference> {
-            Ok(Box::new(Task(self.0)))
+            Ok(Box::new(Task(self.0.clone())))
         }
     }
     struct FailingLexer(QueryError);
@@ -539,7 +539,9 @@ mod tests {
                 errors,
             )
             .map_err(ToolError::Io)?;
-            runtime.register(987, Arc::new(Factory(product))).unwrap();
+            runtime
+                .register(987, Arc::new(Factory(product.clone())))
+                .unwrap();
             Ok(hirsel_engine::requests::SelectedRequest {
                 runtime: Arc::new(Mutex::new(runtime)),
                 roots: vec![QueryId {

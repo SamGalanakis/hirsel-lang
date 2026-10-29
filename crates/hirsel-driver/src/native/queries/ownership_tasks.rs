@@ -171,7 +171,7 @@ impl OwnershipTasks {
             }
         } else {
             selected
-                .set(product)
+                .set(product.clone())
                 .map_err(|_| "ownership diagnostic published twice")?;
         }
         store.associate_product(product.address, product.action, product.record);
@@ -190,7 +190,7 @@ impl OwnershipTasks {
                 request
                     .completed
                     .get()
-                    .copied()
+                    .cloned()
                     .ok_or("ownership unit has not completed".to_owned())
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -247,7 +247,7 @@ impl OwnershipTasks {
         let outputs = self.outputs(root)?;
         let local = outputs
             .iter()
-            .map(|product| self.materialize(*product))
+            .map(|product| self.materialize(product.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         let snapshot = &self.native.snapshot;
         let environment = snapshot.environment();
@@ -715,7 +715,7 @@ impl QueryTask for Task {
                 Err(error) => self.terminal = Some(Err(error)),
             }
         }
-        match self.terminal.unwrap() {
+        match self.terminal.clone().unwrap() {
             Ok(product) => QueryPoll::Complete(product),
             Err(error) => QueryPoll::Failed(error),
         }
@@ -784,7 +784,7 @@ impl Task {
                 match cx.read(guard.query_id()) {
                     Poll::Pending => return Ok(Err(vec![guard.query_id()])),
                     Poll::Ready(Err(error)) => return Err(error),
-                    Poll::Ready(Ok(product)) if guard.accepts(product) => (),
+                    Poll::Ready(Ok(product)) if guard.accepts(product.clone()) => (),
                     _ => return Err(fail("ownership seal-demand dependency changed".into())),
                 }
             }

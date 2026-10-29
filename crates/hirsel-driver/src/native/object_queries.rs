@@ -235,7 +235,7 @@ where
         let ready = selected.first().ok_or("Codegen omitted its owner")?;
         let mut optimizer = selected[1..]
             .iter()
-            .map(|ready| ready.product)
+            .map(|ready| ready.product.clone())
             .collect::<Vec<_>>();
         optimizer.extend(self.native.execution_read());
         codegen_checked(
@@ -769,7 +769,7 @@ pub fn materialize_executable(
     product: &LinkedProduct,
     destination: &Path,
 ) -> Result<(), String> {
-    let checked = linked_product(store, product.product)?;
+    let checked = linked_product(store, product.product.clone())?;
     if checked.executable != product.executable {
         return Err("executable descriptor mismatch".into());
     }

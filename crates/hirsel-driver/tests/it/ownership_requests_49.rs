@@ -74,7 +74,7 @@ fn source_request(explicit_manifest: bool) {
         let mut drops = 0;
         for product in execution.units() {
             execution
-                .with_unit(*product, |observed| {
+                .with_unit(product.clone(), |observed| {
                     assert_eq!(observed.recipes.len(), 10);
                     assert_eq!(observed.recipes[0].before, observed.initial.unit);
                     LeafPlan::from_relocated(&observed.unit, &observed.layouts, &observed.plan)?;
@@ -98,7 +98,7 @@ fn source_request(explicit_manifest: bool) {
             creates > 0 && drops > 0,
             "real resource create/drop observations"
         );
-        let mut wrong = execution.units()[0];
+        let mut wrong = (execution.units()[0]).clone();
         wrong.action = hirsel_engine::store::Action(hirsel_syntax::ContentHash::of_bytes(
             b"another diagnostic output",
         ));

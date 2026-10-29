@@ -240,7 +240,7 @@ impl CompilationTasks {
                 Err("compilation dependency changed within immutable snapshot".into())
             };
         }
-        let completed = self.instances.completed_instances(discovery)?;
+        let completed = self.instances.completed_instances(discovery.clone())?;
         hirsel_intern::memory::checkpoint("global Value complete");
         let guard_bytes = if completed
             .iter()
@@ -262,13 +262,13 @@ impl CompilationTasks {
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
         let declarations = &self.instances.source_inputs().declarations;
-        let mut operations = self.instances.source_operations(discovery)?;
+        let mut operations = self.instances.source_operations(discovery.clone())?;
         let operations_bytes = super::ownership_compilation::metadata::operations(&mut operations);
         let manifest = declarations.manifest()?;
         let mut snapshot = NativeSnapshot::new(
             self.instances.selected_store().clone(),
-            self.instances.products(discovery)?,
-            self.arena.graph(arena)?,
+            self.instances.products(discovery.clone())?,
+            self.arena.graph(arena.clone())?,
             self.instances.options().clone(),
             self.emission.clone(),
             manifest,
@@ -477,7 +477,7 @@ impl CompilationTasks {
         }
         Ok(self
             .instances
-            .completed_instances(dispatch.discovery)?
+            .completed_instances(dispatch.discovery.clone())?
             .len())
     }
     pub fn native(&self, compilation: ProductRef) -> Result<Arc<NativeTasks>, String> {
@@ -493,7 +493,7 @@ impl CompilationTasks {
         compilation: ProductRef,
     ) -> Result<hirsel_lir::discharge::Discharge, String> {
         self.instances
-            .discharged(self.selected(compilation)?.discovery)
+            .discharged(self.selected(compilation)?.discovery.clone())
     }
     /// Body-free execution metadata of this exact completed compilation's
     /// settled Link scope. No dependency query or current-association lookup
@@ -540,7 +540,7 @@ impl CompilationTasks {
             action,
             record,
         };
-        if let Err(other) = self.completed.set((product, outputs))
+        if let Err(other) = self.completed.set((product.clone(), outputs))
             && self.completed.get().unwrap().0 != other.0
         {
             return Err("native compilation completion changed".into());
@@ -590,12 +590,12 @@ impl QueryTask for CompilationTask {
         self.tasks.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         match self.advance(cx) {
             Ok(Ok(product)) => {
-                self.terminal = Some(Ok(product));
+                self.terminal = Some(Ok(product.clone()));
                 finish(Ok(product))
             }
             Ok(Err(waiting)) => QueryPoll::Waiting(waiting),
@@ -625,7 +625,7 @@ impl CompilationTask {
             return Ok(Err(waiting));
         }
         let dispatch = tasks
-            .initialize(selected[0], selected[1])
+            .initialize(selected[0].clone(), selected[1].clone())
             .map_err(|e| tasks.instances.failure(&e))?;
         let mut outputs = Vec::new();
         for key in &dispatch.links {

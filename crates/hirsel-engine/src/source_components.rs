@@ -13,10 +13,6 @@ use std::{
     sync::Arc,
 };
 
-const FACT: Domain = Domain {
-    kind: 0x4600_0020,
-    schema: 1,
-};
 const MEMBERSHIP: Domain = Domain {
     kind: 0x4600_0021,
     schema: 1,
@@ -41,19 +37,18 @@ pub struct SourceGrowthFacets {
     pub components: Vec<SourceGrowthComponent>,
 }
 
-/// Compact accepted call/growth facts. Its output excludes unrelated body details.
+/// Accepted typed call/growth facts retained by the admitted source task.
+/// Durable component publication encodes their complete observations together.
 pub struct SourceGrowthFact {
     owner: DefId,
     calls: Box<[DefId]>,
     summary: Arc<CheckedSummary>,
-    product: ProductRef,
+    definition: Address,
+    selected: Reference,
+    observed: ContentHash,
 }
 
 impl SourceGrowthFact {
-    pub fn product(&self) -> ProductRef {
-        self.product
-    }
-
     /// Physical fact backing retained by an admitted source-growth task.
     pub fn input_bytes(&self) -> u64 {
         (std::mem::size_of::<Self>() + std::mem::size_of_val(&*self.calls)) as u64
@@ -130,33 +125,20 @@ impl SourceGrowthProducer<'_> {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let bytes = self.encode(&(owner, &calls, &summary.growth))?;
-        let observation = self.encode(&(selected, observed))?;
-        let address = Address(ContentHash::of_parts(
-            "hirsel.source-growth.fact.address.v1",
-            [self.namespace.0.0.as_slice(), definition.0.0.as_slice()],
-        ));
-        let action = Action(ContentHash::of_parts(
-            "hirsel.source-growth.fact.action.v1",
-            [
-                address.0.0.as_slice(),
-                observation.as_slice(),
-                bytes.as_slice(),
-            ],
-        ));
-        let product = self.publish(address, action, FACT, &bytes)?;
         Some(SourceGrowthFact {
             owner,
             calls,
             summary,
-            product,
+            definition,
+            selected,
+            observed,
         })
     }
 
-    /// Settle every source call SCC, observing member fact outputs.
+    /// Settle every source call SCC and publish only its coarse durable facet.
     pub fn settle(&self, facts: &[SourceGrowthFact]) -> Option<SourceGrowthFacets> {
         let mut facts: Vec<_> = facts.iter().collect();
-        facts.sort_by_key(|fact| (fact.owner, fact.product.address.0.0));
+        facts.sort_by_key(|fact| (fact.owner, fact.definition.0.0));
         let mut nodes = BTreeSet::new();
         for node in facts
             .iter()
@@ -231,10 +213,19 @@ impl SourceGrowthProducer<'_> {
                 .iter()
                 .filter_map(|id| by_owner.get(id))
                 .flatten()
-                .map(|fact| fact.product.record)
+                .map(|fact| {
+                    (
+                        fact.definition.0,
+                        fact.selected,
+                        fact.observed,
+                        fact.owner,
+                        &fact.calls,
+                        &fact.summary.growth,
+                    )
+                })
                 .collect();
             let action = Action(ContentHash::of_parts(
-                "hirsel.source-growth.component.action.v2",
+                "hirsel.source-growth.component.action.v3",
                 [
                     member_bytes.as_slice(),
                     self.encode(&observations)?.as_slice(),

@@ -85,14 +85,14 @@ fn executable_readiness_uses_provider_and_repairs_missing_output_after_restart()
     let store = Arc::new(DirStore::new(root.clone()));
     let linked = fixture(store.clone());
     let mut ready = output(store, &destination);
-    assert_eq!(ready.ready(&[linked.product]).unwrap(), destination);
+    assert_eq!(ready.ready(&[linked.product.clone()]).unwrap(), destination);
     let inode = destination.metadata().unwrap().ino();
-    ready.ready(&[linked.product]).unwrap();
+    ready.ready(&[linked.product.clone()]).unwrap();
     assert_eq!(destination.metadata().unwrap().ino(), inode);
     std::fs::remove_file(&destination).unwrap();
     drop(ready);
     let mut restarted = output(Arc::new(DirStore::new(root)), &destination);
-    restarted.ready(&[linked.product]).unwrap();
+    restarted.ready(&[linked.product.clone()]).unwrap();
     let child = std::process::Command::new(&destination).output().unwrap();
     assert!(child.status.success());
     assert_eq!(child.stdout, b"ready\n");
@@ -106,13 +106,13 @@ fn existing_destination_does_not_mask_corrupt_or_missing_linked_record() {
     let store = Arc::new(DirStore::new(root.clone()));
     let linked = fixture(store.clone());
     let mut ready = output(store, &destination);
-    ready.ready(&[linked.product]).unwrap();
+    ready.ready(&[linked.product.clone()]).unwrap();
     // Physical path is used only to inject corruption, never by the adapter.
     let record = hirsel_artifact_store::Store::new(root).output_path(linked.product.record);
     std::fs::write(&record, b"truncated").unwrap();
-    assert!(ready.ready(&[linked.product]).is_err());
+    assert!(ready.ready(&[linked.product.clone()]).is_err());
     std::fs::remove_file(record).unwrap();
-    assert!(ready.ready(&[linked.product]).is_err());
+    assert!(ready.ready(&[linked.product.clone()]).is_err());
     assert_eq!(std::fs::read(destination).unwrap(), SCRIPT);
 }
 #[test]
@@ -123,6 +123,10 @@ fn executable_readiness_refuses_wrong_root_count_before_materialization() {
     let destination = tree.path().join("program");
     let mut ready = output(store, &destination);
     assert!(ready.ready(&[]).is_err());
-    assert!(ready.ready(&[linked.product, linked.product]).is_err());
+    assert!(
+        ready
+            .ready(&[linked.product.clone(), linked.product])
+            .is_err()
+    );
     assert!(!destination.exists());
 }

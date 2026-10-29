@@ -80,7 +80,7 @@ fn check_size_instances(nested: bool) {
                 runtime.register(FRONT_STAGE_KIND, stage.factory()).unwrap();
                 let request = runtime.request(&[stage.query(scaled).unwrap()]);
                 let products = runtime.wait(request).unwrap();
-                let output = stage.outcome(products[0]).unwrap();
+                let output = stage.outcome(products[0].clone()).unwrap();
                 program
                     .engine
                     .accept_front_staged(&output, budget.reserve(64 << 10).unwrap())

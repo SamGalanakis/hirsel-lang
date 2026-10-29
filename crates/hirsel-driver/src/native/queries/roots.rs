@@ -139,7 +139,11 @@ impl RootProducts {
                 )
                 .ok_or("settled link Ready lost current C admission")?;
             if current.product != *read
-                || view.inner.selected.insert(read.address.0, *read).is_some()
+                || view
+                    .inner
+                    .selected
+                    .insert(read.address.0, read.clone())
+                    .is_some()
             {
                 return Err("duplicate or changed settled link Ready".into());
             }

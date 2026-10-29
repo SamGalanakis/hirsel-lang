@@ -33,10 +33,10 @@ pub struct NativePreparedSource {
 }
 impl NativePreparedSource {
     pub fn product(&self) -> ProductRef {
-        self.product
+        self.product.clone()
     }
     pub fn source_product(&self) -> ProductRef {
-        self.source_product
+        self.source_product.clone()
     }
     pub fn definition(&self) -> &NativeDefinitionProduct {
         &self.front.product.source
@@ -153,16 +153,16 @@ impl NativePreparationQueries {
     fn prepare(&self, entry: &Entry, source_product: ProductRef) -> Result<ProductRef, Reference> {
         if let Some(output) = entry.completed.get() {
             return if output.source_product == source_product
-                && self.outcome(output.product).is_some()
+                && self.outcome(output.product.clone()).is_some()
             {
-                Ok(output.product)
+                Ok(output.product.clone())
             } else {
                 Err(self.errors.protocol)
             };
         }
         let front = self
             .source
-            .outcome(source_product)
+            .outcome(source_product.clone())
             .ok_or(self.errors.protocol)?;
         if front.product.source.definition != entry.path {
             return Err(self.errors.protocol);
@@ -223,7 +223,7 @@ impl NativePreparationQueries {
         entry
             .completed
             .set(Arc::new(NativePreparedSource {
-                product,
+                product: product.clone(),
                 source_product,
                 front,
                 declaration,
@@ -320,7 +320,7 @@ impl QueryTask for Task {
         size_of::<Self>() as u64
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        let result = if let Some(result) = self.terminal {
+        let result = if let Some(result) = self.terminal.clone() {
             result
         } else {
             let entry = &self.owner.entries[&self.query.address.0];
@@ -330,7 +330,7 @@ impl QueryTask for Task {
                 Poll::Ready(Ok(source)) => self.owner.prepare(entry, source),
             }
         };
-        self.terminal = Some(result);
+        self.terminal = Some(result.clone());
         match result {
             Ok(product) => QueryPoll::Complete(product),
             Err(error) => QueryPoll::Failed(error),

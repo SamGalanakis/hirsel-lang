@@ -301,14 +301,14 @@ impl QueryTask for Task {
         self.queries.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(result) = self.terminal {
+        if let Some(result) = self.terminal.clone() {
             return finish(result);
         }
         match self.advance(cx) {
             Ok(Some(waiting)) => QueryPoll::Waiting(waiting),
             result => {
                 let result = result.and_then(|_| self.complete());
-                self.terminal = Some(result);
+                self.terminal = Some(result.clone());
                 finish(result)
             }
         }
@@ -385,7 +385,7 @@ impl Task {
                             Poll::Pending => return Ok(Some(vec![id])),
                             Poll::Ready(selected) => selected,
                         };
-                        let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
+                        let reference = selected.clone().map(|p| p.record).unwrap_or_else(|r| r);
                         let Some(facts) = self.queries.plan.front.check_facts(reference) else {
                             return Err(reference);
                         };
@@ -573,7 +573,7 @@ impl Task {
                                     .queries
                                     .plan
                                     .lower
-                                    .outcome(product)
+                                    .outcome(product.clone())
                                     .ok_or(self.queries.errors.protocol)?;
                                 self.reads.merge(&output.reads);
                                 file.diagnostics.extend(output.output.diagnostics);
@@ -646,7 +646,7 @@ impl Task {
                             Poll::Pending => return Ok(Some(vec![id])),
                             Poll::Ready(selected) => selected,
                         };
-                        let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
+                        let reference = selected.as_ref().map(|p| p.record).unwrap_or_else(|r| *r);
                         let reads = self
                             .queries
                             .plan
@@ -787,7 +787,8 @@ impl Task {
             failed_lowered: std::mem::take(&mut self.failed_lowered),
             reads: Arc::new(reads),
         });
-        *queries.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some((product, data));
+        *queries.completed.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((product.clone(), data));
         queries
             .store
             .associate_product(product.address, product.action, product.record);

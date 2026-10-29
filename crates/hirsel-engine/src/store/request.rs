@@ -32,7 +32,7 @@ impl Admission {
     fn charge(&self, bytes: u64) -> bool {
         if self
             .used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes)
                     .filter(|next| *next <= self.memory.bytes())
             })
@@ -151,6 +151,15 @@ impl RequestStore {
         true
     }
 }
+struct ArchiveLease {
+    memory: Arc<Admission>,
+    bytes: u64,
+}
+impl Drop for ArchiveLease {
+    fn drop(&mut self) {
+        self.memory.release(self.bytes);
+    }
+}
 struct RequestVerifierRows {
     backend: Arc<dyn ResultStore>,
     admission: Arc<Admission>,
@@ -228,6 +237,24 @@ impl ResultStore for RequestStore {
     fn demand(&self, keys: &[EntryKey]) {
         self.backend.demand(keys)
     }
+    fn open_product_archive(&self, reference: Reference) -> Option<crate::runtime::ProductArchive> {
+        let bytes = self.get_content(reference)?;
+        let charge = crate::runtime::ProductArchive::checked_import_charge(reference, &bytes)
+            .ok()?
+            .checked_add(crate::memo::retained_arc_bytes(&std::mem::MaybeUninit::<
+                ArchiveLease,
+            >::uninit()))?;
+        if !self.memory.charge(charge) {
+            return None;
+        }
+        let owner = Arc::new(ArchiveLease {
+            memory: self.memory.clone(),
+            bytes: charge,
+        });
+        Some(crate::runtime::ProductArchive::from_admitted_content(
+            reference, bytes, charge, owner,
+        ))
+    }
     fn get_content(&self, reference: Reference) -> Option<Bytes> {
         if let Some((actual, bytes)) = self
             .state
@@ -304,6 +331,68 @@ mod tests {
     fn address() -> Address {
         Address(ContentHash::of_bytes(b"request transport"))
     }
+    #[test]
+    fn archive_views_admit_complete_backing_and_outlive_the_request_without_its_table() {
+        struct Backend(Mutex<Bytes>);
+        impl ResultStore for Backend {
+            fn get(&self, _: &EntryKey) -> Option<Bytes> {
+                None
+            }
+            fn put(&self, _: &EntryKey, _: &[u8]) {}
+            fn name(&self) -> &'static str {
+                "archive-view-test"
+            }
+            fn get_content(&self, _: Reference) -> Option<Bytes> {
+                Some(self.0.lock().unwrap().clone())
+            }
+        }
+        let mut backing = vec![0; 4096];
+        backing[100..108].copy_from_slice(b"complete");
+        let bytes = Bytes::from(backing).range(100, 8, 1).unwrap();
+        let reference = domain().reference(b"complete").unwrap();
+        let required = crate::runtime::ProductArchive::checked_import_charge(reference, &bytes)
+            .unwrap()
+            + crate::memo::retained_arc_bytes(&std::mem::MaybeUninit::<ArchiveLease>::uninit());
+        assert!(required > 4096);
+        let backend = Arc::new(Backend(Mutex::new(bytes.clone())));
+        let provider = Arc::downgrade(&backend);
+        let budget = ProcessBudget::new(required);
+        let short = RequestStore::new(backend.clone(), budget.reserve(required - 1).unwrap());
+        assert!(short.open_product_archive(reference).is_none());
+        assert_eq!(short.retained_bytes(), 0);
+        drop(short);
+        assert_eq!(budget.reserved(), 0);
+        let request = Arc::new(RequestStore::new(
+            backend.clone(),
+            budget.reserve(required).unwrap(),
+        ));
+        let producer = Arc::downgrade(&request);
+        *backend.0.lock().unwrap() = Bytes::from(b"replaced".as_slice());
+        assert!(request.open_product_archive(reference).is_none());
+        assert_eq!(request.retained_bytes(), 0);
+        assert!(
+            !request.exhausted(),
+            "substitution does not spend admission"
+        );
+        *backend.0.lock().unwrap() = bytes;
+        let archive = request.open_product_archive(reference).unwrap();
+        assert_eq!(archive.retained_bytes(), required);
+        assert_eq!(request.retained_bytes(), required);
+        *backend.0.lock().unwrap() = Bytes::from(b"evicted".as_slice());
+        drop(backend);
+        drop(request);
+        assert!(producer.upgrade().is_none());
+        assert!(provider.upgrade().is_none());
+        assert_eq!(budget.reserved(), required);
+        let view = archive.clone();
+        drop(archive);
+        assert_eq!(view.bytes(), b"complete");
+        assert_eq!(view.reference(), reference);
+        assert_eq!(budget.reserved(), required);
+        drop(view);
+        assert_eq!(budget.reserved(), 0);
+    }
+
     #[test]
     fn shared_directory_requests_abort_independently_and_publish_after_join() {
         let directory = tempfile::tempdir().unwrap();

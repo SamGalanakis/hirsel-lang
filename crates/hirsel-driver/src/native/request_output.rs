@@ -11,8 +11,8 @@ pub(crate) fn materialize_output(
     destination: &Path,
 ) -> Result<Vec<String>, NativeError> {
     let error = |message| NativeError::new(StageName::Link, message);
-    let linked =
-        object_queries::linked_product(input.store.as_ref(), input.product).map_err(error)?;
+    let linked = object_queries::linked_product(input.store.as_ref(), input.product.clone())
+        .map_err(error)?;
     object_queries::materialize_executable(input.store.as_ref(), &linked, destination)
         .map_err(error)?;
     input.platform.validate_image(destination).map_err(error)?;

@@ -107,7 +107,7 @@ impl QueryFactory for StorageFactory {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&id.address.0)
-            .map(|outcome| outcome.product);
+            .map(|outcome| outcome.product.clone());
         Ok(Box::new(StorageTask {
             owner: self.0.clone(),
             id,
@@ -133,7 +133,7 @@ impl QueryTask for StorageTask {
         self.owner.weight
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        if let Some(terminal) = self.terminal {
+        if let Some(terminal) = self.terminal.clone() {
             return finish(terminal);
         }
         if !self.admitted {
@@ -150,7 +150,7 @@ impl QueryTask for StorageTask {
                 .unwrap_or_else(|e| e.into_inner());
             if *retention < bound {
                 self.terminal = Some(Err(self.owner.errors.resource));
-                return finish(self.terminal.unwrap());
+                return finish(self.terminal.clone().unwrap());
             }
             *retention -= bound;
             self.admitted = true;
@@ -177,7 +177,7 @@ impl QueryTask for StorageTask {
                 }
             }
         };
-        self.terminal = Some(selected);
+        self.terminal = Some(selected.clone());
         finish(selected)
     }
 }
@@ -270,12 +270,12 @@ impl StorageTask {
             .insert(
                 self.id.address.0,
                 Outcome {
-                    product: selected,
+                    product: selected.clone(),
                     result,
                     reads,
                 },
             );
-        if let Ok(product) = selected {
+        if let Ok(product) = &selected {
             owner
                 .front
                 .store

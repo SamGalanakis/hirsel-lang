@@ -638,13 +638,13 @@ pub(super) fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash 
 /// the checked/analyzed body. Its read set is validated before these bytes are
 /// decoded; a hit does not demand the separate Modes product.
 #[derive(Serialize, Deserialize)]
-struct PublicationRecord {
-    summary: Arc<PublishedSummary>,
-    diagnostics: Vec<Diagnostic>,
-    phases: Vec<(Diagnostic, String)>,
-    detail: DependencyReads,
-    dead_arms: Option<crate::tools::DeadArmUse>,
-    lowering: Option<lowering::LoweringUse>,
+pub(in crate::queries) struct PublicationRecord {
+    pub(in crate::queries) summary: Arc<PublishedSummary>,
+    pub(in crate::queries) diagnostics: Vec<Diagnostic>,
+    pub(in crate::queries) phases: Vec<(Diagnostic, String)>,
+    pub(in crate::queries) detail: DependencyReads,
+    pub(in crate::queries) dead_arms: Option<crate::tools::DeadArmUse>,
+    pub(in crate::queries) lowering: Option<lowering::LoweringUse>,
 }
 impl PublicationRecord {
     fn valid(
@@ -788,6 +788,35 @@ pub(super) fn capture_mode(
             detail: canonical_detail(detail),
         },
         owner,
+    )
+}
+
+pub(crate) fn encode_live_analyzed(
+    records: &crate::NativeRecords,
+    source: &crate::NativeRecordContext,
+    output: &QueryOutput<AnalyzedBody>,
+    reads: &Reads,
+    phase: Option<QueryKind>,
+    diagnostic_phases: &[(Diagnostic, String)],
+) -> Option<Vec<u8>> {
+    let body = QueryOutput {
+        value: Body::capture(source.record_types(), &output.value),
+        diagnostics: output.diagnostics.clone(),
+        dependencies: output.dependencies.clone(),
+    };
+    let syntax = (
+        &output.value.typed.syntax,
+        output.value.typed.syntax.occurrence,
+    );
+    records.encode(
+        source,
+        &(
+            syntax,
+            body,
+            reads,
+            phase.map(QueryKind::phase_name),
+            diagnostic_phases,
+        ),
     )
 }
 
@@ -1106,7 +1135,9 @@ impl QueryEngine {
         if !self.s1.is_empty() {
             return None;
         }
-        let variant = self.stored_variant(path, QueryKind::Summary)?;
+        let Some(variant) = self.stored_variant(path, QueryKind::Summary) else {
+            return parallel::load_scheduled_publication(self, path);
+        };
         let record: PublicationRecord = self.decode_record(&variant.payload)?;
         let id = DefId::intern(path);
         let (owner, shape) = self.lexical_shape(path)?;
@@ -1126,12 +1157,44 @@ impl QueryEngine {
             );
             return None;
         }
-        let checked = record.summary.checked.as_ref()?.clone();
+        let checked = (
+            record.summary.checked.as_ref()?.clone(),
+            record.summary.reads.clone(),
+        );
+        self.adopt_publication(path, record, Arc::new(variant.reads), checked)
+    }
+
+    pub(in crate::queries) fn adopt_publication(
+        &mut self,
+        path: &DefPath,
+        record: PublicationRecord,
+        reads: Arc<Reads>,
+        checked: (Arc<CheckedSummary>, Arc<Reads>),
+    ) -> Option<PublishedResult> {
+        let id = DefId::intern(path);
+        let (owner, shape) = self.lexical_shape(path)?;
+        let stored_checked = record.summary.checked.as_ref()?;
+        if !self.s1.is_empty()
+            || record.summary.definition != id
+            || record.summary.summary.owner != id
+            || record.summary.text != self.key_text(path, QueryKind::Summary).ok()?
+            || record.summary.reads.as_ref() != reads.as_ref()
+            || stored_checked.summary != checked.0.summary
+            || stored_checked.growth != checked.0.growth
+            || !record.valid(owner, shape)
+            || (checked.1.as_ref() != reads.as_ref()
+                && checked
+                    .1
+                    .first_changed(|key| self.observe(path, key))
+                    .is_some())
+        {
+            return None;
+        }
         self.record_checked_summary(
             id,
-            checked,
+            checked.0,
             record.summary.text,
-            record.summary.reads.clone(),
+            checked.1,
             record.detail.clone(),
             true,
         );
@@ -1161,7 +1224,7 @@ impl QueryEngine {
             }),
             phase: Some(QueryKind::Modes),
             diagnostic_phases: record.phases,
-            reads: Arc::new(variant.reads),
+            reads,
         })
     }
 
@@ -4043,6 +4106,109 @@ mod malformed_tests {
             }),
         }
     }
+    #[test]
+    fn live_analyzed_archive_keeps_source_and_complete_body_fields_under_exact_admission() {
+        use crate::runtime::{LIVE_ANALYZED, LiveAnalyzedProduct, ProcessBudget, ProductSource};
+        let mut identities = Vec::new();
+        for text in ["fn main() { true }", "fn main() { false }"] {
+            let (engine, syntax) = fixture_source(text);
+            let record = record(&engine, &syntax);
+            let output = record.output.unwrap();
+            let output = Arc::new(QueryOutput {
+                value: output.value.restore(syntax.clone()),
+                diagnostics: output.diagnostics,
+                dependencies: output.dependencies,
+            });
+            let mut reads = ReadsBuilder::new();
+            reads.record(ReadKey::Environment, engine.environment_value());
+            let reads = Arc::new(reads.finish().unwrap());
+            let phases = vec![(
+                Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("BODY-1") },
+                    syntax.item.origin.span,
+                    "phase observation",
+                ),
+                "mode checking".to_owned(),
+            )];
+            let outcome = ModeResult {
+                definition: syntax.item.definition.clone(),
+                result: Ok(output.clone()),
+                phase: Some(QueryKind::Modes),
+                summary: None,
+                reads: reads.clone(),
+                diagnostic_phases: phases.clone(),
+            };
+            let required = LiveAnalyzedProduct::required_bytes(&outcome).unwrap();
+            let budget = ProcessBudget::new(4 << 20);
+            let backing = Arc::new(budget.reserve(17).unwrap());
+            let retained_source = Arc::downgrade(&backing);
+            let source = engine.source_records();
+            let records = crate::NativeRecords::new(
+                engine.types.clone(),
+                engine.result_store.clone().unwrap(),
+            );
+            let source =
+                ProductSource::new(source.clone(), records.clone(), backing.clone()).unwrap();
+            let identity = (
+                hirsel_artifact_store::Address(ContentHash::default()),
+                hirsel_artifact_store::Action(ContentHash::default()),
+            );
+            let mut short = budget.reserve(required - 1).unwrap();
+            assert!(
+                LiveAnalyzedProduct::new(identity, outcome.clone(), source.clone(), &mut short)
+                    .is_none()
+            );
+            assert_eq!(short.bytes(), required - 1);
+            drop(short);
+            let mut exact = budget.reserve(required).unwrap();
+            let live = LiveAnalyzedProduct::new(identity, outcome, source, &mut exact).unwrap();
+            assert_eq!(exact.bytes(), 0);
+            assert_eq!(live.retained_bytes(), required);
+            assert!(Arc::ptr_eq(live.output(), &output));
+            assert_eq!(live.reads(), &reads);
+            assert_eq!(live.phase(), Some(QueryKind::Modes));
+            assert_eq!(live.diagnostic_phases(), phases);
+            let mut scratch = budget.reserve(1 << 20).unwrap();
+            let archive = live.archive(&mut scratch, 1 << 20).unwrap();
+            assert_eq!(archive.reference().domain, LIVE_ANALYZED);
+            let ((mut decoded_syntax, occurrence), decoded, decoded_reads, phase, decoded_phases): (
+                (ItemSyntax, u32), QueryOutput<Body>, Reads, Option<String>, Vec<(Diagnostic, String)>
+            ) = records.decode(&engine, archive.bytes()).unwrap();
+            decoded_syntax.occurrence = occurrence;
+            assert_eq!(decoded_syntax.text_hash, syntax.text_hash);
+            assert_eq!(decoded_syntax.item, syntax.item);
+            assert_eq!(decoded_reads, *reads);
+            assert_eq!(phase.as_deref(), Some(QueryKind::Modes.phase_name()));
+            assert_eq!(decoded_phases, phases);
+            let decoded = decoded.value.restore(Arc::new(decoded_syntax));
+            assert_eq!(decoded.typed.checked, output.value.typed.checked);
+            assert_eq!(decoded.typed.plans, output.value.typed.plans);
+            assert_eq!(decoded.ownership, output.value.ownership);
+            assert_eq!(decoded.results, output.value.results);
+            assert_eq!(decoded.call_allocations, output.value.call_allocations);
+            let mut empty = budget.reserve(0).unwrap();
+            assert_eq!(
+                live.archive(&mut empty, u64::MAX).unwrap().reference(),
+                archive.reference()
+            );
+            drop(backing);
+            drop(engine);
+            assert!(retained_source.upgrade().is_some());
+            drop(exact);
+            drop(scratch);
+            drop(live);
+            assert!(retained_source.upgrade().is_none());
+            assert_eq!(budget.reserved(), archive.retained_bytes());
+            identities.push(archive.reference());
+            drop(archive);
+            assert_eq!(budget.reserved(), 0);
+        }
+        assert_ne!(
+            identities[0], identities[1],
+            "body identity includes source literal content"
+        );
+    }
+
     #[test]
     fn structurally_invalid_records_miss_before_adoption_or_verification() {
         for verify in [

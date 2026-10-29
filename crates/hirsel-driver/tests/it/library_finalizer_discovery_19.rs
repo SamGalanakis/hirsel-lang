@@ -104,15 +104,17 @@ fn compile_objects(source: &str) {
             }
             assert!(!objects.products.is_empty());
             for product in &objects.products {
-                let fragment =
-                    native::object_queries::fragment_product(objects.store.as_ref(), *product)
-                        .unwrap();
+                let fragment = native::object_queries::fragment_product(
+                    objects.store.as_ref(),
+                    product.clone(),
+                )
+                .unwrap();
                 let object =
                     native::object_queries::load_object(objects.store.as_ref(), fragment.object)
                         .unwrap();
                 assert!(object.bytes.starts_with(b"\x7fELF"));
                 assert!(
-                    native::object_queries::linked_product(objects.store.as_ref(), *product)
+                    native::object_queries::linked_product(objects.store.as_ref(), product.clone())
                         .is_err(),
                     "a Codegen output cannot supply an executable"
                 );

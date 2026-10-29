@@ -77,7 +77,7 @@ fn admitted_staged_declarations_match_scalar_without_executing_or_publishing() {
                     let products =
                         result.unwrap_or_else(|r| panic!("stage {r:?}: {:?}", stage.failure(r)));
                     assert_eq!(products[0], products[1]);
-                    let output = stage.outcome(products[0]).unwrap();
+                    let output = stage.outcome((products[0]).clone()).unwrap();
                     assert_eq!(output.owner(), &scaled);
                     assert!(!output.reads().is_empty());
                     let declarations = output.declarations().unwrap().collect::<Vec<_>>();
@@ -174,7 +174,7 @@ fn staged_acceptance_checks_all_reads_and_admits_the_installed_copy() {
         runtime.register(FRONT_STAGE_KIND, stage.factory()).unwrap();
         let request = runtime.request(&[stage.query(scaled).unwrap()]);
         let products = runtime.wait(request).unwrap();
-        let output = stage.outcome(products[0]).unwrap();
+        let output = stage.outcome((products[0]).clone()).unwrap();
         let (path, expected) = output.declarations().unwrap().next().unwrap();
         let path = path.clone();
         let expected = expected.clone();

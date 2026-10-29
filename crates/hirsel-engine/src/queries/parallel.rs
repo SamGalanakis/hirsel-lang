@@ -11,11 +11,11 @@ mod compact;
 mod scheduled;
 pub(crate) use compact::CompactCompleted;
 use compact::{FrontResult, WorkerCompleted};
-pub(in crate::queries) use scheduled::SpecializationDependencies;
 pub use scheduled::{
     FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCarry,
     FrontCheckedOutput, FrontInputFootprint, FrontStorageOutput, FrontStorageQueries,
 };
+pub(in crate::queries) use scheduled::{SpecializationDependencies, load_scheduled_publication};
 
 /// One input's outcome, including the phase that completed or stopped it.
 /// Results from `mode_definitions` always retain the caller's input order.

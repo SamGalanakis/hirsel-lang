@@ -42,7 +42,7 @@ fn front_complete_reads_share_equal_phase_allocations_without_merging_phase_keys
         .unwrap();
         runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
         let request = runtime.request(&[front.query(&program.entry).unwrap()]);
-        let product = runtime.wait(request).unwrap()[0];
+        let product = runtime.wait(request).unwrap()[0].clone();
         let output = front.outcome(product.record).unwrap();
         assert!(output.outcome.result.is_ok());
         let rows = front.memo_snapshot();

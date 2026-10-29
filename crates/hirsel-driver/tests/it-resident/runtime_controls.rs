@@ -57,7 +57,7 @@ impl QueryTask for Task {
     }
     fn poll(&mut self, _: &mut dyn QueryContext) -> QueryPoll {
         self.polls.fetch_add(1, Ordering::SeqCst);
-        QueryPoll::Complete(self.product)
+        QueryPoll::Complete(self.product.clone())
     }
 }
 struct Factory {
@@ -67,7 +67,7 @@ struct Factory {
 impl QueryFactory for Factory {
     fn create(&self, _: QueryId) -> Result<Box<dyn QueryTask>, hirsel_artifact_store::Reference> {
         Ok(Box::new(Task {
-            product: self.product,
+            product: self.product.clone(),
             polls: self.polls.clone(),
         }))
     }

@@ -16,7 +16,7 @@ const OUTPUT: Domain = Domain {
     kind: 0x5200_0011,
     schema: 1,
 };
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Settled {
     product: ProductRef,
     check: ProductRef,
@@ -92,6 +92,7 @@ impl SafeCheck {
             .completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .clone()
             .filter(|selected| selected.product == product)
             .ok_or_else(|| {
                 ToolError::Runtime("selected safe-check product is unavailable".into())
@@ -117,6 +118,7 @@ impl SafeCheck {
             .completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .clone()
             .filter(|selected| selected.product == product)
             .ok_or_else(|| {
                 ToolError::Runtime("selected safe-check product is unavailable".into())
@@ -170,21 +172,26 @@ impl QueryTask for Task {
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         let owner = &self.owner;
-        if let Some(settled) = *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) {
-            return QueryPoll::Complete(settled.product);
+        if let Some(settled) = owner
+            .completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return QueryPoll::Complete(settled.product.clone());
         }
-        let check = match self.check {
+        let check = match self.check.clone() {
             Some(product) => product,
             None => match cx.read(owner.check.query()) {
                 Poll::Pending => return QueryPoll::Waiting(vec![owner.check.query()]),
                 Poll::Ready(Err(error)) => return QueryPoll::Failed(error),
                 Poll::Ready(Ok(product)) => {
-                    self.check = Some(product);
+                    self.check = Some(product.clone());
                     product
                 }
             },
         };
-        let Some(accepted) = owner.check.accepted(check) else {
+        let Some(accepted) = owner.check.accepted(check.clone()) else {
             return QueryPoll::Failed(owner.errors.protocol);
         };
         let launch = owner.launch.filter(|_| accepted);
@@ -198,7 +205,7 @@ impl QueryTask for Task {
         };
         let mut bytes = check.record.output.0.0.to_vec();
         bytes.push(u8::from(run.is_some()));
-        if let Some(run) = run {
+        if let Some(run) = &run {
             bytes.extend_from_slice(&run.record.output.0.0);
         }
         let Some(record) = owner.store.put_content(OUTPUT, &bytes) else {
@@ -219,7 +226,7 @@ impl QueryTask for Task {
             record,
         };
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settled {
-            product,
+            product: product.clone(),
             check,
             run,
         });

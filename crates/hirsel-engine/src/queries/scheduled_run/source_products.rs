@@ -99,7 +99,7 @@ impl FrontRunQueries {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .get(&query.address.0)
-            .map(|(product, _)| *product)
+            .map(|(product, _)| product.clone())
     }
     /// Decode bound of one already completed source product. No provider is read.
     pub fn source_product_bytes(&self, product: ProductRef) -> Result<Option<u64>, QueryError> {

@@ -220,7 +220,7 @@ impl OwnershipBootstrap {
             .ok_or("ownership bootstrap has no selected source")?;
         Ok((
             prepared.compilation.clone(),
-            *compilation,
+            compilation.clone(),
             prepared.facts.clone(),
         ))
     }
@@ -259,7 +259,7 @@ impl OwnershipBootstrap {
         let facts = self
             .source
             .source
-            .outcome(selected)
+            .outcome(selected.clone())
             .ok_or("ownership native source root is unavailable")?
             .products;
         let mut plan = self
@@ -381,7 +381,7 @@ impl OwnershipBootstrap {
             .get()
             .ok_or("ownership dispatch unavailable")?
             .compilation
-            .outcome(compilation)?;
+            .outcome(compilation.clone())?;
         let bytes = serde_json::to_vec(&(
             compilation.address.0,
             compilation.action.0,
@@ -411,7 +411,7 @@ impl OwnershipBootstrap {
             .store
             .associate_product(product.address, product.action, record);
         self.completed
-            .set((product, compilation))
+            .set((product.clone(), compilation))
             .map_err(|_| "ownership bootstrap completed twice")?;
         Ok(product)
     }
@@ -462,7 +462,7 @@ impl QueryTask for Task {
                 },
             }
         }
-        match self.terminal.unwrap() {
+        match self.terminal.clone().unwrap() {
             Ok(product) => QueryPoll::Complete(product),
             Err(error) => QueryPoll::Failed(error),
         }

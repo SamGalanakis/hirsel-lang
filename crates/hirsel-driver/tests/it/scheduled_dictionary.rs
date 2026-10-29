@@ -68,7 +68,7 @@ fn admitted_dictionary_matches_scalar_named_callables_and_resumes_data_dependenc
             let actual = lower.settled_constant(&dictionary, &[]).unwrap();
             let codec = NativeRecords::new(program.engine.types().clone(), store.clone());
             let actual_bytes = codec.encode(&program.engine, &*actual).unwrap();
-            let ordinary = lower.outcome(products[1]).unwrap();
+            let ordinary = lower.outcome((products[1]).clone()).unwrap();
             assert!(
                 ordinary
                     .materialized

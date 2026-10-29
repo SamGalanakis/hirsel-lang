@@ -8,8 +8,10 @@ mod product;
 mod scheduler;
 pub use budget::{MemoryReservation, MemoryReservationPool, ProcessBudget};
 pub use future_task::{LocalFutureTask, QueryReads};
+pub(crate) use product::ProductSource;
 pub use product::{
-    LIVE_LOWER, LIVE_SUMMARY, LiveLowerProduct, LiveSummaryProduct, ProductArchive, SummaryFacet,
+    ArchiveAdmission, LIVE_ANALYZED, LIVE_LOWER, LIVE_SUMMARY, LiveAnalyzedProduct,
+    LiveLowerProduct, LiveSummaryProduct, ProductArchive, SummaryFacet,
 };
 pub use scheduler::{
     AdmittedRuntime, RuntimeCompletion, RuntimeErrors, RuntimeEvent, RuntimeObserver, RuntimeStats,
@@ -27,7 +29,8 @@ pub struct QueryId {
 pub struct RequestId(pub u64);
 
 /// Complete action and canonical output are separate from the logical address.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Cloning a publication explicitly transfers a retained result to another reader.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductRef {
     pub address: Address,
     pub action: Action,

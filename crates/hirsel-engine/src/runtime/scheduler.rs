@@ -660,7 +660,7 @@ impl State {
     }
     fn result(&self, key: Key) -> Option<Outcome> {
         match &self.nodes.get(&key)?.status {
-            Status::Settled(result) => Some(**result),
+            Status::Settled(result) => Some((**result).clone()),
             _ => None,
         }
     }
@@ -852,7 +852,7 @@ impl State {
     fn settle(&mut self, query: Key, result: Outcome) {
         let node = self.nodes.get_mut(&query).expect("claimed query");
         node.execution.as_mut().expect("active execution").task = Task::Send(None);
-        node.status = Status::Settled(Box::new(result));
+        node.status = Status::Settled(Box::new(result.clone()));
         self.stats.settled += 1;
         self.event(RuntimeEvent::Settled {
             query: id(query),

@@ -167,6 +167,15 @@ pub trait ResultStore: Send + Sync {
             self.put(&product_association_key(address), &bytes);
         }
     }
+    /// Import a checked archive through this provider's existing admission.
+    /// Providers without an admitted request partition require the caller's
+    /// explicit grant through `ProductArchive::open` instead.
+    fn open_product_archive(
+        &self,
+        _reference: Reference,
+    ) -> Option<crate::runtime::ProductArchive> {
+        None
+    }
     /// Immutable content and logical action indexes use distinct addresses.
     /// Byte providers share their map; directory providers map content directly.
     fn get_content(&self, reference: Reference) -> Option<Bytes> {

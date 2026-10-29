@@ -411,7 +411,7 @@ impl FrontProofExport {
         product: ProductRef,
         mut allowance: MemoryReservation,
     ) -> Result<FrontProofInput, QueryError> {
-        let layout = self.input_layout(product)?;
+        let layout = self.input_layout(product.clone())?;
         if layout.total().ok_or(QueryError::NotImplemented)? > allowance.bytes() {
             return Err(operational(
                 "PS9 input decode/clone buffers exceed admission",
@@ -458,7 +458,7 @@ impl FrontProofExport {
     pub fn reads(&self, product: ProductRef) -> Result<BTreeMap<DefPath, Arc<Reads>>, QueryError> {
         let output = self
             .run
-            .outcome(product)
+            .outcome(product.clone())
             .filter(|_| product.address == self.query().address)
             .ok_or(QueryError::NotImplemented)?;
         let closure = output.semantic.definitions();

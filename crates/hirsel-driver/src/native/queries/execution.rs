@@ -110,7 +110,7 @@ impl ExecutionTasks {
         })
     }
     fn plan(&self, root: ProductRef, reads: &[ProductRef]) -> Result<ProductRef, String> {
-        let (mut native, selected) = self.roots.products(root, reads)?;
+        let (mut native, selected) = self.roots.products(root.clone(), reads)?;
         let snapshot = &self.roots.native.snapshot;
         let mut owners = snapshot.owners.values().cloned().collect::<Vec<_>>();
         owners.sort_by(InstanceAddress::canonical_cmp);
@@ -188,7 +188,7 @@ impl ExecutionTasks {
         snapshot
             .execution
             .set(Arc::new(ExecutionProduct {
-                product,
+                product: product.clone(),
                 environments: program.ahead_environments,
                 binding,
                 root,
@@ -198,7 +198,7 @@ impl ExecutionTasks {
             }))
             .map_err(|_| "execution plans published twice")?;
         self.completed
-            .set(product)
+            .set(product.clone())
             .map_err(|_| "execution output published twice")?;
         Ok(product)
     }
@@ -213,12 +213,15 @@ impl ExecutionTasks {
             .execution
             .get()
             .ok_or("execution plans have not settled")?;
-        let (mut native, root) = self.roots.products(execution.root, &execution.reads)?;
+        let (mut native, root) = self
+            .roots
+            .products(execution.root.clone(), &execution.reads)?;
         let products = execution
             .reads
             .iter()
             .map(|read| {
-                super::ready_product(self.roots.native.snapshot.store.as_ref(), *read).map(Arc::new)
+                super::ready_product(self.roots.native.snapshot.store.as_ref(), read.clone())
+                    .map(Arc::new)
             })
             .collect::<Result<Vec<_>, _>>()?;
         native.with_execution_context(&root, &products, use_program)
@@ -253,7 +256,7 @@ impl ExecutionTasks {
                     action,
                     record: previous.reference,
                 };
-                if let Ok(objects) = self.load_objects(product) {
+                if let Ok(objects) = self.load_objects(product.clone()) {
                     crate::native::ahead::check_objects(program, &objects)
                         .map_err(|e| e.to_string())?;
                     return Ok(product);
@@ -383,14 +386,14 @@ impl QueryTask for Task {
                     return QueryPoll::Waiting(waiting);
                 }
                 let result = if self.query.kind == EXECUTION_KIND {
-                    self.tasks.plan(reads[0], &reads[1..])
+                    self.tasks.plan(reads[0].clone(), &reads[1..])
                 } else {
-                    self.tasks.emit(self.query, reads[0])
+                    self.tasks.emit(self.query, reads[0].clone())
                 };
                 self.terminal = Some(result.map_err(|e| self.tasks.roots.native.failure(&e)));
             }
         }
-        match self.terminal.unwrap() {
+        match self.terminal.clone().unwrap() {
             Ok(p) => QueryPoll::Complete(p),
             Err(e) => QueryPoll::Failed(e),
         }

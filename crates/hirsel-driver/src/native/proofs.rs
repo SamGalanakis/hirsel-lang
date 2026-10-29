@@ -225,7 +225,7 @@ impl Proofs {
     ) -> Result<Self, super::NativeError> {
         let error = |message| super::NativeError::new(StageName::Import, message);
         let input = export
-            .input_for_native(native, completed)
+            .input_for_native(native, completed.clone())
             .map_err(|e| error(format!("proofs: native source export unavailable: {e:?}")))?;
         let source = native
             .outcome(completed)

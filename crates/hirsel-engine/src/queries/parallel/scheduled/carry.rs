@@ -148,25 +148,25 @@ fn index_bytes(entries: usize, subscriptions: usize) -> u64 {
     weight.bytes()
 }
 
-struct FactsRef<'a> {
-    summary: Option<Arc<PublishedSummary>>,
-    checked: &'a CheckedProduct,
-    dead_arms: &'a Option<crate::tools::DeadArmUse>,
-    diagnostics: &'a Vec<Diagnostic>,
-    diagnostic_phases: &'a Vec<(Diagnostic, String)>,
-    lowering: &'a Option<lowering::LoweringUse>,
-    table_keys: Option<&'a Arc<crate::table_keys::TableKeyUse>>,
+pub(super) struct FactsRef<'a> {
+    pub(super) summary: Option<Arc<PublishedSummary>>,
+    pub(super) checked: &'a CheckedProduct,
+    pub(super) dead_arms: &'a Option<crate::tools::DeadArmUse>,
+    pub(super) diagnostics: &'a Vec<Diagnostic>,
+    pub(super) diagnostic_phases: &'a Vec<(Diagnostic, String)>,
+    pub(super) lowering: &'a Option<lowering::LoweringUse>,
+    pub(super) table_keys: Option<&'a Arc<crate::table_keys::TableKeyUse>>,
 }
 #[derive(serde::Deserialize)]
 #[serde(try_from = "PackedFacts")]
 pub(super) struct Facts {
-    summary: Option<Arc<PublishedSummary>>,
-    checked: CheckedProduct,
-    dead_arms: Option<crate::tools::DeadArmUse>,
-    diagnostics: Vec<Diagnostic>,
-    diagnostic_phases: Vec<(Diagnostic, String)>,
-    lowering: Option<lowering::LoweringUse>,
-    table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
+    pub(super) summary: Option<Arc<PublishedSummary>>,
+    pub(super) checked: CheckedProduct,
+    pub(super) dead_arms: Option<crate::tools::DeadArmUse>,
+    pub(super) diagnostics: Vec<Diagnostic>,
+    pub(super) diagnostic_phases: Vec<(Diagnostic, String)>,
+    pub(super) lowering: Option<lowering::LoweringUse>,
+    pub(super) table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
 }
 // A published summary and its checked product often hold the same proof.
 // Preserve it once on the wire, keeping the summary's independent exact reads.

@@ -328,12 +328,22 @@ pub struct FrontLowerOutput {
     pub depth: DepthEvidence<Span>,
     pub execution: Option<hirsel_validate::ExecutionReceipt>,
     pub execution_subject: ContentHash,
+    pub executed: bool,
+    pub selections: Vec<(DefId, Vec<u64>)>,
+    pub acceptance: Option<hirsel_validate::AcceptedArtifact>,
     pub body: Reference,
     pub implementation_revision: ContentHash,
     pub signature: ContentHash,
     pub verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
     pub materialized: Vec<(hirsel_syntax::ExprId, Materialized)>,
-    owner: Arc<FrontLowerQueries>,
+    owner: Arc<LowerSource>,
+}
+struct LowerSource {
+    anchors: crate::NativeRecordContext,
+    records: crate::NativeRecords,
+    store: Arc<dyn ResultStore>,
+    _sources: SourceMap,
+    _allowance: Arc<MemoryReservation>,
 }
 impl FrontLowerOutput {
     /// Move the typed ordinary result into an admitted live owner. Verifier
@@ -343,16 +353,19 @@ impl FrontLowerOutput {
         product: ProductRef,
         allowance: &mut MemoryReservation,
     ) -> Option<crate::runtime::LiveLowerProduct> {
+        let source = ProductSource::new(
+            self.owner.anchors.clone(),
+            self.owner.records.clone(),
+            self.owner.clone(),
+        )?;
         crate::runtime::LiveLowerProduct::new(
             (product.address, product.action),
-            self.output,
-            Arc::new(self.reads),
-            self.depth,
-            self.owner.anchors.clone(),
-            self.owner,
+            self,
+            source,
             allowance,
         )
     }
+
     pub fn native_product(&self) -> crate::NativeOriginalProduct {
         crate::NativeOriginalProduct {
             definition: self.output.value.path.path().clone(),
@@ -394,7 +407,8 @@ pub struct FrontLowerQueries {
     max_reads: usize,
     errors: RuntimeErrors,
     retention: Mutex<u64>,
-    _allowance: MemoryReservation,
+    _allowance: Arc<MemoryReservation>,
+    source: Arc<LowerSource>,
 }
 impl FrontLowerQueries {
     /// Compact potential dependency inventory; no Lower/Evaluate output or
@@ -402,6 +416,10 @@ impl FrontLowerQueries {
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
         let mut indexes = crate::NativeMetadataWeight::default();
         indexes.tree::<(u32, ContentHash), DefId>(definitions.len().checked_mul(2)?);
+        indexes.add(size_of::<Self>());
+        indexes.add(
+            size_of::<LowerSource>() + size_of::<MemoryReservation>() + 4 * size_of::<usize>(),
+        );
         definitions.iter().try_fold(indexes.bytes(), |total, path| {
             let path_bytes = bincode::serialized_size(path).ok()?;
             total.checked_add(path_bytes.checked_add(
@@ -927,6 +945,8 @@ impl FrontLowerQueries {
         let depth = outcome.depth.evidence();
         let execution = outcome.execution.clone();
         let execution_subject = outcome.execution_subject;
+        let executed = outcome.executed;
+        let selections = outcome.selections.clone();
         drop(outcomes);
         let output = lower.decode(self)?;
         let materialized = self
@@ -945,12 +965,15 @@ impl FrontLowerQueries {
             depth,
             execution,
             execution_subject,
+            executed,
+            selections,
+            acceptance: lower.acceptance.clone(),
             body: lower.body,
             implementation_revision: input.implementation,
             signature,
             verified: lower.verified(self)?,
             materialized,
-            owner: self.clone(),
+            owner: self.source.clone(),
         })
     }
     /// Native adaptation reads compact metadata only. Neither an unchanged
@@ -1038,7 +1061,7 @@ impl FrontLowerQueries {
                     // producer, even while the source observations still match.
                     Ok(product)
                         if id.kind == FRONT_LOWER_KIND
-                            && self.native_product(product).is_none() => {}
+                            && self.native_product(product.clone()).is_none() => {}
                     product => return product,
                 }
             }
@@ -1321,7 +1344,7 @@ impl FrontLowerQueries {
     ) -> Result<Computed, QueryError> {
         let front = self.front.query(path).ok_or(QueryError::NotImplemented)?;
         let selected = source.reads.read_consuming(front).await;
-        let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
+        let reference = selected.clone().map(|p| p.record).unwrap_or_else(|r| r);
         let body = match self.front.outcome(reference) {
             Some(body) => body,
             None if selected.is_ok() => {
@@ -1734,7 +1757,7 @@ impl Source {
         let selected = self.reads.read_consuming(id).await;
         let outcome = self
             .owner
-            .selected(id, selected)
+            .selected(id, selected.clone())
             .ok_or_else(|| self.refused(selected.err().unwrap_or(self.owner.errors.protocol)))?;
         self.merge(
             &outcome
@@ -2174,7 +2197,18 @@ impl QueryEngine {
                 ]
             })
             .collect();
+        let allowance = Arc::new(allowance);
+        let anchors = crate::NativeRecordContext::capture(self);
+        let records = crate::NativeRecords::new(self.types.clone(), store.clone());
+        let source = Arc::new(LowerSource {
+            anchors: anchors.clone(),
+            records: records.clone(),
+            store: store.clone(),
+            _sources: self.sources.clone(),
+            _allowance: allowance.clone(),
+        });
         Ok(Arc::new(FrontLowerQueries {
+            source,
             inputs,
             staged,
             paths,
@@ -2188,8 +2222,8 @@ impl QueryEngine {
             sources: self.sources.clone(),
             limits: self.comptime_limits,
             verify: self.verify,
-            anchors: crate::NativeRecordContext::capture(self),
-            records: crate::NativeRecords::new(self.types.clone(), store.clone()),
+            anchors,
+            records,
             store,
             outcomes: Mutex::new(BTreeMap::new()),
             carry: Mutex::new(None),

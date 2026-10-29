@@ -19,7 +19,7 @@ impl FrontRunQueries {
         product: ProductRef,
     ) -> Result<hirsel_run_schema::ProgramNode, QueryError> {
         let entry = self
-            .semantic_entry(product)
+            .semantic_entry(product.clone())
             .ok_or_else(|| operational("semantic product is unavailable"))?;
         let path = self
             .semantic_paths
@@ -47,7 +47,7 @@ pub(super) fn create(queries: &Arc<FrontRunQueries>, query: QueryId) -> Option<B
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .get(&query.address.0)
-        .map(|(product, _)| Ok(*product));
+        .map(|(product, _)| Ok(product.clone()));
     Some(Box::new(SemanticTask {
         node: Task {
             queries: queries.clone(),
@@ -81,7 +81,7 @@ impl QueryTask for SemanticTask {
         self.weight().retained
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
-        let result = if let Some(result) = self.node.terminal {
+        let result = if let Some(result) = self.node.terminal.clone() {
             result
         } else {
             let path = self.node.root.clone();
@@ -95,7 +95,7 @@ impl QueryTask for SemanticTask {
                     .map_err(|error| self.node.queries.failure_record(error)),
             }
         };
-        self.node.terminal = Some(result);
+        self.node.terminal = Some(result.clone());
         match result {
             Ok(product) => QueryPoll::Complete(product),
             Err(error) => QueryPoll::Failed(error),
@@ -173,7 +173,7 @@ impl SemanticTask {
             .semantic_completed
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .insert(product.address.0, (product, entry));
+            .insert(product.address.0, (product.clone(), entry));
         queries
             .store
             .associate_product(product.address, product.action, product.record);
