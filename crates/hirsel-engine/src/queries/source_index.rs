@@ -795,7 +795,7 @@ mod tests {
                 assert_eq!(budget.reserved(), 0);
                 assert_eq!(-(first_drop.live + last_drop.live), actual.live);
 
-                let prior = engine(&paths);
+                let mut prior = engine(&paths);
                 let required = prior.source_index_bytes().unwrap();
                 assert!(
                     prior
@@ -803,7 +803,7 @@ mod tests {
                         .is_err()
                 );
                 assert_eq!(budget.reserved(), 0);
-                let prior = engine(&paths);
+                let mut prior = engine(&paths);
                 let anchor = prior.items[&paths[0]][0].anchor;
                 let header = prior.signatures[&DefId::intern(&paths[0])].clone();
                 let required = prior.source_index_bytes().unwrap();
@@ -985,7 +985,7 @@ mod tests {
     fn refused_source_index_restore_keeps_its_reservation_and_target_untouched() {
         crate::with_compiler_stack(|| {
             let path = DefPath::core("source.refused");
-            let prior = engine(&[path.clone()]);
+            let mut prior = engine(&[path.clone()]);
             let required = prior.source_index_bytes().unwrap();
             let budget = ProcessBudget::new(required);
             let state = prior

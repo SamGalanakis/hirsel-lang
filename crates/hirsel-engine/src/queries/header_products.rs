@@ -295,6 +295,9 @@ impl QueryEngine {
             entry.memo.durability,
         );
         self.signatures.insert(id, entry.clone());
+        if self.private_summary_active {
+            self.private_signature_publications.insert(id);
+        }
         self.snapshot_sources.insert(id, Arc::downgrade(entry));
     }
 }
