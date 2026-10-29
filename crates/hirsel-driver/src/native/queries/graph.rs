@@ -15,13 +15,55 @@ pub struct ArenaNode {
     pub callees: Vec<Function>,
 }
 
+/// Shared complete component addresses. An escaped key view retains the full
+/// arena registry admission, including the backing of every component.
+#[derive(Clone)]
+pub struct ArenaComponentKeys(Arc<ComponentKeysData>);
+#[derive(Clone)]
+struct ComponentKeysData {
+    values: Vec<ComponentKey>,
+    owner: Option<Arc<hirsel_engine::runtime::MemoryReservation>>,
+}
+impl std::fmt::Debug for ArenaComponentKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.values.fmt(f)
+    }
+}
+impl std::ops::Deref for ArenaComponentKeys {
+    type Target = [ComponentKey];
+    fn deref(&self) -> &Self::Target {
+        &self.0.values
+    }
+}
+impl ArenaComponentKeys {
+    fn new(mut values: Vec<ComponentKey>) -> Self {
+        values.shrink_to_fit();
+        Self(Arc::new(ComponentKeysData {
+            values,
+            owner: None,
+        }))
+    }
+    fn retained_bytes(&self) -> u64 {
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.arc(&self.0);
+        w.vec(
+            &self.0.values,
+            super::ownership_compilation::metadata::component,
+        );
+        w.bytes()
+    }
+    fn with_owner(&mut self, owner: Arc<hirsel_engine::runtime::MemoryReservation>) {
+        Arc::make_mut(&mut self.0).owner = Some(owner);
+    }
+}
+
 #[derive(Clone)]
 pub struct SettledArenaGraph {
     /// Components in deterministic callee-first order in each stratum.
     pub candidates: Vec<Arc<ArenaSummary>>,
     pub chosen: Vec<Arc<ArenaSummary>>,
     /// Exact component addresses, including topology, facet and stratum.
-    pub component_keys: Vec<ComponentKey>,
+    pub component_keys: ArenaComponentKeys,
     chosen_by_owner: BTreeMap<Function, Arc<ArenaSummary>>,
 }
 
@@ -30,10 +72,9 @@ impl SettledArenaGraph {
         let mut w = hirsel_engine::NativeMetadataWeight::default();
         w.flat_vec(&self.candidates);
         w.flat_vec(&self.chosen);
-        w.vec(
-            &self.component_keys,
-            super::ownership_compilation::metadata::component,
-        );
+        if self.component_keys.0.owner.is_none() {
+            w.add(self.component_keys.retained_bytes() as usize);
+        }
         w.packed_map(&mut self.chosen_by_owner, |w, (path, _), _| w.path(path));
         w.bytes()
     }
@@ -69,10 +110,10 @@ fn function(address: &InstanceAddress) -> Function {
 /// clients and runtime continuations use this one planner and the same solver.
 /// No equation or Value body is opened while constructing the plan.
 pub struct ArenaQueryPlan {
-    pub component_keys: Vec<ComponentKey>,
+    pub component_keys: ArenaComponentKeys,
     members: Vec<Vec<EquationProduct>>,
     outgoing: Vec<Vec<InstanceAddress>>,
-    by_owner: BTreeMap<(bool, Function), usize>,
+    by_owner: BTreeMap<Function, usize>,
     external: BTreeMap<Function, (InstanceAddress, Vec<u32>, ProductRef)>,
 }
 impl ArenaQueryPlan {
@@ -134,69 +175,79 @@ impl ArenaQueryPlan {
         let mut all_members = Vec::new();
         let mut all_outgoing = Vec::new();
         let mut by_owner = BTreeMap::new();
-        for stratum in [ArenaStratum::Candidates, ArenaStratum::Chosen] {
-            for component in &components {
-                let positions: BTreeMap<_, _> = component
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &n)| (n, i as u32))
-                    .collect();
-                let mut edges = Vec::new();
-                for (i, &n) in component.iter().enumerate() {
-                    for callee in &graph[n] {
-                        if let Some(&j) = positions.get(callee) {
-                            edges.push((i as u32, j));
-                        }
+        for component in &components {
+            let positions: BTreeMap<_, _> = component
+                .iter()
+                .enumerate()
+                .map(|(i, &n)| (n, i as u32))
+                .collect();
+            let mut edges = Vec::new();
+            for (i, &n) in component.iter().enumerate() {
+                for callee in &graph[n] {
+                    if let Some(&j) = positions.get(callee) {
+                        edges.push((i as u32, j));
                     }
                 }
-                edges.sort();
-                edges.dedup();
-                let key = ComponentKey {
-                    members: component
-                        .iter()
-                        .map(|&i| nodes[i].equations.owner.clone())
-                        .collect(),
-                    edges,
-                    facet,
-                    stratum,
-                };
-                key.address()?;
-                let members = component
-                    .iter()
-                    .map(|&i| EquationProduct {
-                        owner: nodes[i].equations.owner.clone(),
-                        reference: nodes[i].equations.reference,
-                    })
-                    .collect();
-                let outgoing: BTreeSet<_> = component
-                    .iter()
-                    .flat_map(|&n| &nodes[n].callees)
-                    .filter(|f| indices.get(*f).is_none_or(|i| !positions.contains_key(i)))
-                    .collect();
-                let mut outgoing = outgoing
-                    .into_iter()
-                    .map(|f| {
-                        indices
-                            .get(f)
-                            .map(|&index| nodes[index].equations.owner.clone())
-                            .or_else(|| externals.get(f).map(|row| row.0.clone()))
-                            .ok_or_else(|| "missing outgoing arena discovery owner".to_string())
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                outgoing.sort_by(InstanceAddress::canonical_cmp);
-                for owner in &key.members {
-                    by_owner.insert(
-                        (stratum == ArenaStratum::Chosen, function(owner)),
-                        component_keys.len(),
-                    );
-                }
-                component_keys.push(key);
-                all_members.push(members);
-                all_outgoing.push(outgoing);
             }
+            edges.sort();
+            edges.dedup();
+            let key = ComponentKey {
+                members: component
+                    .iter()
+                    .map(|&i| nodes[i].equations.owner.clone())
+                    .collect(),
+                edges: {
+                    edges.shrink_to_fit();
+                    edges
+                },
+                facet,
+                stratum: ArenaStratum::Candidates,
+            };
+            key.address()?;
+            let members: Vec<_> = component
+                .iter()
+                .map(|&i| EquationProduct {
+                    owner: nodes[i].equations.owner.clone(),
+                    reference: nodes[i].equations.reference,
+                })
+                .collect();
+            let outgoing: BTreeSet<_> = component
+                .iter()
+                .flat_map(|&n| &nodes[n].callees)
+                .filter(|f| indices.get(*f).is_none_or(|i| !positions.contains_key(i)))
+                .collect();
+            let mut outgoing = outgoing
+                .into_iter()
+                .map(|f| {
+                    indices
+                        .get(f)
+                        .map(|&index| nodes[index].equations.owner.clone())
+                        .or_else(|| externals.get(f).map(|row| row.0.clone()))
+                        .ok_or_else(|| "missing outgoing arena discovery owner".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            outgoing.sort_by(InstanceAddress::canonical_cmp);
+            for owner in &key.members {
+                by_owner.insert(function(owner), component_keys.len());
+            }
+            component_keys.push(key);
+            all_members.push(members);
+            outgoing.shrink_to_fit();
+            all_outgoing.push(outgoing);
         }
+        let chosen = component_keys
+            .iter()
+            .cloned()
+            .map(|mut key| {
+                key.stratum = ArenaStratum::Chosen;
+                key
+            })
+            .collect::<Vec<_>>();
+        component_keys.extend(chosen);
+        all_members.shrink_to_fit();
+        all_outgoing.shrink_to_fit();
         Ok(Self {
-            component_keys,
+            component_keys: ArenaComponentKeys::new(component_keys),
             members: all_members,
             outgoing: all_outgoing,
             by_owner,
@@ -206,6 +257,38 @@ impl ArenaQueryPlan {
                 .collect(),
         })
     }
+    fn owner_query(&self, owner: &InstanceAddress, stratum: ArenaStratum) -> Option<usize> {
+        self.by_owner.get(&function(owner)).map(|index| {
+            index
+                + if stratum == ArenaStratum::Chosen {
+                    self.members.len()
+                } else {
+                    0
+                }
+        })
+    }
+    pub(super) fn retain_owner(&mut self, owner: Arc<hirsel_engine::runtime::MemoryReservation>) {
+        self.component_keys.with_owner(owner);
+    }
+    pub(super) fn retained_storage_bytes(&mut self) -> u64 {
+        use super::ownership_compilation::metadata::address;
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.add(self.component_keys.retained_bytes() as usize);
+        w.vec(&self.members, |w, members| {
+            w.vec(members, |w, row| address(w, &row.owner))
+        });
+        w.vec(&self.outgoing, |w, outgoing| w.vec(outgoing, address));
+        w.packed_map(&mut self.by_owner, |w, (path, _), _| w.path(path));
+        w.packed_map(
+            &mut self.external,
+            |w, (path, _), (owner, candidates, _)| {
+                w.path(path);
+                address(w, owner);
+                w.flat_vec(candidates);
+            },
+        );
+        w.bytes()
+    }
     /// Only same-stratum outgoing components and, in Chosen, own Candidates.
     pub fn dependencies(&self, index: usize) -> Result<Vec<usize>, String> {
         let key = self
@@ -213,11 +296,8 @@ impl ArenaQueryPlan {
             .get(index)
             .ok_or("unknown arena component")?;
         let mut reads = BTreeSet::new();
-        for owner in &self.outgoing[index] {
-            if let Some(&dependency) = self
-                .by_owner
-                .get(&(key.stratum == ArenaStratum::Chosen, function(owner)))
-            {
+        for owner in &self.outgoing[index % self.outgoing.len()] {
+            if let Some(dependency) = self.owner_query(owner, key.stratum) {
                 reads.insert(dependency);
             }
         }
@@ -225,7 +305,7 @@ impl ArenaQueryPlan {
             reads.insert(
                 *self
                     .by_owner
-                    .get(&(false, function(&key.members[0])))
+                    .get(&function(&key.members[0]))
                     .ok_or("missing own Candidates component")?,
             );
         }
@@ -251,13 +331,10 @@ impl ArenaQueryPlan {
             }
         }
         let mut outgoing = Vec::new();
-        for owner in &self.outgoing[index] {
-            let row = if let Some(index) = self
-                .by_owner
-                .get(&(key.stratum == ArenaStratum::Chosen, function(owner)))
-            {
+        for owner in &self.outgoing[index % self.outgoing.len()] {
+            let row = if let Some(index) = self.owner_query(owner, key.stratum) {
                 let output = selected
-                    .get(index)
+                    .get(&index)
                     .ok_or("unsettled outgoing arena dependency")?;
                 let (_, candidates) = output
                     .candidates
@@ -276,7 +353,7 @@ impl ArenaQueryPlan {
         let own = if key.stratum == ArenaStratum::Chosen {
             let index = self
                 .by_owner
-                .get(&(false, function(&key.members[0])))
+                .get(&function(&key.members[0]))
                 .ok_or("missing own Candidates")?;
             Some(
                 selected
@@ -287,7 +364,14 @@ impl ArenaQueryPlan {
         } else {
             None
         };
-        arena_query(store, key, &self.members[index], own, &outgoing, counts)
+        arena_query(
+            store,
+            key,
+            &self.members[index % self.members.len()],
+            own,
+            &outgoing,
+            counts,
+        )
     }
     pub fn finish(
         &self,
@@ -350,4 +434,69 @@ pub fn settle_arena_queries(
         selected.insert(index, output);
     }
     plan.finish(&selected)
+}
+
+#[cfg(test)]
+mod retained_tests {
+    use super::*;
+    use hirsel_engine::store::Action;
+
+    #[test]
+    fn escaped_component_keys_and_summary_keep_the_complete_arena_grant() {
+        let types = hirsel_types::TypeInterner::new(None);
+        let owner = InstanceAddress {
+            instance: hirsel_layout::instance::InstanceKey::new(
+                &hirsel_syntax::DefPath::core("arena-owner"),
+                0,
+                &[],
+                &types,
+                None,
+                None,
+            )
+            .unwrap(),
+            target_abi: ContentHash::of_bytes(b"arena target"),
+            policy: ContentHash::of_bytes(b"arena policy"),
+        };
+        let reference = hirsel_engine::store::Domain { kind: 1, schema: 1 }
+            .reference(b"equations")
+            .unwrap();
+        let mut plan = ArenaQueryPlan::new(
+            &[ArenaNode {
+                equations: EquationProduct {
+                    owner: owner.clone(),
+                    reference,
+                },
+                callees: Vec::new(),
+            }],
+            &[],
+            1,
+        )
+        .unwrap();
+        assert!(plan.dependencies(0).unwrap().is_empty());
+        assert_eq!(plan.dependencies(1).unwrap(), [0]);
+        assert_ne!(
+            plan.component_keys[0].address().unwrap(),
+            plan.component_keys[1].address().unwrap()
+        );
+        let budget = hirsel_engine::runtime::ProcessBudget::new(1 << 20);
+        let grant = Arc::new(budget.reserve(1 << 20).unwrap());
+        plan.retain_owner(grant.clone());
+        let keys = plan.component_keys.clone();
+        let summary = Arc::new(ArenaSummary {
+            product: ProductRef {
+                address: owner.address(ARENA_CANDIDATES_KIND),
+                action: Action(ContentHash::default()),
+                record: reference,
+            },
+            candidates: vec![(owner, Vec::new())],
+            retained_owner: Some(grant.clone()),
+        });
+        drop(plan);
+        drop(grant);
+        assert_eq!(budget.reserved(), 1 << 20);
+        drop(keys);
+        assert_eq!(budget.reserved(), 1 << 20);
+        drop(summary);
+        assert_eq!(budget.reserved(), 0);
+    }
 }

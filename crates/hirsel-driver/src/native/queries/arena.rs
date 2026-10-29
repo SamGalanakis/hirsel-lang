@@ -100,6 +100,7 @@ pub fn arena_query(
     {
         counts.hits += 1;
         return Ok(Arc::new(ArenaSummary {
+            retained_owner: None,
             product: ProductRef {
                 address,
                 action,
@@ -149,6 +150,7 @@ pub fn arena_query(
         .ok_or("arena product publication failed")?;
     store.associate_product(address, action, record);
     Ok(Arc::new(ArenaSummary {
+        retained_owner: None,
         product: ProductRef {
             address,
             action,

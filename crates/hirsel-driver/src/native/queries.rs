@@ -288,10 +288,34 @@ pub fn solve_arena_component(
         .collect())
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ArenaSummary {
     pub product: ProductRef,
     pub candidates: Vec<(InstanceAddress, Vec<u32>)>,
+    retained_owner: Option<Arc<hirsel_engine::runtime::MemoryReservation>>,
+}
+impl std::fmt::Debug for ArenaSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArenaSummary")
+            .field("product", &self.product)
+            .field("candidates", &self.candidates)
+            .finish()
+    }
+}
+impl ArenaSummary {
+    fn retained_metadata_bytes(&mut self) -> u64 {
+        self.candidates.shrink_to_fit();
+        for (_, candidates) in &mut self.candidates {
+            candidates.shrink_to_fit();
+        }
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.add(size_of::<Self>() + 2 * size_of::<usize>());
+        w.vec(&self.candidates, |w, (owner, candidates)| {
+            ownership_compilation::metadata::address(w, owner);
+            w.flat_vec(candidates);
+        });
+        w.bytes()
+    }
 }
 
 #[derive(Clone, Debug)]

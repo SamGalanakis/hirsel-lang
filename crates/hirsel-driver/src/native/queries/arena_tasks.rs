@@ -109,7 +109,9 @@ impl ArenaTasks {
                     .filter(|total| *total <= self.allowance.bytes())
             })
             .map(|_| ())
-            .map_err(|_| "arena descriptor metadata allowance exhausted".into())
+            .map_err(|charged| format!(
+                "arena descriptor metadata allowance exhausted: requested {bytes} bytes, retained {charged}, allowance {}", self.allowance.bytes()
+            ))
     }
     fn plan(&self, discovery: ProductRef) -> Result<&Plan, String> {
         if let Some(plan) = self.plan.get() {
@@ -130,7 +132,7 @@ impl ArenaTasks {
                 callees: output.facts.body.callees.clone(),
             })
             .collect::<Vec<_>>();
-        let queries = ArenaQueryPlan::new(&nodes, &[], self.facet)?;
+        let mut queries = ArenaQueryPlan::new(&nodes, &[], self.facet)?;
         let ids = queries
             .component_keys
             .iter()
@@ -139,23 +141,13 @@ impl ArenaTasks {
         if (std::mem::size_of::<ArenaTask>() + ids.len() * 256) as u64 > self.weight.scratch {
             return Err("arena graph reads exceed scratch allowance".into());
         }
-        let mut bytes = 4096u64;
         for (index, key) in queries.component_keys.iter().enumerate() {
             let reads = key.members.len() + queries.dependencies(index)?.len();
             if (std::mem::size_of::<ArenaTask>() + reads * 256) as u64 > self.weight.scratch {
                 return Err("arena component reads exceed scratch allowance".into());
             }
-            bytes = bytes.saturating_add(
-                4096 + (reads as u64) * 1024
-                    + key
-                        .members
-                        .iter()
-                        .map(|owner| (owner.instance.encoding().len() as u64) * 8)
-                        .sum::<u64>()
-                    + key.edges.len() as u64 * 64,
-            );
         }
-        self.charge(bytes)?;
+        queries.retain_owner(self.allowance.clone());
         let index = ids
             .iter()
             .enumerate()
@@ -166,15 +158,24 @@ impl ArenaTasks {
             .into_iter()
             .map(|(key, output)| (key.address(INSTANCE_KIND).0, output.product.product))
             .collect();
+        let mut plan = Plan {
+            discovery,
+            queries,
+            ids,
+            index,
+            instances,
+            outputs,
+        };
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.add(size_of::<Plan>());
+        weight.add(plan.queries.retained_storage_bytes() as usize);
+        weight.flat_vec(&plan.ids);
+        weight.packed_map(&mut plan.index, |_, _, _| ());
+        weight.packed_map(&mut plan.instances, |_, _, _| ());
+        weight.flat_vec(&plan.outputs);
+        self.charge(weight.bytes())?;
         self.plan
-            .set(Plan {
-                discovery,
-                queries,
-                ids,
-                index,
-                instances,
-                outputs,
-            })
+            .set(plan)
             .map_err(|_| "duplicate arena plan construction")?;
         Ok(self.plan.get().unwrap())
     }
@@ -183,7 +184,9 @@ impl ArenaTasks {
         plan: &Plan,
         selected: &BTreeMap<usize, Arc<ArenaSummary>>,
     ) -> Result<ProductRef, String> {
-        let graph = plan.queries.finish(selected)?;
+        let mut graph = plan.queries.finish(selected)?;
+        let bytes = graph.retained_index_bytes();
+        self.charge(bytes)?;
         let rows = plan
             .ids
             .iter()
@@ -365,20 +368,17 @@ impl ArenaTask {
         }
         let result = if let Some(index) = self.index {
             let mut counts = ArenaQueryCounts::default();
-            let summary = plan
+            let mut summary = plan
                 .queries
                 .solve(tasks.store.as_ref(), index, &selected, &mut counts)
                 .map_err(fail)?;
             tasks.hits.fetch_add(counts.hits, Ordering::Relaxed);
             tasks.solves.fetch_add(counts.misses, Ordering::Relaxed);
-            let bytes = summary
-                .candidates
-                .iter()
-                .map(|(owner, candidates)| {
-                    owner.instance.encoding().len() + candidates.len() * 4 + 512
-                })
-                .sum::<usize>();
-            tasks.charge(4096 + bytes as u64 * 4).map_err(fail)?;
+            let output = Arc::make_mut(&mut summary);
+            output.retained_owner = Some(tasks.allowance.clone());
+            tasks
+                .charge(output.retained_metadata_bytes())
+                .map_err(fail)?;
             let product = summary.product;
             if let Err(other) = plan.outputs[index].set(summary)
                 && plan.outputs[index].get().unwrap().product != other.product
