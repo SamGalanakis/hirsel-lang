@@ -64,3 +64,20 @@ a lazy component inside V's name numbering or an image decoding scope masks thos
 enclosing tables for label validation and materialization, then restores them.
 Child validation cannot add names to a parent identity or interpret inline names
 as the parent's numeric slots. The same scope governs SCC labels and base labels.
+
+`CheckedTir` opens source TIR in domain `0x4e000024/2`. Its envelope payload is
+an indexed tree of row arrays. Every array starts with `HIRTIR01`, a u32 schema
+tag, a u32 count and a u64 total length, then one `{offset u64, length u64}`
+descriptor per row. Rows are contiguous in declaration order. Definition, body,
+block and match headers name bounded subarrays; instructions, locals, places,
+rvalues, cleanups, types, parameters and match arms are independently readable.
+The scalar definition header also binds the current `TIR_VERSION`.
+
+Opening checks all array extents/tags/counts, exact scalar encodings, source and
+type position bounds, distinct portable references and semantic first-use order.
+Scalar checks mask enclosing source/name/type codecs. Each demanded type resolves
+through its independently checked component. `TirView` presents the same field
+contract over a live Definition and an archive; archived access decodes one row,
+without constructing a Body or TypeTable. `materialize` is an explicit transform
+boundary. `NativeRecords::open_tir` retains current source bindings and the caller's
+admission owner on the complete backing. Neither view supplies V acceptance.

@@ -6,7 +6,10 @@ hirsel_guard::install!();
 mod base;
 mod envelope;
 mod indexed_types;
-pub use envelope::{AnchorRow, IndexedEnvelope};
+pub use envelope::{AnchorRow, BoundIndexedEnvelope, IndexedEnvelope};
+mod tir;
+mod tir_view;
+pub use tir_view::{TirBlockView, TirBodyView, TirMatchView, TirView};
 mod types;
 pub use base::{BaseIndex, SharedTypes};
 use bincode::Options;
@@ -16,6 +19,7 @@ use hirsel_types::{TableBuilder, TypeInterner};
 pub use indexed_types::{CheckedTypeComponent, TypeEdge, TypeRow, TypeTag};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+pub use tir::{CheckedTir, TirBlockRows, TirBodyHeader, TirBodyRows, TirHeader, TirMatchRows};
 pub use types::{ProductTypes, TypeRecords, TypeRef};
 
 #[derive(Serialize, Deserialize)]

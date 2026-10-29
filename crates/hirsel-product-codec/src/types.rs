@@ -201,7 +201,7 @@ impl TypeRecords {
         }
         roots.iter().map(|id| known.get(id).copied()).collect()
     }
-    fn get(&self, reference: TypeRef) -> Option<TypeId> {
+    pub(super) fn get(&self, reference: TypeRef) -> Option<TypeId> {
         if let Some(id) = self.base.get(&reference) {
             return Some(*id);
         }

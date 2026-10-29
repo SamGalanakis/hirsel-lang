@@ -16,6 +16,7 @@ pub use native_semantic::NativeSemanticProgram;
 mod native_metadata;
 pub use native_metadata::NativeMetadataWeight;
 mod native_queries;
+pub use hirsel_product_codec::{CheckedTir, TirBlockView, TirBodyView, TirMatchView, TirView};
 pub use native_queries::*;
 mod native_lower;
 pub use native_lower::{

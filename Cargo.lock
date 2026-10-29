@@ -1056,6 +1056,7 @@ dependencies = [
  "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",
+ "hirsel-tir",
  "hirsel-types",
  "serde",
 ]

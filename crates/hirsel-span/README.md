@@ -29,3 +29,7 @@ meets from 1 and the decoder maps those numbers to anchors the receiver allocate
 and placed; 0 is no anchor. Package images and precheck records carry each
 anchor's (source ordinal, base) beside the numbered spans, so the receiver places
 them without rewriting any span.
+
+`AnchorCodec::Raw` preserves numeric positions while an independently framed
+archive validates its scalar rows. It masks an enclosing codec; typed consumption
+still binds those positions to the reader's current source owners.

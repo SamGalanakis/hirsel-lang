@@ -311,6 +311,39 @@ impl NativeRecords {
         self.records
             .encode_record(value, |anchor| source.record_owner(anchor))
     }
+    /// Indexed source TIR, with complete type closure materialization. The
+    /// store publishes its association only after this succeeds.
+    pub fn encode_tir(
+        &self,
+        source: &(impl NativeRecordSource + ?Sized),
+        definition: &hirsel_tir::Definition,
+    ) -> Option<Vec<u8>> {
+        if !Arc::ptr_eq(&self.types, source.record_types()) {
+            return None;
+        }
+        self.records
+            .encode_tir(definition, |anchor| source.record_owner(anchor))
+    }
+    /// Bind independently checked rows to this consumer's current sources and
+    /// type owner. Content and structural validation do not grant V authority.
+    pub fn open_tir(
+        &self,
+        source: Arc<NativeRecordContext>,
+        bytes: hirsel_artifact_store::Bytes,
+        expected: hirsel_artifact_store::Reference,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Option<hirsel_product_codec::CheckedTir> {
+        if !Arc::ptr_eq(&self.types, source.record_types()) {
+            return None;
+        }
+        hirsel_product_codec::CheckedTir::open(
+            bytes.retain_owner(Arc::new((source.clone(), owner))),
+            expected,
+            self.records.clone(),
+            |owner, occurrence| source.record_source_anchor(owner, occurrence),
+        )
+    }
+
     /// Canonical ordinary bytes and pre-admission for outer record decoding.
     /// The caller must add its typed payload's physical layout bound.
     pub fn encode_with_decode_bytes<T: Serialize>(

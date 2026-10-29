@@ -70,6 +70,8 @@ impl Span {
 /// holds and maps them back to anchors of the reading process. Number 0 is no
 /// anchor. Outside a codec a span carries its anchor id as is.
 pub enum AnchorCodec {
+    /// Keep inline archive anchor positions independent of an enclosing codec.
+    Raw,
     /// Number anchors in first-encounter order while collecting a record.
     Collect(Vec<Anchor>),
     /// Each anchor's number; another anchor fails the serialization.

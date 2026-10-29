@@ -302,6 +302,62 @@ impl IndexedEnvelope {
     }
 }
 
+/// A checked envelope rebound to the consumer's current sources. Type positions
+/// resolve through checked component rows on demand, without a copied reference
+/// vector or a complete TypeTable. Binding supplies no verifier acceptance.
+#[derive(Clone)]
+pub struct BoundIndexedEnvelope {
+    envelope: std::sync::Arc<IndexedEnvelope>,
+    types: std::sync::Arc<IndexedTypes>,
+    anchors: std::sync::Arc<[hirsel_span::Anchor]>,
+}
+struct IndexedTypes {
+    envelope: std::sync::Arc<IndexedEnvelope>,
+    records: std::sync::Arc<crate::TypeRecords>,
+}
+impl hirsel_intern::persist::Source<hirsel_types::TypeId> for IndexedTypes {
+    fn id(&self, number: u32) -> Option<hirsel_types::TypeId> {
+        self.records.get(self.envelope.type_reference(number)?)
+    }
+}
+impl IndexedEnvelope {
+    pub fn bind(
+        self,
+        records: std::sync::Arc<crate::TypeRecords>,
+        mut anchor: impl FnMut(&DefPath, u32) -> Option<hirsel_span::Anchor>,
+    ) -> Option<BoundIndexedEnvelope> {
+        let anchors = (0..self.anchor_count())
+            .map(|n| {
+                let (path, occurrence) = self.anchor(n)?.to_owned();
+                anchor(&path, occurrence)
+            })
+            .collect::<Option<std::sync::Arc<[_]>>>()?;
+        let envelope = std::sync::Arc::new(self);
+        Some(BoundIndexedEnvelope {
+            types: std::sync::Arc::new(IndexedTypes {
+                envelope: envelope.clone(),
+                records,
+            }),
+            envelope,
+            anchors,
+        })
+    }
+}
+impl BoundIndexedEnvelope {
+    pub fn envelope(&self) -> &IndexedEnvelope {
+        &self.envelope
+    }
+    pub(crate) fn decode<T: serde::de::DeserializeOwned>(&self, bytes: &[u8]) -> Option<T> {
+        hirsel_types::with_type_source(self.types.clone(), || {
+            hirsel_span::with_anchor_codec(
+                &mut hirsel_span::AnchorCodec::DecodeShared(self.anchors.clone()),
+                || crate::options(bytes.len()).deserialize(bytes),
+            )
+        })
+        .ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
