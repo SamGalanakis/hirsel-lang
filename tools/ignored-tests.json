@@ -687,5 +687,13 @@
       "hirsel.ownership_trace=true"
     ],
     "target": "//:hirsel-driver-test-it-shard-1"
+  },
+  "ownership_task_capture_71::canceling_child_before_taking_captures_retires_both_equal_resources": {
+    "source": "crates/hirsel-driver/tests/it/ownership_task_capture_71.rs",
+    "inputs": [],
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "target": "//:hirsel-driver-test-it-shard-1"
   }
 }

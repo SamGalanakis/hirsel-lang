@@ -297,3 +297,41 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         "tasks.free@1",
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn canceling_child_before_taking_captures_retires_both_equal_resources() {
+    for tasks in ["tasks.cooperative@1", "tasks.free@1"] {
+        capture_with_tasks(
+            r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let first=Token()
+  let second=Token()
+  let (ready_tx,ready_rx):(Sender[u8],Receiver[u8])=channel.open(tasks)
+  let (gate_tx,gate_rx):(Sender[u8],Receiver[u8])=channel.open(tasks)
+  let child=task.async(s,fn(){
+    let mut ready=take ready_tx
+    let _=channel.send(tasks,mut ready,7u8)
+    let mut gate=take gate_rx
+    let _=channel.receive(tasks,mut gate)
+    let x=take first
+    let y=take second
+  })
+  let mut ready=take ready_rx
+  let _=channel.receive(tasks,mut ready)
+  task.cancel(s,child)
+  let _=task.await(s,take child)
+  let _=gate_tx
+ })
+ Ok(())
+}
+"#,
+            0,
+            tasks,
+        );
+    }
+}

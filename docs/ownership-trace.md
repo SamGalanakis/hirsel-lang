@@ -49,7 +49,9 @@ sources before replacing any destination, so equal payloads retain their distinc
 identities. Resources created and dropped inside a child task are supported
 along with captured Resources transferred at the actual committed spawn. The
 compiler binds the callback and capture paths from the complete checked code
-graph. Resource, tuple and Option task results keep their original credits
+graph. Cancellation while Resources remain in a waiting child's capture
+environment retires each original token under Ordered and Free tasks.
+Resource, tuple and Option task results keep their original credits
 through the actual child-to-parent result copy. A detached result stays with its child
 until its cleanup drops it. Failed children create no parent result credit.
 Unknown callbacks and unsupported dynamic result storage refuse before launch.
