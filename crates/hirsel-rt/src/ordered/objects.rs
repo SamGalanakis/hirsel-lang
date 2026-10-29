@@ -77,9 +77,7 @@ impl Registry {
     /// an object under every linked type of its known family. This overstates
     /// conflicts and never excludes a possible object from a type closure.
     pub fn install_types(&mut self, types: super::capture::Types) {
-        for (id, edges) in types.definitions {
-            self.carries.define(id, edges);
-        }
+        self.carries.install_types(types.definitions);
         self.families = types.families;
         for bindings in self.handles.values() {
             for (&kind, binding) in bindings {

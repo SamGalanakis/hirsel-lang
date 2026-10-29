@@ -273,6 +273,24 @@ fn type_closure_covers_leftover_finalizers_and_task_set_take() {
 }
 
 #[test]
+fn type_and_object_updates_preserve_a_cloned_frontiers_conflicts() {
+    let (mut f, _) = frontier();
+    f.held.get_mut(&1).unwrap().obtains.insert(10);
+    f.carries.define(10, [11].into());
+    let mut updated = f.carries.clone();
+    updated.define(11, Default::default());
+    assert!(!f.eligible(2, &store(7, 1)));
+    std::mem::swap(&mut f.carries, &mut updated);
+    assert!(f.eligible(2, &store(7, 1)));
+    updated = f.carries.clone();
+    f.carries.register(11, object(7));
+    assert!(!f.eligible(2, &store(7, 1)));
+    assert!(f.eligible(2, &store(8, 1)));
+    f.carries = updated;
+    assert!(f.eligible(2, &store(7, 1)));
+}
+
+#[test]
 fn call_footprints_are_transitive_and_include_callers_remaining_members() {
     let (mut f, _) = frontier();
     f.enqueue(3, Held::empty());

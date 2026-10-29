@@ -2,6 +2,7 @@
 //! analysis of the code a task happened to execute in a profiling run.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 pub type TaskId = u64;
 pub type TypeId = u32;
@@ -86,13 +87,21 @@ impl Held {
 /// Task, or TaskSet. `register` also covers objects created during run-ahead.
 #[derive(Clone, Debug, Default)]
 pub struct Carries {
-    types: BTreeMap<TypeId, BTreeSet<TypeId>>,
+    types: Arc<BTreeMap<TypeId, BTreeSet<TypeId>>>,
     objects: BTreeMap<TypeId, BTreeSet<ObjectId>>,
 }
 
 impl Carries {
+    pub(super) fn install_types(&mut self, types: BTreeMap<TypeId, BTreeSet<TypeId>>) {
+        if self.types.is_empty() {
+            self.types = Arc::new(types);
+        } else {
+            Arc::make_mut(&mut self.types).extend(types);
+        }
+    }
+
     pub fn define(&mut self, ty: TypeId, carries: BTreeSet<TypeId>) {
-        self.types.insert(ty, carries);
+        Arc::make_mut(&mut self.types).insert(ty, carries);
     }
 
     pub fn register(&mut self, ty: TypeId, object: ObjectId) {
