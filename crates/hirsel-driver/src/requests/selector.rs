@@ -26,7 +26,7 @@ pub struct CompilerRequests {
     /// Accepted front facts and Lower outcomes carried from one source
     /// revision's graph to the next.
     carry: Option<super::source_graph::Carry>,
-    source_index: std::sync::Mutex<Option<hirsel_engine::SourceIndexState>>,
+    source_index: Arc<std::sync::Mutex<super::source_graph::SourceIndexSlot>>,
     scratch_parent: std::path::PathBuf,
     toolchain: Option<Arc<crate::native::Toolchain>>,
     host_toolchain: bool,
@@ -205,7 +205,7 @@ impl CompilerRequests {
             budget,
             limits,
             carry,
-            source_index: std::sync::Mutex::new(None),
+            source_index: Arc::new(std::sync::Mutex::new(Default::default())),
             scratch_parent: std::env::temp_dir(),
             toolchain: None,
             host_toolchain: false,

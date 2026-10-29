@@ -30,6 +30,8 @@ pub struct SourceIndexState {
     snapshot_inputs_revision: u64,
     // The SourceMap also owns this token, including its detached output clones.
     allowance: Arc<MemoryReservation>,
+    pending_headers: std::sync::Weak<header_products::HeaderProducts>,
+    completed_generation: u64,
 }
 pub(crate) enum SourceHeader {
     Shared(Arc<Entry<hirsel_types::SignatureRef>>),
@@ -396,8 +398,14 @@ impl QueryEngine {
     /// products and controllers drop here. N-1 refuses before moving fields or
     /// replacing source owners; the original immutable inputs can be retried.
     pub fn into_source_index(
-        mut self,
+        self,
         allowance: MemoryReservation,
+    ) -> Result<SourceIndexState, QueryError> {
+        self.into_source_index_owner(Arc::new(allowance))
+    }
+    fn into_source_index_owner(
+        mut self,
+        allowance: Arc<MemoryReservation>,
     ) -> Result<SourceIndexState, QueryError> {
         self.adopt_completed_headers();
         let types = self.source_types()?;
@@ -482,7 +490,6 @@ impl QueryEngine {
             .into_iter()
             .map(|(id, entry)| (id, SourceHeader::capture(entry)))
             .collect();
-        let allowance = Arc::new(allowance);
         let sources = std::mem::take(&mut self.sources).replace_owner(allowance.clone());
         let state = SourceIndexState {
             sources,
@@ -526,6 +533,16 @@ impl QueryEngine {
             snapshot_epoch: self.snapshot_epoch,
             snapshot_inputs_revision: self.snapshot_inputs_revision,
             allowance,
+            pending_headers: self
+                .snapshot
+                .as_ref()
+                .and_then(|(_, snapshot)| snapshot.header_products())
+                .map_or_else(std::sync::Weak::new, Arc::downgrade),
+            completed_generation: self
+                .snapshot
+                .as_ref()
+                .and_then(|(_, snapshot)| snapshot.header_products())
+                .map_or(0, |headers| headers.generation()),
         };
         // Carry always owns/reclaims its source engine, independently of CLI
         // process-exit policy. No old coordinator may survive the handoff.
@@ -534,6 +551,33 @@ impl QueryEngine {
     }
 }
 impl SourceIndexState {
+    /// Complete only this graph's immutable source products, reusing the
+    /// original optional carry grant. Projection holds no selector lock.
+    pub fn complete_headers(self, snapshot: &Arc<SignatureSnapshot>) -> Result<Self, QueryError> {
+        let Some(headers) = snapshot.header_products() else {
+            return Ok(self);
+        };
+        if !self.pending_headers.ptr_eq(&Arc::downgrade(headers))
+            || self.completed_generation == headers.generation()
+        {
+            return Ok(self);
+        }
+        let allowance = self.allowance.clone();
+        let compiler = self.compiler;
+        let mut engine = QueryEngine::new_with_hold_bytes(
+            headers.source_environment().clone(),
+            PhaseAdapters::default(),
+            0,
+        );
+        engine.store_identity = compiler;
+        self.restore(&mut engine).map_err(|_| invalid())?;
+        engine.types = headers.source_types().clone();
+        engine.adopt_header_products(headers);
+        let mut state = engine.into_source_index_owner(allowance)?;
+        state.pending_headers = Arc::downgrade(headers);
+        state.completed_generation = headers.generation();
+        Ok(state)
+    }
     pub fn reserved_bytes(&self) -> u64 {
         self.allowance.bytes()
     }
@@ -580,6 +624,8 @@ impl SourceIndexState {
             snapshot_epoch,
             snapshot_inputs_revision,
             allowance: _,
+            pending_headers: _,
+            completed_generation: _,
         } = self;
         engine.sources = sources;
         engine.indexed_sources = indexed_sources;

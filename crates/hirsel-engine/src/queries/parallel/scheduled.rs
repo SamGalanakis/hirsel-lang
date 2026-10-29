@@ -696,12 +696,17 @@ impl FrontBodyQueries {
             .collect()
     }
     pub fn work_snapshot(&self) -> Vec<(DefPath, QueryKind, u64)> {
-        self.work
+        let mut work = self
+            .work
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
             .map(|((path, kind), count)| (path.path().clone(), *kind, *count))
-            .collect()
+            .collect::<Vec<_>>();
+        if let Some(headers) = self.snapshot.header_products() {
+            work.extend(headers.work_snapshot());
+        }
+        work
     }
     pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> u64 {
         self.work

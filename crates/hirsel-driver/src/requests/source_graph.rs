@@ -141,7 +141,34 @@ struct Expansion {
     _allowance: MemoryReservation,
 }
 
+#[derive(Default)]
+pub(super) struct SourceIndexSlot {
+    generation: Arc<()>,
+    state: Option<hirsel_engine::SourceIndexState>,
+}
+fn complete_source_index(
+    slot: &Mutex<SourceIndexSlot>,
+    generation: &Arc<()>,
+    snapshot: &Arc<hirsel_engine::SignatureSnapshot>,
+) {
+    let state = {
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if !Arc::ptr_eq(&slot.generation, generation) {
+            return;
+        }
+        slot.state.take()
+    };
+    if let Some(state) = state {
+        let state = state.complete_headers(snapshot).ok();
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if Arc::ptr_eq(&slot.generation, generation) && slot.state.is_none() {
+            slot.state = state;
+        }
+    }
+}
 struct SourceProducts {
+    source_index: Arc<Mutex<SourceIndexSlot>>,
+    source_generation: Arc<()>,
     declaration_export: bool,
     hash_selection: Option<(Option<hirsel_syntax::PackageId>, DefPath)>,
     native_sources: Option<(Vec<DefPath>, Arc<hirsel_engine::FrontNativeQueries>)>,
@@ -387,6 +414,9 @@ impl GraphProducts for SourceProducts {
         let meter = self.meter.clone();
         let store = self.store.clone();
         let failure = self.failure_reader();
+        let source_index = self.source_index.clone();
+        let source_generation = self.source_generation.clone();
+        let source_headers = self.front.signatures();
         Ok((
             roots,
             CompilerReadiness {
@@ -398,6 +428,7 @@ impl GraphProducts for SourceProducts {
                         ));
                     }
                     let work = meter.flush()?;
+                    complete_source_index(&source_index, &source_generation, &source_headers);
                     let result = match &operation {
                         CompileOperation::NativeOwnership(_) => {
                             let [product] = products else {
@@ -1139,7 +1170,7 @@ pub(super) fn install(
     request: &CompileRequest,
     ledger: Arc<InspectionLedger>,
     carry: Option<&Carry>,
-    source_index: &Mutex<Option<hirsel_engine::SourceIndexState>>,
+    source_index: &Arc<Mutex<SourceIndexSlot>>,
     scratch_parent: &std::path::Path,
     toolchain: Option<&Arc<crate::native::Toolchain>>,
     host_toolchain: bool,
@@ -1210,10 +1241,11 @@ pub(super) fn install(
     let mut selected_config = config.clone();
     selected_config.store = store.clone();
     let selected_compiler = compiler.clone().with_config(selected_config);
-    let prior_index = source_index
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .take();
+    let (source_generation, prior_index) = {
+        let mut slot = source_index.lock().unwrap_or_else(|e| e.into_inner());
+        slot.generation = Arc::new(());
+        (slot.generation.clone(), slot.state.take())
+    };
     let loaded = if matches!(request.operation, CompileOperation::DataAbi) {
         selected_compiler.load_export_package_inputs(&request.path, &request.inputs)
     } else {
@@ -2289,9 +2321,14 @@ pub(super) fn install(
             .engine
             .into_source_index(source_index_allowance)
             .ok();
-        *source_index.lock().unwrap_or_else(|e| e.into_inner()) = state;
+        let mut slot = source_index.lock().unwrap_or_else(|e| e.into_inner());
+        if Arc::ptr_eq(&slot.generation, &source_generation) {
+            slot.state = state;
+        }
     }
     let products = Arc::new(SourceProducts {
+        source_index: source_index.clone(),
+        source_generation,
         declaration_export: matches!(request.operation, CompileOperation::DataAbi),
         hash_selection,
         native_sources,

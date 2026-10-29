@@ -4,7 +4,7 @@
 use super::*;
 use std::sync::{
     OnceLock, Weak,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 mod sources;
 use sources::HeaderSources;
@@ -14,6 +14,7 @@ pub(crate) struct HeaderProduct {
     pub(crate) result: SignatureOutput,
     pub(crate) entry: Option<Arc<Entry<hirsel_types::SignatureRef>>>,
     pub(crate) recomputes: usize,
+    graph_work: usize,
     origin: Weak<Entry<hirsel_types::SignatureRef>>,
     accounted: AtomicBool,
 }
@@ -42,6 +43,7 @@ impl HeaderPhases {
 }
 pub(crate) struct HeaderProducts {
     rows: hirsel_syntax::DefMap<OnceLock<HeaderProduct>>,
+    generation: AtomicU64,
     environment: QueryEnvironment,
     adapters: HeaderPhases,
     sources: SourceMap,
@@ -80,6 +82,7 @@ impl HeaderProducts {
                         result: entry.result(),
                         entry: Some(project(&entry)),
                         recomputes: 0,
+                        graph_work: 0,
                         origin: Arc::downgrade(&entry),
                         accounted: AtomicBool::new(true),
                     });
@@ -90,6 +93,7 @@ impl HeaderProducts {
         let owners = Arc::new(crate::NativeRecordContext::capture(engine));
         Arc::new(Self {
             rows,
+            generation: AtomicU64::new(0),
             environment: engine.environment.clone(),
             adapters: HeaderPhases::capture(&engine.adapters),
             sources: engine.sources.clone(),
@@ -141,6 +145,26 @@ impl HeaderProducts {
         engine.staged_constants = self.staged.clone();
         engine.header_products = Some(self.clone());
         engine
+    }
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+    pub(crate) fn source_environment(&self) -> &QueryEnvironment {
+        &self.environment
+    }
+    pub(crate) fn source_types(&self) -> &Arc<hirsel_types::TypeInterner> {
+        &self.types
+    }
+    pub(crate) fn work_snapshot(&self) -> Vec<(DefPath, QueryKind, u64)> {
+        self.completed()
+            .map(|(id, product)| {
+                (
+                    id.path().clone(),
+                    QueryKind::Signature,
+                    product.graph_work as u64,
+                )
+            })
+            .collect()
     }
     pub(crate) fn definitions(&self) -> impl Iterator<Item = DefId> + '_ {
         self.rows.keys().copied()
@@ -218,13 +242,19 @@ impl HeaderProducts {
         // Never wait while holding a recursive header stack. Concurrent pure
         // normalizations race only to publish the same immutable source product.
         let recomputes = engine.recompute_count(id.path(), QueryKind::Signature);
-        let _ = cell.set(HeaderProduct {
-            result,
-            entry,
-            recomputes,
-            origin,
-            accounted: AtomicBool::new(local),
-        });
+        if cell
+            .set(HeaderProduct {
+                result,
+                entry,
+                recomputes,
+                graph_work: if local { 0 } else { recomputes },
+                origin,
+                accounted: AtomicBool::new(local),
+            })
+            .is_ok()
+        {
+            self.generation.fetch_add(1, Ordering::Relaxed);
+        }
         cell.get()
             .expect("a completed producer publishes its row")
             .result
