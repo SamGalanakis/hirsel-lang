@@ -8,6 +8,13 @@ use hirsel_lir::ownership_trace::{
 };
 use hirsel_lir::stage::Stage;
 
+#[derive(Default)]
+pub(crate) struct Moves {
+    pub sources: Vec<BlockId>,
+    pub ends: Vec<BlockId>,
+    pub empty: std::collections::BTreeMap<(BlockId, u32), Point>,
+}
+
 pub(crate) fn finish<A: Stage, B: Stage>(
     before: &LirUnit<A>,
     input: &Plan,
@@ -23,6 +30,17 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
     ed: Editor<B>,
     origins: &[Vec<Option<u32>>],
     generated: Vec<CleanupObservation>,
+) -> Result<(LirUnit<B>, Plan, Recipe), String> {
+    finish_moved(before, input, ed, origins, generated, None)
+}
+
+pub(crate) fn finish_moved<A: Stage, B: Stage>(
+    before: &LirUnit<A>,
+    input: &Plan,
+    ed: Editor<B>,
+    origins: &[Vec<Option<u32>>],
+    generated: Vec<CleanupObservation>,
+    moves: Option<&Moves>,
 ) -> Result<(LirUnit<B>, Plan, Recipe), String> {
     let collect = |blocks: &[Option<BlockId>],
                    edges: &[Option<u32>],
@@ -40,6 +58,36 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
             .flatten()
             .ok_or_else(|| format!("ownership trace: removed observed block {block:?}"))
     };
+    let instruction = |block: BlockId, index: u32| -> Result<(BlockId, u32), String> {
+        if moves.is_none() {
+            let position = origins[block.index()]
+                .iter()
+                .position(|origin| *origin == Some(index))
+                .ok_or_else(|| format!("ownership trace: lost instruction at {block:?}:{index}"))?;
+            return Ok((remap_block(block)?, position as u32));
+        }
+        let candidates = origins
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| {
+                moves.map_or(BlockId(*at as u32), |moves| moves.sources[*at]) == block
+            })
+            .flat_map(|(at, rows)| {
+                rows.iter()
+                    .enumerate()
+                    .filter_map(move |(position, origin)| {
+                        (*origin == Some(index)).then_some((BlockId(at as u32), position as u32))
+                    })
+            })
+            .collect::<Vec<_>>();
+        let [(block, index)] = candidates.as_slice() else {
+            return Err(format!(
+                "ownership trace: lost or cloned instruction at {block:?}:{index}"
+            ));
+        };
+        Ok((remap_block(*block)?, *index))
+    };
+    let end = |block: BlockId| remap_block(moves.map_or(block, |moves| moves.ends[block.index()]));
     let remap =
         |point: Point, token: trace::Location, id: trace::MarkerId| -> Result<Point, String> {
             let removed = match point {
@@ -78,29 +126,45 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
                     index,
                     moment,
                 } => {
-                    let relocated = origins[block.index()]
-                        .iter()
-                        .position(|origin| *origin == Some(index))
-                        .ok_or_else(|| {
-                            format!("ownership trace: lost instruction for marker {:?}", id)
-                        })?;
-                    Point::Instruction {
-                        block: remap_block(block)?,
-                        index: relocated as u32,
-                        moment,
+                    if let Some(point) = moves.and_then(|moves| moves.empty.get(&(block, index))) {
+                        let Point::EmptyDrop { anchor, block } = *point else {
+                            return Err("ownership erased drop has no authored empty block".into());
+                        };
+                        return Ok(Point::EmptyDrop {
+                            anchor,
+                            block: remap_block(block)?,
+                        });
+                    }
+                    let (target, relocated) = instruction(block, index)?;
+                    let inst = after.blocks[target.index()]
+                        .instructions
+                        .get(&after.instructions)
+                        .and_then(|code| code.get(relocated as usize));
+                    if matches!(inst, Some(hirsel_lir::ir::Inst::Release { .. }))
+                        && matches!(token, trace::Location::Address(_))
+                    {
+                        Point::ReleaseDrop {
+                            block: target,
+                            index: relocated as u32,
+                        }
+                    } else {
+                        Point::Instruction {
+                            block: target,
+                            index: relocated as u32,
+                            moment: if matches!(
+                                inst,
+                                Some(hirsel_lir::ir::Inst::Drop { if_live: true, .. })
+                            ) {
+                                trace::Moment::IfLive
+                            } else {
+                                moment
+                            },
+                        }
                     }
                 }
                 Point::ReleaseDrop { block, index } => {
-                    let relocated = origins[block.index()]
-                        .iter()
-                        .position(|origin| *origin == Some(index))
-                        .ok_or_else(|| {
-                            format!("ownership trace: lost release for marker {:?}", id)
-                        })?;
-                    Point::ReleaseDrop {
-                        block: remap_block(block)?,
-                        index: relocated as u32,
-                    }
+                    let (block, index) = instruction(block, index)?;
+                    Point::ReleaseDrop { block, index }
                 }
                 Point::Entry => Point::Entry,
                 Point::Edge(edge) => Point::Edge(EdgeId(
@@ -108,10 +172,10 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
                         format!("ownership trace: removed observed edge {edge:?}")
                     })?,
                 )),
-                Point::CallEntered(block) => Point::CallEntered(remap_block(block)?),
-                Point::CallReturned(block) => Point::CallReturned(remap_block(block)?),
+                Point::CallEntered(block) => Point::CallEntered(end(block)?),
+                Point::CallReturned(block) => Point::CallReturned(end(block)?),
                 Point::Return(block) => {
-                    let block = remap_block(block)?;
+                    let block = end(block)?;
                     if let hirsel_lir::ir::Terminator::Return(Some(result)) =
                         after.terminators[block.index()]
                         && token != trace::Location::Value(result)
@@ -210,19 +274,22 @@ pub(crate) fn finish_generated<A: Stage, B: Stage>(
     }
     for mut extra in generated {
         let placed = |point: Point| -> Result<Point, String> {
-            let Point::Instruction {
-                block,
-                index,
-                moment,
-            } = point
-            else {
-                return Err("ownership generated cleanup has no authored instruction".into());
-            };
-            Ok(Point::Instruction {
-                block: remap_block(block)?,
-                index,
-                moment,
-            })
+            match point {
+                Point::Instruction {
+                    block,
+                    index,
+                    moment,
+                } => Ok(Point::Instruction {
+                    block: remap_block(block)?,
+                    index,
+                    moment,
+                }),
+                Point::ReleaseDrop { block, index } => Ok(Point::ReleaseDrop {
+                    block: remap_block(block)?,
+                    index,
+                }),
+                _ => Err("ownership generated cleanup has no authored instruction".into()),
+            }
         };
         extra.point = placed(extra.point)?;
         extra.trigger.point = placed(extra.trigger.point)?;

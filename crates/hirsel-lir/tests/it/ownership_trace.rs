@@ -6102,3 +6102,127 @@ fn ownership_trace_projected_variant_cut_proves_completion_flags_from_all_incomi
         Error::InvalidBinding(MarkerId(0))
     );
 }
+
+#[test]
+fn ownership_trace_observes_a_counted_slot_at_its_actual_early_release() {
+    let (before, _, table) = release_cleanup_fixture();
+    let mut observations = Vec::new();
+    for (block, info) in before.blocks.iter().enumerate() {
+        for (index, inst) in info
+            .instructions
+            .get(&before.instructions)
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            if let Inst::Drop {
+                address,
+                anchor,
+                if_live,
+                ..
+            } = *inst
+            {
+                observations.push(Observation {
+                    point: Point::Instruction {
+                        block: BlockId(block as u32),
+                        index: index as u32,
+                        moment: if if_live {
+                            Moment::IfLive
+                        } else {
+                            Moment::Before
+                        },
+                    },
+                    marker: ObserveOwnership {
+                        id: MarkerId(observations.len() as u32),
+                        site: before.tables.cleanup_anchors[anchor.index()].site,
+                        kind: Kind::Drop,
+                        token: Location::Address(address),
+                        owner: Location::Address(address),
+                    },
+                });
+            }
+        }
+    }
+    let input = Plan::selected(&before, Selection::Owned, observations);
+    check(&before, &input).unwrap();
+    let ordinary = hirsel_rc::insert::insert(before.clone(), &table, &Default::default()).unwrap();
+    let (after, output, recipes) =
+        hirsel_rc::insert::insert_observed(before.clone(), &table, &Default::default(), &input)
+            .unwrap();
+    let releases = |unit: &LirUnit<Rc>| {
+        unit.instructions
+            .iter()
+            .filter_map(|inst| {
+                if let Inst::Release {
+                    value,
+                    layout,
+                    live,
+                    ..
+                } = *inst
+                {
+                    Some((value, layout, live))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(releases(&after), releases(&ordinary));
+    assert!(!releases(&after).is_empty());
+    assert!(!output.cleanups.is_empty());
+    assert_eq!(output.observations.len(), input.observations.len());
+    assert_eq!(recipes.len(), 3);
+    check(&after, &output).unwrap();
+    checked_native_fixture(after.clone(), &table);
+    let (release_before, release_input, _) =
+        hirsel_rc::insert::lower_value_copies_observed(before, &input).unwrap();
+    assert_eq!(release_before.digest(), recipes[1].after);
+    assert_eq!(recipes[2].before, release_before.digest());
+    check_transform(
+        &release_before,
+        &release_input,
+        &after,
+        &output,
+        Some(&recipes[2]),
+    )
+    .unwrap();
+    let normal = output
+        .cleanups
+        .iter()
+        .position(|extra| extra.point == extra.trigger.point)
+        .unwrap();
+    let mut stale_trigger = output.clone();
+    stale_trigger.cleanups[normal].trigger.unit =
+        hirsel_syntax::ContentHash::of_bytes(b"unbound release");
+    let mut wrong_source = output.clone();
+    let other = output
+        .observations
+        .iter()
+        .find(|row| {
+            row.marker.kind == Kind::Drop
+                && matches!(row.marker.token, Location::Address(at)
+                    if release_before.addresses[at.index()].base == AddressBase::Slot(SlotId(0)))
+        })
+        .unwrap();
+    assert_ne!(other.marker.id, output.cleanups[normal].marker);
+    wrong_source.cleanups[normal].marker = other.marker.id;
+    let mut duplicate = output.clone();
+    duplicate.cleanups.push(duplicate.cleanups[normal].clone());
+    for (name, forged) in [
+        ("stale trigger", stale_trigger),
+        ("other slot", wrong_source),
+        ("duplicate", duplicate),
+    ] {
+        assert!(
+            check_transform(
+                &release_before,
+                &release_input,
+                &after,
+                &forged,
+                Some(&recipe(&release_input, &forged))
+            )
+            .is_err(),
+            "accepted {name}"
+        );
+    }
+}

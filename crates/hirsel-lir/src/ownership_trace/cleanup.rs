@@ -1,4 +1,4 @@
-//! Checked custody for failure cleanup introduced by a new RC release.
+//! Checked custody for normal retirement and failure cleanup introduced by RC.
 use super::*;
 use crate::stage::StageKind;
 use std::collections::HashSet;
@@ -262,6 +262,39 @@ pub(super) fn transform<A: Stage, B: Stage>(
                     return Err(fail());
                 }
                 let current = trigger(after, extra.trigger.point).ok_or_else(fail)?;
+                if extra.point == extra.trigger.point {
+                    let source = source_markers
+                        .get(&extra.marker)
+                        .copied()
+                        .ok_or_else(fail)?;
+                    let data = address(after, Location::Address(current.1)).ok_or_else(fail)?;
+                    let action = after
+                        .tables
+                        .cleanup_anchors
+                        .get(current.2.index())
+                        .ok_or_else(fail)?;
+                    let Point::ReleaseDrop { block, .. } = extra.point else {
+                        return Err(fail());
+                    };
+                    if !matches!(A::KIND, StageKind::Placed | StageKind::Rc)
+                        || B::KIND != StageKind::Rc
+                        || !current
+                            .0
+                            .is_some_and(|value| value.index() >= before.values.len())
+                        || after.blocks[block.index()].kind != BlockKind::Body
+                        || super::check::drop_form(after, extra.point) != Some(1)
+                        || source.marker.kind != Kind::Drop
+                        || super::check::drop_form(before, source.point) != Some(0)
+                        || super::check::drop_anchor(before, source.point) != Some(action.clone())
+                        || address(before, source.marker.token).as_ref() != Some(&data)
+                        || address(after, extra.token).as_ref() != Some(&data)
+                        || extra.site != source.marker.site
+                        || !old_data_drops.contains(&(action.clone(), data))
+                    {
+                        return Err(fail());
+                    }
+                    continue;
+                }
                 if !matches!(A::KIND, StageKind::Placed | StageKind::Rc)
                     || B::KIND != StageKind::Rc
                     || current

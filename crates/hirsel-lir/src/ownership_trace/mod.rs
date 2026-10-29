@@ -240,9 +240,10 @@ pub struct CleanupOrigin {
 }
 snapshot_struct!(CleanupOrigin { unit, point });
 
-/// An additional destruction path introduced by RC release failure cleanup.
+/// A retirement introduced by RC, including its failure cleanup paths.
 /// The original marker remains the source identity; token and site name the
-/// actual checked cleanup. Trigger is the release whose failure owns this path.
+/// actual checked retirement. A normal early release is its own trigger;
+/// otherwise the trigger's failure cleanup owns this path.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CleanupObservation {
     pub marker: MarkerId,

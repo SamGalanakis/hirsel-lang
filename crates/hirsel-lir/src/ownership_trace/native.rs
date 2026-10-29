@@ -1262,7 +1262,10 @@ impl LeafPlan {
             next = next
                 .checked_add(1)
                 .ok_or("ownership physical marker overflow")?;
-            aliases.insert(id, (extra.marker, source.marker.site));
+            let anchor = super::check::drop_anchor(unit.unit(), extra.point);
+            let normal =
+                anchor.is_some() && anchor == super::check::drop_anchor(unit.unit(), source.point);
+            aliases.insert(id, (extra.marker, source.marker.site, normal));
             expanded.observations.push(Observation {
                 point: extra.point,
                 marker: ObserveOwnership {
@@ -1275,13 +1278,30 @@ impl LeafPlan {
             });
         }
         let mut prepared = Self::from_relocated(unit, layouts, &expanded)?;
+        // Empty-custody assertions and actual retirements have distinct hook
+        // actions. Keep a separate physical key while both remain bound to the
+        // same immutable original marker in this plan.
+        let physical_ids: BTreeMap<_, _> = aliases
+            .iter()
+            .map(|(&temporary, &(original, _, normal))| {
+                let mixed = prepared.markers.get(&original).is_some_and(|markers| {
+                    markers
+                        .iter()
+                        .any(|marker| marker.id == original && marker.kind != 2)
+                });
+                (
+                    temporary,
+                    if mixed || normal { temporary } else { original },
+                )
+            })
+            .collect();
         for native in prepared.commits.iter_mut().map(|(_, native)| native) {
-            if let Some(&(id, site)) = aliases.get(&native.id) {
-                native.id = id;
+            if let Some(&(_, site, _)) = aliases.get(&native.id) {
+                native.id = physical_ids[&native.id];
                 native.site = site;
             }
         }
-        for (temporary, (original, site)) in aliases {
+        for (temporary, (original, site, _)) in aliases {
             let physical = prepared
                 .markers
                 .remove(&temporary)
@@ -1292,7 +1312,7 @@ impl LeafPlan {
                 .ok_or("additional cleanup lost its prepared source marker")?;
             for mut native in physical {
                 if native.id == temporary {
-                    native.id = original;
+                    native.id = physical_ids[&temporary];
                 }
                 native.site = site;
                 if !target.contains(&native) {

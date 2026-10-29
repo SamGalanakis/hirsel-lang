@@ -221,8 +221,8 @@ pub fn insert_observed(
     let unit = copy_on_write(unit, table, proofs).map_err(|error| error.to_string())?;
     let (unit, plan, detach) = crate::observation::identity(&before, &plan, unit)?;
     let before = unit.clone();
-    let (editor, origins) =
-        release_at_last_use_with::<true>(unit, table).map_err(|error| error.to_string())?;
+    let (editor, origins) = release_at_last_use_with::<true>(unit, table, Some(&plan))
+        .map_err(|error| error.to_string())?;
     for block in &origins.cloned {
         if plan.observations.iter().any(|row| {
             use hirsel_lir::ownership_trace::Point;
@@ -259,7 +259,7 @@ pub fn insert_observed(
             source_drops.entry(slot).or_insert(row.marker.id);
         }
     }
-    let generated = origins
+    let mut generated: Vec<_> = origins
         .generated
         .iter()
         .filter_map(|(&(block, address), &(trigger, anchor, if_live))| {
@@ -284,8 +284,47 @@ pub fn insert_observed(
             })
         })
         .collect();
-    let (unit, plan, releases) =
-        crate::observation::finish_generated(&before, &plan, editor, &origins.rows, generated)?;
+    for &(block, index, address, anchor) in &origins.retirements {
+        let Some(slot) = whole_slot(address) else {
+            continue;
+        };
+        let source = plan.observations.iter().find(|row| {
+            if row.marker.kind != hirsel_lir::ownership_trace::Kind::Drop
+                || !matches!(row.marker.token,
+                        hirsel_lir::ownership_trace::Location::Address(at)
+                        if whole_slot(at) == Some(slot))
+            {
+                return false;
+            }
+            let hirsel_lir::ownership_trace::Point::Instruction { block, index, .. } = row.point
+            else {
+                return false;
+            };
+            matches!(before.blocks[block.index()].instructions.get(&before.instructions)
+                    .and_then(|code| code.get(index as usize)),
+                    Some(Inst::Drop { anchor: old, .. }) if *old == anchor)
+        });
+        let Some(source) = source else { continue };
+        let point = hirsel_lir::ownership_trace::Point::ReleaseDrop { block, index };
+        generated.push(hirsel_lir::ownership_trace::CleanupObservation {
+            marker: source.marker.id,
+            point,
+            token: hirsel_lir::ownership_trace::Location::Address(address),
+            site: editor.unit.tables.cleanup_anchors[anchor.index()].site,
+            trigger: hirsel_lir::ownership_trace::CleanupOrigin {
+                unit: plan.unit,
+                point,
+            },
+        });
+    }
+    let (unit, plan, releases) = crate::observation::finish_moved(
+        &before,
+        &plan,
+        editor,
+        &origins.rows,
+        generated,
+        Some(&origins.moves),
+    )?;
     Ok((unit, plan, vec![copies, detach, releases]))
 }
 
@@ -3421,7 +3460,9 @@ struct Point {
 
 struct ReleaseOrigins<const TRACK: bool> {
     rows: Vec<Vec<Option<u32>>>,
+    moves: crate::observation::Moves,
     cloned: Vec<BlockId>,
+    retirements: Vec<(BlockId, u32, AddressId, CleanupAnchorId)>,
     generated:
         BTreeMap<(BlockId, AddressId), (hirsel_lir::ownership_trace::Point, CleanupAnchorId, bool)>,
 }
@@ -3436,7 +3477,25 @@ impl<const TRACK: bool> ReleaseOrigins<TRACK> {
             } else {
                 Vec::new()
             },
+            moves: crate::observation::Moves {
+                sources: if TRACK {
+                    (0..unit.blocks.len())
+                        .map(|at| BlockId(at as u32))
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                ends: if TRACK {
+                    (0..unit.blocks.len())
+                        .map(|at| BlockId(at as u32))
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                empty: Default::default(),
+            },
             cloned: Vec::new(),
+            retirements: Vec::new(),
             generated: BTreeMap::new(),
         }
     }
@@ -3453,6 +3512,9 @@ impl<const TRACK: bool> ReleaseOrigins<TRACK> {
     fn complete(&mut self, ed: &Editor<Rc>) {
         if TRACK {
             self.rows.resize_with(ed.code.len(), Vec::new);
+            for at in self.moves.sources.len()..ed.code.len() {
+                self.moves.sources.push(BlockId(at as u32));
+            }
             for (origins, code) in self.rows.iter_mut().zip(&ed.code) {
                 origins.resize(code.len(), None);
             }
@@ -3461,17 +3523,18 @@ impl<const TRACK: bool> ReleaseOrigins<TRACK> {
 }
 
 fn release_at_last_use(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit<Rc>, PassError> {
-    let (editor, _) = release_at_last_use_with::<false>(unit, table)?;
+    let (editor, _) = release_at_last_use_with::<false>(unit, table, None)?;
     Ok(editor.finish())
 }
 
 fn release_at_last_use_with<const TRACK: bool>(
     unit: LirUnit<Rc>,
     table: &LayoutTable,
+    observed: Option<&hirsel_lir::ownership_trace::Plan>,
 ) -> Result<(Editor<Rc>, ReleaseOrigins<TRACK>), PassError> {
     let mut excluded = BTreeSet::new();
     loop {
-        let lost = match release_pass::<TRACK>(unit.clone(), table, &excluded)? {
+        let lost = match release_pass::<TRACK>(unit.clone(), table, &excluded, observed)? {
             Ok(result) => return Ok(result),
             Err(lost) => lost,
         };
@@ -3493,6 +3556,7 @@ fn release_pass<const TRACK: bool>(
     unit: LirUnit<Rc>,
     table: &LayoutTable,
     excluded: &BTreeSet<SlotId>,
+    observed: Option<&hirsel_lir::ownership_trace::Plan>,
 ) -> Result<Result<(Editor<Rc>, ReleaseOrigins<TRACK>), BTreeSet<SlotId>>, PassError> {
     let mut origins = ReleaseOrigins::<TRACK>::new(&unit);
     let lay = Lay(table);
@@ -3715,7 +3779,14 @@ fn release_pass<const TRACK: bool>(
         }
     }
     edits.sort_by_key(|&(b, i, _)| (b, std::cmp::Reverse(i)));
+    let mut erased: Vec<(
+        BlockId,
+        usize,
+        u32,
+        hirsel_lir::ownership_trace::ErasedCleanup,
+    )> = Vec::new();
     let mut releases: Vec<(BlockId, usize)> = Vec::new();
+    let mut retirements: Vec<(BlockId, usize, AddressId, CleanupAnchorId)> = Vec::new();
     for (b, i, settle) in edits {
         let code = &mut ed.code[b.index()];
         let Inst::Drop {
@@ -3729,9 +3800,34 @@ fn release_pass<const TRACK: bool>(
         };
         match settle {
             Settle::Delete => {
+                let original = TRACK.then(|| origins.rows[b.index()][i]).flatten();
+                let observed_drop = original.is_some_and(|old| {
+                    observed.is_some_and(|plan| {
+                        plan.observations.iter().any(|row| {
+                            row.marker.kind == hirsel_lir::ownership_trace::Kind::Drop
+                                && matches!(row.point,
+                                hirsel_lir::ownership_trace::Point::Instruction { block, index, .. }
+                                if block == b && index == old)
+                        })
+                    })
+                });
+                for r in erased.iter_mut().filter(|r| r.0 == b && r.1 > i) {
+                    r.1 -= 1;
+                }
+                if observed_drop {
+                    erased.push((
+                        b,
+                        i,
+                        original.unwrap(),
+                        (&ed.unit.tables.cleanup_anchors[anchor.index()]).into(),
+                    ));
+                }
                 code.remove(i);
                 origins.remove(b.index(), i);
                 for r in releases.iter_mut().filter(|r| r.0 == b && r.1 > i) {
+                    r.1 -= 1;
+                }
+                for r in retirements.iter_mut().filter(|r| r.0 == b && r.1 > i) {
                     r.1 -= 1;
                 }
             }
@@ -3747,9 +3843,9 @@ fn release_pass<const TRACK: bool>(
                 }
             }
             Settle::Release(version) => {
-                // The semantic Drop is replaced, so it has no surviving origin.
-                origins.remove(b.index(), i);
-                origins.insert(b.index(), i, 2);
+                // The release retains the semantic drop's origin; its preceding
+                // take is the physical transport of the same slot content.
+                origins.insert(b.index(), i, 1);
                 let (slot, _) = facts.slot_of(address).expect("slot drop");
                 let Some(reaching) = version else {
                     return Err(PassError::Malformed(format!(
@@ -3781,10 +3877,24 @@ fn release_pass<const TRACK: bool>(
                 for r in releases.iter_mut().filter(|r| r.0 == b && r.1 > i) {
                     r.1 += 1;
                 }
+                for r in retirements.iter_mut().filter(|r| r.0 == b && r.1 > i) {
+                    r.1 += 1;
+                }
+                if TRACK && origins.rows[b.index()][i + 1].is_none() {
+                    retirements.push((b, i + 1, address, anchor));
+                }
+                for r in erased.iter_mut().filter(|r| r.0 == b && r.1 > i) {
+                    r.1 += 1;
+                }
                 releases.push((b, i + 1));
             }
         }
     }
+
+    origins.retirements = retirements
+        .into_iter()
+        .map(|(block, index, address, anchor)| (block, index as u32, address, anchor))
+        .collect();
 
     // 3. Each early release's failure successor: a cleanup of what the
     // state after it still owns.
@@ -3899,6 +4009,57 @@ fn release_pass<const TRACK: bool>(
         return Ok(Err(lost));
     }
     let _ = superseded;
+    // Only diagnostics add these pure forwarding blocks. The original source
+    // drop remains an exact empty-custody assertion after its physical release.
+    erased.sort_by_key(|&(block, at, _, _)| (block, std::cmp::Reverse(at)));
+    for (block, at, original, anchor) in erased {
+        let (kind, source) = (
+            ed.unit.blocks[block.index()].kind,
+            ed.unit.blocks[block.index()].anchor,
+        );
+        let empty = ed.block(kind, &[], source);
+        let tail = ed.block(kind, &[], source);
+        ed.code[tail.index()] = ed.code[block.index()].split_off(at);
+        ed.unit.terminators[tail.index()] = ed.unit.terminators[block.index()].clone();
+        let enter = ed.edge(empty, &[]);
+        let leave = ed.edge(tail, &[]);
+        ed.unit.terminators[block.index()] = Terminator::Jump(enter);
+        ed.unit.terminators[empty.index()] = Terminator::Jump(leave);
+        let rows = origins.rows[block.index()].split_off(at);
+        origins.complete(&ed);
+        origins.rows[tail.index()] = rows;
+        let source_block = origins.moves.sources[block.index()];
+        origins.moves.sources[tail.index()] = source_block;
+        if origins.moves.ends[source_block.index()] == block {
+            origins.moves.ends[source_block.index()] = tail;
+        }
+        origins.moves.empty.insert(
+            (block, original),
+            hirsel_lir::ownership_trace::Point::EmptyDrop {
+                anchor,
+                block: empty,
+            },
+        );
+        for (at_block, index, _, _) in &mut origins.retirements {
+            if *at_block == block && *index >= at as u32 {
+                *at_block = tail;
+                *index -= at as u32;
+            }
+        }
+        for (trigger, _, _) in origins.generated.values_mut() {
+            if let hirsel_lir::ownership_trace::Point::Instruction {
+                block: at_block,
+                index,
+                ..
+            } = trigger
+            {
+                if *at_block == block && *index >= at as u32 {
+                    *at_block = tail;
+                    *index -= at as u32;
+                }
+            }
+        }
+    }
     origins.complete(&ed);
     Ok(Ok((ed, origins)))
 }
