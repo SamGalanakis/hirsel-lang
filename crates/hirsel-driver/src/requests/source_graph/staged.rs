@@ -27,9 +27,8 @@ pub(super) fn install(
         return Ok((false, limits));
     }
     let errors = runtime_errors(store)?;
-    let (runtime, snapshot) = loading.lend();
+    let (mut runtime, snapshot) = loading.lend();
     let snapshot = MemoryReservationPool::new(snapshot).map_err(|_| uninstalled())?;
-    let runtime_bytes = runtime.bytes();
     let front = program
         .engine
         .front_body_queries_with_registrations(
@@ -40,6 +39,12 @@ pub(super) fn install(
             errors,
         )
         .map_err(|error| program.error(error))?;
+    let inference = program
+        .engine
+        .release_private_inference_admission()
+        .map_err(|error| program.error(error))?;
+    runtime.join(inference).map_err(|_| uninstalled())?;
+    let runtime_bytes = runtime.bytes();
     // The producer and the installed source copy have independent grants;
     // unused producer bytes return before the final source graph is admitted.
     let stage = FrontStageQueries::new(
@@ -100,6 +105,9 @@ pub(super) fn install(
     drop(snapshot);
     drop(runtime);
     budget.readmit(loading, runtime_bytes, returned)?;
+    program
+        .engine
+        .admit_private_inference(loading.lend_runtime());
     Ok((
         true,
         RequestLimits {
