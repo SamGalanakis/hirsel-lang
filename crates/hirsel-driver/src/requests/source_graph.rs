@@ -263,7 +263,8 @@ impl GraphProducts for SourceProducts {
         *self
             .completed_operation
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(completed.clone());
+            .unwrap_or_else(|error| error.into_inner()) =
+            store_operation.has_publication().then(|| completed.clone());
         let store_operation = super::output::CompileStoreOperation {
             scope: store_operation,
             completed,

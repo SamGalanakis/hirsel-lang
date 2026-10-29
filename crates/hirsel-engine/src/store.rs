@@ -199,6 +199,12 @@ pub struct StoreOperation {
     reads: Vec<Box<dyn Send + Sync>>,
 }
 impl StoreOperation {
+    /// Unpublished physical batches need an independent abort owner until
+    /// completion. Read guards alone do not prevent graph subscribers sharing
+    /// the same immutable products.
+    pub fn has_publication(&self) -> bool {
+        !self.requests.is_empty()
+    }
     pub fn join(&mut self, mut other: Self) {
         self.requests.append(&mut other.requests);
         self.reads.append(&mut other.reads);
