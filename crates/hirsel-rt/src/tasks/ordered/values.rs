@@ -312,7 +312,13 @@ impl Program {
             {
                 program.names = (*ctx).run_ref().names.clone();
             }
-            program.codes = (*ctx).run_ref().value_codes.clone();
+            if program
+                .nodes
+                .iter()
+                .any(|node| matches!(node, Node::Callable { .. }))
+            {
+                program.codes = (*ctx).run_ref().value_codes.index();
+            }
             Ok(program)
         }
     }

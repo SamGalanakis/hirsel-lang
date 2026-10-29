@@ -422,7 +422,7 @@ pub(crate) struct RunShared {
     pub(crate) ordered_memory: std::sync::atomic::AtomicBool,
     /// Immutable compiler code identities, installed before dispatch. No
     /// pointer value is ever included in canonical initialized-field output.
-    pub(crate) value_codes: std::sync::Arc<std::collections::BTreeMap<usize, String>>,
+    pub(crate) value_codes: std::sync::Arc<crate::program::ValueCodes>,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
     pub(crate) root_overflow: crate::roots::Overflow,
     /// Every worker's heap, until the run ends (`crate::heaps`).

@@ -127,7 +127,7 @@ pub struct Program {
     pub(crate) config: Config,
     /// Each Entry's code word and its definition's full path.
     pub(crate) entries: Vec<(usize, String)>,
-    pub(crate) value_codes: std::sync::Arc<std::collections::BTreeMap<usize, String>>,
+    pub(crate) value_codes: std::sync::Arc<ValueCodes>,
     pub(crate) callees: Option<CalleeMetadata>,
 }
 
@@ -257,17 +257,40 @@ impl Program {
     }
 }
 
+/// Validated callable identities borrow the program's immutable descriptor data.
+/// The owned address index is needed only when observation encodes a callable.
+#[derive(Default)]
+pub(crate) struct ValueCodes {
+    rows: Vec<(usize, &'static str)>,
+    index: std::sync::OnceLock<std::sync::Arc<std::collections::BTreeMap<usize, String>>>,
+}
+
+impl ValueCodes {
+    pub(crate) fn index(&self) -> std::sync::Arc<std::collections::BTreeMap<usize, String>> {
+        self.index
+            .get_or_init(|| {
+                let mut index = std::collections::BTreeMap::new();
+                for &(code, name) in &self.rows {
+                    // Linkers may coalesce equivalent code. Keep the first stable identity.
+                    index.entry(code).or_insert_with(|| name.to_owned());
+                }
+                std::sync::Arc::new(index)
+            })
+            .clone()
+    }
+}
+
 /// # Safety
 /// `rows` names `length` immutable rows and their name bytes for this program.
-unsafe fn load_value_codes(
-    rows: *const EntryRow,
-    length: u64,
-) -> Result<std::collections::BTreeMap<usize, String>, String> {
+unsafe fn load_value_codes(rows: *const EntryRow, length: u64) -> Result<ValueCodes, String> {
     let count = usize::try_from(length).map_err(|_| "too many value code identities")?;
     if count > 65_536 || (count != 0 && rows.is_null()) {
         return Err("invalid value code identity table".into());
     }
-    let mut value_codes = std::collections::BTreeMap::new();
+    let mut value_codes = ValueCodes {
+        rows: Vec::with_capacity(count),
+        index: Default::default(),
+    };
     let mut identity_bytes = 0u64;
     for index in 0..count {
         let row = unsafe { &*rows.add(index) };
@@ -283,15 +306,13 @@ unsafe fn load_value_codes(
         if row.path.is_null() {
             return Err("invalid value code identity data".into());
         }
+        // SAFETY: descriptor data lives for the program and all its runs. Only those
+        // owners retain this view; the index returned to observers owns its strings.
         let name = std::str::from_utf8(unsafe {
             std::slice::from_raw_parts(row.path, row.path_length as usize)
         })
         .map_err(|_| "invalid value code identity text")?;
-        // Linkers may coalesce equivalent code. The table is sorted by
-        // identity, so one address always keeps its first stable name.
-        value_codes
-            .entry(row.code as usize)
-            .or_insert_with(|| name.to_owned());
+        value_codes.rows.push((row.code as usize, name));
     }
     Ok(value_codes)
 }
@@ -310,7 +331,7 @@ mod tests {
         let rows = [row(7, b"a"), row(7, b"b"), row(9, b"different")];
         let codes = unsafe { load_value_codes(rows.as_ptr(), rows.len() as u64) }.unwrap();
         assert_eq!(
-            codes,
+            *codes.index(),
             std::collections::BTreeMap::from([(7, "a".into()), (9, "different".into())])
         );
         let mut program =
@@ -323,10 +344,22 @@ mod tests {
         assert!(
             unsafe { load_value_codes(std::ptr::null(), 0) }
                 .unwrap()
+                .index()
                 .is_empty()
         );
         assert!(unsafe { load_value_codes(std::ptr::null(), 1) }.is_err());
         assert!(unsafe { load_value_codes(std::ptr::null(), 65_537) }.is_err());
+        // A coalesced address does not excuse a malformed later identity.
+        let malformed_duplicate = [row(7, b"valid"), row(7, b"\xff")];
+        assert!(
+            unsafe {
+                load_value_codes(
+                    malformed_duplicate.as_ptr(),
+                    malformed_duplicate.len() as u64,
+                )
+            }
+            .is_err()
+        );
         for row in [
             row(0, b"code"),
             row(1, b""),
