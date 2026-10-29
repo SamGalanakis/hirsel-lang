@@ -161,7 +161,7 @@ impl NativeSnapshot {
         let facts = super::emission::select(&instances, &environment)?;
         emission.callbacks = !facts.callbacks.is_empty();
         emission.tracking = facts.tracking;
-        emission.inline_instances = facts.inline.into_iter().collect();
+        emission.inline_instances = facts.inline.iter().copied().collect();
         let bytes = emission.encode()?;
         let context = store
             .put_content(EMISSION_CONTEXT_DOMAIN, &bytes)

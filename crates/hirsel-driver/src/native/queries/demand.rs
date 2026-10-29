@@ -236,6 +236,7 @@ impl DiscoveredInstance {
         mut facts: InstanceFacts,
         previous: Option<&Self>,
     ) -> Self {
+        facts.emission.inline = facts.emission.inline.with_grant(facts._owner.clone());
         if let Some(previous) = previous
             && *previous.facts.source == *facts.source
         {
@@ -273,7 +274,7 @@ impl InstanceFacts {
         });
         weight.vec(&self.templates.references, |w, (path, _)| w.path(path));
         weight.vec(&self.emission.callbacks, |w, path| w.path(path));
-        weight.flat_vec(&self.emission.inline);
+        weight.add(self.emission.inline.retained_bytes() as usize);
         weight
             .bytes()
             .saturating_add(self.seal_demand.retained_bytes())

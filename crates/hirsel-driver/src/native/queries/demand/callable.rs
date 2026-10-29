@@ -22,10 +22,15 @@ impl Scope {
             .iter()
             .map(|facts| Arc::as_ptr(&facts.source))
             .collect::<std::collections::HashSet<_>>();
+        let mut inline = facts
+            .iter()
+            .filter_map(|facts| facts.emission.inline.identity())
+            .collect::<std::collections::HashSet<_>>();
         let mut facts = facts
             .into_iter()
             .map(Arc::as_ptr)
             .collect::<std::collections::HashSet<_>>();
+        let mut shared_inline = 0u64;
         let mut weight = hirsel_engine::NativeMetadataWeight::default();
         weight.vec(&self.outputs, |weight, (key, output)| {
             weight.path(key.instance.definition());
@@ -33,6 +38,12 @@ impl Scope {
             weight.add(output.wrapper_bytes() as usize);
             if facts.insert(Arc::as_ptr(&output.facts)) {
                 weight.add(output.facts.local_metadata_bytes() as usize);
+                if let Some(id) = output.facts.emission.inline.identity()
+                    && !inline.insert(id)
+                {
+                    // local_metadata_bytes includes the complete inline owner.
+                    shared_inline += output.facts.emission.inline.retained_bytes();
+                }
                 if sources.insert(Arc::as_ptr(&output.facts.source)) {
                     weight.add(output.facts.source.retained_metadata_bytes() as usize);
                 }
@@ -44,7 +55,7 @@ impl Scope {
                 weight.add(request.retained_metadata_bytes() as usize);
             }
         });
-        weight.bytes()
+        weight.bytes().saturating_sub(shared_inline)
             + super::super::ownership_compilation::metadata::operations(&mut self.operations)
     }
 }
@@ -99,7 +110,17 @@ impl DemandInstances {
             source(key, operations).ok()?;
         }
         let mut outputs = Vec::new();
-        for (key, candidate, discovery) in candidates.into_values() {
+        let mut inline = super::super::emission::InlineInstances::default();
+        for (key, candidate, mut discovery) in candidates.into_values() {
+            if discovery.emission.inline == inline {
+                discovery.emission.inline = inline.clone();
+            } else {
+                inline = discovery
+                    .emission
+                    .inline
+                    .with_grant(self.retained_owner.clone());
+                discovery.emission.inline = inline.clone();
+            }
             let request = requests.get(key.instance.encoding())?;
             let (_, original) = originals.iter().find(|(original, _)| {
                 let input = &self.requests[original.instance.encoding()];
@@ -312,6 +333,10 @@ impl DemandInstances {
             .collect::<BTreeMap<_, _>>();
         let queries = self.queries.callable();
         let mut publisher = queries;
+        let inline = super::super::emission::InlineInstances::new(
+            specialized.inline.iter().copied(),
+            self.retained_owner.clone(),
+        );
         let mut outputs = Vec::new();
         for ((unit, key), origin) in units.into_iter().zip(&keys).zip(&specialized.origins) {
             let original = &originals[origin.index()].1;
@@ -350,10 +375,8 @@ impl DemandInstances {
                 hirsel_rc::seal_demand::equations::LocalDemandEquations::extract(&unit)?;
             let freedom =
                 hirsel_rc::closure_calls::OperationFreedom::extract(&unit, &binding.table);
-            let emission = super::super::emission::EmissionFacts::extract(
-                &unit,
-                specialized.inline.iter().copied(),
-            );
+            let mut emission = super::super::emission::EmissionFacts::extract(&unit, []);
+            emission.inline = inline.clone();
             let discovery = self.put(
                 INSTANCE_DISCOVERY_DOMAIN,
                 &serde_json::to_vec(&Discovery {
@@ -527,7 +550,13 @@ mod tests {
                 "locally_safe": true, "callees": []
             }))
             .unwrap(),
-            emission: Default::default(),
+            emission: super::super::super::emission::EmissionFacts {
+                inline: super::super::super::emission::InlineInstances::new(
+                    [record.output.0],
+                    Some(owner.clone()),
+                ),
+                ..Default::default()
+            },
         };
         drop(owner);
         let original = DiscoveredInstance::with_facts(product.clone(), facts.clone(), None);
@@ -575,6 +604,7 @@ mod tests {
         assert_eq!(
             independent - shared,
             original.facts.source.retained_metadata_bytes()
+                + original.facts.emission.inline.retained_bytes()
         );
         let changed = scope.outputs[0].1.clone();
         drop(original);
