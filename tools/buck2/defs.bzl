@@ -220,7 +220,7 @@ def native_tool_inputs():
         for name in ["arm", "qemu", "valgrind", "kit", "glibc_floor", "linker", "runtime-auditor"]
     }
 
-def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, products = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
+def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, products = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = [], consumer_cases = {}):
     """A libtest harness (`rustc --test`) and the test that runs it.
 
     `bin_exes` are the package's binaries, as Cargo's CARGO_BIN_EXE_<name>.
@@ -295,6 +295,18 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
             exec_compatible_with = _test_platform(name),
             pool = not TESTS_ON_HOST,
             extra_env = {"HIRSEL_TEST_DEDICATED_CASE": case},
+            **isolated_common
+        )
+    # Stable targets for required native launches, including ignored full-gate
+    # bodies. Consumers can print ordinary target names without runner flags.
+    for suffix, case in consumer_cases.items():
+        _rust_test(
+            name = name + "-consumer-" + suffix,
+            args = ["--include-ignored", "--exact", case],
+            extra_env = {"HIRSEL_TEST_DEDICATED_CASE": case},
+            labels = [],
+            exec_compatible_with = _test_platform(name),
+            pool = not TESTS_ON_HOST,
             **isolated_common
         )
 

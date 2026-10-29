@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Usage: tools/consumers <path>... prints affected Buck2 test targets, one per line."""
+import argparse
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+LIMIT = 100
+BIG = {
+    'hirsel-driver-test-it-stdlib': 'crates/hirsel-driver/tests/it-stdlib',
+    'hirsel-driver-test-it': 'crates/hirsel-driver/tests/it',
+    'hirsel-cli-test-cli': 'crates/hirsel-cli/tests/cli',
+    'hirsel-cli-test-free': 'crates/hirsel-cli/tests/free.rs',
+    'hirsel-cli-test-examples': 'crates/hirsel-cli/tests/examples.rs',
+}
+# These bodies launch native programs and verify replay, rather than merely
+# checking their compilation. The inventory resolves their current shards.
+MUST = {
+    'hirsel-cli-test-cli': {'https::https_serves_a_verifying_client_and_replays_in_either_engine',
+                           'replay::native_and_interpreted_recordings_replay_in_either_engine_and_executables'},
+    'hirsel-cli-test-examples': {'grpc_greeter_serves_and_calls_itself_over_tcp',
+                                'unix_http_serves_itself_over_a_real_socket_and_replays_across_cli_backends'},
+}
+RUNTIME = re.compile(r'(?:^|/)(?:startup[^/]*|scheduler[^/]*|pool[^/]*|cpu[^/]*|managed_cores|ordered|launch)(?:[./]|$)')
+ANSI = re.compile(r'\x1b\[[0-9;]*m')
+
+
+def runtime_change(paths):
+    return any(RUNTIME.search(path) or path.startswith('crates/hirsel-rt/src/tasks/') for path in paths)
+
+
+def buck(root, *args):
+    result = subprocess.run([str(root / '.buck2/bin/buck2'), *args], cwd=root,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode:
+        raise ValueError(result.stderr.strip() or result.stdout.strip())
+    return result.stdout + (result.stderr if args[0] == 'test' else '')
+
+
+def test_graph(root, seeds):
+    selection = f'rdeps(//:, {" + ".join(seeds)})' if seeds else '//:'
+    return json.loads(buck(root, 'uquery', selection,
+                           '--output-attribute', '^test_binary$', '--output-attribute', '^shard',
+                           '--output-attribute', '^costs$', '--output-attribute', '^extra_env$'))
+
+
+def listings(root, graph):
+    targets = [target for target, attrs in graph.items()
+               if attrs.get('test_binary') in BIG and attrs.get('shard_index', 0) == 0
+               and (attrs.get('shards', 0) > 0 or target == 'root//:' + attrs['test_binary'])]
+    if not targets:
+        return {}
+    output = buck(root, 'test', *sorted(targets), '--', '--test-arg=--list',
+                  '--test-arg=--format=terse', '--test-arg=')
+    result, binary = {}, None
+    for line in output.splitlines():
+        line = re.sub(r'^\[[^\]]+\]\s*', '', ANSI.sub('', line)).strip()
+        if match := re.search(r'(?:Pass|Fail): (?:root)?//:(\S+)', line):
+            binary = re.sub(r'-shard-\d+$', '', match[1])
+        elif binary in BIG and (match := re.fullmatch(r'(\S+): test', line)):
+            result.setdefault(binary, set()).add(match[1])
+    missing = {graph[target]['test_binary'] for target in targets} - result.keys()
+    if missing:
+        raise ValueError('no case listing for ' + ', '.join(sorted(missing)))
+    return result
+
+
+def assignments(root, graph, inventories):
+    """Match test_launcher.sh's longest-first greedy assignment, including mean costs."""
+    result = {}
+    for binary, cases in inventories.items():
+        targets = {attrs.get('shard_index', 0): (target, attrs)
+                   for target, attrs in graph.items() if attrs.get('test_binary') == binary
+                   and attrs.get('shards', 0) > 0}
+        if not targets:
+            target = 'root//:' + binary
+            if target in graph:
+                result.update({(binary, case): target for case in cases})
+            continue
+        _, attrs = targets[0]
+        costs = {}
+        if attrs.get('costs'):
+            table = root / attrs['costs'].removeprefix('root//').replace(':', '/').lstrip('/')
+            costs = {name: float(cost) for name, cost in
+                     (line.split('\t') for line in table.read_text().splitlines())}
+        total = 0.0
+        for cost in costs.values():
+            total += cost
+        mean = total / len(costs) if costs else 1
+        weights = {name: float(f'{costs.get(name, mean):.3f}') for name in cases}
+        loads = [0.0] * attrs['shards']
+        for name in sorted(cases, key=lambda name: (-weights[name], name)):
+            shard = min(range(len(loads)), key=loads.__getitem__)
+            loads[shard] += weights[name]
+            result[binary, name] = targets[shard][0]
+    for target, attrs in graph.items():
+        case = attrs.get('extra_env', {}).get('HIRSEL_TEST_DEDICATED_CASE')
+        if case and attrs.get('test_binary') in inventories:
+            if case not in inventories[attrs['test_binary']]:
+                raise ValueError(f'{target}: dedicated selector {case} is absent from the case listing')
+            result[attrs['test_binary'], case] = target
+    return result
+
+
+# Rust strings and comments may contain braces and fake function declarations.
+# Keep offsets while masking them before extracting function extents.
+RUST_LITERAL = re.compile(r'//[^\n]*|/\*.*?\*/|(?:b?r)(?P<hashes>\#*)".*?"(?P=hashes)|b?"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])\'', re.S)
+
+
+class Sources:
+    def __init__(self, root, path):
+        self.root = root
+        path = root / path
+        files = sorted(path.rglob('*.rs')) if path.is_dir() else [path]
+        support = (path if path.is_dir() else path.parent).parent / 'support'
+        files = sorted(set(files) | set(support.rglob('*.rs')))
+        self.files = {file: file.read_text() for file in files}
+        self.functions = {}
+        self.by_name = {}
+        for file in files:
+            source = file.read_text()
+            masked = RUST_LITERAL.sub(lambda match: ' ' * len(match[0]), source)
+            for match in re.finditer(r'\bfn\s+(\w+)\s*(?:<[^;{]*>)?\s*\(', masked):
+                start = masked.find('{', match.end())
+                if start < 0:
+                    continue
+                depth, end = 1, start + 1
+                while depth and end < len(masked):
+                    depth += (masked[end] == '{') - (masked[end] == '}')
+                    end += 1
+                key = file, match[1]
+                imports = '\n'.join(re.findall(r'(?m)^use [^;]+;', source))
+                body = imports + '\n' + source[match.start():end]
+                if key in self.functions:
+                    self.functions[key] += '\n' + body
+                else:
+                    self.functions[key] = body
+                    self.by_name.setdefault(match[1], []).append(key)
+
+    def case(self, name):
+        parts = name.split('::')
+        candidates = self.by_name.get(parts[-1], [])
+        matching = [key for key in candidates if len(parts) == 1 or parts[-2] in key[0].parts
+                    or key[0].stem == parts[-2]]
+        pending = list(matching or candidates)
+        seen, loaded, texts = set(), set(), []
+        if not pending and len(parts) > 1:
+            texts = [self.loaded(file, text, loaded) for file, text in self.files.items()
+                     if file.stem == parts[-2]]
+        while pending:
+            key = pending.pop()
+            if key in seen:
+                continue
+            seen.add(key)
+            text = self.functions[key]
+            texts.append(self.loaded(key[0], text, loaded))
+            calls = RUST_LITERAL.sub('', text)
+            for qualifier, called in re.findall(r'(?:(\w+)::)?\b(\w+)\s*\(', calls):
+                pending.extend(k for k in self.by_name.get(called, [])
+                               if k[0] == key[0] or qualifier and k[0].stem == qualifier)
+        return '\n'.join(texts)
+
+    def loaded(self, origin, text, seen):
+        texts = [origin.relative_to(self.root).as_posix(), text]
+        for literal in re.findall(r'"([^"\n]+\.(?:hir|json))"', text):
+            for file in (origin.parent / literal, self.root / literal):
+                file = file.resolve()
+                if file.is_file() and file.is_relative_to(self.root):
+                    if file not in seen:
+                        seen.add(file)
+                        texts.append(self.loaded(file, file.read_text(), seen))
+                    break
+        return '\n'.join(texts)
+
+
+def module_users(root, paths):
+    modules = {file.stem: file for file in (root / 'stdlib/std@1').glob('*.hir')}
+    affected = {Path(path).stem for path in paths if path.startswith('stdlib/std@1/')}
+    if not affected:
+        return affected
+    dependencies = {name: set(re.findall(r'\b([a-z_]\w*)\.', file.read_text()))
+                    for name, file in modules.items()}
+    while True:
+        users = {name for name, imports in dependencies.items() if imports & affected}
+        if users <= affected:
+            return affected
+        affected |= users
+
+
+def corpus_shard(path, count):
+    # hirsel-cli-args/src/lib.rs Shard::holds: FNV-1a of the repository path.
+    value = 0xcbf29ce484222325
+    for byte in path.encode():
+        value = ((value ^ byte) * 0x100000001b3) & ((1 << 64) - 1)
+    return value % count + 1
+
+
+def select(root, paths, graph, inventories):
+    sys.path.insert(0, str(root / 'tools/buck2'))
+    from sync import CONFORMANCE_SHARDS, CONSUMER_CASES
+    mapped = assignments(root, graph, inventories)
+    mandatory, ordinary, shards = set(), set(), set()
+    runtime = runtime_change(paths)
+    crates = {Path(path).parts[1].replace('-', '_') for path in paths if path.startswith('crates/')}
+    modules = module_users(root, paths)
+    loaded_crates = crates | {target.split(':')[-1].replace('-', '_') for target in graph
+                             if crates and (root / 'crates' / target.split(':')[-1] / 'Cargo.toml').is_file()}
+    if runtime:
+        required = MUST | {'hirsel-cli-test-free': {'native_returned_rest_completion_replays_across_engines'}}
+        for binary, cases in required.items():
+            if missing := cases - inventories.get(binary, set()):
+                raise ValueError(f'{binary}: required launch selectors missing from listing: {sorted(missing)}')
+    for binary, cases in CONSUMER_CASES.items():
+        if runtime:
+            mandatory |= {f'root//:{binary}-consumer-{suffix}' for suffix in cases}
+    for target, attrs in graph.items():
+        binary = attrs.get('test_binary', '')
+        if runtime and binary.startswith('hirsel-cli-test-cpu_pool_'):
+            mandatory.add(target)
+        elif crates and binary and binary not in BIG:
+            ordinary.add(target)
+    for binary, names in inventories.items():
+        sources = Sources(root, BIG[binary])
+        for name in names:
+            text = sources.case(name)
+            if runtime and (name in MUST.get(binary, set()) or
+                            binary == 'hirsel-cli-test-free' and name == 'native_returned_rest_completion_replays_across_engines'):
+                mandatory.add(mapped[binary, name])
+            if (any(crate in text for crate in loaded_crates)
+                    or any(path in text for path in paths)
+                    or any(re.search(r'\b' + re.escape(module) + r'\.', text) for module in modules)
+                    or runtime and re.search(r'pool|ordered|scheduler|cpu|tasks', name)):
+                shards.add(mapped[binary, name])
+    # Resolve std uses in corpus source, including uses through another std module.
+    conformance = sorted((root / 'conformance').rglob('*.hir')) if modules else []
+    chosen = {path for path in paths if path.startswith('conformance/') and path.endswith('.hir')}
+    for file in conformance:
+        if any(re.search(r'\b' + re.escape(module) + r'\.', file.read_text()) for module in modules):
+            chosen.add(file.relative_to(root).as_posix())
+    ordinary |= {f'root//:gate-conformance-shard-{corpus_shard(path, CONFORMANCE_SHARDS)}' for path in chosen}
+    # Mandatory launches come first; truncation never removes them.
+    # Give each affected binary a turn before spending the bound on a large
+    # unit-test family. Full conformance shards precede optional harness shards.
+    groups = {}
+    for target in ordinary | shards:
+        if target not in mandatory:
+            family = graph.get(target, {}).get('test_binary', 'conformance')
+            groups.setdefault(family, []).append(target)
+    for targets in groups.values():
+        targets.sort(key=lambda target: re.sub(r'\d+', lambda m: m[0].zfill(8), target))
+    selected = sorted(mandatory)
+    while any(groups.values()):
+        for family in sorted(groups):
+            if groups[family]:
+                selected.append(groups[family].pop(0))
+    return selected
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('paths', nargs='+')
+    args = parser.parse_args()
+    try:
+        paths = []
+        seeds = set()
+        for argument in args.paths:
+            path = (Path.cwd() / argument).resolve()
+            if not path.is_file() or not path.is_relative_to(ROOT):
+                raise ValueError(f'expected a repository file: {argument}')
+            paths.append(path.relative_to(ROOT).as_posix())
+            if paths[-1].startswith('crates/'):
+                package = tomllib.loads((ROOT / 'crates' / path.relative_to(ROOT).parts[1] / 'Cargo.toml').read_text())
+                seeds.add('owner(' + json.dumps(paths[-1]) + ')')
+                if (ROOT / 'crates' / path.relative_to(ROOT).parts[1] / 'src/lib.rs').is_file():
+                    seeds.add('set(//:' + package['package']['name'] + ')')
+        if runtime_change(paths):
+            seeds.add('set(//:hirsel-rt)')
+        sys.path.insert(0, str(ROOT / 'tools/buck2'))
+        import generated
+        if not (ROOT / '.buck2/bin/buck2').is_file():
+            prepared = subprocess.run([sys.executable, str(ROOT / 'tools/buck2/prepare.py')],
+                                      cwd=ROOT, stdout=sys.stderr)
+            if prepared.returncode:
+                raise ValueError('Buck2 preparation failed')
+        generated.require(ROOT)
+        graph = test_graph(ROOT, sorted(seeds))
+        inventories = listings(ROOT, graph)
+        selected = select(ROOT, paths, graph, inventories)
+        if not selected:
+            raise ValueError('no consumers found for ' + ', '.join(paths))
+        print('\n'.join(target.removeprefix('root') for target in selected[:LIMIT]))
+        if len(selected) > LIMIT:
+            print(f'consumers: truncated {len(selected)} affected targets to {LIMIT}; mandatory launches retained; remaining shards omitted', file=sys.stderr)
+        return 0
+    except (ValueError, OSError, KeyError) as error:
+        print(f'consumers: {error}', file=sys.stderr)
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

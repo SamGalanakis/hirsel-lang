@@ -236,6 +236,16 @@ partitions. Target names come from Cargo; `-unittest` and `-test-it` run unit
 and integration tests, and the library target runs declared doctests. For a
 sharded binary, select every `-shard-<i>` target.
 
+`tools/consumers <path>...` prints affected test targets, one per line, using
+Buck reverse dependencies, real harness case listings, source helpers and loaded
+corpus files. Run them with `tools/consumers <path>... | xargs .buck2/bin/buck2 test`.
+The selection includes native HTTP/HTTPS/gRPC launches, replay and cpu_pool_*
+when startup, scheduler, pool or Ordered code changes. Native HTTP targets run
+the existing full-gate bodies explicitly. Output stops at 100 targets and names
+truncation on stderr; a truncated list is partial consumer coverage. Discovery
+runs no bodies. A libtest selector that matches no bodies fails before dispatch;
+empty shard partitions, ignored bodies and host-empty binaries keep their status.
+
 Pool test actions reserve 5% of the unchanged 600-second RE limit for reporting.
 At the 570-second inner deadline, `test_report.py` prints
 `HIRSEL_TEST_INNER_DEADLINE`, every completed body's result, and each

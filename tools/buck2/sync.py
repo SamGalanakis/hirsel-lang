@@ -208,6 +208,14 @@ FULL_GATE_SKIPS = {
     "hirsel-conformance-test-it": ["native_gate::stored_configuration_retains_independent_seeds_and_baseline_names"],
 }
 
+# Required startup consumers include these existing full-gate HTTP launches.
+CONSUMER_CASES = {
+    "hirsel-cli-test-cli": {
+        "native-http": "full_gate_hello_web_answers_real_requests_native",
+        "native-http-concurrent": "full_gate_hello_web_concurrent_serves_while_another_request_is_incomplete_native",
+    },
+}
+
 # Tests that draw random cases. Their binaries run under a seed that is part
 # of the test's action key (TEST_SEED in defs.bzl), so a cached pass covers
 # that seed only.
@@ -888,7 +896,8 @@ def first_party(meta: dict) -> str:
             return dict(data=[relative(package_dir / "Cargo.toml")] if lifecycle_only else test_data(binary, name, package_dir, src),
                         runtime_archives=None if lifecycle_only or binary == "hirsel-rt-unittest" else runtime_archives,
                         products=PRODUCTS if name in PRODUCT_TESTS and not lifecycle_only else None,
-                        seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary))
+                        seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary),
+                        consumer_cases=CONSUMER_CASES.get(binary))
 
         lib = next((t for t in package["targets"] if set(t["kind"]) & {"lib", "rlib", "staticlib"}), None)
         build = next((t for t in package["targets"] if t["kind"] == ["custom-build"]), None)
