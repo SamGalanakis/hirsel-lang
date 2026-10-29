@@ -314,7 +314,7 @@ fn lower_reporting<S: Stage, R: Reporter>(
         flags: BTreeMap::new(),
         retire_flags: BTreeMap::new(),
         drop_at: BlockId(0),
-        drop_source: AddressId(0),
+        drop_source: None,
         staged: None,
     };
     // Later drops of a block first, so splitting a block leaves the
@@ -1494,7 +1494,7 @@ struct Lowering<'e, 'a, R: Reporter> {
     retire_flags: BTreeMap<(SlotId, Vec<Step>), (SlotId, AddressId, ValueId)>,
     /// The block of the drop being lowered.
     drop_at: BlockId,
-    drop_source: AddressId,
+    drop_source: Option<AddressId>,
     staged: Option<(BlockId, u32, AddressId)>,
 }
 
@@ -1617,7 +1617,7 @@ impl<R: Reporter> Lowering<'_, '_, R> {
             Terminator::Unreachable,
         );
         if R::ENABLED {
-            self.drop_source = address;
+            self.drop_source = report.observes_drop(b, i).then_some(address);
             self.staged = None;
         }
         let mut at = self.sequence(b, &actions, &site)?;
@@ -2522,7 +2522,7 @@ impl<R: Reporter> Lowering<'_, '_, R> {
         let whole = self.whole(slot);
         let value = self.ed.value(ty, Holding::Owned);
         let version = self.ed.value(ty, Holding::Plain);
-        if R::ENABLED && source == self.drop_source {
+        if R::ENABLED && Some(source) == self.drop_source {
             self.staged = Some((at, self.ed.code[at.index()].len() as u32, whole));
         }
         self.ed.code[at.index()].extend([
@@ -3016,6 +3016,17 @@ impl<R: Reporter> Lowering<'_, '_, R> {
         path: &[Step],
         layout: LayoutId,
     ) -> Result<AddressId, PassError> {
+        if R::ENABLED
+            && let Some(address) = self.drop_source
+            && self
+                .facts
+                .slot_of(address)
+                .is_some_and(|(root, parts)| root == slot && parts == path)
+            && self.ed.unit.types[self.ed.unit.addresses[address.index()].ty.index()].layout
+                == layout
+        {
+            return Ok(address);
+        }
         if let Some((_, _, address)) = self
             .prepared
             .iter()
@@ -3324,7 +3335,7 @@ mod pending_tests {
             flags: BTreeMap::new(),
             retire_flags: BTreeMap::new(),
             drop_at: BlockId(0),
-            drop_source: AddressId(0),
+            drop_source: None,
             staged: None,
         };
         let mut actions = Vec::new();
@@ -3390,7 +3401,7 @@ mod pending_tests {
             flags: BTreeMap::new(),
             retire_flags: BTreeMap::new(),
             drop_at: BlockId(0),
-            drop_source: AddressId(0),
+            drop_source: None,
             staged: None,
         };
         let mut state = crate::insert::SlotState {

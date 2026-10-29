@@ -6226,3 +6226,49 @@ fn ownership_trace_observes_a_counted_slot_at_its_actual_early_release() {
         );
     }
 }
+
+#[test]
+fn ownership_trace_early_owned_release_covers_every_ready_take_and_retirement() {
+    use hirsel_lir::stage::Value;
+    use support::Undo;
+    for layout in [l::BLK, l::SLICE] {
+        let mut t = Lir::<Value>::new(&[(Passing::Take, layout)], None);
+        let data = t.slot(layout, SlotKind::Parameter(0), ROOT);
+        let version = t.version_of(data);
+        t.param(version);
+        let address = t.at(ENTRY, data, &[], &[Undo::Drop(data)]);
+        let taken = t.read(ENTRY, address, version, ReadMode::Take, None);
+        t.store(ENTRY, address, taken, data);
+        let exit = t.cleanup_exit(&[Undo::Drop(data)], None);
+        t.builder.jump(ENTRY, exit, &[]);
+        let (before, table, _) = t.finish();
+        let before = checked_native_fixture(before, &table);
+        let input = native::LeafPlan::prepare_value_for_program(&before, &table).unwrap();
+        let index = hirsel_lir::LayoutIndex::new(&table);
+        let lowered = hirsel_rc::observed::lower(
+            before.into_raw(),
+            &input,
+            &index,
+            &hirsel_rc::observed::Options {
+                placement: &hirsel_rc::placement::Options {
+                    regions: false,
+                    noalloc: false,
+                },
+                proofs: &Default::default(),
+                elide: true,
+                reuse: &hirsel_rc::reuse::Options { reuse: true },
+                finalizers: &Default::default(),
+            },
+        )
+        .unwrap();
+        assert_eq!(lowered.recipes.len(), 10);
+        let ready = checked_native_fixture(lowered.unit, &table);
+        let plan = native::LeafPlan::from_relocated(&ready, &table, &lowered.plan).unwrap();
+        assert!(plan.markers().any(|marker| marker.kind == 2));
+        assert!(plan.markers().any(|marker| marker.kind == 7));
+        let mut missing = lowered.plan.clone();
+        assert!(!missing.cleanups.is_empty());
+        missing.cleanups.clear();
+        assert!(native::LeafPlan::from_relocated(&ready, &table, &missing).is_err());
+    }
+}

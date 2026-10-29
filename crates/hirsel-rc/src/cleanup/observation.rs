@@ -6,6 +6,9 @@ use hirsel_lir::ownership_trace::{self as trace, Plan, Point};
 pub(super) trait Reporter {
     const ENABLED: bool = false;
     type Output;
+    fn observes_drop(&self, _block: BlockId, _index: usize) -> bool {
+        false
+    }
     fn edge(&mut self, _old: EdgeId, _new: EdgeId) -> Result<(), PassError> {
         Ok(())
     }
@@ -123,6 +126,18 @@ fn refused_plan(error: impl std::fmt::Display, unit: &LirUnit<Ready>, plan: &Pla
 impl Reporter for Observations {
     const ENABLED: bool = true;
     type Output = Plan;
+    fn observes_drop(&self, block: BlockId, index: usize) -> bool {
+        self.plan.observations.iter().any(|row| {
+            row.marker.kind == trace::Kind::Drop
+                && matches!(row.point,
+                Point::Instruction { block: at, index: position, .. }
+                if at == block && position as usize == index)
+        }) || self.plan.cleanups.iter().any(|row| {
+            matches!(row.point,
+            Point::Instruction { block: at, index: position, .. }
+            if at == block && position as usize == index)
+        })
+    }
     fn edge(&mut self, old: EdgeId, new: EdgeId) -> Result<(), PassError> {
         if let Some(previous) = self.edges.get(&old) {
             if *previous != new {

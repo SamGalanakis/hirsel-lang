@@ -273,16 +273,20 @@ pub(super) fn transform<A: Stage, B: Stage>(
                         .cleanup_anchors
                         .get(current.2.index())
                         .ok_or_else(fail)?;
-                    let Point::ReleaseDrop { block, .. } = extra.point else {
-                        return Err(fail());
+                    let block = match extra.point {
+                        Point::ReleaseDrop { block, .. } | Point::Instruction { block, .. } => {
+                            block
+                        }
+                        _ => return Err(fail()),
                     };
+                    let form = super::check::drop_form(after, extra.point);
                     if !matches!(A::KIND, StageKind::Placed | StageKind::Rc)
                         || B::KIND != StageKind::Rc
-                        || !current
-                            .0
-                            .is_some_and(|value| value.index() >= before.values.len())
+                        || match current.0 {
+                            Some(value) => value.index() < before.values.len() || form != Some(1),
+                            None => form != Some(0),
+                        }
                         || after.blocks[block.index()].kind != BlockKind::Body
-                        || super::check::drop_form(after, extra.point) != Some(1)
                         || source.marker.kind != Kind::Drop
                         || super::check::drop_form(before, source.point) != Some(0)
                         || super::check::drop_anchor(before, source.point) != Some(action.clone())
