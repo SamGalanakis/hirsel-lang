@@ -81,6 +81,7 @@ pub(crate) struct Native {
     pub(super) input_blocks: Vec<crate::pool::cpu_scoped::ledger::blocks::Observed>,
     pub(super) arena: super::cpu_arena::Arena,
     pub(crate) cpu_claim: Option<std::sync::Arc<super::super::cpu::ClaimIdentity>>,
+    pub(crate) cpu_fuel: super::cpu_fuel::Fuel,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -372,6 +373,7 @@ impl Native {
             input_blocks,
             arena: super::cpu_arena::Arena::new(),
             cpu_claim: None,
+            cpu_fuel: super::cpu_fuel::Fuel::default(),
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -638,6 +640,29 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                 // A scalar private or CPU quantum owns no shared state. Keep the same
                 // 1024-point checkpoint and every stop/save/fuel/barrier test,
                 // without taking the scheduler role for a quota-only return.
+                if (*native).cpu && (*native).cpu_phase == 2 && !private(ctx)
+                    && (*native).physical.reason == 2
+                    && (*run).control.stopped().is_none()
+                    && !(*ctx).ahead.as_ref().unwrap().save_requested.load(Ordering::Acquire)
+                    && !(*native).pending_refill
+                    && !(*native).allocation.pending()
+                    && (*native).summary.is_null()
+                    && (*native).growth.is_null()
+                    && exec.leaving.get().is_none()
+                    && let Some(grant) = (*native).cpu_fuel.refill(
+                        (*ctx).view.compiled.fuel, crate::budget::FUEL_CHUNK,
+                    )
+                {
+                    (*ctx).ordered_charge_trace.capture((*ctx).view.compiled.fuel);
+                    (*ctx).heap().set_fuel(grant as i64);
+                    (*ctx).ordered_charge_trace.grant(grant as i64);
+                    (*native).physical.points_left = 1024;
+                    (*native).physical.reason = 0;
+                    sp = (*native).physical.saved_sp;
+                    #[cfg(all(feature = "tsan", target_arch = "x86_64"))]
+                    crate::pool::free::double_claim::mapper(ctx, sp);
+                    continue;
+                }
                 if (((*native).cpu && (*native).cpu_phase == 2 && !private(ctx))
                     || (!(*native).cpu && private(ctx) && (*native).host.root.is_null()))
                     && (*native).physical.reason == 1

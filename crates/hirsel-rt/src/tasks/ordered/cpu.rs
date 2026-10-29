@@ -43,6 +43,43 @@ pub(super) struct RetiredSummary {
     pub record: Option<crate::io::CpuSummary>,
 }
 
+/// A lexical authority borrowed from the real cooperative head. It cannot
+/// cross a switch or a receipt callback, and storage ordinals never choose it.
+pub(super) struct BatchCommit<'a> {
+    batch: &'a mut Batch,
+    state: &'a mut Settled,
+    task: TaskId,
+    _local: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl super::driver::Driver {
+    pub(super) fn cpu_commit(&mut self, task: TaskId) -> Option<BatchCommit<'_>> {
+        assert!(self.head_ready(task), "CPU retirement follows the cooperative head");
+        let batch = self.cpu_batch.as_mut()?;
+        batch.ordinal(task)?;
+        Some(BatchCommit {
+            batch,
+            state: &mut self.frontier.as_mut().unwrap().settled,
+            task,
+            _local: std::marker::PhantomData,
+        })
+    }
+}
+
+impl BatchCommit<'_> {
+    pub(super) fn summary(&mut self) -> Option<RetiredSummary> {
+        self.batch.retire_summary(self.task, self.state)
+    }
+
+    pub(super) fn settle(
+        &mut self,
+        before: &Stretch,
+        complete: bool,
+    ) -> Result<(), hirsel_run_schema::BudgetKind> {
+        self.batch.settle(self.task, before, self.state, complete).unwrap()
+    }
+}
+
 impl Batch {
     fn new(grant: &hirsel_run_schema::CpuGrant, width: u32, count: u64, state: Settled) -> Self {
         let count = usize::try_from(count).expect("bounded CPU count");
@@ -275,10 +312,8 @@ pub(super) fn finish_job(ctx: *mut TaskCtx) -> Stopped<()> {
             .and_then(|batch| batch.block_owner(task))
     });
     let result = engine::with_driver(ctx, |d| {
-        let batch = d.cpu_batch.as_mut()?;
         let empty = Stretch::new(d.budgets);
-        let state = &mut d.frontier.as_mut().unwrap().settled;
-        batch.settle(task, &empty, state, true)
+        Some(d.cpu_commit(task)?.settle(&empty, true))
     });
     result.unwrap_or(Ok(())).map_err(Stop::BudgetExceeded)?;
     if let Some(owner) = owner
@@ -960,5 +995,41 @@ mod tests {
             assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
             assert_eq!(outcome.pending, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod commit_tests {
+    use super::*;
+
+    #[test]
+    fn batch_commit_requires_the_real_ready_head_including_its_poll_gates() {
+        let mut driver = super::super::driver::Driver::new(
+            7,
+            crate::ordered::Policy::admit(&Default::default(), None),
+            Settled { level: 0, limit: 100, fuel: 20 },
+            crate::ordered::objects::Registry::default(),
+        );
+        let grant = hirsel_run_schema::CpuGrant {
+            provider: "cpu.scoped@1".into(), max_workers: 4, max_domains: 1,
+            max_physical_bytes: 1 << 20, max_batch_bytes: 100,
+        };
+        let mut batch = Batch::new(&grant, 4, 2, driver.frontier.as_ref().unwrap().settled);
+        batch.claim(7, 4, 1);
+        batch.claim(9, 4, 0);
+        driver.cpu_batch = Some(batch);
+        assert!(driver.cpu_commit(7).is_some(), "head identity wins over storage ordinal");
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = driver.cpu_commit(9);
+        })).is_err());
+        driver.host_poll = true;
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = driver.cpu_commit(7);
+        })).is_err());
+        driver.host_poll = false;
+        driver.awaiting_save = true;
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = driver.cpu_commit(7);
+        })).is_err());
     }
 }

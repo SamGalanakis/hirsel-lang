@@ -199,6 +199,10 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
     let grant = room.min(crate::budget::FUEL_CHUNK);
     let level = frontier.settled.level;
     driver.grant(task, grant);
+    let native = unsafe { (*ctx).ahead_physical }.cast::<super::ahead::native::Native>();
+    if !native.is_null() && unsafe { (*native).cpu_owner().is_some() } {
+        unsafe { (*native).cpu_fuel.grant(grant, room) };
+    }
     unsafe { (*ctx).heap_ref().meter.settled(level) };
     unsafe { (*ctx).heap().set_fuel(grant as i64) };
     unsafe { (*ctx).ordered_charge_trace.grant(grant as i64) };
@@ -239,9 +243,15 @@ fn capture_charges(ctx: *mut TaskCtx, task: TaskId, driver: &mut Driver) {
     let remaining = word.max(0) as u64;
     capture_frees(ctx, task, driver);
     let grant = driver.grant(task, remaining).unwrap_or(remaining);
-    let consumed = grant
+    let native = unsafe { (*ctx).ahead_physical }.cast::<super::ahead::native::Native>();
+    let private = if !native.is_null() && unsafe { (*native).cpu_owner().is_some() } {
+        unsafe { (*native).cpu_fuel.capture(word) }
+    } else {
+        None
+    };
+    let consumed = private.unwrap_or_else(|| grant
         .saturating_sub(remaining)
-        .saturating_add(u64::from(word < 0));
+        .saturating_add(u64::from(word < 0)));
     if consumed != 0 {
         let budgets = driver.budgets;
         driver
@@ -298,8 +308,7 @@ fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
     let published = with_current_driver(ctx, |task, driver| {
         assert!(driver.head_ready(task), "summaries retire only at head");
-        let state = &mut driver.frontier.as_mut().unwrap().settled;
-        driver.cpu_batch.as_mut()?.retire_summary(task, state)
+        driver.cpu_commit(task)?.summary()
     });
     if let Some(super::cpu::RetiredSummary {
         charges,
@@ -322,12 +331,10 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
             driver.head_ready(task),
             "retire owned work before head charges"
         );
-        let state = &mut driver.frontier.as_mut().unwrap().settled;
-        let result = driver
-            .cpu_batch
-            .as_mut()
-            .and_then(|batch| batch.settle(task, before, state, false))
-            .unwrap_or_else(|| state.settle(before));
+        let result = match driver.cpu_commit(task) {
+            Some(mut commit) => commit.settle(before, false),
+            None => driver.frontier.as_mut().unwrap().settled.settle(before),
+        };
         (task, result)
     });
     super::events::charges::partial(ctx, task, before, result);

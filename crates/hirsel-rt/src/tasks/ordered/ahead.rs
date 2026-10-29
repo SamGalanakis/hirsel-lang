@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) mod cpu_allocation;
 pub(crate) mod cpu_arena;
+pub(crate) mod cpu_fuel;
 pub mod cpu_handoff;
 pub(crate) mod cpu_roots;
 pub(crate) mod cpu_withdrawal;
@@ -356,12 +357,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
     unsafe { crate::managed_cores::admit_capacity(ctx) };
     if super::engine::on(ctx) {
         let _role = unsafe { super::super::role::Guard::new(ctx) };
-        // Validate the prefix in every mode, but inspect a certificate only
-        // when this run can use it. W1 and strict execution start ordinary code.
+        // A live scoped W1 executes a distinct certified child on the caller.
+        // Replay has no scoped pool and retains its serial ordinary entry.
+        let scoped = crate::pool::cpu_scoped::width(ctx);
+        let width = scoped.unwrap_or_else(|| unsafe {
+            (*ctx).run_ref().control.width.load(Ordering::Acquire)
+        });
         let enabled = version != 0
-            && crate::pool::cpu_scoped::width(ctx).unwrap_or_else(|| unsafe {
-                (*ctx).run_ref().control.width.load(Ordering::Acquire)
-            }) > 1
+            && (width > 1 || (scoped == Some(1) && matches!(version, 5 | 6)))
             && super::engine::with_driver(ctx, |d| d.private_enabled);
         let (entry, certificate) = if !enabled {
             (None, None)
