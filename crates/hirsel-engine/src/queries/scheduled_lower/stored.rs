@@ -121,8 +121,7 @@ impl FrontLowerQueries {
             {
                 return None;
             }
-            let body_bytes = self.store.get_content(body)?;
-            let decoded: DefinitionRef = self.records.decode(&self.anchors, &body_bytes)?;
+            let decoded = decode_definition(self, body)?;
             if decoded.path != definition {
                 return None;
             }

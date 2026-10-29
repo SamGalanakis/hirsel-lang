@@ -182,15 +182,25 @@ impl NativeLowerReader {
     /// V rechecks its exact artifact and private input observations after type
     /// and source rebinding. CT5 uses are checked by the same source validator
     /// as the live native source attachment. No native stage is inferred.
-    pub fn read(&self, path: &DefPath) -> Option<NativeLowerBody> {
+    fn archive(
+        &self,
+        path: &DefPath,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Option<hirsel_product_codec::CheckedTir> {
         let selected = self.selected.get(path)?;
-        let definition = self.cache.as_ref()?.read_definition(
+        let archive = self.cache.as_ref()?.read_definition_archive(
             &selected.output,
             self.anchors.record_types().clone(),
             |owner, occurrence| self.anchors.record_source_anchor(owner, occurrence),
             self.policy,
             self.signatures.validation(&path.0.package),
+            owner,
         )?;
+        (archive.header()?.signature_hash == selected.signature).then_some(archive)
+    }
+    pub fn read(&self, path: &DefPath) -> Option<NativeLowerBody> {
+        let selected = self.selected.get(path)?;
+        let definition = Arc::new(self.archive(path, self.anchors.clone())?.materialize()?);
         if definition.path.path() != path
             || definition.signature_hash != selected.signature
             || !hirsel_validate::validate_instance_uses(
@@ -377,14 +387,17 @@ impl NativeOriginalReader {
     /// Checked raw source rows from the selected ordinary Lower publication.
     /// This grants no V acceptance. Transforming consumers materialize explicitly.
     pub fn archive(&self, path: &DefPath) -> Option<hirsel_product_codec::CheckedTir> {
+        let retained: Arc<dyn Send + Sync> =
+            Arc::new((self.verified.anchors.clone(), self.owner.clone()));
+        if let Some(archive) = self.verified.archive(path, retained.clone()) {
+            return Some(archive);
+        }
         let source = self.ordinary.get(path)?;
         let archive = self.records.open_tir(
             self.verified.anchors.clone(),
             self.store.get_content(source.reference)?,
             source.reference,
-            self.owner
-                .clone()
-                .unwrap_or_else(|| self.verified.anchors.clone()),
+            retained,
         )?;
         let header = archive.header()?;
         (header.path.path() == path && header.signature_hash == source.signature).then_some(archive)

@@ -144,14 +144,7 @@ impl LowerProduct {
         }
     }
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
-        let bytes = owner.store.get_content(self.body)?;
-        let source = Arc::new(owner.anchors.clone());
-        let definition = Arc::new(
-            owner
-                .records
-                .open_tir(source.clone(), bytes, self.body, source)?
-                .materialize()?,
-        );
+        let definition = decode_definition(owner, self.body)?;
         if definition.path != self.definition {
             return None;
         }
@@ -161,6 +154,15 @@ impl LowerProduct {
             dependencies: self.dependencies(owner)?,
         })
     }
+}
+fn decode_definition(owner: &FrontLowerQueries, body: Reference) -> Option<DefinitionRef> {
+    let source = Arc::new(owner.anchors.clone());
+    Some(Arc::new(
+        owner
+            .records
+            .open_tir(source.clone(), owner.store.get_content(body)?, body, source)?
+            .materialize()?,
+    ))
 }
 #[derive(Clone)]
 struct Outcome {
