@@ -1544,7 +1544,7 @@ journals the accepted bytes through its existing Print/PrintStderr events.
 ### Startup and physical capacity
 
 An unobserved production run discovers host CPU capacity at its first scoped
-claim or ordinary child spawn. Its first Tasks projection installs the Ordered
+claim or ordinary child spawn. Its first Tasks projection or parkable host effect installs the Ordered
 objects while preserving the root's held memory and remaining fuel. Scalar
 execution needs neither discovery nor Ordered objects. Replay uses its recorded
 logical contract without discovering the current host. Explicit placement
