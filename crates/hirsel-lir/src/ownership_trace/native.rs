@@ -533,7 +533,9 @@ impl LeafPlan {
                             layout,
                         )?;
                     }
-                    Inst::CopyValue { result, .. } if owned(result) => {
+                    Inst::CopyValue { result, .. } | Inst::ReadStatic { result, .. }
+                        if owned(result) =>
+                    {
                         push(
                             after,
                             Kind::Create,

@@ -551,6 +551,11 @@ pub(super) fn binding<S: Stage>(
                 .ok_or(Error::InvalidPoint(m.id))?;
             match (*inst, moment) {
                 (Inst::SealArena { result, .. }, Moment::After) => same(Create, Value(result)),
+                (Inst::ReadStatic { result, .. }, Moment::After)
+                    if unit.values[result.index()].holding == Holding::Owned =>
+                {
+                    same(Create, Value(result))
+                }
                 (
                     Inst::Construct {
                         result, construct, ..

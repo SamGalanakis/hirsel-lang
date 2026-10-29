@@ -399,40 +399,7 @@ fn run_equal_resources(cycle: bool) {
             &[source],
         );
         let output = support::native::run(&program.table.target, &executable);
-        let mut rows = vec![];
-        for line in output.lines() {
-            let parts: Vec<_> = line.split_whitespace().collect();
-            let number = |index: usize| parts[index].parse::<u64>().unwrap();
-            rows.push(match parts[0] {
-                "enter" => {
-                    let mut unit = [0; 32];
-                    assert_eq!(parts[2].len(), 64);
-                    for (i, byte) in unit.iter_mut().enumerate() {
-                        *byte = u8::from_str_radix(&parts[2][2 * i..2 * i + 2], 16).unwrap();
-                    }
-                    Row::Enter {
-                        task: 0,
-                        frame: number(1),
-                        unit,
-                    }
-                }
-                "leave" => Row::Leave {
-                    task: 0,
-                    frame: number(1),
-                },
-                "event" => Row::Event {
-                    task: 0,
-                    frame: number(1),
-                    marker: number(2) as u32,
-                    action: number(3) as u32,
-                    token: number(4),
-                    owner: number(5),
-                    site: number(6),
-                    layout: number(7) as u32,
-                },
-                _ => panic!("unexpected native trace row: {line}"),
-            });
-        }
+        let rows = rows_from_output(&output);
         let log = Log {
             version: trace::VERSION,
             program: [49; 32],
@@ -637,4 +604,195 @@ fn ownership_relocated_native_execution_reports_the_original_marker_ids() {
         outputs.push(output);
     }
     assert_eq!(outputs[0], outputs[1]);
+}
+
+fn owned_static_fixture() -> support::programs::Program {
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let mut schema = Schema::new();
+    let integer = schema.types.p(Primitive::I64);
+    let owner = schema.types.boxed(integer);
+    schema.name("payload", integer);
+    schema.name("owner", owner);
+    schema.signature("entry", &[], integer);
+    let table = schema.build(&target);
+    let manifest = manifest();
+    let payload = table.layout("payload");
+    let owner = table.layout("owner");
+    let mut unit = Unit::new(&table, "ownership_leaf", "entry");
+    let symbol = unit.symbol(SymbolKind::Constant, "OWNED_STATIC");
+    for _ in 0..2 {
+        let value = unit.value(owner, Holding::Owned);
+        unit.builder.push(
+            ENTRY,
+            Inst::ReadStatic {
+                result: value,
+                symbol,
+            },
+        );
+        unit.release(ENTRY, value, payload);
+    }
+    let result = unit.int(ENTRY, hirsel_lir::layout_types::ScalarKind::I64, 7);
+    unit.builder.ret(ENTRY, Some(result));
+    let unit = seal(&table, &manifest, unit.finish());
+    support::programs::Program {
+        table,
+        manifest,
+        units: vec![unit],
+        statics: vec![hirsel_lir::statics::StaticData::plain(
+            hirsel_lir::ir::Symbol {
+                kind: SymbolKind::Constant,
+                definition: path("OWNED_STATIC"),
+                instance: Some(instance("OWNED_STATIC")),
+            },
+            payload,
+            7i64.to_le_bytes().to_vec(),
+        )],
+        finalizers: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn ownership_owned_static_reads_start_distinct_holder_lifetimes() {
+    let program = owned_static_fixture();
+    let plan = LeafPlan::prepare(&program.units[0], &program.table.table).unwrap();
+    let creations: Vec<_> = plan.markers().filter(|marker| marker.kind == 0).collect();
+    let drops: Vec<_> = plan.markers().filter(|marker| marker.kind == 2).collect();
+    assert_eq!((creations.len(), drops.len()), (2, 2));
+    assert_ne!(creations[0].owner, creations[1].owner);
+    let mut forged = plan.plan().clone();
+    forged.observations[0].marker.owner = hirsel_lir::ownership_trace::Location::Return;
+    assert!(hirsel_lir::ownership_trace::check(program.units[0].unit(), &forged).is_err());
+    let mut missing = plan.plan().clone();
+    missing.observations.remove(0);
+    assert!(LeafPlan::from_relocated(&program.units[0], &program.table.table, &missing).is_err());
+    assert!(
+        program
+            .table
+            .table
+            .layouts
+            .iter()
+            .all(|layout| !matches!(layout.kind, hirsel_lir::layout_types::LayoutKind::Resource))
+    );
+}
+
+fn rows_from_output(output: &str) -> Vec<Row> {
+    let mut rows = vec![];
+    for line in output.lines() {
+        let parts: Vec<_> = line.split_whitespace().collect();
+        let number = |index: usize| parts[index].parse::<u64>().unwrap();
+        rows.push(match parts[0] {
+            "enter" => {
+                let mut unit = [0; 32];
+                assert_eq!(parts[2].len(), 64);
+                for (i, byte) in unit.iter_mut().enumerate() {
+                    *byte = u8::from_str_radix(&parts[2][2 * i..2 * i + 2], 16).unwrap();
+                }
+                Row::Enter {
+                    task: 0,
+                    frame: number(1),
+                    unit,
+                }
+            }
+            "leave" => Row::Leave {
+                task: 0,
+                frame: number(1),
+            },
+            "event" => Row::Event {
+                task: 0,
+                frame: number(1),
+                marker: number(2) as u32,
+                action: number(3) as u32,
+                token: number(4),
+                owner: number(5),
+                site: number(6),
+                layout: number(7) as u32,
+            },
+            _ => panic!("unexpected native trace row: {line}"),
+        });
+    }
+    rows
+}
+
+#[test]
+#[ignore = "native: executes static counted-owner credits with both diagnostic emitters"]
+fn ownership_owned_static_reads_keep_equal_payloads_distinct_on_both_backends() {
+    let program = owned_static_fixture();
+    let mut inputs = inputs(&program);
+    inputs.statics = &program.statics;
+    let units = program.units();
+    let mut metadata = metadata(&program);
+    for markers in metadata.values_mut() {
+        for marker in markers.values_mut() {
+            marker.value_type = "Box[i64]".into();
+        }
+    }
+    let mut traces = vec![];
+    for backend in ["llvm", "cranelift"] {
+        let ordinary = if backend == "llvm" {
+            hirsel_llvm::emit_object(&units, &inputs).unwrap()
+        } else {
+            hirsel_cranelift::emit_object(&units, &inputs).unwrap()
+        };
+        let object = if backend == "llvm" {
+            hirsel_llvm::emit_object_ownership(&units, &inputs).unwrap()
+        } else {
+            hirsel_cranelift::emit_object_ownership(&units, &inputs).unwrap()
+        };
+        let after = if backend == "llvm" {
+            hirsel_llvm::emit_object(&units, &inputs).unwrap()
+        } else {
+            hirsel_cranelift::emit_object(&units, &inputs).unwrap()
+        };
+        assert_eq!(ordinary.bytes, after.bytes);
+        let dir = support::native::scratch(&format!("ownership-owned-static-{backend}"));
+        std::fs::write(
+            dir.join("entries.h"),
+            program.c_call("ownership_leaf", "call_leaf"),
+        )
+        .unwrap();
+        let source = dir.join("ownership.c");
+        std::fs::write(
+            &source,
+            include_str!("../native/ownership.c").replace("count == 16", "count == 12"),
+        )
+        .unwrap();
+        let glue = program.glue();
+        let executable = support::native::link(
+            &program.table.target,
+            &dir,
+            &[("unit.o", &object.bytes), ("glue.o", &glue)],
+            &[source],
+        );
+        let output = support::native::run(&program.table.target, &executable);
+        let rows = rows_from_output(&output);
+        let log = Log {
+            version: trace::VERSION,
+            program: [71; 32],
+            row_count: rows.len() as u64,
+            rows,
+            complete: true,
+        };
+        let trace = trace::decode_leaf(&log, [71; 32], &metadata, 100).unwrap();
+        let analysis = trace.analyze([71; 32], 100).unwrap();
+        assert_eq!(
+            (analysis.created, analysis.dropped, analysis.live.len()),
+            (4, 4, 0)
+        );
+        let tokens: std::collections::BTreeSet<_> = trace
+            .events
+            .iter()
+            .filter_map(|event| match &event.action {
+                Action::Create {
+                    token, value_type, ..
+                } => {
+                    assert_eq!(value_type, "Box[i64]");
+                    Some(token)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tokens.len(), 4);
+        traces.push(trace);
+    }
+    assert_eq!(traces[0], traces[1]);
 }
