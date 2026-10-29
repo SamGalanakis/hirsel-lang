@@ -9,9 +9,9 @@ use crate::ir::LirUnit;
 use crate::layout_types::{LayoutId, LayoutTable, TargetSpec};
 use crate::stage::{Stage, ValidatedUnit};
 use crate::{LayoutIndex, LayoutKeys};
-use hirsel_codec::snapshot_struct;
+use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_syntax::ContentHash;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// One reached closure, in canonical first-use order. Cyclic records use local
 /// indices; no recursively nested hash encoding or program-local id escapes.
@@ -27,20 +27,75 @@ snapshot_struct!(LayoutClosure {
     abis
 });
 
-/// Body and its direct content-named bindings. Looking up this descriptor does
-/// not deserialize the body. Decode is reserved for a demanded transformation
-/// or emission, followed by independent validation against current inputs.
+/// Immutable canonical body and its direct content-named bindings. Clones share
+/// the complete typed payload. Only explicit archive encoding serializes it;
+/// demanded transformations clone and rebind raw data, then run independent C.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnitBody {
-    pub text: String,
-    pub layouts: Vec<ContentHash>,
-    pub abis: Vec<ContentHash>,
+pub struct UnitBody(Arc<BodyData>);
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BodyData {
+    unit: BodyUnit,
+    layouts: Vec<ContentHash>,
+    abis: Vec<ContentHash>,
 }
-snapshot_struct!(UnitBody {
-    text,
+snapshot_struct!(BodyData {
+    unit,
     layouts,
     abis
 });
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BodyUnit {
+    Value(LirUnit<crate::stage::Value>),
+    Placed(LirUnit<crate::stage::Placed>),
+    Rc(LirUnit<crate::stage::Rc>),
+    Reuse(LirUnit<crate::stage::Reuse>),
+    Ready(LirUnit<crate::stage::Ready>),
+}
+snapshot_enum!(BodyUnit { Value(unit), Placed(unit), Rc(unit), Reuse(unit), Ready(unit) });
+impl BodyUnit {
+    fn capture<S: Stage>(unit: LirUnit<S>) -> Self {
+        use crate::stage::StageKind;
+        match S::KIND {
+            StageKind::Value => Self::Value(unit.into_stage()),
+            StageKind::Placed => Self::Placed(unit.into_stage()),
+            StageKind::Rc => Self::Rc(unit.into_stage()),
+            StageKind::Reuse => Self::Reuse(unit.into_stage()),
+            StageKind::Ready => Self::Ready(unit.into_stage()),
+        }
+    }
+    fn materialize<S: Stage>(&self) -> Result<LirUnit<S>, String> {
+        macro_rules! selected {
+            ($unit:expr) => {{
+                if $unit.header.stage != S::KIND {
+                    return Err("native body product stage differs".into());
+                }
+                $unit.clone().into_stage()
+            }};
+        }
+        Ok(match self {
+            Self::Value(unit) => selected!(unit),
+            Self::Placed(unit) => selected!(unit),
+            Self::Rc(unit) => selected!(unit),
+            Self::Reuse(unit) => selected!(unit),
+            Self::Ready(unit) => selected!(unit),
+        })
+    }
+}
+impl hirsel_codec::Snapshot for UnitBody {
+    fn write(&self, w: &mut hirsel_codec::Writer) {
+        self.0.write(w);
+    }
+    fn read(r: &mut hirsel_codec::Reader<'_>) -> Result<Self, hirsel_codec::DecodeError> {
+        Ok(Self(Arc::new(BodyData::read(r)?)))
+    }
+}
+impl UnitBody {
+    /// Edit raw ABI operands with copy on write. Modified products carry no
+    /// native acceptance and must pass binding and independent validation.
+    pub fn abi_keys_mut(&mut self) -> &mut [ContentHash] {
+        &mut Arc::make_mut(&mut self.0).abis
+    }
+}
 
 fn map_abi(abi: &mut crate::abi_types::FnAbi, mut layout: impl FnMut(&mut LayoutId)) {
     for p in &mut abi.parameters {
@@ -109,11 +164,11 @@ impl LayoutClosure {
             })
             .collect();
         let canonical = crate::objects::rebound(erased, &local_layouts, &local_abis)?;
-        let body = UnitBody {
-            text: hirsel_codec::to_text(&canonical),
+        let body = UnitBody(Arc::new(BodyData {
+            unit: BodyUnit::capture(canonical),
             layouts: body_layouts,
             abis: body_abis,
-        };
+        }));
         Ok((closure, body))
     }
 
@@ -317,20 +372,21 @@ impl Binding {
         self.abis.get(&key).copied()
     }
 
-    /// Decode only on demand; the returned unit is raw, with no reused seal.
+    /// Clone and rebind only on demand; the returned unit has no reused seal.
     pub fn materialize<S: Stage>(&self, body: &UnitBody) -> Result<LirUnit<S>, String> {
         let layouts = body
+            .0
             .layouts
             .iter()
             .map(|k| self.layouts.get(k).copied().ok_or("missing product layout"))
             .collect::<Result<Vec<_>, _>>()?;
         let abis = body
+            .0
             .abis
             .iter()
             .map(|k| self.abis.get(k).copied().ok_or("missing product ABI"))
             .collect::<Result<Vec<_>, _>>()?;
-        let unit: LirUnit<S> = hirsel_codec::from_text(&body.text)
-            .map_err(|e| format!("native body product: {e:?}"))?;
+        let unit = body.0.unit.materialize::<S>()?;
         crate::objects::rebound(unit, &layouts, &abis)
     }
 }

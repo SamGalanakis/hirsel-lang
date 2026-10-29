@@ -938,6 +938,13 @@ fn native_product_binding_consumes_a_shared_typed_body_without_text_decode() {
     assert_eq!(trace.totals().decoded_bytes, 0);
     assert!(binding.materialize::<Ready>(&shared).is_err());
     drop(observation);
-    let current = Inputs { layouts: &binding.table, ..inputs };
+    let mut corrupt = shared.clone();
+    corrupt.abi_keys_mut()[0] = hirsel_syntax::ContentHash::default();
+    assert!(binding.materialize::<Value>(&corrupt).is_err());
+    assert!(binding.materialize::<Value>(&shared).is_ok());
+    let current = Inputs {
+        layouts: &binding.table,
+        ..inputs
+    };
     assert!(hirsel_lir::validate::validate_value(materialized, &current).is_ok());
 }

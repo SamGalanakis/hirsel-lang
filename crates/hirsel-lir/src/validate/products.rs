@@ -21,11 +21,11 @@ const RECEIPT: Domain = Domain {
 };
 const VALUE_BODY: Domain = Domain {
     kind: 0x4300_0002,
-    schema: 1,
+    schema: 2,
 };
 const READY_BODY: Domain = Domain {
     kind: 0x4300_0003,
-    schema: 1,
+    schema: 2,
 };
 const LAYOUTS: Domain = Domain {
     kind: 0x4300_0004,

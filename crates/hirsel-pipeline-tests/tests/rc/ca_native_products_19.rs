@@ -123,7 +123,7 @@ fn native_products_reject_changed_input_rows_and_corrupt_graph_keys() {
     assert!(Binding::new(&target, &[&closure]).is_err());
     let (closure, _) = LayoutClosure::capture(&checked, &inputs, &[]).unwrap();
     let binding = Binding::new(&target, &[&closure]).unwrap();
-    body.abis[0] = hirsel_syntax::ContentHash::default();
+    body.abi_keys_mut()[0] = hirsel_syntax::ContentHash::default();
     assert!(binding.materialize::<Value>(&body).is_err());
     let mut foreign_table = lowered.table.clone();
     foreign_table.fn_abis[checked.unit().header.abi.0 as usize].result_arena = Some(0);
