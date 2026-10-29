@@ -25,6 +25,26 @@ enum Class {
 }
 
 impl<'o> LayoutBuilder<'o> {
+    fn contains_borrowed_fields(&self, root: LayoutId) -> bool {
+        let mut pending = vec![root];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let record = self.record(id);
+            if record
+                .fields
+                .iter()
+                .any(|field| hirsel_lir::layout::field_is_borrowed(self.table(), record, field))
+            {
+                return true;
+            }
+            pending.extend(record.references());
+        }
+        false
+    }
+
     fn ordinary_abi(&self, id: FnAbiId) -> Result<&FnAbi, LayoutError> {
         let abi = self
             .table()
@@ -121,11 +141,7 @@ impl<'o> LayoutBuilder<'o> {
         }
         self.public_identity(types, function.result, &mut key)?;
         let result_layout = self.layout(types, function.result)?;
-        let result_record = self.record(result_layout);
-        let has_views = result_record
-            .fields
-            .iter()
-            .any(|f| hirsel_lir::layout::field_is_borrowed(self.table(), result_record, f));
+        let has_views = self.contains_borrowed_fields(result_layout);
         let borrowed_parameters: Vec<_> = if has_views {
             types
                 .get(function.result)
@@ -412,13 +428,10 @@ impl<'o> LayoutBuilder<'o> {
         abi.shape = CallableShape::Definition;
         abi.environment = false;
         let borrowed_result = borrows_captures
-            && abi.result.as_ref().is_some_and(|result| {
-                let record = self.record(result.layout);
-                record
-                    .fields
-                    .iter()
-                    .any(|field| hirsel_lir::layout::field_is_borrowed(self.table(), record, field))
-            });
+            && abi
+                .result
+                .as_ref()
+                .is_some_and(|result| self.contains_borrowed_fields(result.layout));
         let pointer = PhysicalSlot {
             ty: PhysicalType::Pointer,
             size: self.target().scalar_size(ScalarKind::Pointer),

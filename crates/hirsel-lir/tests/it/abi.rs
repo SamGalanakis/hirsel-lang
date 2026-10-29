@@ -346,6 +346,48 @@ fn relations_never_change_an_fn_abi_but_conventions_do() {
     assert_eq!(table.fn_abis.len(), 2);
 }
 
+#[test]
+fn borrowed_cursor_results_preserve_their_declared_source_through_containers() {
+    let mut owners = Owners::default();
+    let cursor_path = path("BorrowedCursor");
+    owners.nominals.insert(
+        hirsel_syntax::DefId::intern(&cursor_path),
+        OwnerRepresentation::Cursor {
+            revision: ContentHash::of_bytes(b"borrowed cursor"),
+        },
+    );
+    let mut types = crate::support::ty();
+    let scalar = types.p(Primitive::U64);
+    let cursor = types.named(&cursor_path, Vec::new());
+    let pair = types.tuple(&[scalar, cursor]);
+    let boxed = types.boxed(cursor);
+    let mut builder = LayoutBuilder::new(&x86(), &owners);
+    for result in [cursor, pair, boxed] {
+        let mut result = types.store.get(result).unwrap().clone();
+        result.modes.relation = Relation::parameters([BinderRef::bound(ParamId(0))]);
+        let result = types.store.intern(result);
+        let callable = types.function(
+            &[(PassingMode::Borrow, scalar)],
+            result,
+            Multiplicity::Many,
+            0,
+        );
+        let abi = builder
+            .fn_abi(&types.store, callable, CallableShape::Definition)
+            .unwrap();
+        assert_eq!(
+            builder.table().fn_abis[abi.0 as usize]
+                .result
+                .as_ref()
+                .unwrap()
+                .borrowed_parameters,
+            [0],
+            "result {result:?}",
+        );
+    }
+    checked(builder);
+}
+
 /// One signature `fn(borrow Id, take List[Id]) -> Id` in a store whose rows
 /// are numbered differently, as an importer's public view would number them.
 fn signature(padding: usize) -> (Ty, TypeId) {
