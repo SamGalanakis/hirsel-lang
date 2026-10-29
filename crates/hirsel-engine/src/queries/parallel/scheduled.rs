@@ -197,7 +197,7 @@ pub struct FrontBodyQueries {
     /// marked nor scanned, so inspection does not count them as touched.
     clean_memos: Mutex<BTreeSet<crate::memo::MemoKey>>,
     errors: RuntimeErrors,
-    retention: Mutex<u64>,
+    retention: Arc<Mutex<u64>>,
     // Own immutable snapshot and output metadata admission until every task and
     // external output reader releases this view.
     read_pool: std::sync::OnceLock<Mutex<crate::memo::ReadPool>>,
@@ -753,12 +753,22 @@ impl FrontBodyQueries {
         work
     }
     pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> u64 {
-        self.work
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&(DefId::intern(definition), kind))
-            .copied()
-            .unwrap_or(0)
+        if kind == QueryKind::PrivateInference {
+            let mut work = Vec::new();
+            if let Some(headers) = self.snapshot.header_products() {
+                headers.private_work(&mut work);
+            }
+            return work
+                .into_iter()
+                .filter(|(path, _, _)| path == definition)
+                .map(|(_, _, count)| count)
+                .sum();
+        }
+        self.work_snapshot()
+            .into_iter()
+            .filter(|(path, selected, _)| path == definition && *selected == kind)
+            .map(|(_, _, count)| count)
+            .sum()
     }
     /// Discovery consumes only an actual settled product from this admitted view.
     /// Check own text separately: the read set need not contain its owner's body.
@@ -1643,9 +1653,6 @@ impl QueryEngine {
             self.materialize(definition)?;
         }
         self.register_specializations(definitions);
-        // Inference can materialize siblings and change private header facts.
-        // Settle them before capturing any immutable syntax, keys or receipts.
-        self.prepare_private_summaries();
         let anchors = Arc::new(crate::NativeRecordContext::capture(self));
         required = required
             .checked_add(anchors.input_bytes().ok_or_else(refusal)?)
@@ -1787,8 +1794,13 @@ impl QueryEngine {
                 registration.cloned(),
             ));
         }
+        if !registrations.is_empty() {
+            self.retire_snapshot();
+        }
         let snapshot = self.signature_inputs();
+        let retention = Arc::new(Mutex::new(allowance.bytes() - required));
         if let Some(headers) = snapshot.header_products() {
+            headers.configure_private(weight.scratch, registrations, retention.clone());
             headers.archive_sources(store.clone())?;
         }
         let mut inputs = BTreeMap::new();
@@ -1887,7 +1899,7 @@ impl QueryEngine {
             memo_operations: AtomicU64::new(0),
             verify_store: self.verify_store,
             errors,
-            retention: Mutex::new(allowance.bytes() - required),
+            retention,
             read_pool: std::sync::OnceLock::new(),
             _allowance: Arc::new(FrontSourceBacking {
                 allowance: Mutex::new(allowance),

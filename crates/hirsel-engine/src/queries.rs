@@ -463,7 +463,6 @@ impl QueryEngine {
     pub(crate) fn prepare_signature_snapshot(&mut self) {
         self.note_environment();
         self.settle_signatures();
-        self.prepare_private_summaries();
     }
     pub(crate) fn signature_memo_source(
         &self,

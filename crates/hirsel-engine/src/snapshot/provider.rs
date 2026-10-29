@@ -185,7 +185,12 @@ impl SignatureProvider for FrozenProvider<'_> {
         let target = DefId::intern(target);
         self.reads
             .record(ReadKey::CitedText(target), source.cited_text(target));
-        source.unique_failure(owner, target, claim)
+        source.unique_failure(owner, target, claim).or_else(|| {
+            source.cited_name(owner, target)?;
+            self.snapshot
+                .header_products()?
+                .unique_failure(target, claim)
+        })
     }
     fn cite_name(&mut self, target: &hirsel_syntax::DefPath) -> Option<hirsel_span::Span> {
         let source = self.citations?;

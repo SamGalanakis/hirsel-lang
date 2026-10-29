@@ -604,6 +604,7 @@ impl QueryEngine {
     /// This revision's snapshot, built once after its inputs changed. It is
     /// kept only when every signature normalized, so a failed one is retried.
     pub fn signature_snapshot(&mut self) -> Arc<SignatureSnapshot> {
+        self.prepare_private_summaries();
         let snapshot = self.signature_inputs();
         snapshot.validation_state();
         self.adopt_completed_headers();

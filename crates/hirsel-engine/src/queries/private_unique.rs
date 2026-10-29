@@ -3,7 +3,7 @@
 //! invalidation when a body's proved bits change.
 use super::*;
 use hirsel_types::{SignatureKind, UniqueInference};
-mod scheduled;
+pub(in crate::queries) mod scheduled;
 
 impl QueryEngine {
     /// Lend the host's existing partition to demand inference. Installing the

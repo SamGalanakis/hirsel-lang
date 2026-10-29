@@ -6,6 +6,7 @@ use std::sync::{
     OnceLock, Weak,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
+mod private;
 mod sources;
 use sources::HeaderSources;
 
@@ -23,6 +24,9 @@ struct HeaderPhases {
     lexer: Option<Arc<dyn LexerPhase>>,
     parser: Option<Arc<dyn ParserPhase>>,
     signature: Option<Arc<dyn SignaturePhase>>,
+    resolver: Option<Arc<dyn ResolverPhase>>,
+    checker: Option<Arc<dyn CheckerPhase>>,
+    modes: Option<Arc<dyn ModesPhase>>,
 }
 impl HeaderPhases {
     fn capture(adapters: &PhaseAdapters) -> Self {
@@ -30,6 +34,9 @@ impl HeaderPhases {
             lexer: adapters.lexer.clone(),
             parser: adapters.parser.clone(),
             signature: adapters.signature.clone(),
+            resolver: adapters.resolver.clone(),
+            checker: adapters.checker.clone(),
+            modes: adapters.modes.clone(),
         }
     }
     fn adapters(&self) -> PhaseAdapters {
@@ -37,6 +44,9 @@ impl HeaderPhases {
             lexer: self.lexer.clone(),
             parser: self.parser.clone(),
             signature: self.signature.clone(),
+            resolver: self.resolver.clone(),
+            checker: self.checker.clone(),
+            modes: self.modes.clone(),
             ..Default::default()
         }
     }
@@ -44,6 +54,7 @@ impl HeaderPhases {
 pub(crate) struct HeaderProducts {
     rows: hirsel_syntax::DefMap<OnceLock<HeaderProduct>>,
     generation: AtomicU64,
+    retention: OnceLock<Arc<std::sync::Mutex<u64>>>,
     environment: QueryEnvironment,
     adapters: HeaderPhases,
     sources: SourceMap,
@@ -51,7 +62,8 @@ pub(crate) struct HeaderProducts {
     owners: Arc<crate::NativeRecordContext>,
     provisional: bool,
     failure: Option<QueryError>,
-    syntax: HeaderSources,
+    syntax: Arc<HeaderSources>,
+    private: Option<private::PrivateProducts>,
     declarations: crate::DeclarationIndex,
     catalog: catalog::Catalog,
     types: Arc<hirsel_types::TypeInterner>,
@@ -76,7 +88,12 @@ impl HeaderProducts {
             .map(|path| {
                 let id = DefId::intern(&path);
                 let cell = OnceLock::new();
-                if engine.unmarked_signature(id).is_some() {
+                if engine.unmarked_signature(id).is_some()
+                    && (engine.private_summary_revision == Some(engine.graph.revision())
+                        || !engine
+                            .source_facts(&path)
+                            .is_some_and(|f| (f.body || f.generator) && !f.constant))
+                {
                     let entry = engine.signatures[&id].clone();
                     let _ = cell.set(HeaderProduct {
                         result: entry.result(),
@@ -94,6 +111,7 @@ impl HeaderProducts {
         Arc::new(Self {
             rows,
             generation: AtomicU64::new(0),
+            retention: OnceLock::new(),
             environment: engine.environment.clone(),
             adapters: HeaderPhases::capture(&engine.adapters),
             sources: engine.sources.clone(),
@@ -101,7 +119,12 @@ impl HeaderProducts {
             owners: owners.clone(),
             provisional: engine.private_summary_active,
             failure: engine.current_private_summary_failure().cloned(),
-            syntax: HeaderSources::capture(engine),
+            syntax: engine
+                .header_products
+                .as_ref()
+                .map(|headers| headers.syntax.clone())
+                .unwrap_or_else(|| Arc::new(HeaderSources::capture(engine))),
+            private: private::PrivateProducts::capture(engine),
             declarations: engine.declarations.header_inputs(),
             catalog: engine.catalog.clone(),
             types: engine.types.clone(),
@@ -180,7 +203,8 @@ impl HeaderProducts {
             .archive(self.types.clone(), self.owners.clone(), store)
     }
     pub(super) fn summary(&self, id: DefId) -> Option<&hirsel_types::UniqueSummary> {
-        self.summaries.get(&id)
+        self.demanded_summary(id)
+            .or_else(|| self.summaries.get(&id))
     }
     pub(crate) fn owners(&self) -> &Arc<crate::NativeRecordContext> {
         &self.owners
@@ -199,11 +223,24 @@ impl HeaderProducts {
         let cell = self.rows.get(&id)?;
         if cell.get().is_none() {
             let mut engine = self.execution();
-            let _ = self.demand(&mut engine, id);
+            if let Err(error) = self.demand(&mut engine, id) {
+                let _ = cell.set(HeaderProduct {
+                    result: Err(error),
+                    entry: None,
+                    recomputes: 0,
+                    graph_work: 0,
+                    origin: Weak::new(),
+                    accounted: AtomicBool::new(false),
+                });
+            }
         }
         cell.get()
     }
     pub(crate) fn demand(self: &Arc<Self>, engine: &mut QueryEngine, id: DefId) -> SignatureOutput {
+        self.private_product(id)?;
+        if engine.header_products.is_none() {
+            self.adopt_private_products(engine)?;
+        }
         if let Some(failures) = self.failures.get(&id) {
             engine
                 .private_unique_failures
@@ -242,6 +279,22 @@ impl HeaderProducts {
         // Never wait while holding a recursive header stack. Concurrent pure
         // normalizations race only to publish the same immutable source product.
         let recomputes = engine.recompute_count(id.path(), QueryKind::Signature);
+        let bytes = entry
+            .as_ref()
+            .and_then(|entry| crate::memo::retained::retained_signature_entry_bytes(entry))
+            .unwrap_or(0);
+        let mut grant = self
+            .retention
+            .get()
+            .map(|grant| grant.lock().unwrap_or_else(|e| e.into_inner()));
+        if let Some(grant) = &mut grant {
+            **grant = grant.checked_sub(bytes).ok_or_else(|| {
+                QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "header admission".into(),
+                    message: "demanded header exceeds the existing front partition".into(),
+                })
+            })?;
+        }
         if cell
             .set(HeaderProduct {
                 result,
@@ -254,6 +307,8 @@ impl HeaderProducts {
             .is_ok()
         {
             self.generation.fetch_add(1, Ordering::Relaxed);
+        } else if let Some(grant) = &mut grant {
+            **grant += bytes;
         }
         cell.get()
             .expect("a completed producer publishes its row")
@@ -285,6 +340,7 @@ impl QueryEngine {
             return;
         };
         if current {
+            let _ = headers.adopt_private_products(self);
             self.adopt_header_products(&headers);
         } else {
             for (id, product) in headers.completed() {
@@ -327,6 +383,8 @@ impl QueryEngine {
         self.signatures.insert(id, entry.clone());
         if self.private_summary_active {
             self.private_signature_publications.insert(id);
+        } else {
+            self.private_signature_publications.remove(&id);
         }
         self.snapshot_sources.insert(id, Arc::downgrade(entry));
     }

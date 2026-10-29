@@ -7,8 +7,8 @@ use std::sync::OnceLock;
 
 const KIND: u32 = 0x4602_0001;
 type Proofs = Vec<(DefId, UniqueInference)>;
-#[derive(serde::Serialize, serde::Deserialize, Eq, PartialEq)]
-pub(super) struct Facts {
+#[derive(serde::Serialize, serde::Deserialize, Clone, Eq, PartialEq)]
+pub(in crate::queries) struct Facts {
     pub proofs: Proofs,
     pub reads: Reads,
 }
@@ -413,13 +413,58 @@ impl QueryEngine {
         reservation: MemoryReservation,
         registrations: &[Arc<AcceptedFrontRegistration>],
     ) -> Result<MemoryReservation, QueryError> {
+        self.infer_private_modules(
+            reservation
+                .bytes()
+                .saturating_sub(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + 16384),
+            registrations,
+            None,
+        )?;
+        Ok(reservation)
+    }
+    pub(in crate::queries) fn infer_private_module(
+        &mut self,
+        working_bytes: u64,
+        registrations: &[Arc<AcceptedFrontRegistration>],
+        owner: DefId,
+    ) -> Result<Facts, QueryError> {
+        self.private_summary_active = true;
+        self.infer_private_modules(
+            working_bytes,
+            registrations,
+            Some((
+                crate::memo::PackageKey::of(&owner.path().0.package),
+                crate::memo::ModuleKey::of(&owner.path().0.modules),
+            )),
+        )?;
+        self.local_inference()
+            .remove(&(
+                crate::memo::PackageKey::of(&owner.path().0.package),
+                crate::memo::ModuleKey::of(&owner.path().0.modules),
+            ))
+            .map_or_else(
+                || {
+                    Ok(Facts {
+                        proofs: vec![],
+                        reads: Reads::empty(),
+                    })
+                },
+                Ok,
+            )
+    }
+    fn infer_private_modules(
+        &mut self,
+        working_bytes: u64,
+        registrations: &[Arc<AcceptedFrontRegistration>],
+        selected: Option<(crate::memo::PackageKey, crate::memo::ModuleKey)>,
+    ) -> Result<(), QueryError> {
         let Some(modes) = self
             .adapters
             .modes
             .clone()
             .filter(|m| m.infers_private_unique())
         else {
-            return Ok(reservation);
+            return Ok(());
         };
         for registration in registrations {
             registration.validate(self)?;
@@ -430,6 +475,9 @@ impl QueryEngine {
         let mut pending = Vec::new();
         self.private_summary_reads.clear();
         for ((package, module), paths) in self.inference_groups() {
+            if selected.is_some_and(|selected| selected != (package, module)) {
+                continue;
+            }
             let mut generated = Vec::new();
             for path in &paths {
                 if self.source_facts(path).is_some_and(|f| f.generator) {
@@ -663,9 +711,7 @@ impl QueryEngine {
             };
             // The same per-module fixed point runs with declarations captured
             // by the existing worker. It never enters a scalar body query.
-            let working = reservation
-                .bytes()
-                .saturating_sub(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + 16384);
+            let working = working_bytes;
             let mut metadata = crate::NativeMetadataWeight::default();
             metadata.add(size_of::<Inference>() + inputs.capacity() * size_of::<Input>());
             metadata.tree::<DefPath, Vec<Arc<ItemSyntax>>>(2 * self.items.len());
@@ -728,8 +774,10 @@ impl QueryEngine {
         }
         self.adopt_completed_headers();
         self.publish_private_summaries(inferred)?;
-        self.private_summary_revision = Some(self.graph.revision());
-        Ok(reservation)
+        if selected.is_none() {
+            self.private_summary_revision = Some(self.graph.revision());
+        }
+        Ok(())
     }
     pub(super) fn standalone_private_inference(&mut self) {
         if self

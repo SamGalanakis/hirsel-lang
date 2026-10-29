@@ -572,7 +572,14 @@ impl SourceIndexState {
         engine.store_identity = compiler;
         self.restore(&mut engine).map_err(|_| invalid())?;
         engine.types = headers.source_types().clone();
+        headers.adopt_private_products(&mut engine)?;
         engine.adopt_header_products(headers);
+        // A proved but still undemanded private header remains absent. Its
+        // ordinary producer will publish it on the next actual header demand.
+        for id in std::mem::take(&mut engine.private_signature_publications) {
+            engine.signatures.remove(&id);
+            engine.graph.remove(&MemoKey::new(QueryKind::Signature, id));
+        }
         let mut state = engine.into_source_index_owner(allowance)?;
         state.pending_headers = Arc::downgrade(headers);
         state.completed_generation = headers.generation();
