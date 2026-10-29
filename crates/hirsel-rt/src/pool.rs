@@ -141,6 +141,7 @@ pub(crate) struct Exec {
     chain: Cell<hirsel_free::schedule::Budget>,
     pub(crate) leaving: Cell<Option<free::Leave>>,
     ready_epoch: AtomicU64,
+    scoped_placement: Arc<cpu_scoped::Placement>,
     /// Foreign frames may suspend here, but may never resume on another thread.
     foreign_frames: AtomicU32,
     exit_pending: Cell<bool>,
@@ -185,6 +186,7 @@ impl Exec {
             chain: Cell::default(),
             leaving: Cell::new(None),
             ready_epoch: AtomicU64::new(0),
+            scoped_placement: Arc::new(cpu_scoped::Placement::default()),
             foreign_frames: AtomicU32::new(0),
             exit_pending: Cell::new(false),
             home_driver: Default::default(),
@@ -1389,6 +1391,7 @@ fn worker_main_reserved(
     while unsafe { serve(run, &exec) } {}
     // SAFETY: the exec's last phase ended; `exited` below acknowledges its retirement.
     unsafe { exec.recording.retire(&*run) };
+    exec.scoped_placement.restore();
     unsafe { cpu_scoped::probe::worker(run, &exec, "exit") };
     EXEC.with(|e| e.set(std::ptr::null()));
     if matches!(exec.kind, Kind::Compute(_)) {

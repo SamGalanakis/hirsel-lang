@@ -45,6 +45,29 @@ pub(super) fn cpus() -> Result<Vec<usize>, Refusal> {
     Ok(cpus)
 }
 
+/// The assigned credit and its executor share restoration custody. Native
+/// exit restores under this lock before the TID may be reused; a retained
+/// stopped domain can then drop its calling credit without touching that TID.
+#[derive(Default)]
+pub(in crate::pool) struct State(std::sync::Mutex<Option<Pin>>);
+impl State {
+    pub(in crate::pool) fn pin(&self, cpu: usize) -> Result<(), Refusal> {
+        let mut slot = self.0.lock().unwrap();
+        assert!(slot.is_none(), "one scoped placement per executor");
+        *slot = Some(Pin::new(cpu)?);
+        Ok(())
+    }
+    pub(in crate::pool) fn restore(&self) {
+        let mut slot = self.0.lock().unwrap();
+        // Keep the lock through the syscall: native exit must wait for any
+        // concurrent domain drain to finish restoring this live owner.
+        drop(slot.take());
+    }
+    pub(super) fn tid(&self) -> libc::pid_t {
+        self.0.lock().unwrap().as_ref().unwrap().tid()
+    }
+}
+
 pub(super) struct Pin {
     tid: libc::pid_t,
     previous: Vec<libc::c_ulong>,

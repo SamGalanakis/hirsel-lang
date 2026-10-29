@@ -10,6 +10,7 @@ use std::sync::{
 
 pub(crate) mod ledger;
 mod placement;
+pub(super) use placement::State as Placement;
 pub(crate) mod probe;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -64,7 +65,7 @@ pub(super) struct Assigned {
     exec: Arc<Exec>,
     topology: Option<Arc<ledger::Topology>>,
     cpu: Option<usize>,
-    placement: Option<placement::Pin>,
+    placement: Option<Arc<Placement>>,
 }
 
 impl Permits {
@@ -157,7 +158,8 @@ impl Drop for Reservation {
 impl Assigned {
     pub(super) unsafe fn pin(&mut self, run: *mut RunShared) -> Result<(), Refusal> {
         if let Some(cpu) = self.cpu {
-            let pin = placement::Pin::new(cpu)?;
+            let pin = Arc::clone(&self.exec.scoped_placement);
+            pin.pin(cpu)?;
             if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
                 probe.placement(self.exec.scoped_index().unwrap(), pin.tid(), cpu);
             }
@@ -171,7 +173,9 @@ impl Drop for Assigned {
     fn drop(&mut self) {
         // The worker has exited compiled code. Its idle transitions did not
         // return this credit to the process, even after capacity contracted.
-        self.placement.take();
+        if let Some(placement) = self.placement.take() {
+            placement.restore();
+        }
         let mut state = self.permits.state.lock().unwrap();
         assert!(self.exec.reserved.swap(false, Ordering::AcqRel));
         self.exec.held.store(false, Ordering::Release);
@@ -982,6 +986,59 @@ mod tests {
             }
             assert_eq!(permits.available(), 4);
             assert!(!controller.reserved.load(Ordering::Acquire));
+        }
+    }
+
+    #[test]
+    fn retained_calling_credit_cannot_restore_a_tid_after_its_native_executor_exits() {
+        unsafe {
+            let mut ctx = std::ptr::null_mut();
+            assert_eq!(
+                crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+                0
+            );
+            let run = (*ctx).run_ptr();
+            let execs = super::super::init_execs(ctx);
+            let permits = Arc::new(Permits::new(1));
+            let exec = Exec::new(Kind::Scoped(0), std::ptr::null_mut(), false);
+            let mut assigned = permits
+                .try_reserve(1)
+                .unwrap()
+                .assign(exec.clone())
+                .unwrap();
+            assigned.cpu = Some(placement::cpus().unwrap()[0]);
+            let retained = Arc::new(std::sync::Mutex::new(Some(assigned)));
+            exec.post(Post::Exit, None);
+            execs.holders.count.fetch_add(1, Ordering::AcqRel);
+            let thread = std::thread::spawn({
+                let run = RunPtr(run);
+                let exec = exec.clone();
+                let holders = execs.holders.clone();
+                let retained = retained.clone();
+                move || {
+                    retained
+                        .lock()
+                        .unwrap()
+                        .as_mut()
+                        .unwrap()
+                        .pin(run.0)
+                        .unwrap();
+                    // The credit stays outside this native worker, as it does
+                    // for a stopped run's original calling executor.
+                    super::super::worker_main_reserved(run, exec, holders, None, None);
+                }
+            });
+            thread.join().unwrap();
+            assert!(exec.exited.load(Ordering::Acquire));
+            assert_eq!(
+                permits.available(),
+                0,
+                "the retained domain still owns its credit"
+            );
+            drop(retained.lock().unwrap().take());
+            assert_eq!(permits.available(), 1);
+            assert_eq!(execs.holders.count.load(Ordering::Acquire), 1);
+            crate::context::hirsel_rt_v2_ctx_destroy(ctx);
         }
     }
 
