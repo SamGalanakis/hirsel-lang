@@ -73,7 +73,7 @@ fn import_engine_with_validation(
             .get_content(output.product.layout_closure)
             .unwrap()
             .to_vec();
-        pending.extend(output.dependencies.iter().cloned());
+        pending.extend(output.facts.dependencies.iter().cloned());
         bodies.insert(key.instance.encoding().to_vec(), (value, layouts));
     }
     assert!(!bodies.is_empty());
