@@ -514,7 +514,11 @@ pub(crate) unsafe fn issue(
     ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
-    if matches!(request, Request::Tasks { .. } | Request::TestTasks { .. }) {
+    if matches!(request, Request::Tasks { .. } | Request::TestTasks { .. })
+        || (may_park(&request) && unsafe { crate::pool::wide((*ctx).run_ref()) })
+    {
+        // A deferred run must use its admitted wait/retirement protocol at
+        // the first parkable host effect, even before it projects Tasks.
         unsafe { crate::tasks::ordered::admission::Admission::activate(ctx) };
     }
     if crate::tasks::free::host::native::enabled(ctx) {
