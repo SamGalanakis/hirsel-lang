@@ -170,7 +170,8 @@ impl QueryEngine {
     /// source/provider access or query. Shared core TypeBase data remains with
     /// the original process owner; custom bases refuse until independently owned.
     /// Unfinished transactions and generated namespaces refuse this S0 slice.
-    pub fn source_index_bytes(&self) -> Result<u64, QueryError> {
+    pub fn source_index_bytes(&mut self) -> Result<u64, QueryError> {
+        self.adopt_completed_headers();
         self.source_index_bytes_with_types(self.source_types()?.retained_bytes())
     }
 
@@ -765,7 +766,7 @@ mod tests {
                 }
                 let budget = ProcessBudget::new(64 << 20);
                 let ((state, required), actual) = crate::test_alloc::measured(|| {
-                    let engine = engine(&paths);
+                    let mut engine = engine(&paths);
                     let (required, inspection) = crate::test_alloc::measured_independent(|| {
                         engine.source_index_bytes().unwrap()
                     });

@@ -295,8 +295,18 @@ impl QueryEngine {
     fn load_inference(&mut self, path: &DefPath) -> Option<Facts> {
         let key = self.inference_key(path);
         let store = self.result_store.clone()?;
-        let variant = StoredEntry::load(&*store, &key)
-            .resolve_current(&*store, &key, |key| self.observe(path, key))?;
+        let entry = StoredEntry::load(&*store, &key);
+        if path.0.package.name == "cross_private" {
+            for variant in &entry.variants {
+                eprintln!("INFERENCE-EXPECTED {path} {:?}", variant.reads);
+            }
+        }
+        let variant = entry
+            .resolve_current(&*store, &key, |key| {
+                let value = self.observe(path, key);
+                eprintln!("INFERENCE-READ {path} {key:?} {value:?}");
+                value
+            })?;
         let facts: Facts = self.decode_record(&variant.payload)?;
         (facts.reads == variant.reads
             && facts

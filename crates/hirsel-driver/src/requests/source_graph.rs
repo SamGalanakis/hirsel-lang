@@ -1300,7 +1300,7 @@ pub(super) fn install(
         .collect::<Vec<_>>();
     store.demand(&program.engine.front_store_keys(&root));
     let plan_within = |limits,
-                       program: &LoadedProgram,
+                       program: &mut LoadedProgram,
                        definitions: &[DefPath],
                        footprint,
                        run_input_bytes,
@@ -1357,7 +1357,7 @@ pub(super) fn install(
     };
     let mut plan = plan_within(
         limits,
-        &program,
+        &mut program,
         &definitions,
         footprint,
         run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),
@@ -1502,7 +1502,7 @@ pub(super) fn install(
     }
     plan = plan_within(
         final_limits,
-        &program,
+        &mut program,
         &definitions,
         footprint,
         run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),

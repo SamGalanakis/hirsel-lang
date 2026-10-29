@@ -49,7 +49,7 @@ fn source_index_loader_preserves_headers_and_retires_removed_sources() {
             })
         };
         let budget = ProcessBudget::new(512 << 20);
-        let carry = |program: LoadedProgram| {
+        let carry = |mut program: LoadedProgram| {
             let bytes = program.engine.source_index_bytes().unwrap();
             program
                 .engine
