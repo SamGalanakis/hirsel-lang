@@ -74,9 +74,7 @@ impl super::driver::Driver {
 impl BatchCommit<'_> {
     pub(super) fn summary(&mut self) -> Option<RetiredSummary> {
         let task = self.authority.task();
-        let batch = self.authority.state();
-        batch.materialize(task);
-        batch.retire_summary(task, self.state)
+        self.authority.state().retire_summary(task, self.state)
     }
 
     pub(super) fn settle(
@@ -225,16 +223,15 @@ impl Batch {
         // Publish the complete immutable envelope only after the native save.
         // The actual head (or acknowledged withdrawal) transfers it to Jobs.
         unsafe { (*summary).phase = super::ahead::cpu_handoff::SUMMARY_PUBLISHED };
-        if let Some(identity) = &row.identity {
-            identity.lease().publication.publish(Frozen {
-                before,
-                summary,
-                value,
-            });
-        } else {
-            assert!(row.summary.replace((summary, value)).is_none());
-            self.jobs.pause(job, before);
-        }
+        let identity = row
+            .identity
+            .as_ref()
+            .expect("a CPU publication has its canonical binding");
+        identity.lease().publication.publish(Frozen {
+            before,
+            summary,
+            value,
+        });
         Ok(())
     }
 
@@ -243,6 +240,7 @@ impl Batch {
         task: TaskId,
         state: &mut Settled,
     ) -> Option<RetiredSummary> {
+        self.materialize(task);
         let job = self.ordinal(task)?;
         let row = &mut self.records[job];
         let (summary, _) = row.summary.as_ref()?;
@@ -710,7 +708,7 @@ mod tests {
             fuel: 20,
         };
         let mut batch = Batch::new(&grant(100), 4, 2, state);
-        batch.claim(7, 4, 0);
+        batch.claim_for_test(7, 4, 0);
         assert_eq!(
             batch.settle(
                 7,
@@ -723,7 +721,7 @@ mod tests {
         // A parent/result rest can credit and charge between two jobs.
         state.level = 30;
         state.fuel = 12;
-        batch.claim(9, 4, 1);
+        batch.claim_for_test(9, 4, 1);
         assert_eq!(
             batch.settle(
                 9,
@@ -750,8 +748,8 @@ mod tests {
                 fuel: 20,
             };
             let mut batch = Batch::new(&grant(100), width, 2, state);
-            batch.claim(7, width, 0);
-            batch.claim(9, width, 1);
+            batch.claim_for_test(7, width, 0);
+            batch.claim_for_test(9, width, 1);
             assert!(
                 !batch.owns(9 + (1 << 32), 1),
                 "a recycled slot has no claim"
@@ -871,8 +869,8 @@ mod tests {
                 retained_count: 0,
                 retained: std::ptr::null(),
             });
-            batch.claim(7, 4, 0);
-            batch.claim(9, 4, 1);
+            batch.claim_for_test(7, 4, 0);
+            batch.claim_for_test(9, 4, 1);
             // The younger physical publication must leave the tape untouched.
             batch
                 .publish(
@@ -1047,8 +1045,8 @@ mod commit_tests {
             max_batch_bytes: 100,
         };
         let mut batch = Batch::new(&grant, 4, 2, driver.frontier.as_ref().unwrap().settled);
-        batch.claim(7, 4, 1);
-        batch.claim(9, 4, 0);
+        batch.claim_for_test(7, 4, 1);
+        batch.claim_for_test(9, 4, 0);
         driver.cpu_batch = Some(batch);
         assert!(
             driver.cpu_commit(7).is_some(),

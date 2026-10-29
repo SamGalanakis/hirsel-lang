@@ -84,6 +84,16 @@ impl Batch {
         assert!(row.verdict.replace(verdict).is_none());
     }
 
+    #[cfg(test)]
+    pub(super) fn claim_for_test(&mut self, task: TaskId, width: u32, ordinal: u64) {
+        self.claim(task, width, ordinal);
+        self.bind_identity(
+            task,
+            vec![ordinal as u32].into_boxed_slice(),
+            TaskLease::new(crate::tasks::registry::TaskKey::from_word(task)),
+        );
+    }
+
     pub(in crate::tasks::ordered) fn identity(&self, task: TaskId) -> Option<Arc<ClaimIdentity>> {
         self.records[self.ordinal(task)?].identity.clone()
     }

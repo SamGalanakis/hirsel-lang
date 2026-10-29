@@ -42,8 +42,8 @@ mod tests {
             let head = (3 << 32) | 7;
             let younger = (5 << 32) | 9;
             let mut batch = Batch::new(&grant, width, 2, state);
-            batch.claim(head, width, 0);
-            batch.claim(younger, width, 1);
+            batch.claim_for_test(head, width, 0);
+            batch.claim_for_test(younger, width, 1);
             let value = 42u64;
             let roots = [std::ptr::dangling_mut::<Header>()];
             let mut summary = Summary {
