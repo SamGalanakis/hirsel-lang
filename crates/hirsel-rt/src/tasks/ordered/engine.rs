@@ -365,10 +365,36 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
     result.map_err(Stop::BudgetExceeded)
 }
 
-/// Before taking a worker heap/pool borrow. A denied reservation leaves the
-/// request and logical budget untouched; only head promotion can resume it.
-pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
+pub(crate) enum AllocationReservation {
+    Logical(u64),
+    Backing,
+}
+
+/// Before taking a worker heap/pool borrow. Logical admission can await head
+/// promotion; backing admission can await younger owners' physical saves.
+pub(crate) fn reserve_allocation(
+    ctx: *mut TaskCtx,
+    reservation: AllocationReservation,
+) -> Stopped<()> {
+    let bytes = match reservation {
+        AllocationReservation::Logical(bytes) => bytes,
+        AllocationReservation::Backing => {
+            super::ahead::cpu_withdrawal::wait_for_backing(ctx);
+            return Ok(());
+        }
+    };
     unsafe { super::ahead::barrier(ctx) };
+    let task = current(ctx);
+    if with_driver(ctx, |driver| {
+        driver
+            .cpu_batch
+            .as_ref()
+            .is_some_and(|batch| batch.limit(task).is_some())
+    }) {
+        // Ordinary runtime frames have no revocable allocation checkpoint.
+        // Only the saved CPU request path can borrow the head's backing.
+        at_head(ctx)?;
+    }
     if lease_cpu_allocation(ctx, bytes).is_some() {
         unsafe {
             (*ctx)
@@ -2601,6 +2627,9 @@ pub(crate) fn ahead_refill(ctx: *mut TaskCtx) -> Stopped<bool> {
         return Ok(false);
     }
     if with_driver(ctx, |d| d.head_ready(task)) {
+        if super::ahead::cpu_restart::active(ctx) {
+            return Ok(false);
+        }
         super::host::retire_return(ctx);
         let before = stretch(ctx);
         settle_head(ctx, &before)?;
@@ -2613,6 +2642,9 @@ pub(crate) fn ahead_refill(ctx: *mut TaskCtx) -> Stopped<bool> {
 /// observes cancellation nor adds a semantic operation, yield or poll.
 pub(crate) fn host_segment_barrier(ctx: *mut TaskCtx) -> Stopped<bool> {
     advance(ctx)?;
+    if super::ahead::cpu_restart::active(ctx) {
+        return Ok(false);
+    }
     let task = current(ctx);
     if !with_driver(ctx, |d| d.head_ready(task)) {
         return Ok(false);

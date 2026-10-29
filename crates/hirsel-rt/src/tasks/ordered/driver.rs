@@ -134,6 +134,12 @@ impl Driver {
         }
     }
 
+    pub(super) fn saved_grant(&self, task: TaskId) -> Option<u64> {
+        self.fuel_grants
+            .iter()
+            .find_map(|(key, value)| (*key == task).then_some(*value))
+    }
+
     pub(super) fn release_grant(&mut self, task: TaskId) -> Option<u64> {
         self.fuel_grants
             .iter()

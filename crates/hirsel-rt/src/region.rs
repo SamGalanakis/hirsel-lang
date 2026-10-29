@@ -1089,10 +1089,13 @@ unsafe fn reserve_in_mode(
         };
         if !prepared {
             crate::alloc::ordered_reserve(ctx, canonical_size(need));
-            let backing = ctx.pool().reserve_cpu_backing(need);
-            if backing.is_err() {
-                crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
+            if ctx.pool().reserve_cpu_backing(need).is_err() {
+                crate::alloc::ordered_backing(ctx);
+                if ctx.pool().reserve_cpu_backing(need).is_err() {
+                    crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
+                }
             }
+            crate::tasks::ordered::ahead::cpu_withdrawal::backing_admitted(ctx);
         }
         // Preflight may migrate. Reborrow the task-local region only after
         // it returns, then take the new worker's pool.

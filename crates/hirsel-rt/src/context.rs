@@ -596,11 +596,21 @@ impl TaskCtx {
     /// The running worker's heap.
     #[inline(always)]
     pub(crate) fn heap(&mut self) -> &mut Heap {
+        let private = crate::tasks::ordered::ahead::cpu_restart::heap(self);
+        if !private.is_null() {
+            // SAFETY: the dispatch owner exclusively owns this attempt.
+            return unsafe { &mut *private };
+        }
         self.worker().heap()
     }
     /// The running worker's heap, read only.
     #[inline(always)]
     pub(crate) fn heap_ref(&self) -> &Heap {
+        let private = crate::tasks::ordered::ahead::cpu_restart::heap(self);
+        if !private.is_null() {
+            // SAFETY: only the dispatched task accesses its attempt heap.
+            return unsafe { &*private };
+        }
         // SAFETY: as for `worker`.
         unsafe { &*(*self.worker).heap }
     }
@@ -685,13 +695,14 @@ impl TaskCtx {
         // SAFETY: caller contract.
         unsafe {
             (*ctx).worker = worker;
+            let heap = (*ctx).heap() as *mut Heap;
             match (*(*ctx).run).worker_metrics.as_deref() {
-                Some(metrics) if (*worker).heap().stale(&(*ctx).view) => {
+                Some(metrics) if (*heap).stale(&(*ctx).view) => {
                     let started = std::time::Instant::now();
-                    (*worker).heap().bind(&raw mut (*ctx).view);
+                    (*heap).bind(&raw mut (*ctx).view);
                     metrics.refresh(started.elapsed());
                 }
-                _ => (*worker).heap().bind(&raw mut (*ctx).view),
+                _ => (*heap).bind(&raw mut (*ctx).view),
             }
             #[cfg(feature = "measurement")]
             {

@@ -185,3 +185,8 @@ fn ordered_allocating_job_arena_reuses_buffers_and_returns_an_escaping_owner() {
 fn ordered_allocating_job_arena_preserves_serial_receipts_and_exact_trace() {
     ordered_arena_receipts_match_serial_and_exact_witness();
 }
+
+#[test]
+fn ordered_allocating_pressure_agrees_across_four_engines_and_cross_replay() {
+    cpu_fixture_allocating_pressure_four_engine_agreement(4);
+}

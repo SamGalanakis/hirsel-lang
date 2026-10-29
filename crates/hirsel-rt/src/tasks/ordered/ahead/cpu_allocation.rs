@@ -14,6 +14,7 @@ const LEASED: u32 = 4;
 pub(super) const REASON: u32 = 8;
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub(super) struct Request {
     phase: u32,
     index: u32,
@@ -66,7 +67,11 @@ impl Request {
             }
         }
         assert!(matches!(self.phase, SUMMARIZED | CHARGED | LEASED));
-        Ok(true)
+        let task = super::super::engine::current(ctx);
+        Ok(super::cpu_restart::active(ctx)
+            || super::super::engine::with_driver(ctx, |driver| {
+                driver.frontier.as_ref().unwrap().head() == Some(task)
+            }))
     }
     pub(super) fn complete(&mut self) {
         self.phase = IDLE;

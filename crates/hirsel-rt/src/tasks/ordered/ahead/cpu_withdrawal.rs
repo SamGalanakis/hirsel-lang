@@ -41,6 +41,43 @@ impl Withdrawal {
     }
 }
 
+/// Ordinary canonical allocation has Rust frames on its own task stack. It
+/// can suspend through the shared dispatcher, retaining no allocator borrow.
+pub(in crate::tasks::ordered) fn wait_for_backing(ctx: *mut TaskCtx) {
+    if !engine::on(ctx) {
+        return;
+    }
+    let task = engine::current(ctx);
+    if !engine::with_driver(ctx, |driver| {
+        driver.head_ready(task)
+            && driver
+                .cpu_batch
+                .as_ref()
+                .is_some_and(|batch| batch.limit(task).is_some())
+    }) {
+        return;
+    }
+    request(ctx);
+    if !engine::with_driver(ctx, |driver| {
+        driver
+            .cpu_withdrawal
+            .as_ref()
+            .is_some_and(|withdrawal| withdrawal.head == task)
+    }) {
+        return;
+    }
+    while !acknowledged(ctx) {
+        engine::suspend(ctx, task, true);
+    }
+}
+
+pub(crate) fn backing_admitted(ctx: *mut TaskCtx) {
+    if engine::on(ctx) {
+        let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+        release(ctx);
+    }
+}
+
 /// Idle with the role held, after a head's physical backing refusal. No
 /// pointed-to mapper state, charge or block is changed by the save request.
 pub(super) fn request(ctx: *mut TaskCtx) {

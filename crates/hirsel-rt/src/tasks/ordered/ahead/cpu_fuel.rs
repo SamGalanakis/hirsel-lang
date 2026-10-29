@@ -1,6 +1,6 @@
 //! Owner-local fuel between lifecycle entries. This only accumulates compiled
 //! points; the real Stretch and Jobs still decide the first language stop.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Fuel {
     issued: Option<u64>,
     pending: u64,

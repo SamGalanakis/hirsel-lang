@@ -371,6 +371,7 @@ fn ordered_budget_services_are_guarded_and_do_not_create_semantic_operations() {
     let graph = source();
     for (caller, service) in [
         ("alloc::ordered_reserve", PHYSICAL_BUDGET_SERVICES[0]),
+        ("alloc::ordered_backing", PHYSICAL_BUDGET_SERVICES[0]),
         ("budget::refill", PHYSICAL_BUDGET_SERVICES[1]),
     ] {
         assert!(

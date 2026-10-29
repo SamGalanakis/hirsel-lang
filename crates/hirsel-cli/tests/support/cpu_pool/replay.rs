@@ -105,7 +105,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {{
       let mut out = [job]
       list.reserve(mut out, 128u64)
       if job == 1u64 {{
-        list.reserve(mut out, 65536u64)
+        list.reserve(mut out, 262144u64)
         let mut delay = job
         for i in 0u64..2000000u64 {{
           delay = int.wrapping_add(int.wrapping_mul(delay, 6364136223846793005u64), i)
@@ -144,15 +144,14 @@ pub fn main(rt: Io) -> Result[(), GrantError] {{
             .unwrap(),
     );
     let tape = root.join("success.tape");
-    checked(
+    checked(qual_native_output(
         Command::new(&executable)
             .arg("--hirsel-grants")
             .arg(&grants)
             .arg("--hirsel-record")
-            .arg(&tape)
-            .output()
-            .unwrap(),
-    );
+            .arg(&tape),
+        &root,
+    ));
     let recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
     let summary = recording
         .events
@@ -180,6 +179,9 @@ pub fn main(rt: Io) -> Result[(), GrantError] {{
         }
         fs::write(&grants, authority.to_string()).unwrap();
         for grant_only in [false, true] {
+            eprintln!(
+                "original 2 MiB/2 MiB W{width} {backend}, fueled={fueled}, grant_only={grant_only}"
+            );
             ordered_allocation_memory_cut(&executable, &root, &grants, summary, grant_only);
         }
     }
@@ -218,16 +220,17 @@ fn ordered_allocation_memory_cut(
         fs::write(&limited, authority.to_string()).unwrap();
         let tape = root.join("memory-cut.tape");
         let events = root.join("memory-cut.events");
-        let live = Command::new(executable)
-            .env("HIRSEL_RT_BOUNDED_STOP_TRACE", "1")
-            .arg("--hirsel-grants")
-            .arg(&limited)
-            .arg("--hirsel-record")
-            .arg(&tape)
-            .arg("--hirsel-trace-events")
-            .arg(&events)
-            .output()
-            .unwrap();
+        let live = qual_native_output(
+            Command::new(executable)
+                .env("HIRSEL_RT_BOUNDED_STOP_TRACE", "1")
+                .arg("--hirsel-grants")
+                .arg(&limited)
+                .arg("--hirsel-record")
+                .arg(&tape)
+                .arg("--hirsel-trace-events")
+                .arg(&events),
+            root,
+        );
         assert_eq!(
             live.status.code(),
             Some(hirsel_run_schema::exit::BUDGET_EXCEEDED),
@@ -269,15 +272,16 @@ fn ordered_allocation_memory_cut(
         } else {
             reference = Some(cut);
         }
-        let replayed = Command::new(executable)
-            .env("HIRSEL_RT_BOUNDED_STOP_TRACE", "1")
-            .arg("--hirsel-replay")
-            .arg(&tape)
-            .arg("--hirsel-trace-events")
-            .arg(&events)
-            .env("HIRSEL_RT_WORKERS", "1")
-            .output()
-            .unwrap();
+        let replayed = qual_native_output(
+            Command::new(executable)
+                .env("HIRSEL_RT_BOUNDED_STOP_TRACE", "1")
+                .arg("--hirsel-replay")
+                .arg(&tape)
+                .arg("--hirsel-trace-events")
+                .arg(&events)
+                .env("HIRSEL_RT_WORKERS", "1"),
+            root,
+        );
         assert_eq!(replayed.status.code(), live.status.code(), "{replayed:?}");
         assert_eq!(replayed.stdout, live.stdout);
         assert_eq!(replayed.stderr, live.stderr);

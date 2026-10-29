@@ -460,6 +460,15 @@ impl<P, R> Frontier<P, R> {
         self.free_speculative(task, bytes);
     }
 
+    /// Revoke an unretired CPU allocation suffix, before any semantic log.
+    pub(crate) fn discard_cpu_attempt(&mut self, task: TaskId) {
+        let row = self.tasks.get_mut(&task).expect("a live CPU attempt");
+        assert!(row.log.is_empty(), "CPU rollback cannot undo an operation");
+        self.physical -= row.speculative_bytes;
+        row.speculative_bytes = 0;
+        row.open_speculative_bytes = 0;
+    }
+
     /// Fuel already consumed in this task's logged future turns.
     pub(crate) fn logged_fuel(&self, task: TaskId) -> u64 {
         self.tasks[&task].log.iter().fold(0, |fuel, entry| {

@@ -82,9 +82,11 @@ pub(crate) struct Native {
     pub(super) arena: super::cpu_arena::Arena,
     pub(crate) cpu_claim: Option<std::sync::Arc<super::super::cpu::ClaimIdentity>>,
     pub(crate) cpu_fuel: super::cpu_fuel::Fuel,
+    pub(super) restart: super::cpu_restart::State,
 }
 impl Drop for Native {
     fn drop(&mut self) {
+        self.restart.discard(&self.arena);
         // Normal cleanup has left this physical record. A stopped, retained
         // native worker never gets here until its actual native owner exits.
         if let Some(identity) = &self.cpu_claim
@@ -374,6 +376,7 @@ impl Native {
             arena: super::cpu_arena::Arena::new(),
             cpu_claim: None,
             cpu_fuel: super::cpu_fuel::Fuel::default(),
+            restart: super::cpu_restart::State::new(certificate.preclaimed),
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -482,7 +485,12 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                 saved.check(ctx, &*native, owner);
             }
             let run = (*ctx).run_ptr();
-            let arena_ready = if (*run).control.stopped().is_some() {
+            super::cpu_restart::prepare(ctx, native, sp);
+            let revoked = super::cpu_restart::must_revoke(ctx, native);
+            if revoked {
+                super::cpu_restart::rollback(ctx, native);
+            }
+            let arena_ready = if revoked || (*run).control.stopped().is_some() {
                 false
             } else {
                 match super::cpu_arena::flush(ctx, native) {
@@ -608,6 +616,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                 }
             }
             if pause {
+                super::cpu_restart::rollback(ctx, native);
                 if !private(ctx) && (*run).control.stopped().is_none() {
                     let task = super::super::engine::current(ctx);
                     super::super::engine::with_driver(ctx, |d| d.suspending(task, true));

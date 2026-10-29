@@ -96,3 +96,8 @@ fn ordered_empty_list_mapper_agrees_across_four_engines_and_replay() {
 fn ordered_copied_list_mapper_agrees_across_four_engines_and_replay() {
     cpu_fixture_copied_list_four_engine_agreement(16);
 }
+
+#[test]
+fn ordered_allocating_pressure_agrees_across_four_engines_and_cross_replay() {
+    cpu_fixture_allocating_pressure_four_engine_agreement(16);
+}

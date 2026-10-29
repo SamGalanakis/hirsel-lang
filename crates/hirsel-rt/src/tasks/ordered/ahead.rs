@@ -16,6 +16,7 @@ pub(crate) mod cpu_allocation;
 pub(crate) mod cpu_arena;
 pub(crate) mod cpu_fuel;
 pub mod cpu_handoff;
+pub(crate) mod cpu_restart;
 pub(crate) mod cpu_roots;
 pub(crate) mod cpu_withdrawal;
 pub(crate) mod cpu_worker;

@@ -12,11 +12,11 @@ pub(crate) use charge::Charge;
 
 /// Owner-local journal: meter callbacks hold a heap borrow and cannot reach a
 /// scheduler. Read only the task's compiled fuel word and this disjoint field.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Local {
     journal: Option<Box<Journal>>,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Journal {
     fuel: i64,
     charges: Vec<Charge>,

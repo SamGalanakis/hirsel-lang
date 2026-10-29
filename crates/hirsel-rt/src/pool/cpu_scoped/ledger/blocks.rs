@@ -23,6 +23,16 @@ pub(crate) struct Observed {
     generation: u64,
 }
 
+#[cfg(all(
+    feature = "system-allocator",
+    not(any(feature = "diagnostic", feature = "measurement"))
+))]
+impl Block {
+    pub(crate) fn pointer(self) -> *mut Header {
+        std::ptr::with_exposed_provenance_mut(self.address)
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Blocks {
     generation: u64,
@@ -116,13 +126,21 @@ impl Blocks {
             .checked_add(1)
             .expect("CPU block generation");
         let block = Block {
-            address: block.addr(),
+            // Revocation can recover the physical pointer after logical
+            // custody ended, so expose its provenance when registering it.
+            address: block as usize,
             generation: self.generation,
             owner,
             region,
         };
         slot.insert(block);
         block
+    }
+
+    /// Revoke all fresh storage of an unpublished pure attempt.
+    pub(crate) fn discard(&mut self, owner: Owner) {
+        self.live.retain(|_, block| block.owner != owner);
+        self.regions.retain(|_, registered| *registered != owner);
     }
 
     /// Once mapper cleanup finishes, ordinary values own escaped results.

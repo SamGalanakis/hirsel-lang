@@ -2259,8 +2259,12 @@ pub(crate) unsafe fn allocation_preflight(ctx: *mut TaskCtx, index: u32, extent:
     // No heap reference survives refusal handling. CPU ahead work can use
     // this same preflight result to save/withdraw instead of selecting a stop.
     if unsafe { cpu_preflight(ctx, index, extent, align) }.is_err() {
-        crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
+        unsafe { ordered_backing(ctx) };
+        if unsafe { cpu_preflight(ctx, index, extent, align) }.is_err() {
+            crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
+        }
     }
+    crate::tasks::ordered::ahead::cpu_withdrawal::backing_admitted(ctx);
 }
 
 /// Internal allocating operations use the same admission as T01. No caller
@@ -2418,7 +2422,23 @@ pub(crate) unsafe fn ordered_reserve(ctx: *mut TaskCtx, bytes: u64) {
     }
     let result = {
         let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-        crate::tasks::ordered::engine::reserve_allocation(ctx, bytes)
+        crate::tasks::ordered::engine::reserve_allocation(
+            ctx,
+            crate::tasks::ordered::engine::AllocationReservation::Logical(bytes),
+        )
+    };
+    unsafe { crate::stop::check(ctx, result) };
+}
+
+/// A refused physical admission releases every heap/pool borrow before the
+/// guarded allocation service waits for younger owners to return backing.
+pub(crate) unsafe fn ordered_backing(ctx: *mut TaskCtx) {
+    let result = {
+        let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+        crate::tasks::ordered::engine::reserve_allocation(
+            ctx,
+            crate::tasks::ordered::engine::AllocationReservation::Backing,
+        )
     };
     unsafe { crate::stop::check(ctx, result) };
 }

@@ -23,6 +23,16 @@ fn cpu_interpreter_native_policy(width: usize, free: bool) {
 }
 
 fn cpu_interpreter_matrix(width: usize, free: bool, source: &str, scalar: bool) {
+    cpu_interpreter_matrix_grant(width, free, source, scalar, 8 << 20);
+}
+
+fn cpu_interpreter_matrix_grant(
+    width: usize,
+    free: bool,
+    source: &str,
+    scalar: bool,
+    batch_bytes: u64,
+) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     fs::write(root.join("main.hir"), source).unwrap();
@@ -32,7 +42,7 @@ fn cpu_interpreter_matrix(width: usize, free: bool, source: &str, scalar: bool) 
     let grants = root.join("grants.json");
     fs::write(&grants, serde_json::json!({"placement":{"cores":1,"reorder":"auto"},
         "io":{"stdout":"stdout.bytes@1","dirs":[],"tasks":if free { "tasks.free@1" } else { "tasks.cooperative@1" },"cpu":{"provider":"cpu.scoped@1",
-        "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
+        "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":batch_bytes}}}).to_string()).unwrap();
     let interpreted_tape = root.join("interpreted.tape");
     {
         checked(
