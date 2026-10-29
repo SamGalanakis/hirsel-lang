@@ -746,3 +746,8 @@ rests and needs no completion hook. A fully transferred Complete result with
 no updates or releases can then restore its mut inputs and publish immediately.
 Untransferred non-inert owners, callbacks, Free mode, checked execution and
 memory-metered execution keep the ordinary scheduled completion path.
+
+`ownership_trace::run_owned` explicitly observes Resources and owned String/Bytes
+leaves through construction, moves, calls and cleanup, on reference and checked
+execution. Copies and unsupported library producers refuse the diagnostic while
+preserving the source outcome. `run_resources` keeps its resource-only selection.
