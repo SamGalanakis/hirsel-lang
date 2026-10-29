@@ -410,6 +410,32 @@ with open('orphan.pid', 'w') as output: output.write(str(child.pid))
 
 
 class LauncherSelection(LauncherFixture):
+    def test_a_stale_selector_fails_instead_of_running_zero_bodies(self):
+        for args in [('missing_case',), ('--exact', 'pool::missing_case'),
+                     ('--', 'missing_case')]:
+            for shard in ({}, dict(TEST_TOTAL_SHARDS='3', TEST_SHARD_INDEX='0')):
+                with self.subTest(args=args, shard=shard):
+                    run = subprocess.run(['sh', str(LAUNCHER), 'harness', *args],
+                                         cwd=self.root, env=self.env | shard,
+                                         capture_output=True, text=True)
+                    self.assertEqual(run.returncode, 2, run.stderr)
+                    self.assertIn('matched no test bodies', run.stderr)
+                    self.assertIn(args[-1], run.stderr)
+                    self.assertFalse(self.observed.exists())
+
+    def test_empty_listing_and_host_empty_harness_keep_their_status(self):
+        run = subprocess.run(['sh', str(LAUNCHER), 'harness', '--list', 'missing_case'],
+                             cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout, '')
+        self.env['CASES'] = '{}'
+        selected, _ = self.run_cases()
+        self.assertEqual(selected['cases'], [])
+        self.env['CASES'] = json.dumps({'host::unsupported': True})
+        selected, output = self.run_cases('host::unsupported')
+        self.assertEqual(selected['cases'], [])
+        self.assertIn('ignored', output)
+
     def test_isolation_preserves_other_partitions_and_explicit_selection(self):
         before = [self.run_cases(shard=f'{i}/2')[0]['cases'] for i in (1, 2)]
         self.env['HIRSEL_TEST_ISOLATED_CASES'] = 'pool::smoke'
@@ -553,6 +579,7 @@ class LauncherSelection(LauncherFixture):
                 self.assertEqual(threads, '2')
 
     def test_flag_shaped_values_remain_values(self):
+        self.env.pop('HIRSEL_TEST_BINARY')  # This argv probe is a script, not libtest.
         self.env['HIRSEL_TEST_CPUS'] = '2'
         probe = self.root / 'probe'
         probe.write_text('#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n')

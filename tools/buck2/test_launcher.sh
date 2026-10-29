@@ -320,7 +320,6 @@ for argument in "$@"; do
 done
 inventory=false
 if "$full_gate" && "$ignored" && [ -n "$test_binary" ]; then inventory=true; fi
-if [ -z "$shard" ] && ! "$inventory" && [ -z "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then materialize_native_inputs "$@"; run_harness "$@"; exit $?; fi
 set -f # Rust case names and declared patterns are words, never shell globs.
 list_cases() (
   remaining=$#
@@ -346,7 +345,48 @@ list_cases() (
   listing="$("$harness" "$@")" || exit $?
   printf '%s\n' "$listing" | sed -n 's/: test$//p' | LC_ALL=C sort
 )
+# --ignored can legitimately select only host-disabled bodies. Distinguish
+# that skip from a name absent from the binary, using libtest's full listing.
+selection_exists() (
+  remaining=$#
+  while [ "$remaining" -gt 0 ]; do
+    argument=$1; shift; remaining=$((remaining - 1))
+    [ "$argument" = --ignored ] || set -- "$@" "$argument"
+  done
+  [ -n "$(list_cases "$@")" ]
+)
+# Discover positive selectors before deciding which shard owns them. A stale
+# selector must fail on shard 1, rather than becoming an empty exact filter.
+filtered=false
+skip=false
+literal=false
+discovery=false
+for argument in "$@"; do
+  if "$skip"; then skip=false; continue; fi
+  if "$literal"; then filtered=true; continue; fi
+  case "$argument" in
+    --) literal=true ;;
+    --list | --help | -h) discovery=true ;;
+    -*) if takes_value "$argument"; then skip=true; fi ;;
+    *) filtered=true ;;
+  esac
+done
+if "$discovery" && ! "$inventory"; then run_harness "$@"; exit $?; fi
+if [ -z "$shard" ] && ! "$inventory" && [ -z "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then
+  if [ -n "$test_binary" ] && "$filtered"; then
+    cases="$(list_cases "$@")"
+    if [ -z "$cases" ] && ! selection_exists "$@"; then
+      printf 'test_launcher.sh: selector [%s] matched no test bodies\n' "$*" >&2
+      exit 2
+    fi
+  fi
+  materialize_native_inputs "$@"; run_harness "$@"; exit $?
+fi
 cases="$(list_cases "$@")"
+if [ -z "$cases" ] && "$filtered" && ! selection_exists "$@"; then
+  printf 'test_launcher.sh: selector [%s] matched no test bodies\n' "$*" >&2
+  exit 2
+fi
 if [ -n "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then
   cases="$(printf '%s\n' "$cases" | awk -v selected="$HIRSEL_TEST_DEDICATED_CASE" '$0 == selected')"
 fi
@@ -362,20 +402,6 @@ fi
 if [ -n "$shard" ]; then
   index="${shard%/*}"
   count="${shard#*/}"
-  # Positional arguments select cases; flags and their values never do, so
-  # e.g. `-Z unstable-options --report-time` keeps every shard running.
-  filtered=false
-  skip=false
-  literal=false
-  for argument in "$@"; do
-    if "$skip"; then skip=false; continue; fi
-    if "$literal"; then filtered=true; continue; fi
-    case "$argument" in
-      --) literal=true ;;
-      -*) if takes_value "$argument"; then skip=true; fi ;;
-      *) filtered=true ;;
-    esac
-  done
   if "$filtered"; then
     [ "$index" -eq 1 ] || { echo "shard $shard: arguments select the cases; shard 1 runs them"; exit 0; }
   else
