@@ -59,7 +59,7 @@ pub(crate) struct Driver {
     pub(super) cpu_withdrawal: Option<super::ahead::cpu_withdrawal::Withdrawal>,
     pub(super) spawn_ordinals: BTreeMap<TaskId, u32>,
     pub(super) detaching: BTreeMap<TaskId, u32>,
-    pub(super) plain_layouts: BTreeSet<u32>,
+    pub(super) plain_layouts: super::drops::PlainLayouts,
     pub(super) memory: bool,
     pub(super) budgets: crate::budget::stretch::Budgets,
     /// A park/holding/end boundary cannot poll slots before its physical save.
@@ -109,7 +109,7 @@ impl Driver {
             cpu_withdrawal: None,
             spawn_ordinals: BTreeMap::new(),
             detaching: BTreeMap::new(),
-            plain_layouts: BTreeSet::new(),
+            plain_layouts: super::drops::PlainLayouts::default(),
             memory: false,
             budgets: crate::budget::stretch::Budgets {
                 fuel: false,
@@ -158,9 +158,8 @@ impl Driver {
         let Some(head) = frontier.head() else {
             return Vec::new();
         };
-        let order: Vec<_> = std::iter::once(head).chain(frontier.queue()).collect();
         let mut ready = Vec::new();
-        for task in order {
+        for task in std::iter::once(head).chain(frontier.queue()) {
             if self
                 .cpu_withdrawal
                 .as_ref()

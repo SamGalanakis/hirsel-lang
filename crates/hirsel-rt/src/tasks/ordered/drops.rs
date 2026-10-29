@@ -10,6 +10,31 @@ use super::engine;
 use crate::ordered::objects::Kind;
 use crate::ordered::{Next, Progress};
 
+/// Membership in the linked descriptor registry. Layout IDs are dense; one
+/// bit per ID avoids allocating tree nodes and searching them during closure.
+#[derive(Default)]
+pub(super) struct PlainLayouts(Vec<u64>);
+
+impl PlainLayouts {
+    fn new(count: u32) -> Self {
+        Self(vec![0; (count as usize).div_ceil(64)])
+    }
+
+    pub(super) fn contains(&self, id: &u32) -> bool {
+        self.0
+            .get(*id as usize / 64)
+            .is_some_and(|word| word & (1 << (*id % 64)) != 0)
+    }
+
+    fn insert(&mut self, id: u32) {
+        self.0[id as usize / 64] |= 1 << (id % 64);
+    }
+
+    fn remove(&mut self, id: u32) {
+        self.0[id as usize / 64] &= !(1 << (id % 64));
+    }
+}
+
 /// Reuse the compiler's complete type-edge graph. A cyclic component is safe
 /// only if every layout it can reach has a known program without user code or
 /// handle close. Missing/erased metadata never certifies a speculative drop.
@@ -18,12 +43,10 @@ use crate::ordered::{Next, Progress};
 pub(super) unsafe fn plain_layouts(
     ctx: *mut TaskCtx,
     types: &crate::ordered::capture::Types,
-) -> std::collections::BTreeSet<u32> {
-    let mut plain: std::collections::BTreeSet<_> = types
-        .definitions
-        .keys()
-        .copied()
-        .filter(|&id| {
+) -> PlainLayouts {
+    let mut plain = PlainLayouts::new(unsafe { (*ctx).heap_ref().layout_count() });
+    for &id in types.definitions.keys() {
+        let safe = (|| {
             let layout = unsafe { &*(*ctx).descriptor(id) };
             if layout.finalizer.is_some() || layout.flags & crate::LAYOUT_MUTEX_ROOT != 0 {
                 return false;
@@ -47,22 +70,23 @@ pub(super) unsafe fn plain_layouts(
                         | crate::STEP_THAW
                 )
             }) && (steps.is_empty() || layout.scan_words != 0)
-        })
-        .collect();
-    loop {
-        let rejected: Vec<_> = plain
-            .iter()
-            .copied()
-            .filter(|id| !types.definitions[id].is_subset(&plain))
-            .collect();
-        if rejected.is_empty() {
-            break;
-        }
-        for id in rejected {
-            plain.remove(&id);
+        })();
+        if safe {
+            plain.insert(id);
         }
     }
-    plain
+    loop {
+        let mut changed = false;
+        for (&id, edges) in &types.definitions {
+            if plain.contains(&id) && edges.iter().any(|edge| !plain.contains(edge)) {
+                plain.remove(id);
+                changed = true;
+            }
+        }
+        if !changed {
+            return plain;
+        }
+    }
 }
 
 /// # Safety
