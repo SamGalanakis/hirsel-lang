@@ -108,6 +108,7 @@ fn compile(faults: Arc<Faults>, verify: Verify) -> crate::native_object_products
         false,
         hirsel_intern::jobs::Jobs::ONE,
         store::VerifyStore::Off,
+        false,
         |_, _, _| (),
         |_, _| (),
     )

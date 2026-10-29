@@ -1713,6 +1713,10 @@ fn generated_failure_sources() -> Vec<(&'static str, String, &'static str, u32, 
 
 #[test]
 fn generated_body_failure_uses_generated_source_in_every_engine() {
+    use hirsel_driver::native::{self, Backend, Fixture, OptLevel, Runtime, Sites, Tape};
+    use hirsel_engine::store::{MemStore, ResultStore, VerifyStore};
+    use std::{cell::RefCell, sync::Arc};
+
     with_compiler_stack(|| {
         let mut configurations = smoke_matrix();
         configurations.push(Configuration {
@@ -1725,9 +1729,10 @@ fn generated_body_failure_uses_generated_source_in_every_engine() {
         let tools = toolchain(&configurations);
         let mut mismatches = vec![];
         for (name, source, rule, line, column) in generated_failure_sources() {
-            let program = checked(&source);
-            let [failure] = program.reference.failures.as_slice() else {
-                panic!("{name}: {:?}", program.reference)
+            let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+            let (facts, reference) = generated_request_products(&source, store.clone());
+            let [failure] = reference.failures.as_slice() else {
+                panic!("{name}: {reference:?}")
             };
             assert_eq!(
                 (failure.rule.as_str(), failure.line, failure.column),
@@ -1735,16 +1740,100 @@ fn generated_body_failure_uses_generated_source_in_every_engine() {
                 "{name}"
             );
             assert!(failure.file.starts_with("<generated:"), "{failure:?}");
-            for (configuration, outcome) in differential(
-                &program.validated,
-                &program.entry,
-                &program.reference,
-                &configurations,
-                &tools,
-                &scratch(&format!("generated-{name}")),
-            ) {
-                if outcome != Outcome::Agree {
-                    mismatches.push(format!("{name}: {configuration}: {outcome:?}"));
+            let declarations =
+                native::queries::declarations::NativeDeclarations::from_front(facts.clone())
+                    .unwrap();
+            let sites = Sites::from_anchors(
+                &facts.roots.sources,
+                declarations
+                    .source_anchors
+                    .iter()
+                    .map(|(path, anchors)| (path, anchors.clone()))
+                    .collect(),
+            );
+            let dir = scratch(&format!("generated-{name}"));
+            let fixture = Fixture::default();
+            let observations = RefCell::new(Vec::new());
+            for (backend, opt) in [
+                (Backend::Llvm, OptLevel::Speed),
+                (Backend::Cranelift, OptLevel::None),
+            ] {
+                crate::native_object_products_19::compile_front(
+                    facts.clone(),
+                    store.clone(),
+                    std::slice::from_ref(&facts.run.entry),
+                    backend,
+                    opt,
+                    configurations[0].options.clone(),
+                    false,
+                    hirsel_intern::jobs::Jobs::new(2),
+                    VerifyStore::Off,
+                    true,
+                    |view, root, readies| {
+                        if backend == Backend::Llvm {
+                            let configuration = configurations
+                                .iter()
+                                .find(|c| matches!(c.engine, Engine::Heap { campaign: true }))
+                                .unwrap();
+                            let result = view.with_execution_context(root, readies, |program| {
+                                native::heap_campaign(program, &facts.run.entry, &sites)
+                                    .map(|run| run.observation)
+                                    .map_err(|error| error.to_string())
+                            });
+                            observations
+                                .borrow_mut()
+                                .push((configuration.name(), result));
+                        }
+                    },
+                    |program, objects| {
+                        for configuration in &configurations {
+                            let runtime = match (backend, configuration.engine) {
+                                (Backend::Llvm, Engine::Native { runtime, .. }) => runtime,
+                                (Backend::Cranelift, Engine::Cranelift { runtime, .. }) => runtime,
+                                _ => continue,
+                            };
+                            let toolchain = tools.with_runtime(runtime.build());
+                            let result = (|| {
+                                let runnable = native::link_fixture_runnable(
+                                    program,
+                                    &facts.run.entry,
+                                    objects,
+                                    &toolchain,
+                                    &dir,
+                                    &fixture,
+                                )?;
+                                let launched = native::launch_fixture(
+                                    &runnable,
+                                    &program.target,
+                                    &toolchain,
+                                    &dir,
+                                    runtime == Runtime::Diagnostic,
+                                    Tape::Live {
+                                        record: None,
+                                        revocations: None,
+                                    },
+                                    &fixture,
+                                )?;
+                                native::observe(&launched, program, &sites)
+                            })()
+                            .map_err(|error| error.to_string());
+                            observations
+                                .borrow_mut()
+                                .push((configuration.name(), result));
+                        }
+                    },
+                );
+            }
+            for (configuration, observation) in observations.into_inner() {
+                match observation {
+                    Ok(actual) if actual == reference => {}
+                    Ok(actual) => mismatches.push(format!(
+                        "{name}: {configuration}: {:?}",
+                        Outcome::Mismatch(actual)
+                    )),
+                    Err(error) => {
+                        mismatches.push(format!("{name}: {configuration}: {error}"));
+                    }
                 }
             }
         }
@@ -1826,6 +1915,7 @@ fn generated_body_sites_and_objects_do_not_depend_on_id_assignment() {
                             true,
                             hirsel_intern::jobs::Jobs::new(2),
                             hirsel_engine::store::VerifyStore::Off,
+                            false,
                             |_, _, _| (),
                             |_, _| (),
                         );
@@ -2108,6 +2198,7 @@ fn generated_body_debug_preserves_nested_body_sites() {
                     true,
                     hirsel_intern::jobs::Jobs::new(2),
                     hirsel_engine::store::VerifyStore::Off,
+                    false,
                     |view, root, _| {
                         *sources.borrow_mut() = Some(view.profile_sources(root).unwrap())
                     },

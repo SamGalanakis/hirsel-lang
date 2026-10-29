@@ -43,6 +43,7 @@ fn actual_root_rejects_changed_owner_policy_and_c_bound_ready_summary() {
             false,
             hirsel_intern::jobs::Jobs::ONE,
             VerifyStore::Off,
+            false,
             |view, root, readies| {
                 let (summaries, table, _keys) = view
                     .with_link_context(root, readies, |program| {

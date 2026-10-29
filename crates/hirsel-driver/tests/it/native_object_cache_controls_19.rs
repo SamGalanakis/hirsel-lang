@@ -116,6 +116,7 @@ fn compile_source(
         false,
         Jobs::new(jobs),
         verification,
+        false,
         |_, _, _| (),
         |_, _| (),
     )

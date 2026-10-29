@@ -33,6 +33,7 @@ fn same_source_call_receipt_survives_the_complete_source_inventory() {
             false,
             hirsel_intern::jobs::Jobs::ONE,
             store::VerifyStore::Off,
+            false,
             |_, _, _| (),
             |_, _| (),
         )

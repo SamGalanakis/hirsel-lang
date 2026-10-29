@@ -39,6 +39,7 @@ fn bodyless_keyed_inventory_survives_cross_open_and_refuses_missing_metadata() {
                 false,
                 hirsel_intern::jobs::Jobs::ONE,
                 VerifyStore::Off,
+                false,
                 |view, root, readies| {
                     let inventory = view
                         .with_link_context(root, readies, |program| {

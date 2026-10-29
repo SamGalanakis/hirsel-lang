@@ -10,6 +10,7 @@ use native::{
         self, NativeRootKey, NativeRoots,
         arena_tasks::{ARENA_GRAPH_KIND, ArenaTaskFactory, ArenaTasks},
         declarations::NativeDeclarations,
+        execution::{EXECUTION_KIND, ExecutionTasks, Factory as ExecutionFactory},
         instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks},
         products::{EmissionOptions, NativeSnapshot},
         root_tasks::{NativeRootFactory, NativeRootTasks},
@@ -212,6 +213,7 @@ pub(super) fn compile_roots_inspect<R>(
         debug,
         jobs,
         verification,
+        false,
         inspect,
         use_context,
     )
@@ -227,6 +229,7 @@ pub(super) fn compile_front<R>(
     debug: bool,
     jobs: hirsel_intern::jobs::Jobs,
     verification: hirsel_engine::store::VerifyStore,
+    execution: bool,
     inspect: impl FnOnce(
         &mut queries::roots::RootProducts,
         &Arc<queries::NativeRootProduct>,
@@ -255,6 +258,7 @@ pub(super) fn compile_front<R>(
         debug,
         jobs,
         verification,
+        execution,
         inspect,
         use_context,
     )
@@ -273,6 +277,7 @@ fn compile_settled<R>(
     debug: bool,
     jobs: hirsel_intern::jobs::Jobs,
     verification: hirsel_engine::store::VerifyStore,
+    execution: bool,
     inspect: impl FnOnce(
         &mut queries::roots::RootProducts,
         &Arc<queries::NativeRootProduct>,
@@ -454,6 +459,19 @@ fn compile_settled<R>(
             Arc::new(ObjectTaskFactory::new(objects)),
         )
         .unwrap();
+    if execution {
+        let tasks = ExecutionTasks::new(roots.clone(), &[], weight);
+        runtime
+            .register(EXECUTION_KIND, Arc::new(ExecutionFactory(tasks.clone())))
+            .unwrap();
+        let request = runtime.request(&[tasks.query_id()]);
+        runtime.wait(request).unwrap_or_else(|error| {
+            panic!(
+                "{}",
+                String::from_utf8_lossy(&store.get_content(error).unwrap())
+            )
+        });
+    }
     let requests = keys
         .iter()
         .map(CodegenKey::query_id)
