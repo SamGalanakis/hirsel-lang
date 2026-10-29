@@ -1,5 +1,6 @@
 use hirsel_driver::*;
 use hirsel_engine::{runtime::QueryRuntime, *};
+use hirsel_tir::TirProvider;
 use std::sync::Arc;
 fn signature_session(
     store: Arc<dyn store::ResultStore>,
@@ -127,12 +128,7 @@ fn staged_lower_products_restore_own_declarations_before_admission_without_modes
         }
         let mut oracle =
             signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
-        let mut products = StagedProducts::capture(&mut oracle, 1).unwrap();
-        let request = products
-            .runtime
-            .request(&[products.lower.query(&path).unwrap()]);
-        products.runtime.wait(request).unwrap();
-        products.runtime.shutdown();
+        oracle.lower_to_tir(&path).unwrap();
     });
 }
 
@@ -231,12 +227,10 @@ fn lower_hits_replay_exact_staged_values_and_preserve_completion_authority() {
         assert!(!accepted, "producer ledger cannot transfer V completion");
         let mut oracle =
             signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
-        let mut products = StagedProducts::capture(&mut oracle, 1).unwrap();
-        let request = products
-            .runtime
-            .request(&[products.lower.query(&root).unwrap()]);
-        products.runtime.wait(request).unwrap();
-        products.runtime.shutdown();
+        oracle
+            .register_staged_definition(&definition("scaled"))
+            .unwrap();
+        oracle.lower_to_tir(&root).unwrap();
     });
 }
 
@@ -355,23 +349,11 @@ fn ordinary_staged_registrations_restore_from_heads_without_syntax_or_execution_
             .add("staged-heads.hir", source.into())
             .unwrap();
         oracle.index_source(file, &default_context()).unwrap();
-        let mut products = StagedProducts::capture(&mut oracle, 1).unwrap();
-        let request = products
-            .runtime
-            .request(&[products.lower.query(&owner).unwrap()]);
-        products.runtime.wait(request).unwrap();
-        let query = products.lower.staged_query(&hidden, &[2]).unwrap();
-        let request = products.runtime.request(&[query]);
-        products.runtime.wait(request).unwrap();
+        oracle.register_staged_definition(&owner).unwrap();
+        oracle.lower_to_tir(&owner).unwrap();
         assert_eq!(
-            products
-                .lower
-                .settled_constant(&hidden, &[2])
-                .unwrap()
-                .root
-                .kind,
+            oracle.constant_instance(&hidden, &[2]).unwrap().root.kind,
             hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4))
         );
-        products.runtime.shutdown();
     });
 }
