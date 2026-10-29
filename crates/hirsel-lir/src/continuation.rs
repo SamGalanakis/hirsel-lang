@@ -48,6 +48,7 @@ mod validate;
 pub use tail::{OwnedTail, TailCarrier, TailKind};
 pub(crate) use validate::cpu_saved_frames;
 mod cleanup;
+mod storage;
 pub use validate::{
     AheadCertificate, AheadKind, CallerProof, ContinuationError, FrameDag, ResultCleanupProof,
     validate, validate_runtime_operations,
@@ -655,10 +656,11 @@ fn fixed(table: &LayoutTable, id: LayoutId) -> Option<(u64, u64)> {
     }
 }
 
-/// Forward may-live storage and active loans on entry to `at`'s terminator.
 fn storage_at(u: &LirUnit<Ready>, at: BlockId) -> (BTreeSet<SlotId>, BTreeSet<LoanId>) {
-    storage_before(u, at, usize::MAX)
+    storage::StorageFlow::new(u).before(at, usize::MAX)
 }
+
+#[cfg(test)]
 fn storage_before(
     u: &LirUnit<Ready>,
     at: BlockId,
@@ -1283,6 +1285,7 @@ fn states(
     environment: Option<LayoutId>,
 ) -> Result<(Vec<LiveStorage>, Vec<ResumeState>, Vec<CleanupResumeState>), String> {
     let live = crate::liveness::liveness(u);
+    let storage_flow = storage::StorageFlow::new(u);
     let mut at_sites = Vec::new();
     let mut union = BTreeSet::new();
     for site in sites {
@@ -1296,13 +1299,14 @@ fn states(
         if reaches(u, u.tables.edges[normal.index()].target, site.block) {
             return Err("boundary on a cycle".into());
         }
-        let (slots, loans) = storage_at(u, site.block);
+        let (slots, loans) = storage_flow.before(site.block, usize::MAX);
         union.extend(slots.iter().copied().filter(|s| !parameter_slot(u, *s)));
         at_sites.push((slots, loans));
     }
     for (block, i) in cleanup::sites(u, table, environment) {
         union.extend(
-            storage_before(u, block, i)
+            storage_flow
+                .before(block, i)
                 .0
                 .into_iter()
                 .filter(|s| !parameter_slot(u, *s)),
@@ -1430,8 +1434,15 @@ fn states(
             bytes,
         });
     }
-    let cleanups =
-        cleanup::root_states(u, table, &storage, base, out.len() as u32 + 1, environment)?;
+    let cleanups = cleanup::root_states(
+        u,
+        table,
+        &storage,
+        base,
+        out.len() as u32 + 1,
+        environment,
+        &storage_flow,
+    )?;
     Ok((storage, out, cleanups))
 }
 

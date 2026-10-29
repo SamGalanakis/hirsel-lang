@@ -43,6 +43,7 @@ pub(super) fn root_states(
     base: u64,
     first: u32,
     environment: Option<LayoutId>,
+    storage_flow: &storage::StorageFlow<'_>,
 ) -> Result<Vec<CleanupResumeState>, String> {
     let live = crate::liveness::liveness(u);
     let mut out = Vec::new();
@@ -81,7 +82,7 @@ pub(super) fn root_states(
             {
                 return Err("cleanup boundary on a cycle".into());
             }
-            let (slots, loans) = storage_before(u, block, i);
+            let (slots, loans) = storage_flow.before(block, i);
             if !loans.is_empty() {
                 return Err("cleanup with a live unproved loan".into());
             }
