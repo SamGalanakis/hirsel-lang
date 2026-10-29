@@ -593,12 +593,13 @@ impl DeclarationIndex {
             .get(&DefId::intern(path))
             .map(|row| row.candidates)
     }
-    /// The header hashes of `path`'s candidates, in occurrence order.
+    /// Public opaque names from declaration metadata, without preparing headers.
     pub(crate) fn opaque_paths(&self) -> impl Iterator<Item = &DefPath> {
         self.rows.iter().filter_map(|(id, row)| {
             (row.visibility == Visibility::PublicOpaque).then_some(id.path())
         })
     }
+    /// The header hashes of `path`'s candidates, in occurrence order.
     pub fn headers(&self, path: &DefPath) -> Option<&[ContentHash]> {
         self.rows.get(&DefId::intern(path)).map(|row| &*row.headers)
     }

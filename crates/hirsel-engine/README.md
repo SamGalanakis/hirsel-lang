@@ -1015,8 +1015,10 @@ Changing retention or the configured allowance updates existing scalar holds.
 Compact read/diagnostic/depth receipts and table/interner storage remain session
 metadata outside the body allowance; caller-owned output Arcs remain in flight.
 
-Private uniqueness inference runs as admitted S5 module queries before front
-snapshots are captured. The Modes adapter retains its existing SCC fixed point.
+Admitted Check demands private uniqueness facts by module after capturing its
+front snapshot. The producer runs on the existing compiler worker and retains
+the Modes adapter's SCC fixed point. Final private headers observe the settled
+module proof. Run, native and complete V consumers demand their full catalogues.
 Inference products use the ordinary result provider and complete read receipts;
 unchanged inputs reuse facts without resolving or checking bodies. Source
 membership, private body text, lookups, private representations and normalized

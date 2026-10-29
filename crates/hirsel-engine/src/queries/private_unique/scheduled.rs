@@ -376,6 +376,13 @@ impl QueryEngine {
                         self.publish_private_signature(id)?;
                     }
                 }
+                if !registrations.is_empty() {
+                    let inputs = super::registration_inputs(registrations);
+                    if self.private_summary_inputs != inputs {
+                        self.private_summary_inputs = inputs;
+                        self.retire_snapshot();
+                    }
+                }
                 self.private_summary_revision = Some(self.graph.revision());
                 Ok(reservation)
             });

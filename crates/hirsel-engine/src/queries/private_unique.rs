@@ -5,6 +5,24 @@ use super::*;
 use hirsel_types::{SignatureKind, UniqueInference};
 pub(in crate::queries) mod scheduled;
 
+pub(super) fn registration_inputs(registrations: &[Arc<AcceptedFrontRegistration>]) -> ContentHash {
+    let mut rows = registrations
+        .iter()
+        .map(|registration| {
+            [
+                registration.definition().fingerprint(),
+                registration.syntax.text_hash,
+                registration.reads().digest(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    rows.sort_unstable();
+    ContentHash::of_parts(
+        "hirsel.private-registration-inputs.v1",
+        rows.iter().flatten().map(|hash| hash.0.as_slice()),
+    )
+}
+
 impl QueryEngine {
     /// Lend the host's existing partition to demand inference. Installing the
     /// allowance does not normalize a header or compute private facts.

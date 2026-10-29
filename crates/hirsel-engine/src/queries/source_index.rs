@@ -15,6 +15,7 @@ pub struct SourceIndexState {
     private_summaries: Box<[(DefId, hirsel_types::UniqueSummary)]>,
     private_unique_failures: Box<[(DefId, Vec<hirsel_types::UniqueFailure>)]>,
     private_summary_revision: Option<crate::Revision>,
+    private_summary_inputs: ContentHash,
     graph: crate::memo::SourceHeaderGraph,
     front_changes: frontier::FrontTracker,
     inputs: Box<[(DefId, memos::DefInputs)]>,
@@ -516,6 +517,7 @@ impl QueryEngine {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             private_summary_revision: self.private_summary_revision,
+            private_summary_inputs: self.private_summary_inputs,
             graph,
             front_changes: std::mem::take(&mut self.front_changes),
             inputs: std::mem::take(&mut self.inputs)
@@ -617,6 +619,7 @@ impl SourceIndexState {
             private_summaries,
             private_unique_failures,
             private_summary_revision,
+            private_summary_inputs,
             graph,
             front_changes,
             inputs,
@@ -651,6 +654,7 @@ impl SourceIndexState {
         engine.private_summaries = private_summaries.into_vec().into_iter().collect();
         engine.private_unique_failures = private_unique_failures.into_vec().into_iter().collect();
         engine.private_summary_revision = private_summary_revision;
+        engine.private_summary_inputs = private_summary_inputs;
         engine.graph = graph.restore();
         engine.graph.reset_stats();
         engine.front_changes = front_changes;

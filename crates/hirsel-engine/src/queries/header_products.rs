@@ -16,6 +16,7 @@ pub(crate) struct HeaderProduct {
     pub(crate) entry: Option<Arc<Entry<hirsel_types::SignatureRef>>>,
     pub(crate) recomputes: usize,
     graph_work: usize,
+    publication: bool,
     _standalone: Option<Arc<crate::runtime::MemoryReservation>>,
     origin: Weak<Entry<hirsel_types::SignatureRef>>,
     accounted: AtomicBool,
@@ -84,6 +85,7 @@ pub(crate) struct HeaderProducts {
 impl HeaderProducts {
     pub(crate) fn capture(engine: &QueryEngine) -> Arc<Self> {
         let private = private::PrivateProducts::capture(engine);
+        let declarations = engine.declarations.frozen();
         let rows = engine
             .source_paths()
             .into_iter()
@@ -101,6 +103,7 @@ impl HeaderProducts {
                         entry: Some(project(&entry)),
                         recomputes: 0,
                         graph_work: 0,
+                        publication: engine.private_signature_publications.contains(&id),
                         _standalone: None,
                         origin: Arc::downgrade(&entry),
                         accounted: AtomicBool::new(true),
@@ -140,7 +143,25 @@ impl HeaderProducts {
             verify_store: engine.verify_store,
             limits: engine.comptime_limits,
             staged: engine.staged_constants.clone(),
-            summaries: Arc::new(engine.private_summaries.clone()),
+            summaries: Arc::new(
+                engine
+                    .private_summaries
+                    .iter()
+                    .filter(|(id, _)| {
+                        declarations
+                            .metadata()
+                            .definitions
+                            .get(id.path())
+                            .is_some_and(|metadata| !metadata.public)
+                            && engine.source_facts(id.path()).is_some_and(|facts| {
+                                (facts.body || facts.generator)
+                                    && !facts.constant
+                                    && !facts.instance_bodied
+                            })
+                    })
+                    .map(|(id, summary)| (*id, summary.clone()))
+                    .collect(),
+            ),
             failures: engine.private_unique_failures.clone(),
         })
     }
@@ -218,8 +239,11 @@ impl HeaderProducts {
             .archive(self.types.clone(), self.owners.clone(), store)
     }
     pub(super) fn summary(&self, id: DefId) -> Option<&hirsel_types::UniqueSummary> {
-        self.demanded_summary(id)
-            .or_else(|| self.summaries.get(&id))
+        if self.private.is_some() {
+            self.demanded_summary(id)
+        } else {
+            self.summaries.get(&id)
+        }
     }
     pub(crate) fn owners(&self) -> &Arc<crate::NativeRecordContext> {
         &self.owners
@@ -244,6 +268,7 @@ impl HeaderProducts {
                     entry: None,
                     recomputes: 0,
                     graph_work: 0,
+                    publication: false,
                     _standalone: None,
                     origin: Weak::new(),
                     accounted: AtomicBool::new(false),
@@ -261,6 +286,7 @@ impl HeaderProducts {
                 entry: Some(entry.clone()),
                 recomputes: 0,
                 graph_work: 0,
+                publication: false,
                 _standalone: None,
                 origin: Weak::new(),
                 accounted: AtomicBool::new(true),
@@ -332,6 +358,7 @@ impl HeaderProducts {
                 entry,
                 recomputes,
                 graph_work: if local { 0 } else { recomputes },
+                publication: self.provisional,
                 _standalone: standalone,
                 origin,
                 accounted: AtomicBool::new(local),
@@ -414,7 +441,9 @@ impl QueryEngine {
         );
         self.signatures.insert(id, entry.clone());
         if self.private_summary_active {
-            self.private_signature_publications.insert(id);
+            if product.publication {
+                self.private_signature_publications.insert(id);
+            }
         } else {
             self.private_signature_publications.remove(&id);
         }

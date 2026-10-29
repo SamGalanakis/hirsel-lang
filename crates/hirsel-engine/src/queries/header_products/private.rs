@@ -13,6 +13,7 @@ pub(super) struct ModuleProduct {
 struct Candidate {
     module: Module,
     declared: Option<Arc<Entry<hirsel_types::SignatureRef>>>,
+    publication: bool,
 }
 pub(super) struct PrivateProducts {
     candidates: hirsel_syntax::DefMap<Candidate>,
@@ -64,7 +65,14 @@ impl PrivateProducts {
                     .unmarked_signature(id)
                     .and_then(|_| engine.signatures.get(&id))
                     .map(project);
-                (id, Candidate { module, declared })
+                (
+                    id,
+                    Candidate {
+                        module,
+                        declared,
+                        publication: engine.private_signature_publications.contains(&id),
+                    },
+                )
             })
             .collect::<hirsel_syntax::DefMap<_>>();
         let modules = candidates
@@ -268,11 +276,21 @@ impl HeaderProducts {
                 )
             })
             .collect::<hirsel_syntax::DefMap<_>>();
-        let mut changed = false;
-        for cell in private.modules.values() {
+        inferred.retain(|id, _| private.candidates.contains_key(id));
+        engine
+            .private_summary_reads
+            .retain(|id, _| private.candidates.contains_key(id));
+        let mut changed = inferred.len() != engine.private_summaries.len();
+        for (module, cell) in &private.modules {
             let Some(Ok(product)) = cell.get() else {
                 continue;
             };
+            for (id, candidate) in &private.candidates {
+                if candidate.module == *module {
+                    inferred.remove(id);
+                    engine.private_summary_reads.remove(id);
+                }
+            }
             let reads = Arc::new(product.facts.reads.clone());
             for (id, proof) in &product.facts.proofs {
                 engine.private_summary_reads.insert(*id, reads.clone());
@@ -341,14 +359,23 @@ impl HeaderProducts {
                     let cell = OnceLock::new();
                     let entry = final_cell
                         .get()
-                        .and_then(|product| product.entry.as_ref())
-                        .or_else(|| self.private.as_ref()?.candidates.get(id)?.declared.as_ref());
-                    if let Some(entry) = entry {
+                        .and_then(|product| {
+                            product
+                                .entry
+                                .as_ref()
+                                .map(|entry| (entry, product.publication))
+                        })
+                        .or_else(|| {
+                            let candidate = self.private.as_ref()?.candidates.get(id)?;
+                            Some((candidate.declared.as_ref()?, candidate.publication))
+                        });
+                    if let Some((entry, publication)) = entry {
                         let _ = cell.set(HeaderProduct {
                             result: entry.result(),
                             entry: Some(entry.clone()),
                             recomputes: 0,
                             graph_work: 0,
+                            publication,
                             _standalone: None,
                             origin: Weak::new(),
                             accounted: AtomicBool::new(true),

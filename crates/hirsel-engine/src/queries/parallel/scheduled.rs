@@ -1784,7 +1784,9 @@ impl QueryEngine {
                 registration.cloned(),
             ));
         }
-        if !registrations.is_empty() {
+        let registration_inputs = private_unique::registration_inputs(registrations);
+        if self.private_summary_inputs != registration_inputs {
+            self.private_summary_inputs = registration_inputs;
             self.private_summary_revision = None;
             self.retire_snapshot();
         }
