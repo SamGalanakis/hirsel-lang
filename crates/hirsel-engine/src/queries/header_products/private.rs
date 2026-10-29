@@ -8,6 +8,7 @@ pub(super) struct ModuleProduct {
     work: BTreeMap<(DefId, QueryKind), usize>,
     pub(super) signatures: hirsel_syntax::DefMap<Arc<Entry<hirsel_types::SignatureRef>>>,
     accounted: AtomicBool,
+    _standalone: Option<Arc<crate::runtime::MemoryReservation>>,
 }
 pub(super) struct PrivateProducts {
     candidates: hirsel_syntax::DefMap<Module>,
@@ -158,14 +159,17 @@ impl HeaderProducts {
                     .map(|((path, kind), count)| ((DefId::intern(path), *kind), *count))
                     .collect();
                 weight.tree::<(DefId, QueryKind), usize>(work.len());
-                if let Some(retention) = private.retention.get() {
+                let standalone = if self.standalone {
+                    Some(self.reserve_standalone(weight.bytes())?)
+                } else if let Some(retention) = private.retention.get() {
                     let mut remaining = retention.lock().unwrap_or_else(|e| e.into_inner());
                     *remaining = remaining
                         .checked_sub(weight.bytes())
                         .ok_or_else(private_refusal)?;
+                    None
                 } else {
                     return Err(private_refusal());
-                }
+                };
                 self.generation.fetch_add(1, Ordering::Relaxed);
                 Ok(ModuleProduct {
                     facts,
@@ -173,6 +177,7 @@ impl HeaderProducts {
                     work,
                     signatures,
                     accounted: AtomicBool::new(false),
+                    _standalone: standalone,
                 })
             })
             .as_ref()
@@ -280,6 +285,22 @@ impl HeaderProducts {
             }
         }
     }
+    pub(super) fn reserve_standalone(
+        &self,
+        bytes: u64,
+    ) -> Result<Arc<crate::runtime::MemoryReservation>, QueryError> {
+        // Legacy scalar inputs already use this shared source-inference partition.
+        // The admitted front grant covers its task/output rows, not those inputs.
+        let bytes = bytes
+            .checked_add(
+                (size_of::<crate::runtime::MemoryReservation>() + 2 * size_of::<usize>()) as u64,
+            )
+            .ok_or_else(private_refusal)?;
+        crate::queries::private_unique::scheduled::standalone_budget()
+            .reserve(bytes)
+            .map(Arc::new)
+            .map_err(|_| private_refusal())
+    }
     fn declared(&self) -> Arc<Self> {
         Arc::new(Self {
             rows: self.rows.keys().map(|id| (*id, OnceLock::new())).collect(),
@@ -290,6 +311,7 @@ impl HeaderProducts {
             sources: self.sources.clone(),
             owners: self.owners.clone(),
             provisional: true,
+            standalone: false,
             failure: None,
             syntax: self.syntax.clone(),
             declarations: self.declarations.clone(),

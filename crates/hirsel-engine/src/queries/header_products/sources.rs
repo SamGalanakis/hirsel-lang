@@ -15,6 +15,7 @@ enum Transport {
 }
 pub(super) struct HeaderSources {
     by_definition: hirsel_syntax::DefMap<Vec<FileId>>,
+    facts: hirsel_syntax::DefMap<Arc<catalog::SourceFacts>>,
     transport: std::sync::RwLock<Transport>,
 }
 impl HeaderSources {
@@ -30,10 +31,29 @@ impl HeaderSources {
             }
             by_definition.insert(DefId::intern(path), selected.into_iter().collect());
         }
+        let facts = engine
+            .items
+            .iter()
+            .filter_map(|(path, candidates)| {
+                Some((
+                    DefId::intern(path),
+                    engine.catalog.shared_syntax_facts(candidates.first()?),
+                ))
+            })
+            .collect();
         Self {
             by_definition,
+            facts,
             transport: std::sync::RwLock::new(Transport::Written(files)),
         }
+    }
+    pub(super) fn facts(&self, id: DefId) -> Option<catalog::SourceFacts> {
+        self.facts.get(&id).map(|facts| (**facts).clone())
+    }
+    pub(super) fn facts_index_bytes(definitions: usize) -> u64 {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.tree::<DefId, Arc<catalog::SourceFacts>>(definitions);
+        weight.bytes()
     }
     pub(super) fn archive(
         &self,

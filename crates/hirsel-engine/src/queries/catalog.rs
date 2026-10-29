@@ -174,7 +174,7 @@ pub(crate) struct Catalog {
     files: super::native_records::SourceTable<FileId, FileContext>,
     candidates: super::native_records::SourceTable<DefPath, Vec<Candidate>>,
     facts_cache:
-        std::sync::RwLock<BTreeMap<hirsel_syntax::LexicalOwner, (ContentHash, SourceFacts)>>,
+        std::sync::RwLock<BTreeMap<hirsel_syntax::LexicalOwner, (ContentHash, Arc<SourceFacts>)>>,
 }
 pub(super) struct SourceCatalog {
     files: Box<[(FileId, FileContext)]>,
@@ -262,7 +262,10 @@ impl Catalog {
         if cached_facts {
             weight.map(
                 &self.facts_cache.read().unwrap_or_else(|e| e.into_inner()),
-                |w, _, (_, value)| facts(w, value),
+                |w, _, (_, value)| {
+                    w.arc(value);
+                    facts(w, value);
+                },
             );
         }
         weight.bytes()
@@ -447,12 +450,15 @@ impl Catalog {
         self.facts_cache.write().unwrap().clear();
     }
     fn syntax_facts(&self, syntax: &ItemSyntax) -> SourceFacts {
+        (*self.shared_syntax_facts(syntax)).clone()
+    }
+    pub(in crate::queries) fn shared_syntax_facts(&self, syntax: &ItemSyntax) -> Arc<SourceFacts> {
         if let Some((text, facts)) = self.facts_cache.read().unwrap().get(&syntax.owner())
             && *text == syntax.text_hash
         {
             return facts.clone();
         }
-        let facts = SourceFacts::capture(syntax);
+        let facts = Arc::new(SourceFacts::capture(syntax));
         self.facts_cache
             .write()
             .unwrap()
@@ -681,6 +687,11 @@ impl QueryEngine {
             .and_then(|items| items.first())
             .map(|syntax| self.catalog.syntax_facts(syntax))
             .or_else(|| self.catalog.facts(path).cloned())
+            .or_else(|| {
+                self.header_products
+                    .as_ref()?
+                    .source_facts(DefId::intern(path))
+            })
     }
     fn catalog_key(&self, file: FileId, context: &FileContext) -> Option<crate::store::EntryKey> {
         self.result_store.as_ref()?;
@@ -1470,13 +1481,23 @@ mod tests {
 
 impl QueryEngine {
     pub(crate) fn declared(&self, path: &DefPath) -> bool {
-        self.items.contains_key(path) || self.catalog.body(path).is_some()
+        self.items.contains_key(path)
+            || self.catalog.body(path).is_some()
+            || self
+                .header_products
+                .as_ref()
+                .is_some_and(|headers| headers.contains(DefId::intern(path)))
     }
     pub(crate) fn source_paths(&self) -> Vec<DefPath> {
         self.items
             .keys()
             .cloned()
             .chain(self.catalog.paths().cloned())
+            .chain(
+                self.header_products
+                    .iter()
+                    .flat_map(|headers| headers.definitions().map(|id| id.path().clone())),
+            )
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()

@@ -6,6 +6,10 @@ use crate::store::{Entry as StoredEntry, EntryKey, VariantRef};
 use std::sync::OnceLock;
 
 const KIND: u32 = 0x4602_0001;
+pub(in crate::queries) fn standalone_budget() -> &'static Arc<ProcessBudget> {
+    static BUDGET: OnceLock<Arc<ProcessBudget>> = OnceLock::new();
+    BUDGET.get_or_init(|| ProcessBudget::new(512 << 20))
+}
 type Proofs = Vec<(DefId, UniqueInference)>;
 #[derive(serde::Serialize, serde::Deserialize, Clone, Eq, PartialEq)]
 pub(in crate::queries) struct Facts {
@@ -821,8 +825,7 @@ impl QueryEngine {
         if self.private_bootstrap_active {
             return;
         }
-        static BUDGET: OnceLock<Arc<ProcessBudget>> = OnceLock::new();
-        let budget = BUDGET.get_or_init(|| ProcessBudget::new(512 << 20));
+        let budget = standalone_budget();
         let available = budget.limit().saturating_sub(budget.reserved());
         if let Ok(reservation) = budget.reserve(available) {
             self.private_bootstrap_active = true;

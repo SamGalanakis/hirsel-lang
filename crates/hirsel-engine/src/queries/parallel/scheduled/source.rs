@@ -156,6 +156,10 @@ impl QueryEngine {
             .checked_add(self.catalog.input_bytes().ok_or_else(refused)?)
             .ok_or_else(refused)?
             .checked_add(owner_bytes)
+            .ok_or_else(refused)?
+            .checked_add(header_products::HeaderProducts::source_fact_index_bytes(
+                self.items.len(),
+            ))
             .ok_or_else(refused)?;
         Ok(FrontInputFootprint {
             source_headers,

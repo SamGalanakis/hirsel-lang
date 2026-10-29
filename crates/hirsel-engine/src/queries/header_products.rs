@@ -16,6 +16,7 @@ pub(crate) struct HeaderProduct {
     pub(crate) entry: Option<Arc<Entry<hirsel_types::SignatureRef>>>,
     pub(crate) recomputes: usize,
     graph_work: usize,
+    _standalone: Option<Arc<crate::runtime::MemoryReservation>>,
     origin: Weak<Entry<hirsel_types::SignatureRef>>,
     accounted: AtomicBool,
 }
@@ -60,6 +61,7 @@ pub(crate) struct HeaderProducts {
     sources: SourceMap,
     owners: Arc<crate::NativeRecordContext>,
     provisional: bool,
+    standalone: bool,
     failure: Option<QueryError>,
     syntax: Arc<HeaderSources>,
     private: Option<private::PrivateProducts>,
@@ -99,6 +101,7 @@ impl HeaderProducts {
                         entry: Some(project(&entry)),
                         recomputes: 0,
                         graph_work: 0,
+                        _standalone: None,
                         origin: Arc::downgrade(&entry),
                         accounted: AtomicBool::new(true),
                     });
@@ -116,6 +119,7 @@ impl HeaderProducts {
             sources: engine.sources.clone(),
             owners: owners.clone(),
             provisional: engine.private_summary_active,
+            standalone: !engine.private_inference_hosted && !engine.private_summary_active,
             failure: engine.current_private_summary_failure().cloned(),
             syntax: engine
                 .header_products
@@ -172,6 +176,12 @@ impl HeaderProducts {
     }
     pub(crate) fn generation(&self) -> u64 {
         self.generation.load(Ordering::Relaxed)
+    }
+    pub(crate) fn source_facts(&self, id: DefId) -> Option<catalog::SourceFacts> {
+        self.syntax.facts(id)
+    }
+    pub(crate) fn source_fact_index_bytes(definitions: usize) -> u64 {
+        HeaderSources::facts_index_bytes(definitions)
     }
     pub(crate) fn source_environment(&self) -> &QueryEnvironment {
         &self.environment
@@ -230,6 +240,7 @@ impl HeaderProducts {
                     entry: None,
                     recomputes: 0,
                     graph_work: 0,
+                    _standalone: None,
                     origin: Weak::new(),
                     accounted: AtomicBool::new(false),
                 });
@@ -246,6 +257,7 @@ impl HeaderProducts {
                 entry: Some(entry.clone()),
                 recomputes: 0,
                 graph_work: 0,
+                _standalone: None,
                 origin: Weak::new(),
                 accounted: AtomicBool::new(true),
             });
@@ -295,9 +307,14 @@ impl HeaderProducts {
             .as_ref()
             .and_then(|entry| crate::memo::retained::retained_signature_entry_bytes(entry))
             .unwrap_or(0);
+        let standalone = self
+            .standalone
+            .then(|| self.reserve_standalone(bytes))
+            .transpose()?;
         let mut grant = self
             .retention
             .get()
+            .filter(|_| !self.standalone)
             .map(|grant| grant.lock().unwrap_or_else(|e| e.into_inner()));
         if let Some(grant) = &mut grant {
             **grant = grant.checked_sub(bytes).ok_or_else(|| {
@@ -313,6 +330,7 @@ impl HeaderProducts {
                 entry,
                 recomputes,
                 graph_work: if local { 0 } else { recomputes },
+                _standalone: standalone,
                 origin,
                 accounted: AtomicBool::new(local),
             })
