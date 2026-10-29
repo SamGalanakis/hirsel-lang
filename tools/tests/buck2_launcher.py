@@ -412,7 +412,7 @@ with open('orphan.pid', 'w') as output: output.write(str(child.pid))
 class LauncherSelection(LauncherFixture):
     def test_a_stale_selector_fails_instead_of_running_zero_bodies(self):
         for args in [('missing_case',), ('--exact', 'pool::missing_case'),
-                     ('--', 'missing_case')]:
+                     ('--', 'missing_case'), ('--skip', 'pool::', '--skip', 'host::')]:
             for shard in ({}, dict(TEST_TOTAL_SHARDS='3', TEST_SHARD_INDEX='0')):
                 with self.subTest(args=args, shard=shard):
                     run = subprocess.run(['sh', str(LAUNCHER), 'harness', *args],
@@ -422,6 +422,14 @@ class LauncherSelection(LauncherFixture):
                     self.assertIn('matched no test bodies', run.stderr)
                     self.assertIn(args[-1], run.stderr)
                     self.assertFalse(self.observed.exists())
+
+    def test_stale_dedicated_case_cannot_turn_into_an_empty_partition(self):
+        self.env['HIRSEL_TEST_DEDICATED_CASE'] = 'removed_body'
+        run = subprocess.run(['sh', str(LAUNCHER), 'harness'], cwd=self.root,
+                             env=self.env, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn('removed_body', run.stderr)
+        self.assertFalse(self.observed.exists())
 
     def test_empty_listing_and_host_empty_harness_keep_their_status(self):
         run = subprocess.run(['sh', str(LAUNCHER), 'harness', '--list', 'missing_case'],

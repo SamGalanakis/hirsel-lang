@@ -349,15 +349,25 @@ list_cases() (
 # that skip from a name absent from the binary, using libtest's full listing.
 selection_exists() (
   remaining=$#
+  literal=false
   while [ "$remaining" -gt 0 ]; do
     argument=$1; shift; remaining=$((remaining - 1))
-    [ "$argument" = --ignored ] || set -- "$@" "$argument"
+    if "$literal"; then set -- "$@" "$argument"; continue; fi
+    case "$argument" in
+      --) literal=true ;;
+      --ignored) continue ;;
+    esac
+    set -- "$@" "$argument"
+    if takes_value "$argument" && [ "$remaining" -gt 0 ]; then
+      value=$1; shift; remaining=$((remaining - 1)); set -- "$@" "$value"
+    fi
   done
   [ -n "$(list_cases "$@")" ]
 )
 # Discover positive selectors before deciding which shard owns them. A stale
 # selector must fail on shard 1, rather than becoming an empty exact filter.
 filtered=false
+restricted=false
 skip=false
 literal=false
 discovery=false
@@ -367,13 +377,15 @@ for argument in "$@"; do
   case "$argument" in
     --) literal=true ;;
     --list | --help | -h) discovery=true ;;
+    --skip) restricted=true; skip=true ;;
+    --skip=*) restricted=true ;;
     -*) if takes_value "$argument"; then skip=true; fi ;;
     *) filtered=true ;;
   esac
 done
 if "$discovery" && ! "$inventory"; then run_harness "$@"; exit $?; fi
 if [ -z "$shard" ] && ! "$inventory" && [ -z "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then
-  if [ -n "$test_binary" ] && "$filtered"; then
+  if [ -n "$test_binary" ] && { "$filtered" || "$restricted"; }; then
     cases="$(list_cases "$@")"
     if [ -z "$cases" ] && ! selection_exists "$@"; then
       printf 'test_launcher.sh: selector [%s] matched no test bodies\n' "$*" >&2
@@ -383,11 +395,15 @@ if [ -z "$shard" ] && ! "$inventory" && [ -z "${HIRSEL_TEST_DEDICATED_CASE:-}" ]
   materialize_native_inputs "$@"; run_harness "$@"; exit $?
 fi
 cases="$(list_cases "$@")"
-if [ -z "$cases" ] && "$filtered" && ! selection_exists "$@"; then
+if [ -z "$cases" ] && { "$filtered" || "$restricted"; } && ! selection_exists "$@"; then
   printf 'test_launcher.sh: selector [%s] matched no test bodies\n' "$*" >&2
   exit 2
 fi
 if [ -n "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then
+  if [ -z "$(list_cases --exact "$HIRSEL_TEST_DEDICATED_CASE")" ]; then
+    printf 'test_launcher.sh: selector [%s] matched no test bodies\n' "$HIRSEL_TEST_DEDICATED_CASE" >&2
+    exit 2
+  fi
   cases="$(printf '%s\n' "$cases" | awk -v selected="$HIRSEL_TEST_DEDICATED_CASE" '$0 == selected')"
 fi
 unset HIRSEL_TEST_DEDICATED_CASE
