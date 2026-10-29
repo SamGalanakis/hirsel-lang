@@ -35,9 +35,41 @@ pub struct NativeRecordContext {
     bindings: Arc<SourceBindings>,
 }
 struct SourceBindings {
-    owners: BTreeMap<Anchor, (DefPath, u32)>,
-    anchors: BTreeMap<(DefPath, u32), Anchor>,
+    owners: BTreeMap<Anchor, (RecordOwner, u32)>,
+    anchors: BTreeMap<(RecordOwner, u32), Anchor>,
     source_definitions: BTreeMap<Anchor, DefId>,
+}
+#[derive(Clone)]
+enum RecordOwner {
+    Interned(DefId),
+    Written(Arc<DefPath>),
+}
+impl RecordOwner {
+    fn capture(path: &DefPath) -> Self {
+        DefId::get(path).map_or_else(|| Self::Written(Arc::new(path.clone())), Self::Interned)
+    }
+    fn path(&self) -> &DefPath {
+        match self {
+            Self::Interned(id) => id.path(),
+            Self::Written(path) => path,
+        }
+    }
+}
+impl PartialEq for RecordOwner {
+    fn eq(&self, other: &Self) -> bool {
+        self.path() == other.path()
+    }
+}
+impl Eq for RecordOwner {}
+impl PartialOrd for RecordOwner {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RecordOwner {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.path().cmp(other.path())
+    }
 }
 /// Recomputable projections of current source products, never semantic read
 /// observations. Mutating a source table drops this one product; detached
@@ -129,9 +161,20 @@ impl NativeRecordContext {
     pub(crate) fn input_bytes(&self) -> Option<u64> {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + size_of::<SourceBindings>() + 4 * size_of::<usize>());
-        weight.map(&self.bindings.owners, |w, _, (path, _)| w.path(path));
-        weight.map(&self.bindings.anchors, |w, (path, _), _| w.path(path));
-        weight.tree::<Anchor, DefId>(self.bindings.source_definitions.len());
+        weight.bulk_tree::<Anchor, (RecordOwner, u32)>(self.bindings.owners.len());
+        weight.bulk_tree::<(RecordOwner, u32), Anchor>(self.bindings.anchors.len());
+        weight.bulk_tree::<Anchor, DefId>(self.bindings.source_definitions.len());
+        for (owner, _) in self
+            .bindings
+            .owners
+            .values()
+            .chain(self.bindings.anchors.keys())
+        {
+            if let RecordOwner::Written(path) = owner {
+                weight.arc(path);
+                weight.path(path);
+            }
+        }
         Some(weight.bytes())
     }
 
@@ -256,9 +299,19 @@ impl NativeRecordContext {
         Self {
             types: engine.types().clone(),
             bindings: Arc::new(SourceBindings {
-                owners,
-                anchors,
-                source_definitions,
+                owners: owners
+                    .into_iter()
+                    .map(|(anchor, (owner, occurrence))| {
+                        (anchor, (RecordOwner::capture(&owner), occurrence))
+                    })
+                    .collect(),
+                anchors: anchors
+                    .into_iter()
+                    .map(|((owner, occurrence), anchor)| {
+                        ((RecordOwner::capture(&owner), occurrence), anchor)
+                    })
+                    .collect(),
+                source_definitions: source_definitions.into_iter().collect(),
             }),
         }
     }
@@ -268,12 +321,15 @@ impl NativeRecordSource for NativeRecordContext {
         &self.types
     }
     fn record_owner(&self, anchor: Anchor) -> Option<(DefPath, u32)> {
-        self.bindings.owners.get(&anchor).cloned()
+        self.bindings
+            .owners
+            .get(&anchor)
+            .map(|(owner, occurrence)| (owner.path().clone(), *occurrence))
     }
     fn record_source_anchor(&self, owner: &DefPath, occurrence: u32) -> Option<Anchor> {
         self.bindings
             .anchors
-            .get(&(owner.clone(), occurrence))
+            .get(&(RecordOwner::capture(owner), occurrence))
             .copied()
     }
 }

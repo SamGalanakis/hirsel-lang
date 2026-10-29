@@ -385,9 +385,13 @@ fn ownership_projection_is_charged_and_generated_changes_retire_both_directions(
         .bindings
         .owners
         .values()
-        .filter(|(owner, _)| owner.0.name.starts_with("$generated-source:a:"))
+        .filter(|(owner, _)| owner.path().0.name.starts_with("$generated-source:a:"))
     {
-        assert!(current.record_source_anchor(owner, *occurrence).is_none());
+        assert!(
+            current
+                .record_source_anchor(owner.path(), *occurrence)
+                .is_none()
+        );
     }
     let bound = current.input_bytes().unwrap();
     assert!(bound > size_of::<NativeRecordContext>() as u64);
