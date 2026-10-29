@@ -178,10 +178,6 @@ impl NativeLowerBody {
     }
 }
 impl NativeLowerReader {
-    /// Only a selected current source query can provide this body's envelope.
-    /// V rechecks its exact artifact and private input observations after type
-    /// and source rebinding. CT5 uses are checked by the same source validator
-    /// as the live native source attachment. No native stage is inferred.
     fn archive(
         &self,
         path: &DefPath,
@@ -198,6 +194,10 @@ impl NativeLowerReader {
         )?;
         (archive.header()?.signature_hash == selected.signature).then_some(archive)
     }
+    /// Only a selected current source query can provide this body's envelope.
+    /// V rechecks its exact artifact and private input observations after type
+    /// and source rebinding. CT5 uses are checked by the same source validator
+    /// as the live native source attachment. No native stage is inferred.
     pub fn read(&self, path: &DefPath) -> Option<NativeLowerBody> {
         let selected = self.selected.get(path)?;
         let definition = Arc::new(self.archive(path, self.anchors.clone())?.materialize()?);
