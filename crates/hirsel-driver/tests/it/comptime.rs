@@ -978,10 +978,10 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
                     assert_eq!(actual, expected, "jobs={jobs} warm={warm}");
                     if source == generated {
                         let scalar = control.check_definition(&path("chosen")).unwrap();
-                        let bound = sources.dependency_decode_bytes(&path("chosen")).unwrap();
+                        let bound = sources.checked_dependency_decode_bytes(&path("chosen")).unwrap();
                         let budget = hirsel_engine::runtime::ProcessBudget::new(bound);
                         let worker = sources
-                            .dependencies(&path("chosen"), budget.reserve(bound).unwrap())
+                            .checked_dependencies(&path("chosen"), budget.reserve(bound).unwrap())
                             .unwrap();
                         assert!(
                             scalar
