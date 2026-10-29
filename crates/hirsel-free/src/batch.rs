@@ -4,6 +4,9 @@
 //! ordinal names storage only. Its caller must derive retirement from the real
 //! cooperative head, including holding rests and polls. Retained notifications
 //! own the old allocation and never look up a replacement by ordinal.
+#[path = "batch/publication.rs"]
+pub mod publication;
+
 use crate::frame::{self, Notification, Queued, Running};
 use crate::sync::{Arc, AtomicBool, AtomicU32, Ordering};
 
@@ -243,5 +246,29 @@ impl Startup {
     }
     pub fn outcome(&self) -> Option<bool> {
         (self.pending.load(Ordering::Acquire) == 0).then(|| !self.failed.load(Ordering::Relaxed))
+    }
+}
+
+/// Unique lexical access to committed state at the supplied cooperative head.
+/// Runtime admission derives both arguments from its real frontier and gates.
+/// The raw marker prevents sending this borrow across a physical owner change.
+pub struct Commit<'a, T> {
+    state: &'a mut T,
+    task: u64,
+    _local: std::marker::PhantomData<*mut ()>,
+}
+impl<'a, T> Commit<'a, T> {
+    pub fn claim(state: &'a mut T, task: u64, head: Option<u64>, ready: bool) -> Option<Self> {
+        (ready && head == Some(task)).then_some(Self {
+            state,
+            task,
+            _local: std::marker::PhantomData,
+        })
+    }
+    pub fn state(&mut self) -> &mut T {
+        self.state
+    }
+    pub fn task(&self) -> u64 {
+        self.task
     }
 }

@@ -170,7 +170,7 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bo
     unsafe { crate::alloc::cpu_allocation_done(ctx) };
     super::cpu_withdrawal::release(ctx);
     if let Some(ledger) = unsafe { (*ctx).heap_ref().meter.cpu.get() } {
-        let owner = unsafe { (*native).claimed_owner(ctx) }
+        let owner = unsafe { (*native).cpu_owner() }
             .expect("a CPU allocation belongs to its claimed ordinal");
         ledger.blocks.lock().unwrap().adopt(owner, result);
     }

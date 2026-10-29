@@ -83,6 +83,18 @@ pub(crate) struct Native {
     pub(crate) cpu_claim: Option<std::sync::Arc<super::super::cpu::ClaimIdentity>>,
     pub(crate) cpu_fuel: super::cpu_fuel::Fuel,
 }
+impl Drop for Native {
+    fn drop(&mut self) {
+        // Normal cleanup has left this physical record. A stopped, retained
+        // native worker never gets here until its actual native owner exits.
+        if let Some(identity) = &self.cpu_claim
+            && identity.lease().publication.verdict().is_some()
+        {
+            identity.lease().publication.drained();
+        }
+    }
+}
+
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
     assert!(std::mem::offset_of!(Physical, reserved_zero) == 28);
@@ -297,18 +309,6 @@ impl Native {
         })
     }
 
-    pub(crate) fn claimed_owner(
-        &self,
-        ctx: *mut TaskCtx,
-    ) -> Option<crate::pool::cpu_scoped::ledger::blocks::Owner> {
-        self.cpu_owner().or_else(|| {
-            let task = super::super::engine::current(ctx);
-            super::super::engine::with_driver(ctx, |driver| {
-                driver.cpu_batch.as_ref()?.block_owner(task)
-            })
-        })
-    }
-
     pub(crate) fn new(
         ctx: *mut TaskCtx,
         environment: *mut Header,
@@ -477,7 +477,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
             }
             if let Some(saved) = (*native).saved_roots.take() {
                 let owner = (*native)
-                    .claimed_owner(ctx)
+                    .cpu_owner()
                     .expect("a saved CPU call retains its ordinal");
                 saved.check(ctx, &*native, owner);
             }

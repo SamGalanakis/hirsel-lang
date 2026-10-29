@@ -769,6 +769,7 @@ name = "hirsel-free-loom"
 version = "0.0.0"
 dependencies = [
  "hirsel-guard",
+ "hirsel-run-schema",
  "loom",
 ]
 

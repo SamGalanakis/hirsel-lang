@@ -90,3 +90,7 @@ mod role_owner;
 
 #[path = "../../../../crates/hirsel-free/src/batch.rs"]
 pub mod batch;
+
+#[cfg(not(test))]
+#[allow(dead_code)]
+pub mod cpu_budget;

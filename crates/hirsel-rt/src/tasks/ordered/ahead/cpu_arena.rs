@@ -110,7 +110,7 @@ pub(super) unsafe fn adopt(
         if super::super::engine::with_driver(ctx, |driver| driver.budgets.fuel) {
             return;
         }
-        let Some(owner) = (unsafe { (*native).claimed_owner(ctx) }) else {
+        let Some(owner) = (unsafe { (*native).cpu_owner() }) else {
             return;
         };
         if (*native).arena.enabled != 0 {

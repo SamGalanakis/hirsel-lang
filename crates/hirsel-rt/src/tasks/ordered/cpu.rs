@@ -8,6 +8,7 @@ use crate::stop::{Stop, Stopped};
 
 mod claims;
 mod withdrawal;
+pub(in crate::tasks::ordered) use claims::Frozen;
 pub(crate) use claims::{ClaimIdentity, bind_frame};
 pub(super) use withdrawal::Withdrawn;
 
@@ -35,21 +36,21 @@ struct Record {
     summary: Option<(*mut super::ahead::cpu_handoff::Summary, Vec<u8>)>,
     settled_prefix: Option<Result<Stretch, Pause>>,
     recorded_prefix: Option<Stretch>,
+    verdict: Option<hirsel_free::batch::publication::Verdict<Frozen>>,
 }
 
 pub(super) struct RetiredSummary {
     pub charges: Stretch,
     pub result: Result<(), hirsel_run_schema::BudgetKind>,
     pub record: Option<crate::io::CpuSummary>,
+    pub verdict: Option<hirsel_free::batch::publication::Verdict<Frozen>>,
 }
 
 /// A lexical authority borrowed from the real cooperative head. It cannot
 /// cross a switch or a receipt callback, and storage ordinals never choose it.
 pub(super) struct BatchCommit<'a> {
-    batch: &'a mut Batch,
+    authority: hirsel_free::batch::Commit<'a, Batch>,
     state: &'a mut Settled,
-    task: TaskId,
-    _local: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 impl super::driver::Driver {
@@ -60,18 +61,22 @@ impl super::driver::Driver {
         );
         let batch = self.cpu_batch.as_mut()?;
         batch.ordinal(task)?;
+        let frontier = self.frontier.as_mut().unwrap();
+        let authority =
+            hirsel_free::batch::Commit::claim(batch, task, frontier.head(), true).unwrap();
         Some(BatchCommit {
-            batch,
-            state: &mut self.frontier.as_mut().unwrap().settled,
-            task,
-            _local: std::marker::PhantomData,
+            authority,
+            state: &mut frontier.settled,
         })
     }
 }
 
 impl BatchCommit<'_> {
     pub(super) fn summary(&mut self) -> Option<RetiredSummary> {
-        self.batch.retire_summary(self.task, self.state)
+        let task = self.authority.task();
+        let batch = self.authority.state();
+        batch.materialize(task);
+        batch.retire_summary(task, self.state)
     }
 
     pub(super) fn settle(
@@ -79,8 +84,10 @@ impl BatchCommit<'_> {
         before: &Stretch,
         complete: bool,
     ) -> Result<(), hirsel_run_schema::BudgetKind> {
-        self.batch
-            .settle(self.task, before, self.state, complete)
+        let task = self.authority.task();
+        self.authority
+            .state()
+            .settle(task, before, self.state, complete)
             .unwrap()
     }
 }
@@ -215,8 +222,19 @@ impl Batch {
             None => before.clone(),
         };
         assert!(row.recorded_prefix.replace(recorded).is_none());
-        assert!(row.summary.replace((summary, value)).is_none());
-        self.jobs.pause(job, before);
+        // Publish the complete immutable envelope only after the native save.
+        // The actual head (or acknowledged withdrawal) transfers it to Jobs.
+        unsafe { (*summary).phase = super::ahead::cpu_handoff::SUMMARY_PUBLISHED };
+        if let Some(identity) = &row.identity {
+            identity.lease().publication.publish(Frozen {
+                before,
+                summary,
+                value,
+            });
+        } else {
+            assert!(row.summary.replace((summary, value)).is_none());
+            self.jobs.pause(job, before);
+        }
         Ok(())
     }
 
@@ -235,6 +253,7 @@ impl Batch {
                 charges,
                 result: Err(stop.kind),
                 record: None,
+                verdict: row.verdict.take(),
             });
         }
         let (_, value) = row.summary.take().unwrap();
@@ -268,6 +287,7 @@ impl Batch {
             charges,
             result: result.map_err(|stop| stop.kind),
             record: Some(record),
+            verdict: row.verdict.take(),
         })
     }
 

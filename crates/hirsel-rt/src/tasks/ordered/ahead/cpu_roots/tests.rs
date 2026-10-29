@@ -114,17 +114,22 @@ fn withdrawal(published: bool, diagnostic: bool) {
             let younger = handle(1, 7);
             let other = crate::context::hirsel_rt_v2_worker_create(ctx);
             (*other).task_id = 1;
-            role::with_role(ctx, |s| {
+            let child_claim = role::with_role(ctx, |s| {
                 assert_eq!(s.tasks.len(), 1);
                 s.tasks
                     .push(Some(Task::new(7, other, Some(0), vec![0], None)));
+                let lease = s.lease(1);
+                let path = s.task(1).path.clone().into_boxed_slice();
                 let Logical::Ordered(d) = &mut s.logical else {
                     unreachable!()
                 };
-                d.cpu_batch.as_mut().unwrap().claim(younger, 4, 1);
+                let batch = d.cpu_batch.as_mut().unwrap();
+                batch.claim(younger, 4, 1);
+                let claim = batch.bind_identity(younger, path, lease);
                 d.enqueue(younger, crate::ordered::footprint::Held::empty());
                 assert!(d.select().contains(&younger));
                 d.claimed(younger, 1);
+                claim
             });
             let owner = Owner {
                 task: younger,
@@ -185,6 +190,7 @@ fn withdrawal(published: bool, diagnostic: bool) {
                 capacity: 0,
             };
             let mut child_native = make_native(other, input, mapper);
+            child_native.cpu_claim = Some(child_claim);
             if published {
                 child_native.summary = &raw mut summary;
             } else {
@@ -228,6 +234,13 @@ fn withdrawal(published: bool, diagnostic: bool) {
             // make room for the head's exact pending allocation.
             let blocker = ledger.reserve_heap(grant.max_batch_bytes - before).unwrap();
             let mut head_native = make_native(ctx, std::ptr::null_mut(), std::ptr::null_mut());
+            let head = engine::current(ctx);
+            head_native.cpu_claim = engine::with_driver(ctx, |driver| {
+                driver
+                    .cpu_batch
+                    .as_ref()
+                    .and_then(|batch| batch.identity(head))
+            });
             (*ctx).ahead_physical = &raw mut head_native.physical;
             let head_stack = crate::fiber::Stack::new();
             let sp = head_stack.prepare(

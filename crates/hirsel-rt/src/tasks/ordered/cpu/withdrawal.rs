@@ -120,6 +120,9 @@ impl Batch {
         head: TaskId,
         targets: &BTreeSet<TaskId>,
     ) -> Vec<Withdrawn> {
+        for &task in targets {
+            self.materialize(task);
+        }
         let head = self.ordinal(head).expect("live head CPU job");
         assert!(
             self.records[head + 1..]

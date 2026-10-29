@@ -316,6 +316,7 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
         charges,
         result,
         record,
+        verdict,
     }) = published
     {
         // A speculative mapper may have reached publication beyond the first
@@ -324,6 +325,13 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
         // the run's terminal outcome records the rejected budget instead.
         if let Some(record) = record {
             super::cpu::record_summary(ctx, &record)?;
+        }
+        if result.is_ok() {
+            if let Some(verdict) = verdict {
+                verdict.accept();
+            }
+        } else {
+            drop(verdict);
         }
         super::events::charges::partial(ctx, current(ctx), &charges, result);
         result.map_err(Stop::BudgetExceeded)?;

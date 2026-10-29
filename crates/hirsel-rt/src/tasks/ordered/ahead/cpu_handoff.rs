@@ -95,7 +95,6 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_publish(ctx: *mut TaskCtx, summary: *m
         return NOT_CERTIFIED;
     }
     unsafe { crate::stop::check(ctx, super::super::engine::ahead_summary(ctx, summary)) };
-    unsafe { (*summary).phase = SUMMARY_PUBLISHED };
     unsafe { crate::stop::check(ctx, super::super::engine::at_head(ctx)) };
     assert_eq!(unsafe { (*summary).phase }, SUMMARY_RETIRED);
     ACCEPTED
@@ -177,7 +176,7 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
                 (*pointer).ordinal,
             )
         };
-        let owner = unsafe { (*native).claimed_owner(ctx) };
+        let owner = unsafe { (*native).cpu_owner() };
         let task = owner.map(|owner| owner.task);
         let valid = bytes <= 256
             && (bytes == 0 || !value.is_null())
@@ -214,7 +213,6 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
             unsafe { (*native).summary_blocks = blocks };
         }
         super::super::engine::ahead_summary(ctx, pointer)?;
-        unsafe { (*pointer).phase = SUMMARY_PUBLISHED };
     }
     assert_eq!(
         unsafe { (*pointer).phase },
@@ -235,6 +233,13 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
         return Ok(false);
     }
     assert_eq!(unsafe { (*pointer).phase }, SUMMARY_RETIRED);
+    if let Some(identity) = unsafe { (*native).cpu_claim.as_ref() } {
+        assert_eq!(
+            identity.lease().publication.verdict(),
+            Some(true),
+            "continuation follows its accepted receipt"
+        );
+    }
     unsafe {
         (*native).summary_status = u32::from(ACCEPTED);
         (*native).summary = std::ptr::null_mut();

@@ -7,7 +7,20 @@ use std::sync::{Arc, OnceLock};
 pub(crate) struct ClaimLease {
     frame: OnceLock<Arc<crate::pool::free::Frame>>,
     task: TaskLease,
+    pub(in crate::tasks::ordered) publication:
+        Arc<hirsel_free::batch::publication::Publication<Frozen>>,
 }
+
+/// The native save owns every pointer and initialized root until its verdict.
+/// Storage custody remains in the claim's Frame and generation lease.
+pub(in crate::tasks::ordered) struct Frozen {
+    pub before: Stretch,
+    pub summary: *mut super::super::ahead::cpu_handoff::Summary,
+    pub value: Vec<u8>,
+}
+// SAFETY: publication is after the exact native save. Only the acquired head
+// accesses the summary; the producer waits for its verdict before continuing.
+unsafe impl Send for Frozen {}
 
 pub(crate) type ClaimIdentity = hirsel_free::batch::Identity<ClaimLease>;
 
@@ -37,6 +50,7 @@ impl Batch {
             ClaimLease {
                 frame: OnceLock::new(),
                 task: lease,
+                publication: Arc::new(hirsel_free::batch::publication::Publication::default()),
             },
         ));
         assert!(
@@ -48,7 +62,29 @@ impl Batch {
         identity
     }
 
-    pub(super) fn identity(&self, task: TaskId) -> Option<Arc<ClaimIdentity>> {
+    pub(super) fn materialize(&mut self, task: TaskId) {
+        let Some(ordinal) = self.ordinal(task) else {
+            return;
+        };
+        let row = &mut self.records[ordinal];
+        let Some(identity) = &row.identity else {
+            return;
+        };
+        let Some((frozen, verdict)) =
+            hirsel_free::batch::publication::Publication::take(&identity.lease().publication)
+        else {
+            return;
+        };
+        self.jobs.pause(ordinal, frozen.before);
+        assert!(
+            row.summary
+                .replace((frozen.summary, frozen.value))
+                .is_none()
+        );
+        assert!(row.verdict.replace(verdict).is_none());
+    }
+
+    pub(in crate::tasks::ordered) fn identity(&self, task: TaskId) -> Option<Arc<ClaimIdentity>> {
         self.records[self.ordinal(task)?].identity.clone()
     }
 }

@@ -19,6 +19,13 @@ fn native(ctx: *mut TaskCtx, live: *mut u64) -> Box<Native> {
         source: std::ptr::null_mut(),
     };
     let mut native = Native::new(ctx, std::ptr::null_mut(), 0, certificate);
+    let task = engine::current(ctx);
+    native.cpu_claim = engine::with_driver(ctx, |driver| {
+        driver
+            .cpu_batch
+            .as_ref()
+            .and_then(|batch| batch.identity(task))
+    });
     // Exercise the exact claim arm/enter leaves. No allocation is permitted
     // before enter, even though this native record has a CPU certificate.
     unsafe {

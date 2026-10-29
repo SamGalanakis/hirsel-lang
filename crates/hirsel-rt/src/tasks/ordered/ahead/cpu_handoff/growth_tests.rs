@@ -124,6 +124,13 @@ fn run_growth_with_sharing(
                 source: std::ptr::null_mut(),
             };
             let mut native = Native::new(ctx, std::ptr::null_mut(), 0, certificate);
+            let task = engine::current(ctx);
+            native.cpu_claim = engine::with_driver(ctx, |driver| {
+                driver
+                    .cpu_batch
+                    .as_ref()
+                    .and_then(|batch| batch.identity(task))
+            });
             (*ctx).ahead_physical = &raw mut native.physical;
             super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_arm(ctx);
             super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_enter((*ctx).ahead_physical);
@@ -455,6 +462,13 @@ fn run_region_storage(
                 source: std::ptr::null_mut(),
             };
             let mut native = Native::new(ctx, std::ptr::null_mut(), 0, certificate);
+            let task = engine::current(ctx);
+            native.cpu_claim = engine::with_driver(ctx, |driver| {
+                driver
+                    .cpu_batch
+                    .as_ref()
+                    .and_then(|batch| batch.identity(task))
+            });
             (*ctx).ahead_physical = &raw mut native.physical;
             super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_arm(ctx);
             super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_enter((*ctx).ahead_physical);

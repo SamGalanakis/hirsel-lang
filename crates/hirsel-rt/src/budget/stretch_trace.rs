@@ -7,13 +7,8 @@ use crate::ordered::footprint::TaskId;
 use hirsel_run_schema::BudgetKind;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Charge {
-    Fuel(u64),
-    Alloc(u64),
-    Free(u64),
-    Credit(u64),
-}
+mod charge;
+pub(crate) use charge::Charge;
 
 /// Owner-local journal: meter callbacks hold a heap borrow and cannot reach a
 /// scheduler. Read only the task's compiled fuel word and this disjoint field.
