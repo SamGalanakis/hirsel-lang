@@ -307,14 +307,12 @@ impl HeaderProducts {
             .as_ref()
             .and_then(|entry| crate::memo::retained::retained_signature_entry_bytes(entry))
             .unwrap_or(0);
-        let standalone = self
-            .standalone
+        let standalone = (self.standalone && self.retention.get().is_none())
             .then(|| self.reserve_standalone(bytes))
             .transpose()?;
         let mut grant = self
             .retention
             .get()
-            .filter(|_| !self.standalone)
             .map(|grant| grant.lock().unwrap_or_else(|e| e.into_inner()));
         if let Some(grant) = &mut grant {
             **grant = grant.checked_sub(bytes).ok_or_else(|| {

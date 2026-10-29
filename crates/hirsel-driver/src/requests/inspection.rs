@@ -274,6 +274,11 @@ impl GraphMeter {
             .unwrap_or_else(|error| error.into_inner());
         let mut current = self.s0.clone();
         for (path, kind, count) in self.front.work_snapshot() {
+            // Source parsing is outside this semantic-phase ledger, including
+            // when a demanded private module materializes its written inputs.
+            if matches!(kind, QueryKind::Lex | QueryKind::Parse) {
+                continue;
+            }
             let index = KINDS
                 .iter()
                 .position(|selected| *selected == kind)

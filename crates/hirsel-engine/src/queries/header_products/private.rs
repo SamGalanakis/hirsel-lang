@@ -159,7 +159,7 @@ impl HeaderProducts {
                     .map(|((path, kind), count)| ((DefId::intern(path), *kind), *count))
                     .collect();
                 weight.tree::<(DefId, QueryKind), usize>(work.len());
-                let standalone = if self.standalone {
+                let standalone = if self.standalone && private.retention.get().is_none() {
                     Some(self.reserve_standalone(weight.bytes())?)
                 } else if let Some(retention) = private.retention.get() {
                     let mut remaining = retention.lock().unwrap_or_else(|e| e.into_inner());
