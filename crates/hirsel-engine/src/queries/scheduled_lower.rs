@@ -2157,7 +2157,7 @@ impl QueryEngine {
         {
             return Err(refusal());
         }
-        let snapshot = front.signatures();
+        let snapshot = self.signature_inputs();
         let packages: std::collections::BTreeSet<_> =
             definitions.iter().map(|path| &path.0.package).collect();
         let opaque = self
