@@ -372,7 +372,7 @@ pub struct FrontLowerQueries {
     front: Arc<FrontBodyQueries>,
     snapshot: Arc<SignatureSnapshot>,
     memo: Arc<hirsel_types::TypeMemo>,
-    lowering: Arc<dyn LoweringPhase>,
+    lowering: Option<Arc<dyn LoweringPhase>>,
     runtime: std::sync::OnceLock<Result<Arc<hirsel_interp::aggregate::RuntimeTypes>, QueryError>>,
     instances: Arc<hirsel_tir::InstanceBodies>,
     sources: SourceMap,
@@ -1430,8 +1430,9 @@ impl FrontLowerQueries {
             }
             return Ok(Value::Constant(Box::new(Constants::new(value, constants))));
         }
+        let lowering = self.lowering.as_deref().ok_or(QueryError::NotImplemented)?;
         self.count(path, |work| work.lowerings += 1);
-        let output = self.lowering.lower(
+        let output = lowering.lower(
             self.snapshot.types(),
             &self.memo,
             &analyzed.value,
@@ -1944,6 +1945,10 @@ async fn evaluate(
     let site = analyzed.value.typed.syntax.tree.expressions[expression.0 as usize]
         .origin
         .span;
+    let lowering = owner
+        .lowering
+        .as_deref()
+        .ok_or(QueryError::NotImplemented)?;
     owner.count(signature.definition.path(), |work| work.initializers += 1);
     source.evidence.borrow_mut().executed = true;
     let prepared = EvaluationInput {
@@ -1956,7 +1961,7 @@ async fn evaluate(
         constants: &constants,
         sizes: &sizes,
     }
-    .lower(owner.snapshot.types(), &owner.memo, &*owner.lowering)?;
+    .lower(owner.snapshot.types(), &owner.memo, lowering)?;
     let admission =
         s1::ValidatedEvaluation::recorded(prepared, &owner.snapshot, owner.verify, site);
     source.merge(&admission.reads);
@@ -2043,7 +2048,7 @@ impl QueryEngine {
             .clone()
             .filter(|s| s.enabled())
             .ok_or_else(refusal)?;
-        let lowering = self.adapters.lowering.clone().ok_or_else(refusal)?;
+        let lowering = self.adapters.lowering.clone();
         let mut inputs = Vec::with_capacity(definitions.len());
         for path in definitions {
             if front.query(path).is_none() {

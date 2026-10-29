@@ -456,7 +456,10 @@ impl FrontRegistrationQueries {
         .lower(
             self.lower.snapshot.types(),
             &self.lower.memo,
-            &*self.lower.lowering,
+            self.lower
+                .lowering
+                .as_deref()
+                .ok_or(QueryError::NotImplemented)?,
         )?;
         let admission = s1::ValidatedEvaluation::recorded(
             lowered,
