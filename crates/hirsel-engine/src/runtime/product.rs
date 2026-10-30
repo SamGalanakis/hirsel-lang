@@ -110,9 +110,9 @@ impl<T> Owner<T> {
                 .domain
                 .reference(&bytes)
                 .ok_or_else(|| io::Error::other("live product archive exceeds the record limit"))?;
-            let reservation = grant.split(retained).ok_or_else(|| {
-                io::Error::from(io::ErrorKind::OutOfMemory)
-            })?;
+            let reservation = grant
+                .split(retained)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::OutOfMemory))?;
             Ok(ProductArchive(ArchiveBacking::Materialized(Arc::new(
                 ArchiveOwner {
                     bytes,
@@ -835,8 +835,7 @@ mod tests {
         )
         .unwrap();
         let mut short = budget.reserve(1).unwrap();
-        let (refused, allocation) =
-            crate::test_alloc::measured(|| product.archive(&mut short, 1));
+        let (refused, allocation) = crate::test_alloc::measured(|| product.archive(&mut short, 1));
         assert!(refused.is_err());
         assert!(
             allocation.peak <= short.bytes() as isize,
