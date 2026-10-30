@@ -216,11 +216,12 @@ fn export_case_with_ownership(
                     .unwrap();
             }
             let query = export.query();
-            let unknown = ProductRef {
-                address: query.address,
-                action: hirsel_artifact_store::Action(query.address.0),
-                record: errors.protocol,
-            };
+            let unknown = crate::scheduled_front::synthetic_fixture(
+                query.address,
+                hirsel_artifact_store::Action(query.address.0),
+                errors.protocol.domain,
+                b"protocol",
+            );
             assert!(export.input(unknown.clone()).is_err());
             let request =
                 runtime.request(&[native.as_ref().map_or(query, |native| native.query())]);

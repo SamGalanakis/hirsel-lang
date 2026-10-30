@@ -172,11 +172,12 @@ mod tests {
                 .is_err()
             );
             let query = bridge.bindings[&main];
-            let absent = ProductRef {
-                address: query.address,
-                action: hirsel_artifact_store::Action(query.address.0),
-                record: failure,
-            };
+            let absent = crate::fixture_product(
+                &*store,
+                query.address,
+                hirsel_artifact_store::Action(query.address.0),
+                failure,
+            );
             assert!(bridge.products.lower_product(&main, absent).is_err());
             drop(engine);
             let mut runtime =
@@ -197,7 +198,7 @@ mod tests {
                     "front Lower failed: lower={:?}, front={:?}, record={:?}, stats={:?}",
                     lower.failure(reference),
                     front
-                        .outcome(reference)
+                        .outcome(Err(reference))
                         .map(|output| output.outcome.result.err()),
                     store
                         .get_content(reference)
@@ -220,8 +221,8 @@ mod tests {
                     .lower_product(&other, selected.clone())
                     .is_err()
             );
-            let mut crossed = selected;
-            crossed.record = failure;
+            let crossed =
+                crate::fixture_product(&*store, selected.address, selected.action, failure);
             assert!(bridge.products.lower_product(&main, crossed).is_err());
             let issued = product.verified.clone().expect("actual completed source V");
             let reader = bridge

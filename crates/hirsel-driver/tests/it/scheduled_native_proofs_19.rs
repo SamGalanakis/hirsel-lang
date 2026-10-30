@@ -232,10 +232,8 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
         .unwrap();
         assert!(!proofs.discharge.is_empty());
         assert_eq!(trace.totals(), Default::default());
-        let wrong = ProductRef {
-            action: store::Action(Default::default()),
-            ..completed
-        };
+        let mut wrong = completed.clone();
+        wrong.action = store::Action(Default::default());
         assert!(Proofs::assess_native(&export, &source, wrong, &evidence, store.clone()).is_err());
         let mut untrusted = evidence.clone();
         untrusted.trusted.clear();

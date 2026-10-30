@@ -306,7 +306,14 @@ fn changed_source_member_stops_at_equal_settled_component() {
             "the changed member reaches the SCC"
         );
         assert_eq!(
-            before.record, after.record,
+            before
+                .archive(ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+            after
+                .archive(ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
             "equal settled facet stops propagation"
         );
         assert_eq!(
@@ -318,8 +325,14 @@ fn changed_source_member_stops_at_equal_settled_component() {
         assert_eq!(rejected.diagnostics.len(), 1);
         assert_eq!(rejected.diagnostics[0].rule.as_str(), "GEN-5");
         assert_ne!(
-            component(&rejected, "left").record,
-            before.record,
+            component(&rejected, "left")
+                .archive(ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+            before
+                .archive(ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
             "unexecuted growing roots still invalidate the verdict"
         );
         let split = settle(&source.replace("{left(x)}", "{let _=x}"), 2);
@@ -331,8 +344,14 @@ fn changed_source_member_stops_at_equal_settled_component() {
         );
         let merged = settle(&source.replace("{right(x)}", "{right((copy x,copy x))}"), 2);
         assert_eq!(
-            component(&merged, "left").record,
-            component(&rejected, "left").record
+            component(&merged, "left")
+                .archive(ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+            component(&rejected, "left")
+                .archive(ArchiveAdmission::Retained)
+                .unwrap()
+                .reference()
         );
         assert_eq!(merged.diagnostics.len(), 1);
         let removed = settle("fn separate[T](x:T){separate(x)}\npub fn main(){}\n", 1);

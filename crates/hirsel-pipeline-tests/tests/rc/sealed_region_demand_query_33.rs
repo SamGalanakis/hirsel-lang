@@ -32,7 +32,11 @@ fn guard_query_refuses_missing_roots_and_repairs_malformed_cached_selections() {
     });
     let equations = LocalDemandEquations::extract(&unit).unwrap();
     let owner = equations.owner().clone();
-    let store = MemStore::default();
+    let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+    let store = hirsel_engine::store::RequestStore::new(
+        std::sync::Arc::new(MemStore::default()),
+        budget.reserve(64 << 20).unwrap(),
+    );
     let domain = Domain {
         kind: 0x4e00_0001,
         schema: 1,
@@ -45,11 +49,7 @@ fn guard_query_refuses_missing_roots_and_repairs_malformed_cached_selections() {
             kind: 0x4e00_0001,
             address: Address(hash),
         },
-        product: ProductRef {
-            address: Address(hash),
-            action: Action(hash),
-            record,
-        },
+        product: crate::imported_fixture(&store, Address(hash), Action(hash), record),
         equations,
     };
     store.associate_product(input.product.address, input.product.action, record);
@@ -83,7 +83,11 @@ fn guard_query_refuses_missing_roots_and_repairs_malformed_cached_selections() {
     assert!(Plan::new(vec![input.clone()], &[missing], hash, hash).is_err());
     let query = Plan::new(vec![input], &[owner], hash, hash).unwrap();
     let correct = query.execute(&store).unwrap();
-    let bytes = store.get_content(correct.product.record).unwrap();
+    let archive = correct
+        .product
+        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+        .unwrap();
+    let bytes = store.get_content(archive.reference()).unwrap();
     for mutant in 0..4 {
         let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         match mutant {
@@ -94,7 +98,7 @@ fn guard_query_refuses_missing_roots_and_repairs_malformed_cached_selections() {
         }
         let forged = store
             .put_content(
-                correct.product.record.domain,
+                archive.reference().domain,
                 &serde_json::to_vec(&value).unwrap(),
             )
             .unwrap();
@@ -109,7 +113,11 @@ fn guard_query_refuses_missing_roots_and_repairs_malformed_cached_selections() {
 
 #[test]
 fn original_scalar_guard_query_uses_only_metadata_and_rechecks_dependency_outputs() {
-    let store = MemStore::default();
+    let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+    let store = hirsel_engine::store::RequestStore::new(
+        std::sync::Arc::new(MemStore::default()),
+        budget.reserve(64 << 20).unwrap(),
+    );
     let domain = Domain {
         kind: 0x4e00_0001,
         schema: 1,
@@ -145,11 +153,7 @@ fn original_scalar_guard_query_uses_only_metadata_and_rechecks_dependency_output
                             [bytes.as_slice()],
                         ));
                         store.associate_product(address, action, record);
-                        let product = ProductRef {
-                            address,
-                            action,
-                            record,
-                        };
+                        let product = crate::imported_fixture(&store, address, action, record);
                         records.push(product.clone());
                         Input {
                             query: hirsel_engine::runtime::QueryId {

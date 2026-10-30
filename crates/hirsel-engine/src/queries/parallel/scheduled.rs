@@ -79,7 +79,9 @@ impl FrontSummary {
     }
 }
 struct FrontOutcome {
-    reference: Reference,
+    reference: Option<Reference>,
+    publication: Option<ProductRef>,
+    body_publication: Option<WeakAnalyzedProduct>,
     definition: DefId,
     status: Result<(), QueryError>,
     phase: Option<QueryKind>,
@@ -104,7 +106,8 @@ pub(crate) struct FrontCheckFacts {
 }
 impl FrontOutcome {
     fn capture(
-        reference: Reference,
+        reference: Option<Reference>,
+        publication: Option<ProductRef>,
         outcome: ModeResult,
         checked: CheckedProduct,
         dead_arms: Option<crate::tools::DeadArmUse>,
@@ -130,6 +133,8 @@ impl FrontOutcome {
         let summary = summary.map(|summary| FrontSummary::capture(summary, &checked, &reads));
         Self {
             reference,
+            publication,
+            body_publication: None,
             definition: DefId::intern(&definition),
             status: result.map(|_| ()),
             phase,
@@ -157,8 +162,22 @@ struct Input {
 /// select its view before constructing queries; producer completion cannot
 /// publish declarations, fuel or a later source root's diagnostics.
 struct FrontSourceBacking {
-    allowance: Mutex<MemoryReservation>,
+    products: SharedProductSource,
+    admitted: u64,
+    allowance: MemoryReservationPool,
     _sources: SourceMap,
+}
+struct LiveSourceBacking {
+    _source: Arc<FrontSourceBacking>,
+    retention: Arc<Mutex<u64>>,
+    charge: u64,
+    _allowance: MemoryReservation,
+}
+impl Drop for LiveSourceBacking {
+    fn drop(&mut self) {
+        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        *retention += self.charge;
+    }
 }
 pub struct FrontBodyQueries {
     inputs: BTreeMap<Key, Input>,
@@ -209,25 +228,7 @@ pub struct FrontBodyQueries {
 pub struct FrontBodyOutput {
     pub outcome: ModeResult,
     _snapshot: Arc<FrontBodyQueries>,
-}
-impl FrontBodyOutput {
-    pub fn into_live_body(
-        self,
-        product: ProductRef,
-        allowance: &mut MemoryReservation,
-    ) -> Option<LiveAnalyzedProduct> {
-        let source = ProductSource::new(
-            self._snapshot.anchors.as_ref().clone(),
-            self._snapshot.input_records.clone(),
-            self._snapshot._allowance.clone(),
-        )?;
-        LiveAnalyzedProduct::new(
-            (product.address, product.action),
-            self.outcome,
-            source,
-            allowance,
-        )
-    }
+    _body_owner: Option<LiveAnalyzedProduct>,
 }
 /// Checked-only source-growth input. It survives a later Modes failure and
 /// carries the checked stage's complete reads rather than a provisional union.
@@ -267,7 +268,7 @@ impl FrontBodyQueries {
         crate::runtime::LiveSummaryProduct::new(
             (product.address, product.action),
             value,
-            ProductSource::new(
+            ProductSource::prepare(
                 self.anchors.as_ref().clone(),
                 self.input_records.clone(),
                 self._allowance.clone(),
@@ -410,7 +411,10 @@ impl FrontBodyQueries {
             .checked_add(
                 (std::mem::size_of::<Self>()
                     + std::mem::size_of::<FrontSourceBacking>()
-                    + 2 * std::mem::size_of::<usize>()) as u64,
+                    + std::mem::size_of::<Mutex<u64>>()
+                    + 4 * std::mem::size_of::<usize>()) as u64
+                    + MemoryReservationPool::metadata_bytes()
+                    + ProductSource::metadata_bytes(),
             )
     }
     /// Compact diagnostic retention within this source's original allowance.
@@ -418,17 +422,19 @@ impl FrontBodyQueries {
     pub fn compact_retained_reads(&self) {
         self.read_pool.get_or_init(Mutex::default);
     }
-    pub(crate) fn retained_reads(&self, reads: &Arc<Reads>) -> Option<Arc<Reads>> {
+    pub(crate) fn retained_reads(
+        &self,
+        cx: &mut dyn QueryContext,
+        reads: &Arc<Reads>,
+    ) -> Option<Arc<Reads>> {
         let Some(pool) = self.read_pool.get() else {
             return Some(reads.clone());
         };
         let mut pool = pool.lock().unwrap_or_else(|e| e.into_inner());
+        self.make_room(cx, pool.required_bytes(reads)?)?;
         let mut remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        let mut allowance = self
-            ._allowance
-            .allowance
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let available = self._allowance.allowance.available_bytes();
+        let mut allowance = self._allowance.allowance.take(available)?;
         Some(Arc::new(pool.intern(
             reads,
             &mut allowance,
@@ -437,29 +443,38 @@ impl FrontBodyQueries {
     }
     fn pool_completion_reads(
         &self,
+        cx: &mut dyn QueryContext,
         outcome: &mut ModeResult,
         checked: &mut CheckedProduct,
         memos: &mut [(crate::memo::MemoKey, Arc<Reads>)],
     ) -> Option<()> {
-        if let Some(summary) = &mut outcome.summary {
+        self.pool_observed_reads(cx, &mut outcome.reads, &mut outcome.summary, checked, memos)
+    }
+    fn pool_observed_reads(
+        &self,
+        cx: &mut dyn QueryContext,
+        reads: &mut Arc<Reads>,
+        summary: &mut Option<Arc<PublishedSummary>>,
+        checked: &mut CheckedProduct,
+        memos: &mut [(crate::memo::MemoKey, Arc<Reads>)],
+    ) -> Option<()> {
+        if let Some(summary) = summary.as_mut() {
             Arc::make_mut(summary).share_checked_storage();
         }
         let Some(pool) = self.read_pool.get() else {
             return Some(());
         };
         let mut pool = pool.lock().unwrap_or_else(|e| e.into_inner());
-        let mut remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        let mut allowance = self
-            ._allowance
-            .allowance
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         let mut shared = BTreeMap::<usize, Arc<Reads>>::new();
         let mut intern = |reads: &mut Arc<Reads>| -> Option<()> {
             let identity = Arc::as_ptr(reads) as usize;
             let retained = if let Some(retained) = shared.get(&identity) {
                 retained.clone()
             } else {
+                self.make_room(cx, pool.required_bytes(reads)?)?;
+                let mut remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+                let available = self._allowance.allowance.available_bytes();
+                let mut allowance = self._allowance.allowance.take(available)?;
                 let retained = Arc::new(pool.intern(reads, &mut allowance, &mut remaining)?);
                 shared.insert(identity, retained.clone());
                 retained
@@ -467,8 +482,8 @@ impl FrontBodyQueries {
             *reads = retained;
             Some(())
         };
-        intern(&mut outcome.reads)?;
-        if let Some(summary) = &mut outcome.summary {
+        intern(reads)?;
+        if let Some(summary) = summary.as_mut() {
             intern(&mut Arc::make_mut(summary).reads)?;
         }
         if let Some((_, reads, _)) = checked {
@@ -481,21 +496,28 @@ impl FrontBodyQueries {
     }
     fn retain(
         &self,
+        cx: &mut dyn QueryContext,
         outcome: &ModeResult,
         checked: &CheckedProduct,
         table_keys: Option<&Arc<crate::table_keys::TableKeyUse>>,
         memos: &[(crate::memo::MemoKey, Arc<Reads>)],
     ) -> Option<()> {
         let charge = retained::compact_metadata(outcome, checked, table_keys, memos)?;
+        self.make_room(cx, charge)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         *retention = retention.checked_sub(charge)?;
         Some(())
     }
-    fn retain_dead_arms(&self, uses: Option<&mut crate::tools::DeadArmUse>) -> Option<()> {
+    fn retain_dead_arms(
+        &self,
+        cx: &mut dyn QueryContext,
+        uses: Option<&mut crate::tools::DeadArmUse>,
+    ) -> Option<()> {
         let Some(uses) = uses else {
             return Some(());
         };
         let bytes = LintFacts::capture_bytes(uses);
+        self.make_room(cx, bytes)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         *retention = retention.checked_sub(bytes)?;
         Some(())
@@ -518,46 +540,89 @@ impl FrontBodyQueries {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let outcome = outcomes.get(&query.address.0)?;
         Some(match &outcome.status {
-            Err(_) => Err(outcome.reference),
-            Ok(()) => Ok(ProductRef {
-                address: query.address,
-                action: crate::store::query_action(
-                    &self.inputs.get(&query.address.0)?.key,
-                    self.inputs.get(&query.address.0)?.key.1,
-                    &outcome.reads,
-                ),
-                record: outcome.reference,
-            }),
+            Err(_) => Err(outcome.reference?),
+            Ok(()) => Ok(outcome.publication.as_ref()?.clone()),
         })
+    }
+    fn make_room(&self, cx: &mut dyn QueryContext, charge: u64) -> Option<()> {
+        while *self.retention.lock().unwrap_or_else(|e| e.into_inner()) < charge {
+            if !cx.evict_body() {
+                return None;
+            }
+        }
+        Some(())
+    }
+    fn owner_grant(
+        &self,
+        cx: &mut dyn QueryContext,
+        value_bytes: u64,
+    ) -> Option<(MemoryReservation, Arc<LiveSourceBacking>)> {
+        let backing_bytes =
+            crate::memo::retained_arc_bytes(&std::mem::MaybeUninit::<LiveSourceBacking>::uninit());
+        let charge = value_bytes.checked_add(backing_bytes)?;
+        self.make_room(cx, charge)?;
+        let mut remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        let next = remaining.checked_sub(charge)?;
+        let mut allowance = self._allowance.allowance.take(charge)?;
+        let backing_allowance = allowance.split(backing_bytes)?;
+        *remaining = next;
+        drop(remaining);
+        Some((
+            allowance,
+            Arc::new(LiveSourceBacking {
+                _source: self._allowance.clone(),
+                retention: self.retention.clone(),
+                charge,
+                _allowance: backing_allowance,
+            }),
+        ))
+    }
+    fn admit_summary(
+        &self,
+        cx: &mut dyn QueryContext,
+        address: hirsel_artifact_store::Address,
+        action: hirsel_artifact_store::Action,
+        summary: Arc<PublishedSummary>,
+    ) -> Option<ProductRef> {
+        let (mut allowance, backing) =
+            self.owner_grant(cx, LiveSummaryProduct::shared_value_bytes(&summary)?)?;
+        let product = LiveSummaryProduct::new(
+            (address, action),
+            summary,
+            ProductSource::backed(self._allowance.products.clone(), backing),
+            &mut allowance,
+        )?;
+        Some(ProductRef::summary(product))
+    }
+    fn admit_body(
+        &self,
+        cx: &mut dyn QueryContext,
+        address: hirsel_artifact_store::Address,
+        action: hirsel_artifact_store::Action,
+        outcome: ModeResult,
+        summary: LiveSummaryProduct,
+    ) -> Option<ProductRef> {
+        let (mut allowance, backing) =
+            self.owner_grant(cx, LiveAnalyzedProduct::shared_required_bytes(&outcome)?)?;
+        let product = LiveAnalyzedProduct::new(
+            (address, action),
+            outcome,
+            summary,
+            ProductSource::backed(self._allowance.products.clone(), backing),
+            &mut allowance,
+        )?;
+        Some(ProductRef::analyzed(product))
     }
     /// Captured rows and actual settled metadata owned by this producer view.
     /// Provider content bytes and active decode scratch have separate owners.
     pub fn retained_bytes(&self) -> u64 {
-        let pool = self
-            .read_pool
-            .get()
-            .map(|pool| pool.lock().unwrap_or_else(|e| e.into_inner()));
         let remaining = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        let allowance = self
-            ._allowance
-            .allowance
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        allowance.bytes() + pool.as_ref().map_or(0, |pool| pool.charged_bytes()) - *remaining
+        self._allowance.admitted - *remaining
     }
 
     /// Immutable producer grant, including input rows and retained outcomes.
     pub fn admitted_bytes(&self) -> u64 {
-        let pool = self
-            .read_pool
-            .get()
-            .map(|pool| pool.lock().unwrap_or_else(|e| e.into_inner()));
-        self._allowance
-            .allowance
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .bytes()
-            + pool.as_ref().map_or(0, |pool| pool.charged_bytes())
+        self._allowance.admitted
     }
 
     pub fn store_adoptions(&self) -> u64 {
@@ -800,26 +865,55 @@ impl FrontBodyQueries {
     /// Actual settled checked summary, including after a later Modes failure.
     pub fn checked_definition(self: &Arc<Self>, path: &DefPath) -> Option<FrontCheckedOutput> {
         let query = self.query(path)?;
-        let reference = self
-            .outcomes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&query.address.0)?
-            .reference;
-        self.checked(reference)
+        let selected = self.completed_product(query)?;
+        self.checked(selected)
     }
-    pub fn checked(self: &Arc<Self>, reference: Reference) -> Option<FrontCheckedOutput> {
+    fn selection_key(
+        &self,
+        selected: &Result<ProductRef, Reference>,
+        outcomes: &BTreeMap<Key, FrontOutcome>,
+    ) -> Option<Key> {
+        match selected {
+            Err(reference) => outcomes.iter().find_map(|(key, value)| {
+                (value.status.is_err() && value.reference == Some(*reference)).then_some(*key)
+            }),
+            Ok(product) => {
+                let key = if self.inputs.contains_key(&product.address.0) {
+                    product.address.0
+                } else {
+                    *index_value(&self.body_demands, &product.address.0)?
+                };
+                let outcome = outcomes.get(&key)?;
+                let primary = outcome.publication.as_ref()?;
+                if primary == product {
+                    return Some(key);
+                }
+                let analyzed = product.analyzed_value()?;
+                (product.action == primary.action
+                    && analyzed.address() == product.address
+                    && analyzed.action() == product.action
+                    && outcome
+                        .body_publication
+                        .as_ref()
+                        .is_some_and(|current| current.matches(analyzed)))
+                .then_some(key)
+            }
+        }
+    }
+    pub fn checked(
+        self: &Arc<Self>,
+        selected: Result<ProductRef, Reference>,
+    ) -> Option<FrontCheckedOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-        let (key, outcome) = outcomes
-            .iter()
-            .find(|(_, outcome)| outcome.reference == reference)?;
+        let key = self.selection_key(&selected, &outcomes)?;
+        let outcome = outcomes.get(&key)?;
         let (summary, reads, dependencies) = outcome.checked.as_ref()?;
         Some(FrontCheckedOutput {
             table_keys: self
                 .table_keys
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .get(key)?
+                .get(&key)?
                 .clone(),
             summary: summary.clone(),
             dependencies: dependencies.clone(),
@@ -851,27 +945,31 @@ impl FrontBodyQueries {
         Arc::new(Factory(self.clone()))
     }
     /// Inspect compact reads without decoding the checked body.
-    pub(crate) fn selected_reads(&self, reference: Reference) -> Option<Arc<Reads>> {
-        self.outcomes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .find(|outcome| outcome.reference == reference)
-            .map(|outcome| outcome.reads.clone())
+    pub(crate) fn selected_reads(
+        &self,
+        selected: Result<ProductRef, Reference>,
+    ) -> Option<Arc<Reads>> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let key = self.selection_key(&selected, &outcomes)?;
+        Some(outcomes.get(&key)?.reads.clone())
     }
     /// Settled Check inputs own no analyzed body and never read its archive.
-    pub(crate) fn check_facts(&self, reference: Reference) -> Option<FrontCheckFacts> {
+    pub(crate) fn check_facts(
+        &self,
+        selected: Result<ProductRef, Reference>,
+    ) -> Option<FrontCheckFacts> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-        let selected = outcomes
-            .values()
-            .find(|outcome| outcome.reference == reference)?;
-        let source_rules = selected.summary.as_ref().is_some_and(|summary| {
-            let summary = summary.materialize(&selected.checked, &selected.reads);
-            summary
-                .summary
-                .calls
-                .iter()
-                .any(|call| call.callee.path().is_core("region.with"))
+        let key = self.selection_key(&selected, &outcomes)?;
+        let selected = outcomes.get(&key)?;
+        let source_rules = selected.publication.as_ref().is_some_and(|publication| {
+            publication.summary_value().is_some_and(|summary| {
+                summary
+                    .value()
+                    .summary
+                    .calls
+                    .iter()
+                    .any(|call| call.callee.path().is_core("region.with"))
+            })
         });
         Some(FrontCheckFacts {
             result: selected
@@ -913,49 +1011,46 @@ impl FrontBodyQueries {
 
     /// An immutable outcome, including exact error-phase and read evidence.
     /// This lookup never adopts a product into a mutable source namespace.
-    pub fn outcome(self: &Arc<Self>, reference: Reference) -> Option<FrontBodyOutput> {
-        let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-        let (key, selected) = outcomes
-            .iter_mut()
-            .find(|(_, outcome)| outcome.reference == reference)?;
-        let result = match &selected.status {
-            Err(error) => Err(error.clone()),
+    pub fn outcome(
+        self: &Arc<Self>,
+        selected: Result<ProductRef, Reference>,
+    ) -> Option<FrontBodyOutput> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let key = self.selection_key(&selected, &outcomes)?;
+        let outcome = outcomes.get(&key)?;
+        let (result, body_owner) = match &outcome.status {
+            Err(error) => (Err(error.clone()), None),
             Ok(()) => {
-                let output = if let Some(output) = selected.body.upgrade() {
-                    output
-                } else {
-                    let bytes = self.store.get_content(reference)?;
-                    let input = self.inputs.get(key)?;
-                    let restored = persistent::restore_frozen_mode(
-                        &self.records,
-                        &self.types,
-                        self.syntax(input)?,
-                        &self.citations,
-                        input.key.1,
-                        &bytes,
-                        selected.reads.clone(),
-                        None,
-                    )?;
-                    let output = restored.outcome.result.ok()?;
-                    selected.body = Arc::downgrade(&output);
-                    output
-                };
-                Ok(output)
+                let owner = selected
+                    .as_ref()
+                    .ok()?
+                    .analyzed_value()
+                    .cloned()
+                    .or_else(|| outcome.body_publication.as_ref()?.upgrade())?;
+                (Ok(owner.output().clone()), Some(owner))
             }
         };
         Some(FrontBodyOutput {
             outcome: ModeResult {
-                definition: selected.definition.path().clone(),
+                definition: outcome.definition.path().clone(),
                 result,
-                phase: selected.phase,
-                summary: selected
-                    .summary
+                phase: outcome.phase,
+                summary: outcome
+                    .publication
                     .as_ref()
-                    .map(|summary| summary.materialize(&selected.checked, &selected.reads)),
-                reads: selected.reads.clone(),
-                diagnostic_phases: selected.diagnostic_phases.clone(),
+                    .and_then(ProductRef::summary_value)
+                    .map(LiveSummaryProduct::value_arc)
+                    .or_else(|| {
+                        outcome
+                            .summary
+                            .as_ref()
+                            .map(|summary| summary.materialize(&outcome.checked, &outcome.reads))
+                    }),
+                reads: outcome.reads.clone(),
+                diagnostic_phases: outcome.diagnostic_phases.clone(),
             },
             _snapshot: self.clone(),
+            _body_owner: body_owner,
         })
     }
     pub(crate) fn registration_handle(
@@ -1000,7 +1095,7 @@ impl FrontBodyQueries {
             .lock()
             .unwrap()
             .values()
-            .map(|outcome| outcome.reference)
+            .filter_map(|outcome| outcome.reference)
             .collect()
     }
     pub(crate) fn registration(&self, path: &DefPath) -> Option<&AcceptedFrontRegistration> {
@@ -1088,19 +1183,10 @@ impl QueryTask for BodyTask {
                     self.terminal = Some(Err(error));
                     return finish(Err(error));
                 }
-                std::task::Poll::Ready(Ok(product)) => {
-                    if self.queries.outcome(product.record).is_some() {
-                        let result = Ok(ProductRef {
-                            address: self.query.address,
-                            ..product
-                        });
-                        self.terminal = Some(result.clone());
-                        return finish(result);
-                    }
-                }
+                std::task::Poll::Ready(Ok(_)) => {}
             }
         }
-        let result = self.run();
+        let result = self.run(cx);
         self.terminal = Some(result.clone());
         finish(result)
     }
@@ -1112,7 +1198,123 @@ fn finish(result: Result<ProductRef, Reference>) -> QueryPoll {
     }
 }
 impl BodyTask {
-    fn load(&self) -> Option<Result<ProductRef, Reference>> {
+    fn publish_body(
+        &self,
+        cx: &mut dyn QueryContext,
+        mut outcome: ModeResult,
+        bytes: Option<&[u8]>,
+    ) -> Result<ProductRef, Reference> {
+        let queries = &self.queries;
+        let input = &queries.inputs[&self.input];
+        let (reference, reads, summary) = {
+            let outcomes = queries.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+            let old = outcomes.get(&self.input).ok_or(queries.errors.protocol)?;
+            if outcome.result.is_err()
+                || old.status.is_err()
+                || old.reads.as_ref() != outcome.reads.as_ref()
+            {
+                return Err(queries.errors.protocol);
+            }
+            let old_summary = old
+                .publication
+                .as_ref()
+                .and_then(ProductRef::summary_value)
+                .ok_or(queries.errors.protocol)?
+                .value();
+            let current_summary = outcome.summary.as_ref().ok_or(queries.errors.protocol)?;
+            if !crate::SummaryView::from(old_summary).equivalent(
+                &queries.types,
+                crate::SummaryView::from(&**current_summary),
+                &queries.types,
+            ) || old.diagnostic_phases != outcome.diagnostic_phases
+                || old.diagnostics
+                    != outcome
+                        .result
+                        .as_ref()
+                        .map_err(|_| queries.errors.protocol)?
+                        .diagnostics
+            {
+                return Err(queries.errors.protocol);
+            }
+            outcome.phase = old.phase;
+            (
+                old.reference,
+                old.reads.clone(),
+                old.publication
+                    .as_ref()
+                    .and_then(ProductRef::summary_value)
+                    .ok_or(queries.errors.protocol)?
+                    .clone(),
+            )
+        };
+        if let (Some(reference), Some(bytes)) = (reference, bytes) {
+            if reference.domain.reference(bytes) != Some(reference) {
+                return Err(queries.errors.protocol);
+            }
+            if queries.store.put_content(reference.domain, bytes) != Some(reference) {
+                return Err(queries.errors.resource);
+            }
+        }
+        let action = crate::store::query_action(&input.key, input.key.1, &reads);
+        let product = queries
+            .admit_body(cx, self.query.address, action, outcome, summary)
+            .ok_or(queries.errors.resource)?;
+        let body = product.analyzed_value().ok_or(queries.errors.protocol)?;
+        let mut outcomes = queries.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let current = outcomes
+            .get_mut(&self.input)
+            .ok_or(queries.errors.protocol)?;
+        current.body = Arc::downgrade(body.output());
+        current.body_publication = Some(body.downgrade());
+        drop(outcomes);
+        if let Some(reference) = reference {
+            queries
+                .store
+                .associate_product(self.query.address, action, reference);
+        }
+        Ok(product)
+    }
+
+    fn restore_body(&self, cx: &mut dyn QueryContext) -> Option<Result<ProductRef, Reference>> {
+        let queries = &self.queries;
+        if !queries.store.query_cache_enabled()
+            || queries.verify_store != crate::store::VerifyStore::Off
+        {
+            return None;
+        }
+        let input = &queries.inputs[&self.input];
+        let (reference, reads) = {
+            let outcomes = queries.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+            let old = outcomes.get(&self.input)?;
+            (old.reference?, old.reads.clone())
+        };
+        if reference.domain != crate::store::product_domain(QueryKind::Modes)
+            || reference.len > self.weight.scratch
+        {
+            return None;
+        }
+        let bytes = queries.store.get_content(reference)?;
+        if reference.domain.reference(&bytes) != Some(reference) {
+            return None;
+        }
+        let restored = persistent::restore_frozen_mode(
+            &queries.records,
+            &queries.types,
+            queries.syntax(input)?,
+            &queries.citations,
+            input.key.1,
+            &bytes,
+            reads,
+            queries
+                .snapshot
+                .signature(input.definition)
+                .and_then(Result::ok)
+                .map(|signature| &**signature),
+        )?;
+        Some(self.publish_body(cx, restored.outcome, None))
+    }
+
+    fn load(&self, cx: &mut dyn QueryContext) -> Option<Result<ProductRef, Reference>> {
         let queries = &self.queries;
         let input = queries.inputs.get(&self.input)?;
         let mut entry = crate::store::Entry::load(&*queries.store, &input.key);
@@ -1167,12 +1369,13 @@ impl BodyTask {
             Arc::make_mut(summary).share_checked_storage();
         }
         queries.retain(
+            cx,
             &restored.outcome,
             &restored.checked,
             restored.table_keys.as_ref(),
             &memo_rows,
         )?;
-        queries.retain_dead_arms(restored.dead_arms.as_mut())?;
+        queries.retain_dead_arms(cx, restored.dead_arms.as_mut())?;
         if let Some(table_keys) = restored.table_keys {
             queries
                 .table_keys
@@ -1182,6 +1385,17 @@ impl BodyTask {
         }
         let (outcome, checked) = (restored.outcome, restored.checked);
         let failed = outcome.result.is_err();
+        let action = variant.action(&input.key);
+        let publication = if failed {
+            None
+        } else {
+            Some(queries.admit_summary(
+                cx,
+                self.query.address,
+                action,
+                outcome.summary.as_ref()?.clone(),
+            )?)
+        };
         queries
             .memos
             .lock()
@@ -1196,28 +1410,29 @@ impl BodyTask {
             .unwrap_or_else(|e| e.into_inner())
             .insert(
                 self.input,
-                FrontOutcome::capture(variant.output, outcome, checked, restored.dead_arms),
+                FrontOutcome::capture(
+                    Some(variant.output),
+                    publication.clone(),
+                    outcome,
+                    checked,
+                    restored.dead_arms,
+                ),
             );
         queries.store_adoptions.fetch_add(1, Relaxed);
         timings::count(Count::StoreHits);
         timings::count(Count::StoreModeHits);
         if !failed {
-            self.remember_carry(variant.output);
+            self.remember_carry(Some(variant.output));
         }
         if failed {
             return Some(Err(variant.output));
         }
-        let action = variant.action(&input.key);
         queries
             .store
             .associate_product(self.query.address, action, variant.output);
-        Some(Ok(ProductRef {
-            address: self.query.address,
-            action,
-            record: variant.output,
-        }))
+        Some(Ok(publication?))
     }
-    fn run(&mut self) -> Result<ProductRef, Reference> {
+    fn run(&mut self, cx: &mut dyn QueryContext) -> Result<ProductRef, Reference> {
         let _read_scope = self.queries.store.read_scope();
         let _publication = self.queries.store.publication_scope();
         if !self.materialize
@@ -1225,14 +1440,19 @@ impl BodyTask {
         {
             return product;
         }
+        if self.materialize
+            && let Some(body) = self.restore_body(cx)
+        {
+            return body;
+        }
         if !self.materialize && self.queries.verify_store == crate::store::VerifyStore::Off {
-            if let Some(hit) = self.load_carry() {
+            if let Some(hit) = self.load_carry(cx) {
                 return hit;
             }
-            if let Some(hit) = self.load_compact() {
+            if let Some(hit) = self.load_compact(cx) {
                 return hit;
             }
-            if let Some(hit) = self.load() {
+            if let Some(hit) = self.load(cx) {
                 return hit;
             }
             timings::count(Count::StoreMisses);
@@ -1323,7 +1543,10 @@ impl BodyTask {
             &worker,
             queries.types.clone(),
             &mut source,
-            Some(&queries.records),
+            queries
+                .store
+                .query_cache_enabled()
+                .then_some(&*queries.records),
         );
         let mut memo_rows = completed.memo_snapshot();
         let mut checked = completed.checked_product();
@@ -1344,55 +1567,35 @@ impl BodyTask {
         // mode output, and includes source/phase/ordered-read provenance.
         let failed = published.result.is_err();
         let bytes = if failed {
-            queries
-                .records
-                .encode_record(
-                    &(
-                        published.definition,
-                        published.result.err(),
-                        published.phase.map(QueryKind::phase_name),
-                        published.diagnostic_phases,
-                        &*published.reads,
-                    ),
-                    |anchor| queries.citations.record_owner(anchor),
-                )
-                .ok_or(queries.errors.resource)?
+            Some(
+                queries
+                    .records
+                    .encode_record(
+                        &(
+                            published.definition,
+                            published.result.err(),
+                            published.phase.map(QueryKind::phase_name),
+                            published.diagnostic_phases,
+                            &*published.reads,
+                        ),
+                        |anchor| queries.citations.record_owner(anchor),
+                    )
+                    .ok_or(queries.errors.resource)?,
+            )
         } else {
-            completed.take_payload().ok_or(queries.errors.resource)?
+            completed.take_payload()
         };
-        if bytes.len() as u64 > self.weight.scratch {
+        if bytes
+            .as_ref()
+            .is_some_and(|bytes| bytes.len() as u64 > self.weight.scratch)
+        {
             return Err(queries.errors.resource);
         }
         if self.materialize {
-            // The accepted compact P is immutable. A body demand may only
-            // replenish exactly its original archive; it never replaces facts
-            // or debits a second retained copy of their metadata.
-            let (reference, reads) = {
-                let outcomes = queries.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-                let old = outcomes.get(&self.input).ok_or(queries.errors.protocol)?;
-                if failed || old.status.is_err() || old.reads.as_ref() != outcome.reads.as_ref() {
-                    return Err(queries.errors.protocol);
-                }
-                (old.reference, old.reads.clone())
-            };
-            if reference.domain.reference(&bytes) != Some(reference) {
-                return Err(queries.errors.protocol);
-            }
-            if queries.store.put_content(reference.domain, &bytes) != Some(reference) {
-                return Err(queries.errors.resource);
-            }
-            let action = crate::store::query_action(&input.key, input.key.1, &reads);
-            queries
-                .store
-                .associate_product(self.query.address, action, reference);
-            return Ok(ProductRef {
-                address: self.query.address,
-                action,
-                record: reference,
-            });
+            return self.publish_body(cx, outcome, bytes.as_deref());
         }
         if let Some((reads, expected)) = expected {
-            if failed || reads != *outcome.reads || expected.as_ref() != bytes.as_slice() {
+            if failed || reads != *outcome.reads || bytes.as_deref() != Some(expected.as_ref()) {
                 let error = QueryError::Operational(hirsel_types::OperationalFailure {
                     operation: "verify-cache".into(),
                     message: format!("{}: Modes differs from its cached result", input.definition),
@@ -1422,7 +1625,7 @@ impl BodyTask {
                     diagnostic_phases: vec![],
                 };
                 queries
-                    .retain(&output, &None, None, &[])
+                    .retain(cx, &output, &None, None, &[])
                     .ok_or(queries.errors.resource)?;
                 queries
                     .outcomes
@@ -1430,7 +1633,7 @@ impl BodyTask {
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(
                         self.input,
-                        FrontOutcome::capture(record, output, None, None),
+                        FrontOutcome::capture(Some(record), None, output, None, None),
                     );
                 return Err(record);
             }
@@ -1438,10 +1641,10 @@ impl BodyTask {
         let (record, action) = if failed {
             let record = queries
                 .store
-                .put_content(FAILURE, &bytes)
+                .put_content(FAILURE, bytes.as_deref().ok_or(queries.errors.protocol)?)
                 .ok_or(queries.errors.resource)?;
             (
-                record,
+                Some(record),
                 hirsel_artifact_store::Action(ContentHash::of_parts(
                     "hirsel.front.failure-action.v1",
                     [
@@ -1451,7 +1654,7 @@ impl BodyTask {
                     ],
                 )),
             )
-        } else {
+        } else if let Some(bytes) = &bytes {
             let variant = VariantRef::publish(
                 queries.store.as_ref(),
                 &input.key,
@@ -1467,16 +1670,21 @@ impl BodyTask {
                 entry.action(&input.key),
                 &entry.encode_for(&input.key),
             );
-            (variant.output, variant.action(&input.key))
+            (Some(variant.output), variant.action(&input.key))
+        } else {
+            (
+                None,
+                crate::store::query_action(&input.key, input.key.1, &outcome.reads),
+            )
         };
         queries
-            .pool_completion_reads(&mut outcome, &mut checked, &mut memo_rows)
+            .pool_completion_reads(cx, &mut outcome, &mut checked, &mut memo_rows)
             .ok_or(queries.errors.resource)?;
         queries
-            .retain(&outcome, &checked, table_keys.as_ref(), &memo_rows)
+            .retain(cx, &outcome, &checked, table_keys.as_ref(), &memo_rows)
             .ok_or(queries.errors.resource)?;
         queries
-            .retain_dead_arms(dead_arms.as_mut())
+            .retain_dead_arms(cx, dead_arms.as_mut())
             .ok_or(queries.errors.resource)?;
         queries
             .memos
@@ -1493,28 +1701,44 @@ impl BodyTask {
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(self.input, keys);
         }
+        let publication = if failed {
+            None
+        } else {
+            Some(
+                queries
+                    .admit_summary(
+                        cx,
+                        self.query.address,
+                        action,
+                        outcome
+                            .summary
+                            .as_ref()
+                            .ok_or(queries.errors.protocol)?
+                            .clone(),
+                    )
+                    .ok_or(queries.errors.resource)?,
+            )
+        };
         queries
             .outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(
                 self.input,
-                FrontOutcome::capture(record, outcome, checked, dead_arms),
+                FrontOutcome::capture(record, publication.clone(), outcome, checked, dead_arms),
             );
         if !failed {
             self.remember_carry(record);
         }
         if failed {
-            return Err(record);
+            return Err(record.ok_or(queries.errors.protocol)?);
         }
-        queries
-            .store
-            .associate_product(self.query.address, action, record);
-        Ok(ProductRef {
-            address: self.query.address,
-            action,
-            record,
-        })
+        if let Some(record) = record {
+            queries
+                .store
+                .associate_product(self.query.address, action, record);
+        }
+        publication.ok_or(queries.errors.protocol)
     }
 }
 pub(in crate::queries) struct SpecializationDependencies {
@@ -1852,6 +2076,15 @@ impl QueryEngine {
             })
             .collect::<Vec<_>>();
         body_demands.sort_unstable_by_key(|&(demand, _)| demand);
+        let admitted = allowance.bytes();
+        let mut allowance = allowance;
+        let products = ProductSource::admit_shared(
+            anchors.as_ref().clone(),
+            input_records.clone(),
+            &mut allowance,
+        )
+        .ok_or_else(refusal)?;
+        let pool = MemoryReservationPool::new(allowance).map_err(|_| refusal())?;
         Ok(Arc::new(FrontBodyQueries {
             inputs,
             by_definition: by_definition.into_boxed_slice(),
@@ -1901,7 +2134,9 @@ impl QueryEngine {
             retention,
             read_pool: std::sync::OnceLock::new(),
             _allowance: Arc::new(FrontSourceBacking {
-                allowance: Mutex::new(allowance),
+                products,
+                admitted,
+                allowance: pool,
                 _sources: self.sources.clone(),
             }),
         }))

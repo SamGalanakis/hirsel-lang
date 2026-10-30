@@ -35,19 +35,23 @@ pub struct CompilerRequests {
 // Capturing the guard policy once prevents each source revision from creating
 // a new full-cap budget. Explicit constructors retain their caller's budget.
 static HOST: OnceLock<(Arc<ProcessBudget>, u64)> = OnceLock::new();
+pub(crate) fn host_budget() -> (&'static Arc<ProcessBudget>, u64) {
+    let (budget, cap) = HOST.get_or_init(|| {
+        let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
+            .ok()
+            .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
+            .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
+        // Keep a quarter for the host, source loader and native libraries.
+        (ProcessBudget::new(cap.saturating_sub(cap / 4)), cap)
+    });
+    (budget, *cap)
+}
 impl CompilerRequests {
     /// Capture the existing host guard cap. Construction is lazy/infallible;
     /// actual graph reservations and refusal belong to request selection.
     pub fn for_host(compiler: Compiler, config: CompileConfig) -> Self {
-        let (budget, cap) = HOST.get_or_init(|| {
-            let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
-                .ok()
-                .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
-                .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
-            // Keep a quarter for the host, source loader and native libraries.
-            (ProcessBudget::new(cap.saturating_sub(cap / 4)), cap)
-        });
-        let limits = host_limits(*cap, config.jobs.get());
+        let (budget, cap) = host_budget();
+        let limits = host_limits(cap, config.jobs.get());
         let mut selected = Self::new(compiler, config, budget.clone(), limits);
         selected.host_toolchain = true;
         selected
@@ -269,6 +273,18 @@ mod tests {
         assert!(ProcessBudget::new(0).reserve(zero.runtime_bytes).is_err());
         assert_eq!(first.capture_attempts(), 3);
         assert!(first.input_limits().bytes <= 16 << 20);
+        let (budget, cap) = host_budget();
+        let before = budget.reserved();
+        let directory = tempfile::tempdir().unwrap();
+        let target = crate::native::TargetSpec::x86_64_unknown_linux_gnu();
+        let tools = crate::native::Toolchain::in_tree(directory.path(), &[&target]).unwrap();
+        let charged = before + (cap / 8).min(128 << 20);
+        assert_eq!(budget.reserved(), charged);
+        let view = tools.products.clone();
+        drop(tools);
+        assert_eq!(budget.reserved(), charged);
+        drop(view);
+        assert_eq!(budget.reserved(), before);
     }
 }
 

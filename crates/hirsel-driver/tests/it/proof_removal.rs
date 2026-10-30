@@ -929,8 +929,11 @@ fn native_discovery_reports_actual_removals_on_cold_and_body_free_fresh_hits() {
             trusted: vec![Checker::parse("prover@1").unwrap()],
         };
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn store::ResultStore> =
-            Arc::new(store::DirStore::new(dir.path().to_path_buf()));
+        let transport = ProcessBudget::new(64 << 20);
+        let store: Arc<dyn store::ResultStore> = Arc::new(store::RequestStore::new(
+            Arc::new(store::DirStore::new(dir.path().to_path_buf())),
+            transport.reserve(64 << 20).unwrap(),
+        ));
         let mut expected = None;
         for mode in 0..3 {
             let mut producer = QueryEngine::new(default_environment(), compiler_adapters())
@@ -1070,14 +1073,9 @@ fn native_discovery_reports_actual_removals_on_cold_and_body_free_fresh_hits() {
                 proofs.report_discharged(&actual),
                 expected.as_ref().unwrap().1
             );
-            assert!(
-                tasks
-                    .discharged(ProductRef {
-                        action: store::Action(Default::default()),
-                        ..settled
-                    })
-                    .is_err()
-            );
+            let mut wrong = settled.clone();
+            wrong.action = store::Action(Default::default());
+            assert!(tasks.discharged(wrong).is_err());
             if mode == 1 {
                 assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
                 assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);

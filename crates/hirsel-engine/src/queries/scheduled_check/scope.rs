@@ -57,8 +57,8 @@ impl FrontCheckQueries {
         for (path, reference) in data
             .front
             .iter()
-            .map(|(p, r)| (p, r.record))
-            .chain(data.failed_front.iter().map(|(p, r)| (p, *r)))
+            .map(|(p, r)| (p, Ok(r.clone())))
+            .chain(data.failed_front.iter().map(|(p, r)| (p, Err(*r))))
         {
             weight.path(path);
             let reads = self
@@ -77,8 +77,8 @@ impl FrontCheckQueries {
         for (path, reference, failed) in data
             .lowered
             .iter()
-            .map(|(p, r)| (p, r.record, false))
-            .chain(data.failed_lowered.iter().map(|(p, r)| (p, *r, true)))
+            .map(|(p, r)| (p, Ok(r.clone()), false))
+            .chain(data.failed_lowered.iter().map(|(p, r)| (p, Err(*r), true)))
         {
             weight.path(path);
             weight.path(path);
@@ -133,8 +133,8 @@ impl FrontCheckQueries {
         for (path, reference) in data
             .front
             .iter()
-            .map(|(p, r)| (p, r.record))
-            .chain(data.failed_front.iter().map(|(p, r)| (p, *r)))
+            .map(|(p, r)| (p, Ok(r.clone())))
+            .chain(data.failed_front.iter().map(|(p, r)| (p, Err(*r))))
         {
             let reads = self
                 .plan
@@ -146,8 +146,8 @@ impl FrontCheckQueries {
         for (path, reference, failed) in data
             .lowered
             .iter()
-            .map(|(p, r)| (p, r.record, false))
-            .chain(data.failed_lowered.iter().map(|(p, r)| (p, *r, true)))
+            .map(|(p, r)| (p, Ok(r.clone()), false))
+            .chain(data.failed_lowered.iter().map(|(p, r)| (p, Err(*r), true)))
         {
             let query = self.plan.lower.query(path).ok_or_else(missing)?;
             let reads = self

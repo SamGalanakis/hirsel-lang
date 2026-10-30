@@ -232,8 +232,11 @@ fn ready_case_inner_mutation(
 ) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn ResultStore> =
-            Arc::new(store::DirStore::new(dir.path().join("products")));
+        let transport = ProcessBudget::new(64 << 20);
+        let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+            Arc::new(store::DirStore::new(dir.path().join("products"))),
+            transport.reserve(64 << 20).unwrap(),
+        ));
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let policy =
             hirsel_syntax::ContentHash::of_bytes(b"native demand task current source control");

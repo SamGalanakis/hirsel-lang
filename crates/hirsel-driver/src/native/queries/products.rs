@@ -466,7 +466,12 @@ impl NativeProducts for DemandProducts {
             .lookup_product(address)
             .ok_or("missing arena dependency association")?;
         if current.action != summary.product.action
-            || current.reference != summary.product.record
+            || current.reference
+                != summary
+                    .product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference()
             || self.snapshot.store.get_content(current.reference).is_none()
         {
             return Err("arena dependency is no longer settled".into());

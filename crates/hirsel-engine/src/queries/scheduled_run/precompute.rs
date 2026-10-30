@@ -36,13 +36,14 @@ impl FrontRunQueries {
             .capacity()
             .checked_mul(std::mem::size_of::<(QueryId, bool)>())
             .ok_or(QueryError::NotImplemented)? as u64;
-        let remaining = this
+        let mut remaining = this
             .retention
-            .get_mut()
+            .lock()
             .unwrap_or_else(|error| error.into_inner());
         *remaining = remaining
             .checked_sub(bytes)
             .ok_or_else(|| operational("precompute inventory exceeds admission"))?;
+        drop(remaining);
         let query = QueryId {
             kind: FRONT_RUN_KIND,
             address: hirsel_artifact_store::Address(ContentHash::of_parts(
@@ -179,11 +180,15 @@ impl Task {
                 Poll::Ready(Ok(product)) => product,
             };
             if source {
+                let archive = match product.archive(ArchiveAdmission::Retained) {
+                    Ok(archive) => archive,
+                    Err(_) => return Poll::Ready(Err(queries.errors.resource)),
+                };
                 self.digest = ContentHash::of_parts(
                     "hirsel.front.precompute.fold.v1",
                     [
                         self.digest.0.as_slice(),
-                        product.record.output.0.0.as_slice(),
+                        archive.reference().output.0.0.as_slice(),
                     ],
                 );
             }
@@ -207,18 +212,20 @@ impl Task {
                     record.output.0.0.as_slice(),
                 ],
             ));
-            let product = ProductRef {
-                address: self.query.address,
+            let product = ProductRef::import_archive(
+                self.query.address,
                 action,
-                record,
-            };
+                queries
+                    .admit_archive(record, bytes)
+                    .map_err(|_| queries.errors.resource)?,
+            );
             *queries
                 .precomputed
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = Some((product.clone(), output));
             queries
                 .store
-                .associate_product(product.address, product.action, product.record);
+                .associate_product(product.address, product.action, record);
             Ok(product)
         })())
     }

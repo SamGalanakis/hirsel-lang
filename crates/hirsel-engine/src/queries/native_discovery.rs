@@ -245,14 +245,15 @@ impl NativeDiscoveryCache {
             }
             if current == record.binders
                 && Self::action(engine, &source, &current) == Some(previous.action)
+                && let Some(archive) = self.store.open_product_archive(previous.reference)
             {
                 self.counts.hits += 1;
                 return Ok(NativeDiscoveryProduct {
-                    product: Some(crate::runtime::ProductRef {
+                    product: Some(crate::runtime::ProductRef::import_archive(
                         address,
-                        action: previous.action,
-                        record: previous.reference,
-                    }),
+                        previous.action,
+                        archive,
+                    )),
                     source: Arc::new(source),
                     contracts: record.contracts,
                     requirements: record.requirements,
@@ -297,11 +298,11 @@ impl NativeDiscoveryCache {
             let bytes = self.records.encode(engine, &record)?;
             let reference = self.store.put_content(DISCOVERY, &bytes)?;
             self.store.associate_product(address, action, reference);
-            Some(crate::runtime::ProductRef {
+            Some(crate::runtime::ProductRef::import_archive(
                 address,
                 action,
-                record: reference,
-            })
+                self.store.open_product_archive(reference)?,
+            ))
         })();
         Ok(NativeDiscoveryProduct {
             product,

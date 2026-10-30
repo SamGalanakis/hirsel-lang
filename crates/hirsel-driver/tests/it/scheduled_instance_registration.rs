@@ -76,7 +76,7 @@ fn front(
     let queries: Vec<_> = paths.iter().map(|p| front.query(p).unwrap()).collect();
     let request = runtime.request(&queries);
     if let Err(error) = runtime.wait(request) {
-        let failure = front.outcome(error);
+        let failure = front.outcome(Err(error));
         panic!(
             "front {error:?}: {:?}; resource={}, protocol={}, work={:?}, accepted={:?}",
             failure.map(|o| o.outcome.result),

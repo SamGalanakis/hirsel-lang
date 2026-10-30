@@ -6,6 +6,11 @@ fn output_path(store: &DirStore, reference: Reference) -> std::path::PathBuf {
 use hirsel_lir::layout_types::TargetSpec;
 use std::cell::Cell;
 
+fn admitted(backend: Arc<dyn ResultStore>) -> hirsel_engine::store::RequestStore {
+    let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+    hirsel_engine::store::RequestStore::new(backend, budget.reserve(64 << 20).unwrap())
+}
+
 const INPUT: Domain = Domain {
     kind: 0x4f00ff00,
     schema: 1,
@@ -17,11 +22,7 @@ fn input(store: &dyn ResultStore, s: &str) -> Reference {
     store.put_content(INPUT, s.as_bytes()).unwrap()
 }
 fn product(store: &dyn ResultStore, s: &str) -> ProductRef {
-    ProductRef {
-        address: Address(hash(s)),
-        action: Action(hash(s)),
-        record: input(store, s),
-    }
+    crate::fixture_product(store, Address(hash(s)), Action(hash(s)), input(store, s))
 }
 fn key(name: &str) -> CodegenKey {
     let types = hirsel_types::TypeInterner::new(None);
@@ -130,7 +131,7 @@ fn addresses_cover_every_option_and_canonical_roots() {
 #[test]
 fn hit_never_materializes_and_equal_recomputation_backdates() {
     let dir = tempfile::tempdir().unwrap();
-    let store = DirStore::new(dir.path().into());
+    let store = admitted(Arc::new(DirStore::new(dir.path().into())));
     let key = key("main");
     let mut ready = ready(&store);
     let cold = codegen(&store, &key, &ready, || Ok(object())).unwrap();
@@ -149,10 +150,18 @@ fn hit_never_materializes_and_equal_recomputation_backdates() {
     let changed = codegen(&store, &key, &ready, || Ok(object())).unwrap();
     assert_ne!(changed.product.action, cold.product.action);
     assert_eq!(
-        changed.product.record, cold.product.record,
+        changed
+            .product
+            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .unwrap()
+            .reference(),
+        cold.product
+            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .unwrap()
+            .reference(),
         "equal output failed to backdate"
     );
-    let fresh = DirStore::new(dir.path().into());
+    let fresh = admitted(Arc::new(DirStore::new(dir.path().into())));
     assert_eq!(
         codegen(&fresh, &key, &ready, || panic!("fresh hit decoded body"))
             .unwrap()
@@ -164,7 +173,7 @@ fn hit_never_materializes_and_equal_recomputation_backdates() {
 #[test]
 fn optimizer_body_reads_invalidate_release_but_not_ordinary_debug_calls() {
     let dir = tempfile::tempdir().unwrap();
-    let store = DirStore::new(dir.path().into());
+    let store = admitted(Arc::new(DirStore::new(dir.path().into())));
     let debug = key("caller");
     let ordinary = ready(&store);
     let d = codegen(&store, &debug, &ordinary, || Ok(object())).unwrap();
@@ -195,7 +204,7 @@ fn optimizer_body_reads_invalidate_release_but_not_ordinary_debug_calls() {
 #[test]
 fn complete_ready_context_controls_hits() {
     let dir = tempfile::tempdir().unwrap();
-    let store = DirStore::new(dir.path().into());
+    let store = admitted(Arc::new(DirStore::new(dir.path().into())));
     let key = key("main");
     let original = ready(&store);
     for axis in 0..5 {
@@ -203,7 +212,14 @@ fn complete_ready_context_controls_hits() {
         let mut changed = original.clone();
         let next = input(&store, &format!("changed-{axis}"));
         match axis {
-            0 => changed.product.record = next,
+            0 => {
+                changed.product = crate::fixture_product(
+                    &store,
+                    changed.product.address,
+                    changed.product.action,
+                    next,
+                )
+            }
             1 => changed.ready = next,
             2 => changed.layout_closure = next,
             3 => changed.emission_context = next,
@@ -223,14 +239,15 @@ fn complete_ready_context_controls_hits() {
 #[test]
 fn corrupt_or_missing_object_recomputes_instead_of_hitting() {
     let dir = tempfile::tempdir().unwrap();
-    let store = DirStore::new(dir.path().into());
+    let backend = Arc::new(DirStore::new(dir.path().into()));
+    let store = admitted(backend.clone());
     let key = key("main");
     let ready = ready(&store);
     for bad in [b"truncated".as_slice(), b"another corrupt payload"] {
         let cold = codegen(&store, &key, &ready, || Ok(object())).unwrap();
         let record: ObjectRecord = get_record(&store, OBJECT, cold.object).unwrap();
         let blob: BlobRecord = get_record(&store, BLOB, record.bytes.into()).unwrap();
-        let path = output_path(&store, blob.chunks[0].clone().into());
+        let path = output_path(&backend, blob.chunks[0].clone().into());
         std::fs::write(&path, bad).unwrap();
         let called = Cell::new(false);
         codegen(&store, &key, &ready, || {
@@ -240,12 +257,41 @@ fn corrupt_or_missing_object_recomputes_instead_of_hitting() {
         .unwrap();
         assert!(called.get());
     }
+    for corrupt in [false, true] {
+        let cold = codegen(&store, &key, &ready, || Ok(object())).unwrap();
+        let reference = cold
+            .product
+            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .unwrap()
+            .reference();
+        let path = output_path(&backend, reference);
+        if corrupt {
+            std::fs::write(path, b"corrupt descriptor").unwrap();
+        } else {
+            std::fs::remove_file(path).unwrap();
+        }
+        let called = Cell::new(false);
+        let repaired = codegen(&store, &key, &ready, || {
+            called.set(true);
+            Ok(object())
+        })
+        .unwrap();
+        assert!(called.get());
+        assert_eq!(
+            repaired
+                .product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+            reference
+        );
+    }
 }
 
 #[test]
 fn link_order_is_canonical_and_archive_order_is_significant() {
     let dir = tempfile::tempdir().unwrap();
-    let store = DirStore::new(dir.path().into());
+    let store = admitted(Arc::new(DirStore::new(dir.path().into())));
     let ready = ready(&store);
     let a = codegen(&store, &key("a"), &ready, || Ok(object())).unwrap();
     let b = codegen(&store, &key("b"), &ready, || Ok(object())).unwrap();
@@ -267,7 +313,18 @@ fn link_order_is_canonical_and_archive_order_is_significant() {
     manifest.runtime_archives.reverse();
     let fourth = link(&store, &link_key(), &manifest, &mut compute).unwrap();
     assert_ne!(third.product.action, fourth.product.action);
-    assert_eq!(third.product.record, fourth.product.record);
+    assert_eq!(
+        third
+            .product
+            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .unwrap()
+            .reference(),
+        fourth
+            .product
+            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .unwrap()
+            .reference()
+    );
     assert_eq!(calls.get(), 3);
     manifest.fragments.push(manifest.fragments[0].clone());
     assert!(link(&store, &link_key(), &manifest, &mut compute).is_err());
@@ -276,12 +333,13 @@ fn link_order_is_canonical_and_archive_order_is_significant() {
 #[test]
 fn linked_hit_refuses_stale_fragments_and_relinks_missing_executable() {
     let dir = tempfile::tempdir().unwrap();
-    let store = DirStore::new(dir.path().into());
+    let backend = Arc::new(DirStore::new(dir.path().into()));
+    let store = admitted(backend.clone());
     let fragment = codegen(&store, &key("main"), &ready(&store), || Ok(object())).unwrap();
     let manifest = inputs(&store, vec![fragment.clone()]);
     let mut compute = |_: &LinkKey, _: &LinkInputs, _: &[ObjectArtifact]| Ok(b"exe".to_vec());
     let first = link(&store, &link_key(), &manifest, &mut compute).unwrap();
-    std::fs::remove_file(output_path(&store, first.executable)).unwrap();
+    std::fs::remove_file(output_path(&backend, first.executable)).unwrap();
     let called = Cell::new(false);
     link(&store, &link_key(), &manifest, &mut |_, _, _| {
         called.set(true);
@@ -289,7 +347,36 @@ fn linked_hit_refuses_stale_fragments_and_relinks_missing_executable() {
     })
     .unwrap();
     assert!(called.get());
-    std::fs::remove_file(output_path(&store, fragment.object)).unwrap();
+    for corrupt in [false, true] {
+        let old = link(&store, &link_key(), &manifest, &mut compute).unwrap();
+        let reference = old
+            .product
+            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .unwrap()
+            .reference();
+        let path = output_path(&backend, reference);
+        if corrupt {
+            std::fs::write(path, b"corrupt descriptor").unwrap();
+        } else {
+            std::fs::remove_file(path).unwrap();
+        }
+        let called = Cell::new(false);
+        let repaired = link(&store, &link_key(), &manifest, &mut |_, _, _| {
+            called.set(true);
+            Ok(b"exe".to_vec())
+        })
+        .unwrap();
+        assert!(called.get());
+        assert_eq!(
+            repaired
+                .product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+            reference
+        );
+    }
+    std::fs::remove_file(output_path(&backend, fragment.object)).unwrap();
     assert!(
         link(&store, &link_key(), &manifest, &mut |_, _, _| panic!(
             "stale fragment reached linker"
@@ -301,7 +388,7 @@ fn linked_hit_refuses_stale_fragments_and_relinks_missing_executable() {
 #[test]
 fn static_foreign_launch_runtime_and_linker_changes_invalidate() {
     let dir = tempfile::tempdir().unwrap();
-    let store = DirStore::new(dir.path().into());
+    let store = admitted(Arc::new(DirStore::new(dir.path().into())));
     let original = inputs(&store, vec![]);
     let key = link_key();
     let mut compute = |_: &LinkKey, _: &LinkInputs, _: &[ObjectArtifact]| Ok(b"exe".to_vec());
@@ -327,7 +414,7 @@ fn static_foreign_launch_runtime_and_linker_changes_invalidate() {
 fn executable_materialization_reuses_inode_and_repairs_wrong_mode_or_bytes() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let dir = tempfile::tempdir().unwrap();
-    let store = DirStore::new(dir.path().join("store"));
+    let store = admitted(Arc::new(DirStore::new(dir.path().join("store"))));
     let manifest = inputs(&store, vec![]);
     let linked = link(&store, &link_key(), &manifest, &mut |_, _, _| {
         Ok(b"#!/bin/sh\nexit 0\n".to_vec())
@@ -510,8 +597,9 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
             ] {
                 let dir = root.path().join(format!("{}-{opt:?}", backend.name()));
                 std::fs::create_dir_all(&dir).unwrap();
-                let store: Arc<dyn hirsel_engine::store::ResultStore> =
-                    Arc::new(hirsel_engine::store::MemStore::default());
+                let store: Arc<dyn hirsel_engine::store::ResultStore> = Arc::new(admitted(
+                    Arc::new(hirsel_engine::store::MemStore::default()),
+                ));
                 let mut descriptor = ready(store.as_ref());
                 descriptor.ready = store
                     .put_content(INPUT, hirsel_codec::to_text(unit).as_bytes())
@@ -608,7 +696,7 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
 
 #[test]
 fn explicit_recompute_checks_exact_cached_bytes() {
-    let store = hirsel_engine::store::MemStore::default();
+    let store = admitted(Arc::new(hirsel_engine::store::MemStore::default()));
     let key = key("main");
     let descriptor = ready(&store);
     let cold = codegen(&store, &key, &descriptor, || Ok(object())).unwrap();
@@ -672,10 +760,10 @@ fn object_hit_never_reads_ready_body_payload() {
     }
     let inner = hirsel_engine::store::MemStore::default();
     let descriptor = ready(&inner);
-    let store = NoBody {
+    let store = admitted(Arc::new(NoBody {
         inner,
         body: descriptor.ready,
-    };
+    }));
     let key = key("main");
     let cold = codegen(&store, &key, &descriptor, || Ok(object())).unwrap();
     let warm = codegen(&store, &key, &descriptor, || {
@@ -696,7 +784,7 @@ struct TaskSnapshot {
     ready: ReadyProduct,
     link: LinkDependencies,
     result: ProductRef,
-    store: Arc<hirsel_engine::store::MemStore>,
+    store: Arc<dyn ResultStore>,
     makes: Arc<AtomicUsize>,
 }
 struct TaskProducts {
@@ -752,14 +840,20 @@ impl ObjectTaskSnapshot for TaskSnapshot {
         Ok(self.link.clone())
     }
     fn link_input(&self, p: ProductRef) -> Result<Reference, Reference> {
-        Ok(p.record)
+        p.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .map(|archive| archive.reference())
+            .map_err(|_| self.failure("link product archive unavailable"))
     }
     fn products(&self, settled: &[ProductRef]) -> Result<Box<dyn ObjectProducts>, Reference> {
         assert!(!settled.is_empty());
         self.makes.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(TaskProducts {
             result: self.result.clone(),
-            reference: self.result.record,
+            reference: self
+                .result
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
         }))
     }
     fn failure(&self, message: &str) -> Reference {
@@ -789,7 +883,7 @@ fn query(product: ProductRef) -> QueryId {
 fn task_snapshot(
     request: ObjectTaskRequest,
     ready: ReadyProduct,
-    store: Arc<hirsel_engine::store::MemStore>,
+    store: Arc<dyn ResultStore>,
     result: ProductRef,
 ) -> Arc<TaskSnapshot> {
     Arc::new(TaskSnapshot {
@@ -842,10 +936,8 @@ fn codegen_stages_local_ready_while_execution_waits_and_preserves_failure_order(
                 ObjectTaskRequest::WholeCodegen { key, .. } => key.query_id(),
                 _ => unreachable!(),
             };
-            let result = ProductRef {
-                address: id.address,
-                ..product(store.as_ref(), "emitted")
-            };
+            let mut result = product(store.as_ref(), "emitted");
+            result.address = id.address;
             let execution_product = product(store.as_ref(), "execution");
             let execution = query(execution_product.clone());
             let mut snapshot = task_snapshot(request, ready.clone(), store.clone(), result.clone());
@@ -901,7 +993,9 @@ fn codegen_stages_local_ready_while_execution_waits_and_preserves_failure_order(
 
 #[test]
 fn codegen_task_create_is_lazy_and_waits_for_complete_optimizer_inventory() {
-    let store = Arc::new(hirsel_engine::store::MemStore::default());
+    let store = Arc::new(admitted(
+        Arc::new(hirsel_engine::store::MemStore::default()),
+    ));
     let mut ready = ready(store.as_ref());
     ready.optimizer_reads = vec![
         product(store.as_ref(), "copy1"),
@@ -910,10 +1004,8 @@ fn codegen_task_create_is_lazy_and_waits_for_complete_optimizer_inventory() {
     let key = key("caller");
     let id = key.query_id();
     let owner = query(ready.product.clone());
-    let result = ProductRef {
-        address: id.address,
-        ..product(store.as_ref(), "emitted")
-    };
+    let mut result = product(store.as_ref(), "emitted");
+    result.address = id.address;
     let denied = task_snapshot(
         ObjectTaskRequest::Codegen {
             key: key.clone(),
@@ -970,10 +1062,8 @@ fn codegen_task_rejects_stale_optimizer_and_dependency_failure_before_emission()
         let key = key("caller");
         let id = key.query_id();
         let owner = query(ready.product.clone());
-        let result = ProductRef {
-            address: id.address,
-            ..product(store.as_ref(), "emitted")
-        };
+        let mut result = product(store.as_ref(), "emitted");
+        result.address = id.address;
         let snapshot = task_snapshot(
             ObjectTaskRequest::Codegen {
                 key,
@@ -993,10 +1083,12 @@ fn codegen_task_rejects_stale_optimizer_and_dependency_failure_before_emission()
         let mut cx = TaskContext::default();
         cx.settled.push((owner, Ok(ready.product)));
         let next = if stale {
-            Ok(ProductRef {
-                record: input(store.as_ref(), "new body"),
-                ..copy
-            })
+            Ok(crate::fixture_product(
+                store.as_ref(),
+                copy.address,
+                copy.action,
+                input(store.as_ref(), "new body"),
+            ))
         } else {
             Err(input(store.as_ref(), "failed validation"))
         };
@@ -1008,17 +1100,17 @@ fn codegen_task_rejects_stale_optimizer_and_dependency_failure_before_emission()
 
 #[test]
 fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
-    let store = Arc::new(hirsel_engine::store::MemStore::default());
+    let store = Arc::new(admitted(
+        Arc::new(hirsel_engine::store::MemStore::default()),
+    ));
     let ready = ready(store.as_ref());
     let fragment = codegen(store.as_ref(), &key("main"), &ready, || Ok(object())).unwrap();
     let key = link_key();
     let id = key.query_id();
     let manifest = product(store.as_ref(), "manifest");
     let manifest_id = query(manifest.clone());
-    let result = ProductRef {
-        address: id.address,
-        ..product(store.as_ref(), "linked")
-    };
+    let mut result = product(store.as_ref(), "linked");
+    result.address = id.address;
     let static_p = product(store.as_ref(), "statics");
     let runtime = product(store.as_ref(), "archive");
     let launch = product(store.as_ref(), "launch");

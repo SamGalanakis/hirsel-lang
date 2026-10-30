@@ -203,10 +203,16 @@ impl QueryTask for Task {
             },
             None => None,
         };
-        let mut bytes = check.record.output.0.0.to_vec();
+        let Ok(check_archive) = check.archive(ArchiveAdmission::Retained) else {
+            return QueryPoll::Failed(owner.errors.resource);
+        };
+        let mut bytes = check_archive.reference().output.0.0.to_vec();
         bytes.push(u8::from(run.is_some()));
         if let Some(run) = &run {
-            bytes.extend_from_slice(&run.record.output.0.0);
+            let Ok(archive) = run.archive(ArchiveAdmission::Retained) else {
+                return QueryPoll::Failed(owner.errors.resource);
+            };
+            bytes.extend_from_slice(&archive.reference().output.0.0);
         }
         let Some(record) = owner.store.put_content(OUTPUT, &bytes) else {
             return QueryPoll::Failed(owner.errors.resource);
@@ -220,11 +226,10 @@ impl QueryTask for Task {
                 record.output.0.0.as_slice(),
             ],
         ));
-        let product = ProductRef {
-            address: owner.id.address,
-            action,
-            record,
+        let Some(archive) = owner.store.open_product_archive(record) else {
+            return QueryPoll::Failed(owner.errors.resource);
         };
+        let product = ProductRef::import_archive(owner.id.address, action, archive);
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some(Settled {
             product: product.clone(),
             check,

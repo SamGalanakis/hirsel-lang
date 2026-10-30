@@ -431,7 +431,7 @@ impl FrontLowerQueries {
             id,
             key,
             domain,
-            &descriptor,
+            descriptor.clone().into(),
             Outcome {
                 result: Ok(value),
                 reads,

@@ -387,7 +387,10 @@ impl OwnershipBootstrap {
         let bytes = serde_json::to_vec(&(
             compilation.address.0,
             compilation.action.0,
-            compilation.record,
+            compilation
+                .archive(ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
         ))
         .map_err(|e| e.to_string())?;
         let record = self
@@ -398,17 +401,20 @@ impl OwnershipBootstrap {
         if OUTPUT.reference(&bytes) != Some(record) {
             return Err("ownership bootstrap content differs".into());
         }
-        let product = ProductRef {
-            address: self.query.address,
-            action: Action(ContentHash::of_parts(
+        let product = ProductRef::import_archive(
+            self.query.address,
+            Action(ContentHash::of_parts(
                 "hirsel.host.ownership-bootstrap-action.v1",
                 [
                     self.query.address.0.0.as_slice(),
                     record.output.0.0.as_slice(),
                 ],
             )),
-            record,
-        };
+            self.source
+                .store
+                .open_product_archive(record)
+                .ok_or("native publication archive exceeds admission")?,
+        );
         self.source
             .store
             .associate_product(product.address, product.action, record);

@@ -541,11 +541,21 @@ impl RootProducts {
         let current = store
             .lookup_product(root.product.address)
             .ok_or("missing native root association")?;
-        if current.action != root.product.action || current.reference != root.product.record {
+        if current.action != root.product.action
+            || current.reference
+                != root
+                    .product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference()
+        {
             return Err("native root is no longer settled".into());
         }
         for reference in [
-            root.product.record,
+            root.product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
             root.static_manifest,
             root.launch_manifest,
             root.statics_finalizers,
@@ -600,7 +610,14 @@ impl NativeRoots for RootProducts {
         let mut statics = Vec::new();
         for key in &instances {
             let (instance, _) = snapshot.instances.admitted(key, &snapshot.environment())?;
-            reads.push(instance.product.product.record);
+            reads.push(
+                instance
+                    .product
+                    .product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference(),
+            );
             // Static data/finalizer selection is a dependency even if a changed
             // static leaves the Ready unit and unit object byte-for-byte equal.
             if snapshot
@@ -641,18 +658,19 @@ impl NativeRoots for RootProducts {
                 )
             })
             .collect::<Vec<_>>();
-        let record = self.put(
-            ROOT_RECORD,
-            &serde_json::to_vec(&(members, static_manifest, launch_manifest))
-                .map_err(|e| e.to_string())?,
-        )?;
+        let bytes = serde_json::to_vec(&(members, static_manifest, launch_manifest))
+            .map_err(|e| e.to_string())?;
+        let record = self.put(ROOT_RECORD, &bytes)?;
         snapshot.store.associate_product(address, action, record);
         let product = Arc::new(NativeRootProduct {
-            product: ProductRef {
+            product: ProductRef::import_archive(
                 address,
                 action,
-                record,
-            },
+                snapshot
+                    .store
+                    .admit_product_archive(record, bytes.into())
+                    .ok_or("native product archive is unavailable or exceeds admission")?,
+            ),
             instances,
             static_manifest,
             launch_manifest,

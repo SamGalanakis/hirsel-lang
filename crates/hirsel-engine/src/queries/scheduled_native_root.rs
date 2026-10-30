@@ -63,7 +63,7 @@ pub struct FrontNativeQueries {
 struct Ownership {
     _run: Arc<FrontRunQueries>,
     _definitions: Arc<FrontNativeDefinitionQueries>,
-    _allowance: MemoryReservation,
+    _allowance: Arc<MemoryReservation>,
 }
 fn constant_bytes<'a>(mut paths: impl Iterator<Item = &'a DefPath>) -> Option<u64> {
     paths.try_fold(0u64, |total, path| {
@@ -125,9 +125,13 @@ impl FrontNativeQueries {
             .checked_add(constant_bytes(definitions.iter())?)
     }
     fn header_bytes(definitions: &[DefPath]) -> Option<u64> {
-        definitions
-            .iter()
-            .try_fold(std::mem::size_of::<Self>() as u64, |total, path| {
+        definitions.iter().try_fold(
+            (std::mem::size_of::<Self>()
+                + std::mem::size_of::<Ownership>()
+                + std::mem::size_of::<Mutex<u64>>()
+                + std::mem::size_of::<MemoryReservation>()
+                + 6 * std::mem::size_of::<usize>()) as u64,
+            |total, path| {
                 total
                     .checked_add(bincode::serialized_size(path).ok()?.checked_mul(4)?)?
                     .checked_add(
@@ -136,7 +140,8 @@ impl FrontNativeQueries {
                         // continuation when it actually reads them below.
                         (4 * std::mem::size_of::<DefPath>() + 256) as u64,
                     )
-            })
+            },
+        )
     }
     pub fn query(&self) -> QueryId {
         self.query
@@ -498,16 +503,25 @@ impl Task {
                     (
                         run_product.address.0,
                         run_product.action.0,
-                        run_product.record,
+                        run_product
+                            .archive(ArchiveAdmission::Retained)
+                            .map_err(|_| QueryError::NotImplemented)?
+                            .reference(),
                     ),
                     catalogue
                         .iter()
                         .map(|d| {
                             d.product
                                 .as_ref()
-                                .map(|p| (p.address.0, p.action.0, p.record))
+                                .map(|p| {
+                                    p.archive(ArchiveAdmission::Retained).map(|archive| {
+                                        (p.address.0, p.action.0, archive.reference())
+                                    })
+                                })
+                                .transpose()
                         })
-                        .collect::<Vec<_>>(),
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|_| QueryError::NotImplemented)?,
                 ),
             )
             .ok_or(QueryError::NotImplemented)?;
@@ -528,11 +542,17 @@ impl Task {
                 record.output.0.0.as_slice(),
             ],
         ));
-        let product = ProductRef {
-            address: owner.query.address,
+        let product = ProductRef::import_archive(
+            owner.query.address,
             action,
-            record,
-        };
+            ProductArchive::from_retained_bytes(
+                record,
+                bytes.into(),
+                owner.ownership._allowance.clone(),
+                Arc::new(Mutex::new(owner.output_budget - used)),
+            )
+            .map_err(|_| QueryError::NotImplemented)?,
+        );
         // Keep the producer template undecorated: an external map or file
         // can outlive this root, without the owner retaining itself in a cycle.
         roots.sources = roots.sources.retain_owner(owner.ownership.clone());
@@ -552,7 +572,7 @@ impl Task {
             Some((product.clone(), Arc::new(products)));
         owner
             .store
-            .associate_product(product.address, product.action, product.record);
+            .associate_product(product.address, product.action, record);
         Ok(product)
     }
 }
@@ -737,7 +757,7 @@ impl QueryEngine {
             ownership: Arc::new(Ownership {
                 _run: run.clone(),
                 _definitions: definitions.clone(),
-                _allowance: allowance,
+                _allowance: Arc::new(allowance),
             }),
         }))
     }

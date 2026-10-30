@@ -24,7 +24,11 @@ fn arena_query_graph_settles_local_equations_and_reuses_unchanged_components() {
         operations: &operations,
         discharge: Some(&lowered.native_discharge),
     };
-    let store = MemStore::default();
+    let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+    let store = hirsel_engine::store::RequestStore::new(
+        std::sync::Arc::new(MemStore::default()),
+        budget.reserve(64 << 20).unwrap(),
+    );
     let mut nodes = Vec::new();
     for (index, unit) in lowered.units.iter().enumerate() {
         let key = &lowered.unit_keys[index];
@@ -66,11 +70,19 @@ fn arena_query_graph_settles_local_equations_and_reuses_unchanged_components() {
         first
             .chosen
             .iter()
-            .map(|s| s.product.record)
+            .map(|s| s
+                .product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference())
             .collect::<Vec<_>>(),
         next.chosen
             .iter()
-            .map(|s| s.product.record)
+            .map(|s| s
+                .product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference())
             .collect::<Vec<_>>()
     );
     let mut missing = nodes.pop().unwrap();

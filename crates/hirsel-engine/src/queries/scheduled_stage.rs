@@ -24,6 +24,7 @@ struct Data {
     result: Result<Vec<StagedRegistration>, QueryError>,
     reads: Arc<Reads>,
     sites: Vec<Span>,
+    _allowance: Option<MemoryReservation>,
 }
 type Completed = (Result<ProductRef, Reference>, Arc<Data>);
 /// Clones retain the original source and declaration admission. A declaration
@@ -78,16 +79,18 @@ pub struct FrontStageQueries {
     anchors: Arc<crate::NativeRecordContext>,
     store: Arc<dyn ResultStore>,
     outcomes: Mutex<BTreeMap<ContentHash, Completed>>,
-    remaining: Mutex<u64>,
+    output_pool: MemoryReservationPool,
     weight: MemoryWeight,
     errors: RuntimeErrors,
-    allowance: MemoryReservation,
+    total: u64,
+    _allowance: MemoryReservation,
 }
 impl FrontStageQueries {
     /// Fixed query/owner rows; output allocations are debited only on demand.
     pub fn input_bytes(definitions: &[DefPath]) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + 2 * size_of::<usize>());
+        weight.add(MemoryReservationPool::metadata_bytes() as usize);
         weight.tree::<ContentHash, Input>(definitions.len());
         weight.tree::<DefPath, QueryId>(definitions.len());
         for path in definitions {
@@ -103,7 +106,7 @@ impl FrontStageQueries {
         Arc::new(Factory(self.clone()))
     }
     pub fn retained_bytes(&self) -> u64 {
-        self.allowance.bytes() - *self.remaining.lock().unwrap_or_else(|e| e.into_inner())
+        self.total - self.output_pool.available_bytes()
     }
     pub fn outcome(self: &Arc<Self>, product: ProductRef) -> Option<FrontStageOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -126,7 +129,7 @@ impl FrontStageQueries {
             .and_then(|(_, data)| data.result.as_ref().err().cloned())
             .or_else(|| {
                 self.front
-                    .outcome(reference)
+                    .outcome(Err(reference))
                     .and_then(|o| o.outcome.result.err())
             })
     }
@@ -170,7 +173,7 @@ impl FrontStageQueries {
         }
         Ok(registrations)
     }
-    fn complete(&self, id: QueryId, data: Data) -> Result<ProductRef, Reference> {
+    fn complete(&self, id: QueryId, mut data: Data) -> Result<ProductRef, Reference> {
         let bytes = self
             .records
             .encode(&*self.anchors, &(&data.result, &*data.reads, &data.sites))
@@ -197,7 +200,6 @@ impl FrontStageQueries {
                 Err(error) => crate::memo::retained::retained_query_error_bytes(error),
             })
             .ok_or(self.errors.resource)?;
-        let mut remaining = self.remaining.lock().unwrap_or_else(|e| e.into_inner());
         let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((result, _)) = outcomes.get(&id.address.0) {
             return result.clone();
@@ -216,7 +218,7 @@ impl FrontStageQueries {
                     .ok_or(self.errors.resource)?,
             )
             .ok_or(self.errors.resource)?;
-        let next = remaining.checked_sub(charge).ok_or(self.errors.resource)?;
+        data._allowance = Some(self.output_pool.take(charge).ok_or(self.errors.resource)?);
         let failed = data.result.is_err();
         let record = self
             .store
@@ -226,16 +228,18 @@ impl FrontStageQueries {
             "hirsel.front.stage.action.v1",
             [id.address.0.0.as_slice(), record.output.0.0.as_slice()],
         ));
-        let product = ProductRef {
-            address: id.address,
-            action,
-            record,
+        let result = if failed {
+            Err(record)
+        } else {
+            Ok(ProductRef::import_archive(
+                id.address,
+                action,
+                ProductArchive::from_encoded_in(record, bytes, &self.output_pool)
+                    .map_err(|_| self.errors.resource)?,
+            ))
         };
-        let result = if failed { Err(record) } else { Ok(product) };
         outcomes.insert(id.address.0, (result.clone(), Arc::new(data)));
-        *remaining = next;
         drop(outcomes);
-        drop(remaining);
         if !failed {
             self.store.associate_product(id.address, action, record);
         }
@@ -290,7 +294,7 @@ impl QueryTask for Task {
             }
             Poll::Ready(Ok(product)) => product,
         };
-        let front = match self.queries.front.outcome(selected.record) {
+        let front = match self.queries.front.outcome(Ok(selected.clone())) {
             Some(front) => front,
             None => {
                 let Some(body) = self.queries.front.body_query(&input.owner) else {
@@ -304,7 +308,7 @@ impl QueryTask for Task {
                     }
                     Poll::Ready(Ok(product)) => product,
                 };
-                let Some(front) = self.queries.front.outcome(selected.record) else {
+                let Some(front) = self.queries.front.outcome(Ok(selected.clone())) else {
                     return QueryPoll::Failed(self.queries.errors.protocol);
                 };
                 front
@@ -346,6 +350,7 @@ impl QueryTask for Task {
                 result,
                 reads: Arc::new(reads),
                 sites,
+                _allowance: None,
             },
         );
         self.terminal = Some(result.clone());
@@ -365,7 +370,7 @@ impl FrontStageQueries {
         definitions: &[DefPath],
         front: Arc<FrontBodyQueries>,
         weight: MemoryWeight,
-        allowance: MemoryReservation,
+        mut allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<Self>, QueryError> {
         let refused = || {
@@ -375,10 +380,16 @@ impl FrontStageQueries {
             })
         };
         let required = Self::input_bytes(definitions);
-        let remaining = allowance
-            .bytes()
-            .checked_sub(required)
+        let total = allowance.bytes();
+        let remaining = total.checked_sub(required).ok_or_else(refused)?;
+        let output = allowance
+            .split(
+                remaining
+                    .checked_add(MemoryReservationPool::metadata_bytes())
+                    .ok_or_else(refused)?,
+            )
             .ok_or_else(refused)?;
+        let output_pool = MemoryReservationPool::new(output).map_err(|_| refused())?;
         let mut inputs = BTreeMap::new();
         let mut ids = BTreeMap::new();
         for owner in definitions {
@@ -416,10 +427,11 @@ impl FrontStageQueries {
             inputs,
             ids,
             outcomes: Mutex::new(BTreeMap::new()),
-            remaining: Mutex::new(remaining),
+            output_pool,
             weight,
             errors,
-            allowance,
+            total,
+            _allowance: allowance,
         }))
     }
 }

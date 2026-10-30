@@ -240,7 +240,12 @@ impl LocalReadyQueries {
                 .ok_or("missing settled arena association")?;
             let bytes = self
                 .store
-                .get_content(product.record)
+                .get_content(
+                    product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference(),
+                )
                 .ok_or("missing settled arena result")?;
             let rows: Vec<(Vec<u8>, Vec<u32>)> =
                 serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
@@ -249,10 +254,26 @@ impl LocalReadyQueries {
                 .iter()
                 .map(|(a, xs)| (a.instance.encoding().to_vec(), xs.clone()))
                 .collect::<Vec<_>>();
-            if product.record.domain.kind != ARENA_CHOSEN_KIND
-                || product.record.domain.schema != 1
+            if product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference()
+                .domain
+                .kind
+                != ARENA_CHOSEN_KIND
+                || product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference()
+                    .domain
+                    .schema
+                    != 1
                 || association.action != product.action
-                || association.reference != product.record
+                || association.reference
+                    != product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference()
                 || rows != expected
             {
                 return Err("arena result differs from its settled descriptor".into());
@@ -264,7 +285,14 @@ impl LocalReadyQueries {
                     || chosen
                         .insert(
                             function(address),
-                            (address, candidates.first().copied(), product.record),
+                            (
+                                address,
+                                candidates.first().copied(),
+                                product
+                                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                    .map_err(|e| e.to_string())?
+                                    .reference(),
+                            ),
                         )
                         .is_some()
                 {
@@ -299,7 +327,12 @@ impl LocalReadyQueries {
                 hirsel_lir::LAYOUT_VERSION,
                 hirsel_lir::ABI_VERSION,
             ),
-            owner.product.product.record,
+            owner
+                .product
+                .product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
             own.1,
             own.2,
             callee_reads,
@@ -313,8 +346,15 @@ impl LocalReadyQueries {
         .map_err(|e| e.to_string())?;
         if let Some(selection) = &guard_output {
             bytes.extend(
-                serde_json::to_vec(&(selection.product.record, guard))
-                    .map_err(|e| e.to_string())?,
+                serde_json::to_vec(&(
+                    selection
+                        .product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference(),
+                    guard,
+                ))
+                .map_err(|e| e.to_string())?,
             );
         }
         let action = Action(ContentHash::of_parts(

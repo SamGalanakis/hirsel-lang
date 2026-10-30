@@ -92,13 +92,12 @@ mod tests {
         }
     }
     fn product(query: QueryId) -> ProductRef {
-        ProductRef {
-            address: query.address,
-            action: Action(query.address.0),
-            record: Domain { kind: 1, schema: 1 }
-                .reference(&query.address.0.0)
-                .unwrap(),
-        }
+        crate::fixture_product_bytes(
+            query.address,
+            Action(query.address.0),
+            Domain { kind: 1, schema: 1 },
+            &query.address.0.0,
+        )
     }
     struct Leaf(Arc<AtomicUsize>);
     impl QueryFactory for Leaf {

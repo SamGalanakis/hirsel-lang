@@ -9,7 +9,7 @@ struct Row {
     owner: DefId,
     text: ContentHash,
     reads: Arc<Reads>,
-    reference: Reference,
+    reference: Option<Reference>,
     bytes: Arc<[u8]>,
     decode_bytes: u64,
     charge: u64,
@@ -69,7 +69,7 @@ impl FrontCarry {
         owner: DefId,
         text: ContentHash,
         reads: Arc<Reads>,
-        reference: Reference,
+        reference: Option<Reference>,
         bytes: Vec<u8>,
         decode_bytes: u64,
     ) {
@@ -167,6 +167,17 @@ pub(super) struct Facts {
     pub(super) diagnostic_phases: Vec<(Diagnostic, String)>,
     pub(super) lowering: Option<lowering::LoweringUse>,
     pub(super) table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
+}
+impl Facts {
+    fn share_summary_reads(&mut self, reads: &Arc<Reads>) -> Option<()> {
+        if let Some(summary) = &mut self.summary {
+            if summary.reads.as_ref() != reads.as_ref() {
+                return None;
+            }
+            Arc::make_mut(summary).reads = reads.clone();
+        }
+        Some(())
+    }
 }
 // A published summary and its checked product often hold the same proof.
 // Preserve it once on the wire, keeping the summary's independent exact reads.
@@ -292,14 +303,27 @@ impl TryFrom<PackedFacts> for Facts {
 }
 impl FactsRef<'_> {
     fn bytes(&self, decoded: bool) -> u64 {
-        self.weight(decoded, None)
+        self.weight(decoded, None, false)
     }
-    fn weight(&self, decoded: bool, compact: Option<&Arc<Reads>>) -> u64 {
+    fn weight(&self, decoded: bool, compact: Option<&Arc<Reads>>, published: bool) -> u64 {
         let mut w = if decoded {
             Weight::decoded()
         } else {
             Weight::default()
         };
+        if published {
+            if let Some(summary) = &self.summary {
+                w.arc(summary, |w, summary| {
+                    retained::definition(w, &summary.summary);
+                    w.parameter_growth(&summary.growth);
+                    if let Some(checked) = &summary.checked {
+                        w.arc(checked, retained::checked);
+                    }
+                    w.reads(&summary.reads);
+                });
+            }
+        }
+        let published_bytes = w.bytes;
         if let Some(reads) = compact {
             w.reads(reads);
         }
@@ -349,6 +373,7 @@ impl FactsRef<'_> {
             }
         }
         w.bytes
+            .saturating_sub(published_bytes)
             .saturating_add(dead.bytes())
             .saturating_add(if compact.is_some() {
                 0
@@ -424,7 +449,7 @@ impl FrontBodyQueries {
     }
 }
 impl BodyTask {
-    pub(super) fn remember_carry(&self, reference: Reference) {
+    pub(super) fn remember_carry(&self, reference: Option<Reference>) {
         let queries = &self.queries;
         let Some(carry) = queries
             .carry
@@ -485,7 +510,7 @@ impl BodyTask {
     }
     pub(super) fn remember_cached_carry(
         &self,
-        reference: Reference,
+        reference: Option<Reference>,
         reads: Arc<Reads>,
         bytes: Vec<u8>,
         decode_bytes: u64,
@@ -510,7 +535,10 @@ impl BodyTask {
             decode_bytes,
         );
     }
-    pub(super) fn load_carry(&self) -> Option<Result<ProductRef, Reference>> {
+    pub(super) fn load_carry(
+        &self,
+        cx: &mut dyn QueryContext,
+    ) -> Option<Result<ProductRef, Reference>> {
         let queries = &self.queries;
         let carry = queries
             .carry
@@ -543,7 +571,7 @@ impl BodyTask {
         let reads = row.reads.clone();
         // Completion takes the outcomes lock, while capture takes it before carry.
         drop(rows);
-        self.install_facts(reference, reads, facts, clean)
+        self.install_facts(cx, reference, reads, facts, clean)
     }
     pub(super) fn decode_facts(&self, bytes: &[u8], reads: &Arc<Reads>) -> Option<Facts> {
         let queries = &self.queries;
@@ -581,16 +609,18 @@ impl BodyTask {
     }
     pub(super) fn install_facts(
         &self,
-        reference: Reference,
+        cx: &mut dyn QueryContext,
+        reference: Option<Reference>,
         reads: Arc<Reads>,
         facts: Facts,
         clean: bool,
     ) -> Option<Result<ProductRef, Reference>> {
-        self.install_facts_inner(reference, reads, facts, clean, false)
+        self.install_facts_inner(cx, reference, reads, facts, clean, false)
     }
     pub(super) fn install_cached_facts(
         &self,
-        reference: Reference,
+        cx: &mut dyn QueryContext,
+        reference: Option<Reference>,
         reads: Arc<Reads>,
         mut facts: Facts,
     ) -> Option<Result<ProductRef, Reference>> {
@@ -610,19 +640,18 @@ impl BodyTask {
                 summary.checked = Some(checked.clone());
             }
         }
-        self.install_facts_inner(reference, reads, facts, false, true)
+        self.install_facts_inner(cx, reference, reads, facts, false, true)
     }
     fn install_facts_inner(
         &self,
-        reference: Reference,
-        reads: Arc<Reads>,
+        cx: &mut dyn QueryContext,
+        reference: Option<Reference>,
+        mut reads: Arc<Reads>,
         mut facts: Facts,
         clean: bool,
         cached: bool,
     ) -> Option<Result<ProductRef, Reference>> {
-        if let Some(summary) = &mut facts.summary {
-            Arc::make_mut(summary).share_checked_storage();
-        }
+        facts.share_summary_reads(&reads)?;
         let queries = &self.queries;
         let input = &queries.inputs[&self.input];
         let mut memo_rows = vec![(
@@ -635,6 +664,13 @@ impl BodyTask {
                 reads.clone(),
             ));
         }
+        queries.pool_observed_reads(
+            cx,
+            &mut reads,
+            &mut facts.summary,
+            &mut facts.checked,
+            &mut memo_rows,
+        )?;
         let view = FactsRef {
             summary: facts.summary.clone(),
             checked: &facts.checked,
@@ -651,13 +687,14 @@ impl BodyTask {
             }
         }
         let charge = if cached {
-            view.weight(false, Some(&reads))
+            view.weight(false, Some(&reads), true)
         } else {
             let mut weight = Weight::default();
             weight.reads(&reads);
-            view.bytes(false).checked_add(weight.bytes)?
+            view.weight(false, None, true).checked_add(weight.bytes)?
         }
         .checked_add(clean_rows.bytes())?;
+        queries.make_room(cx, charge)?;
         let mut retention = queries.retention.lock().unwrap_or_else(|e| e.into_inner());
         let remaining = retention.checked_sub(charge)?;
         *retention = remaining;
@@ -665,6 +702,7 @@ impl BodyTask {
         let action = crate::store::query_action(&input.key, input.key.1, &reads);
         let summary = facts
             .summary
+            .clone()
             .map(|s| FrontSummary::capture(s, &facts.checked, &reads));
         if let Some(keys) = facts.table_keys {
             queries
@@ -685,8 +723,12 @@ impl BodyTask {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .extend(memo_rows);
+        let summary_value = facts.summary.as_ref()?.clone();
+        let publication = queries.admit_summary(cx, self.query.address, action, summary_value)?;
         let outcome = FrontOutcome {
             reference,
+            publication: Some(publication.clone()),
+            body_publication: None,
             definition: input.definition,
             status: Ok(()),
             phase: None,
@@ -711,11 +753,7 @@ impl BodyTask {
         // A later actual body demand owns materialization and its association.
         timings::count(Count::StoreHits);
         timings::count(Count::StoreModeHits);
-        Some(Ok(ProductRef {
-            address: self.query.address,
-            action,
-            record: reference,
-        }))
+        Some(Ok(publication))
     }
 }
 
@@ -741,7 +779,7 @@ mod tests {
                         owner,
                         *key,
                         Arc::new(Reads::from_vec(vec![(ReadKey::Environment, *key)]).unwrap()),
-                        reference,
+                        Some(reference),
                         vec![9; 64],
                         1024,
                     );
@@ -770,7 +808,7 @@ mod tests {
                     owner,
                     *key,
                     Arc::new(Reads::from_vec(vec![(ReadKey::Environment, *key)]).unwrap()),
-                    reference,
+                    Some(reference),
                     vec![9; 64],
                     1024,
                 );
@@ -791,6 +829,63 @@ mod tests {
         assert_eq!(budget.reserved(), header - 1);
         drop(refused);
         assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn adopted_summary_reads_share_one_allocation_without_changing_complete_bytes() {
+        let owner = DefId::intern(&DefPath::core("read-alias"));
+        let rows = vec![
+            (ReadKey::Environment, ContentHash::of_bytes(b"environment")),
+            (
+                ReadKey::Signature(owner),
+                ContentHash::of_bytes(b"signature"),
+            ),
+        ];
+        let reads = Arc::new(Reads::from_vec(rows.clone()).unwrap());
+        let duplicate = Arc::new(Reads::from_vec(rows).unwrap());
+        let mut facts = Facts {
+            summary: Some(Arc::new(PublishedSummary {
+                definition: owner,
+                text: ContentHash::default(),
+                summary: DefinitionSummary {
+                    owner,
+                    frames: [].into(),
+                    calls: [].into(),
+                    staged: [].into(),
+                },
+                growth: ParameterGrowth::default(),
+                storage: None,
+                checked: None,
+                reads: duplicate,
+            })),
+            checked: None,
+            dead_arms: None,
+            diagnostics: vec![],
+            diagnostic_phases: vec![],
+            lowering: None,
+            table_keys: None,
+        };
+        let original = bincode::serialize(&facts).unwrap();
+        let mut before = Weight::default();
+        before.reads(&facts.summary.as_ref().unwrap().reads);
+        before.reads(&reads);
+        assert!(!Arc::ptr_eq(&facts.summary.as_ref().unwrap().reads, &reads));
+        facts.share_summary_reads(&reads).unwrap();
+        assert!(Arc::ptr_eq(&facts.summary.as_ref().unwrap().reads, &reads));
+        let mut after = Weight::default();
+        after.reads(&facts.summary.as_ref().unwrap().reads);
+        after.reads(&reads);
+        assert!(after.bytes < before.bytes);
+        assert_eq!(bincode::serialize(&facts).unwrap(), original);
+        let changed = Arc::new(
+            Reads::from_vec(vec![(
+                ReadKey::Environment,
+                ContentHash::of_bytes(b"changed"),
+            )])
+            .unwrap(),
+        );
+        assert!(facts.share_summary_reads(&changed).is_none());
+        assert_eq!(bincode::serialize(&facts).unwrap(), original);
     }
 
     #[test]

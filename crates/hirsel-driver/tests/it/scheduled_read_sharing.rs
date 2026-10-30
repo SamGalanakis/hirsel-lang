@@ -43,8 +43,7 @@ fn front_complete_reads_share_equal_phase_allocations_without_merging_phase_keys
         runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
         let request = runtime.request(&[front.query(&program.entry).unwrap()]);
         let product = runtime.wait(request).unwrap()[0].clone();
-        let output = front.outcome(product.record).unwrap();
-        assert!(output.outcome.result.is_ok());
+        let output = product.summary_value().unwrap();
         let rows = front.memo_snapshot();
         let find = |phase| {
             rows.iter()
@@ -60,11 +59,12 @@ fn front_complete_reads_share_equal_phase_allocations_without_merging_phase_keys
             Arc::ptr_eq(&checked, &modes),
             "equal complete phase reads retain one allocation"
         );
-        assert!(Arc::ptr_eq(&modes, &output.outcome.reads));
+        assert!(Arc::ptr_eq(&modes, &output.value().reads));
         let before = front.retained_bytes();
-        let second = front.outcome(product.record).unwrap();
+        let second = front.checked(Ok(product.clone())).unwrap();
         assert_eq!(front.retained_bytes(), before);
-        assert_eq!(second.outcome.reads, output.outcome.reads);
+        assert_eq!(second.reads, output.value().reads);
+        assert!(product.archive(ArchiveAdmission::Retained).is_err());
         assert_eq!(front.recompute_count(&program.entry, QueryKind::Resolve), 1);
         assert_eq!(front.recompute_count(&program.entry, QueryKind::Check), 1);
         assert_eq!(front.recompute_count(&program.entry, QueryKind::Modes), 1);

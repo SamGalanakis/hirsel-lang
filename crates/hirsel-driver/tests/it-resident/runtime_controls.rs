@@ -83,7 +83,12 @@ impl OutputReadiness for Readiness {
             return Err("wrong root count".into());
         };
         self.store
-            .get_content(product.record)
+            .get_content(
+                product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference(),
+            )
             .map(|b| b.to_vec())
             .ok_or_else(|| "missing product".into())
     }
@@ -124,11 +129,11 @@ impl RequestEngine for Engine {
                 "hirsel.resident.fixture.action.v1",
                 parts.iter().map(Vec::as_slice),
             ));
-            let product = ProductRef {
-                address: root().address,
+            let product = crate::fixture_product(
+                &*self.store,
+                root().address,
                 action,
-                record: self
-                    .store
+                self.store
                     .put_content(
                         Domain {
                             kind: 123,
@@ -137,7 +142,7 @@ impl RequestEngine for Engine {
                         &bytes,
                     )
                     .unwrap(),
-            };
+            );
             let reservation = self.budget.reserve(ALLOWANCE).map_err(|e| e.to_string())?;
             let mut runtime = AdmittedRuntime::new(Jobs::new(1), reservation, errors())
                 .map_err(|e| e.to_string())?;
@@ -311,14 +316,14 @@ impl RequestEngine for FrozenEngine {
             .read(&request.path)
             .map_err(|e| e.to_string())?;
         let parts = request.inputs.identity_parts();
-        let product = ProductRef {
-            address: root().address,
-            action: Action(ContentHash::of_parts(
+        let product = crate::fixture_product(
+            &*self.store,
+            root().address,
+            Action(ContentHash::of_parts(
                 "hirsel.resident.explicit-input-fixture.v1",
                 parts.iter().map(Vec::as_slice),
             )),
-            record: self
-                .store
+            self.store
                 .put_content(
                     Domain {
                         kind: 123,
@@ -327,7 +332,7 @@ impl RequestEngine for FrozenEngine {
                     &bytes,
                 )
                 .unwrap(),
-        };
+        );
         let mut runtime = AdmittedRuntime::new(
             Jobs::new(1),
             self.budget.reserve(ALLOWANCE).map_err(|e| e.to_string())?,

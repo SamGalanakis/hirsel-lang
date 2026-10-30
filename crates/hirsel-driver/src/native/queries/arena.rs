@@ -54,11 +54,25 @@ pub fn arena_query(
             if own.product.address != candidates_key.address()? {
                 return Err("Chosen reads another Candidates component".into());
             }
-            dependencies.push(own.product.record);
+            dependencies.push(
+                own.product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference(),
+            );
         }
         _ => return Err("invalid arena stratum read".into()),
     }
-    dependencies.extend(outgoing.iter().map(|(_, _, p)| p.record));
+    dependencies.extend(
+        outgoing
+            .iter()
+            .map(|(_, _, p)| {
+                p.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map(|archive| archive.reference())
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    );
     let outgoing_rows: Vec<_> = outgoing
         .iter()
         .map(|(a, xs, _)| (a.instance.encoding(), xs))
@@ -97,15 +111,12 @@ pub fn arena_query(
                 && xs.windows(2).all(|w| w[0] < w[1])
                 && (key.stratum == ArenaStratum::Candidates || xs.len() <= 1)
         })
+        && let Some(archive) = store.copy_product_archive(previous.reference)
     {
         counts.hits += 1;
         return Ok(Arc::new(ArenaSummary {
             retained_owner: None,
-            product: ProductRef {
-                address,
-                action,
-                record: previous.reference,
-            },
+            product: ProductRef::import_archive(address, action, archive),
             candidates: key
                 .members
                 .iter()
@@ -151,11 +162,13 @@ pub fn arena_query(
     store.associate_product(address, action, record);
     Ok(Arc::new(ArenaSummary {
         retained_owner: None,
-        product: ProductRef {
+        product: ProductRef::import_archive(
             address,
             action,
-            record,
-        },
+            store
+                .admit_product_archive(record, bytes.into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        ),
         candidates,
     }))
 }

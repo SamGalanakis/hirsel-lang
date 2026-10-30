@@ -46,7 +46,11 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
         serde_json::to_vec(&(table.finish(), payload)).unwrap()
     }
     with_compiler_stack(|| {
-        let store = Arc::new(store::MemStore::default());
+        let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+        let store = Arc::new(store::RequestStore::new(
+            Arc::new(store::MemStore::default()),
+            budget.reserve(64 << 20).unwrap(),
+        ));
         let session = || {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
                 .with_result_store(store.clone());
@@ -115,7 +119,18 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
             source_positions(&fresh, &read.contracts.as_ref().unwrap().source_anchors),
             expected_positions
         );
-        assert_eq!(seed.product.unwrap().record, read.product.unwrap().record);
+        assert_eq!(
+            seed.product
+                .unwrap()
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+            read.product
+                .unwrap()
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference()
+        );
         assert_eq!(expected, observations(&fresh, &read.requirements));
         assert_eq!(
             expected_parameters,
@@ -144,7 +159,11 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
 fn native_discovery_cache_type_only_respects_forced_recomputation() {
     use std::sync::Arc;
     with_compiler_stack(|| {
-        let store = Arc::new(store::MemStore::default());
+        let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+        let store = Arc::new(store::RequestStore::new(
+            Arc::new(store::MemStore::default()),
+            budget.reserve(64 << 20).unwrap(),
+        ));
         let session = || {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
                 .with_result_store(store.clone());
@@ -181,8 +200,18 @@ fn native_discovery_cache_type_only_respects_forced_recomputation() {
         assert_eq!(queries.counts.hits, 0);
         assert_eq!(queries.counts.misses, 1);
         assert_eq!(
-            expected.product.unwrap().record,
-            actual.product.unwrap().record
+            expected
+                .product
+                .unwrap()
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+            actual
+                .product
+                .unwrap()
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference()
         );
     });
 }
@@ -191,7 +220,11 @@ fn native_discovery_cache_type_only_respects_forced_recomputation() {
 fn native_discovery_cache_forced_lower_uses_fresh_verifier_output() {
     use std::sync::Arc;
     with_compiler_stack(|| {
-        let store = Arc::new(store::MemStore::default());
+        let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+        let store = Arc::new(store::RequestStore::new(
+            Arc::new(store::MemStore::default()),
+            budget.reserve(64 << 20).unwrap(),
+        ));
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone())
             .with_verify_store(store::VerifyStore::Recompute);

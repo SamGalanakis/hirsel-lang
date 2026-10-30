@@ -353,7 +353,7 @@ impl FrontLowerOutput {
         product: ProductRef,
         allowance: &mut MemoryReservation,
     ) -> Option<crate::runtime::LiveLowerProduct> {
-        let source = ProductSource::new(
+        let source = ProductSource::prepare(
             self.owner.anchors.clone(),
             self.owner.records.clone(),
             self.owner.clone(),
@@ -406,7 +406,7 @@ pub struct FrontLowerQueries {
     weight: MemoryWeight,
     max_reads: usize,
     errors: RuntimeErrors,
-    retention: Mutex<u64>,
+    retention: Arc<Mutex<u64>>,
     _allowance: Arc<MemoryReservation>,
     source: Arc<LowerSource>,
 }
@@ -420,6 +420,7 @@ impl FrontLowerQueries {
         indexes.add(
             size_of::<LowerSource>() + size_of::<MemoryReservation>() + 4 * size_of::<usize>(),
         );
+        indexes.add(size_of::<Mutex<u64>>() + 2 * size_of::<usize>());
         definitions.iter().try_fold(indexes.bytes(), |total, path| {
             let path_bytes = bincode::serialized_size(path).ok()?;
             total.checked_add(path_bytes.checked_add(
@@ -503,7 +504,18 @@ impl FrontLowerQueries {
             .get(&(id.kind, id.address.0))
             .and_then(|(_, outcome, _)| outcome.reads(self).map(Arc::new))
     }
-    pub(crate) fn selected_read_len(&self, id: QueryId, reference: Reference) -> Option<usize> {
+    pub(crate) fn selected_read_len(
+        &self,
+        id: QueryId,
+        selected: Result<ProductRef, Reference>,
+    ) -> Option<usize> {
+        let reference = match selected {
+            Ok(product) => product
+                .archive(ArchiveAdmission::Retained)
+                .ok()?
+                .reference(),
+            Err(reference) => reference,
+        };
         self.outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -513,7 +525,18 @@ impl FrontLowerQueries {
     }
     /// Exact settled descriptor, including failed Lower reads. This does not
     /// decode a body, invoke a producer or accept another query's reference.
-    pub(crate) fn selected_reads(&self, id: QueryId, reference: Reference) -> Option<Arc<Reads>> {
+    pub(crate) fn selected_reads(
+        &self,
+        id: QueryId,
+        selected: Result<ProductRef, Reference>,
+    ) -> Option<Arc<Reads>> {
+        let reference = match selected {
+            Ok(product) => product
+                .archive(ArchiveAdmission::Retained)
+                .ok()?
+                .reference(),
+            Err(reference) => reference,
+        };
         self.outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -934,7 +957,12 @@ impl FrontLowerQueries {
     pub fn outcome(self: &Arc<Self>, product: ProductRef) -> Option<FrontLowerOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let (reference, outcome, _) = outcomes.get(&(FRONT_LOWER_KIND, product.address.0))?;
-        if *reference != product.record {
+        if *reference
+            != product
+                .archive(ArchiveAdmission::Retained)
+                .ok()?
+                .reference()
+        {
             return None;
         }
         let Value::Lower(lower) = outcome.result.as_ref().ok()? else {
@@ -1011,7 +1039,13 @@ impl FrontLowerQueries {
             .cloned()
     }
     fn selected(&self, id: QueryId, selected: Result<ProductRef, Reference>) -> Option<Outcome> {
-        let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
+        let reference = match selected {
+            Ok(product) => product
+                .archive(ArchiveAdmission::Retained)
+                .ok()?
+                .reference(),
+            Err(reference) => reference,
+        };
         self.outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1093,13 +1127,13 @@ impl FrontLowerQueries {
             ReadKey::ExecutedBody(DefId::intern(&path)),
             memos::optional(Some(self.inputs[&path].implementation)),
         );
-        if self.verify == Verify::On {
-            let mut observed = ReadsBuilder::new();
-            FrozenProvider::new(&self.snapshot, path.0.package.clone(), &mut observed)
-                .validation_universe();
-            source.merge(&observed.finish().map_err(|_| self.errors.protocol)?);
-        }
         let computed = if source.framed && source.depth.borrow().limit() == 0 {
+            if self.verify == Verify::On {
+                let mut observed = ReadsBuilder::new();
+                FrozenProvider::new(&self.snapshot, path.0.package.clone(), &mut observed)
+                    .validation_universe();
+                source.merge(&observed.finish().map_err(|_| self.errors.protocol)?);
+            }
             Err(source.overflow(self.inputs[&path].site))
         } else {
             self.compute(id.kind, &path, selection.as_ref(), &mut source)
@@ -1262,7 +1296,7 @@ impl FrontLowerQueries {
             execution_subject,
         };
         self.remember_carry(id, key, &bytes, &outcome);
-        self.publish(id, key, domain, &bytes, outcome, true)
+        self.publish(id, key, domain, bytes.into(), outcome, true)
     }
     /// Settle one descriptor: store it, admit its outcome under this producer's
     /// retention and associate a successful product.
@@ -1271,13 +1305,13 @@ impl FrontLowerQueries {
         id: QueryId,
         key: &EntryKey,
         domain: Domain,
-        bytes: &[u8],
+        bytes: hirsel_artifact_store::Bytes,
         mut outcome: Outcome,
         persist: bool,
     ) -> Result<ProductRef, Reference> {
         let record = self
             .store
-            .put_content(domain, bytes)
+            .put_content(domain, &bytes)
             .ok_or(self.errors.resource)?;
         let action = hirsel_artifact_store::Action(ContentHash::of_parts(
             "hirsel.front.scheduled-action.v1",
@@ -1304,6 +1338,19 @@ impl FrontLowerQueries {
             self.remember_stored(id, key, record, &outcome);
         }
         outcome.archive_reads(record);
+        let archive = if failed {
+            None
+        } else {
+            Some(
+                ProductArchive::from_retained_bytes(
+                    record,
+                    bytes,
+                    self._allowance.clone(),
+                    self.retention.clone(),
+                )
+                .map_err(|_| self.errors.resource)?,
+            )
+        };
         let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -1329,11 +1376,11 @@ impl FrontLowerQueries {
             return Err(record);
         }
         self.store.associate_product(id.address, action, record);
-        Ok(ProductRef {
-            address: id.address,
+        Ok(ProductRef::import_archive(
+            id.address,
             action,
-            record,
-        })
+            archive.ok_or(self.errors.protocol)?,
+        ))
     }
     async fn compute(
         &self,
@@ -1344,8 +1391,7 @@ impl FrontLowerQueries {
     ) -> Result<Computed, QueryError> {
         let front = self.front.query(path).ok_or(QueryError::NotImplemented)?;
         let selected = source.reads.read_consuming(front).await;
-        let reference = selected.clone().map(|p| p.record).unwrap_or_else(|r| r);
-        let body = match self.front.outcome(reference) {
+        let body = match self.front.outcome(selected.clone()) {
             Some(body) => body,
             None if selected.is_ok() => {
                 let materialize = self
@@ -1358,12 +1404,22 @@ impl FrontLowerQueries {
                     .await
                     .map_err(|error| source.refused(error))?;
                 self.front
-                    .outcome(product.record)
+                    .outcome(Ok(product.clone()))
                     .ok_or_else(|| source.refused(self.errors.protocol))?
             }
             None => return Err(source.refused(selected.err().unwrap_or(self.errors.protocol))),
         };
         source.merge(&body.outcome.reads);
+        if self.verify == Verify::On {
+            let mut observed = ReadsBuilder::new();
+            FrozenProvider::new(&self.snapshot, path.0.package.clone(), &mut observed)
+                .validation_universe();
+            source.merge(
+                &observed
+                    .finish()
+                    .map_err(|_| source.refused(self.errors.protocol))?,
+            );
+        }
         if let Some(registration) = self.front.registration(path) {
             source
                 .evidence
@@ -2109,7 +2165,7 @@ impl QueryEngine {
         if input_bytes > allowance.bytes() {
             return Err(refusal());
         }
-        let retention = Mutex::new(allowance.bytes() - input_bytes);
+        let retention = Arc::new(Mutex::new(allowance.bytes() - input_bytes));
         let store = self
             .result_store
             .clone()

@@ -239,6 +239,13 @@ impl ResultStore for RequestStore {
     }
     fn open_product_archive(&self, reference: Reference) -> Option<crate::runtime::ProductArchive> {
         let bytes = self.get_content(reference)?;
+        self.admit_product_archive(reference, bytes)
+    }
+    fn admit_product_archive(
+        &self,
+        reference: Reference,
+        bytes: Bytes,
+    ) -> Option<crate::runtime::ProductArchive> {
         let charge = crate::runtime::ProductArchive::checked_import_charge(reference, &bytes)
             .ok()?
             .checked_add(crate::memo::retained_arc_bytes(&std::mem::MaybeUninit::<
@@ -247,6 +254,39 @@ impl ResultStore for RequestStore {
         if !self.memory.charge(charge) {
             return None;
         }
+        let owner = Arc::new(ArchiveLease {
+            memory: self.memory.clone(),
+            bytes: charge,
+        });
+        Some(crate::runtime::ProductArchive::from_admitted_content(
+            reference, bytes, charge, owner,
+        ))
+    }
+    fn copy_product_archive(&self, reference: Reference) -> Option<crate::runtime::ProductArchive> {
+        let bytes = self.get_content(reference)?;
+        if !bytes.matches_reference(reference) {
+            return None;
+        }
+        // The existing transport bound covers the buffer, its region header,
+        // archive header and lease before allocating the detached payload.
+        let working = reference.len.checked_add(ENTRY_CHARGE)?;
+        if !self.memory.charge(working) {
+            return None;
+        }
+        let bytes = Bytes::from(bytes.to_vec());
+        let charge = crate::runtime::ProductArchive::checked_import_charge(reference, &bytes)
+            .ok()
+            .and_then(|bytes| {
+                bytes.checked_add(crate::memo::retained_arc_bytes(&std::mem::MaybeUninit::<
+                    ArchiveLease,
+                >::uninit(
+                )))
+            });
+        let Some(charge) = charge.filter(|charge| *charge <= working) else {
+            self.memory.release(working);
+            return None;
+        };
+        self.memory.release(working - charge);
         let owner = Arc::new(ArchiveLease {
             memory: self.memory.clone(),
             bytes: charge,
@@ -390,6 +430,76 @@ mod tests {
         assert_eq!(view.reference(), reference);
         assert_eq!(budget.reserved(), required);
         drop(view);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn encoded_archive_moves_producer_backing_without_reading_the_provider() {
+        struct Backend;
+        impl ResultStore for Backend {
+            fn get(&self, _: &EntryKey) -> Option<Bytes> {
+                panic!("producer transfer read the provider")
+            }
+            fn put(&self, _: &EntryKey, _: &[u8]) {}
+            fn name(&self) -> &'static str {
+                "encoded-archive-test"
+            }
+        }
+        let bytes = Bytes::from(vec![7; 4096]);
+        let pointer = bytes.as_ptr();
+        let reference = domain().reference(&bytes).unwrap();
+        let required = crate::runtime::ProductArchive::checked_import_charge(reference, &bytes)
+            .unwrap()
+            + crate::memo::retained_arc_bytes(&std::mem::MaybeUninit::<ArchiveLease>::uninit());
+        let budget = ProcessBudget::new(required);
+        let request = RequestStore::new(Arc::new(Backend), budget.reserve(required).unwrap());
+        let archive = request.admit_product_archive(reference, bytes).unwrap();
+        assert_eq!(archive.bytes().as_ptr(), pointer);
+        assert_eq!(archive.retained_bytes(), required);
+        drop(request);
+        assert_eq!(archive.bytes(), &[7; 4096]);
+        drop(archive);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn compact_archive_copy_admits_its_payload_and_survives_provider_eviction() {
+        struct Backend(Mutex<Bytes>);
+        impl ResultStore for Backend {
+            fn get(&self, _: &EntryKey) -> Option<Bytes> {
+                None
+            }
+            fn put(&self, _: &EntryKey, _: &[u8]) {}
+            fn name(&self) -> &'static str {
+                "compact-archive-test"
+            }
+            fn get_content(&self, _: Reference) -> Option<Bytes> {
+                Some(self.0.lock().unwrap().clone())
+            }
+        }
+        let mut backing = vec![0; 1 << 20];
+        backing[100..108].copy_from_slice(b"complete");
+        let bytes = Bytes::from(backing).range(100, 8, 1).unwrap();
+        let pointer = bytes.as_ptr();
+        let reference = domain().reference(b"complete").unwrap();
+        let working = reference.len + ENTRY_CHARGE;
+        let backend = Arc::new(Backend(Mutex::new(bytes)));
+        let budget = ProcessBudget::new(working);
+        let short = RequestStore::new(backend.clone(), budget.reserve(working - 1).unwrap());
+        assert!(short.copy_product_archive(reference).is_none());
+        assert_eq!(short.retained_bytes(), 0);
+        drop(short);
+        let request = RequestStore::new(backend.clone(), budget.reserve(working).unwrap());
+        let archive = request.copy_product_archive(reference).unwrap();
+        assert_ne!(archive.bytes().as_ptr(), pointer);
+        assert!(archive.retained_bytes() <= working);
+        assert_eq!(request.retained_bytes(), archive.retained_bytes());
+        *backend.0.lock().unwrap() = Bytes::from(b"evicted".as_slice());
+        drop((backend, request));
+        assert_eq!(archive.bytes(), b"complete");
+        assert_eq!(archive.reference(), reference);
+        assert_eq!(budget.reserved(), working);
+        drop(archive);
         assert_eq!(budget.reserved(), 0);
     }
 

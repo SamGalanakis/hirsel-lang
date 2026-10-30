@@ -5,12 +5,12 @@ use bincode::Options;
 
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0037,
-    schema: 4,
+    schema: 5,
 };
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Record {
     key: Key,
-    body: Reference,
+    body: Option<Reference>,
     reads: Reads,
     decode_bytes: u64,
     #[serde(
@@ -22,7 +22,7 @@ struct Record {
 #[derive(serde::Serialize)]
 struct RecordRef<'a> {
     key: Key,
-    body: Reference,
+    body: Option<Reference>,
     reads: &'a Reads,
     decode_bytes: u64,
     #[serde(serialize_with = "hirsel_product_codec::serialize_payload")]
@@ -62,8 +62,10 @@ pub(in crate::queries) fn load_publication(
         .deserialize(&bytes)
         .ok()?;
     if record.key != key.0
-        || record.body.domain != crate::store::product_domain(QueryKind::Modes)
-        || record.body.len > crate::store::MAX_RECORD as u64
+        || record.body.is_some_and(|body| {
+            body.domain != crate::store::product_domain(QueryKind::Modes)
+                || body.len > crate::store::MAX_RECORD as u64
+        })
         || selected
             .reference
             .len
@@ -105,7 +107,7 @@ pub(in crate::queries) fn load_publication(
 impl BodyTask {
     pub(super) fn store_compact(
         &self,
-        body: Reference,
+        body: Option<Reference>,
         reads: &Reads,
         facts: &[u8],
         decode_bytes: u64,
@@ -141,7 +143,10 @@ impl BodyTask {
             .cache_product(address(self.input), action, OUTPUT, &bytes);
     }
 
-    pub(super) fn load_compact(&self) -> Option<Result<ProductRef, Reference>> {
+    pub(super) fn load_compact(
+        &self,
+        cx: &mut dyn QueryContext,
+    ) -> Option<Result<ProductRef, Reference>> {
         let queries = &self.queries;
         if !queries.store.query_cache_enabled() {
             return None;
@@ -160,8 +165,10 @@ impl BodyTask {
             .deserialize(&bytes)
             .ok()?;
         if record.key != self.input
-            || record.body.domain != crate::store::product_domain(QueryKind::Modes)
-            || record.body.len > self.weight.scratch
+            || record.body.is_some_and(|body| {
+                body.domain != crate::store::product_domain(QueryKind::Modes)
+                    || body.len > self.weight.scratch
+            })
             || selected
                 .reference
                 .len
@@ -182,7 +189,7 @@ impl BodyTask {
         }
         let reads = Arc::new(record.reads);
         let facts = self.decode_facts(&record.facts, &reads)?;
-        let completed = self.install_cached_facts(record.body, reads.clone(), facts)?;
+        let completed = self.install_cached_facts(cx, record.body, reads.clone(), facts)?;
         if completed.is_ok() {
             self.remember_cached_carry(record.body, reads, record.facts, record.decode_bytes);
         }
@@ -272,9 +279,11 @@ mod tests {
                 let mut record = Record {
                     key: key.0,
                     // Body-free publication must not fetch this absent archive.
-                    body: crate::store::product_domain(QueryKind::Modes)
-                        .reference(b"absent body")
-                        .unwrap(),
+                    body: Some(
+                        crate::store::product_domain(QueryKind::Modes)
+                            .reference(b"absent body")
+                            .unwrap(),
+                    ),
                     reads: Reads::empty(),
                     decode_bytes: 0,
                     facts: engine.encode_record(&facts).unwrap(),
@@ -288,7 +297,7 @@ mod tests {
                     record.decode_bytes = u64::MAX;
                 }
                 if fault == 9 {
-                    record.body.domain = OUTPUT;
+                    record.body.as_mut().unwrap().domain = OUTPUT;
                 }
                 let action = if fault == 7 {
                     hirsel_artifact_store::Action(ContentHash::default())
@@ -301,7 +310,7 @@ mod tests {
                     OUTPUT,
                     &bincode::serialize(&record).unwrap(),
                 );
-                assert!(store.get_content(record.body).is_none());
+                assert!(store.get_content(record.body.unwrap()).is_none());
                 engine.verify_store = verify;
                 let hit = engine.load_publication(path);
                 let accepted = fault == 0 && verify == crate::store::VerifyStore::Off;
@@ -326,7 +335,7 @@ mod tests {
         #[derive(serde::Serialize, serde::Deserialize)]
         struct Legacy {
             key: Key,
-            body: Reference,
+            body: Option<Reference>,
             reads: Reads,
             decode_bytes: u64,
             facts: Vec<u8>,
@@ -335,9 +344,11 @@ mod tests {
             let key = ContentHash::of_bytes(b"compact-owner");
             let legacy = Legacy {
                 key,
-                body: crate::store::product_domain(QueryKind::Modes)
-                    .reference(b"body")
-                    .unwrap(),
+                body: Some(
+                    crate::store::product_domain(QueryKind::Modes)
+                        .reference(b"body")
+                        .unwrap(),
+                ),
                 reads: Reads::from_vec(vec![(ReadKey::Environment, key)]).unwrap(),
                 decode_bytes: 12345,
                 facts: (0..len).map(|n| n as u8).collect(),

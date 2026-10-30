@@ -246,12 +246,24 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                             .iter()
                             .find(|(other, _)| other.owner == key.owner)
                             .unwrap();
-                        assert_ne!(original.record, replacement.record);
+                        assert_ne!(
+                            original
+                                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                .unwrap()
+                                .reference(),
+                            replacement
+                                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                .unwrap()
+                                .reference()
+                        );
                         (
                             key.address(),
                             Association {
                                 action: original.action,
-                                reference: replacement.record,
+                                reference: replacement
+                                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                    .unwrap()
+                                    .reference(),
                             },
                         )
                     })
@@ -370,7 +382,15 @@ fn original_whole_plan_cross_open_skips_all_value_work_and_compares_recomputatio
                 observed.push(
                     cold.products
                         .iter()
-                        .map(|(key, product)| (key.address(), product.record))
+                        .map(|(key, product)| {
+                            (
+                                key.address(),
+                                product
+                                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                    .unwrap()
+                                    .reference(),
+                            )
+                        })
                         .collect::<Vec<_>>(),
                 );
                 let other = compile_source(
@@ -390,12 +410,24 @@ fn original_whole_plan_cross_open_skips_all_value_work_and_compares_recomputatio
                             .iter()
                             .find(|(other, _)| other.owner == key.owner)
                             .unwrap();
-                        assert_ne!(original.record, replacement.record);
+                        assert_ne!(
+                            original
+                                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                .unwrap()
+                                .reference(),
+                            replacement
+                                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                .unwrap()
+                                .reference()
+                        );
                         (
                             key.address(),
                             Association {
                                 action: original.action,
-                                reference: replacement.record,
+                                reference: replacement
+                                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                    .unwrap()
+                                    .reference(),
                             },
                         )
                     })

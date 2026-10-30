@@ -240,7 +240,7 @@ impl InstanceTasks {
                 let charge = weight
                     .bytes()
                     .saturating_add(request.retained_metadata_bytes());
-                Ok((
+                (
                     key.address(INSTANCE_KIND).0,
                     key.address(INSTANCE_INPUT_KIND).0,
                     charge,
@@ -251,9 +251,9 @@ impl InstanceTasks {
                         source: OnceLock::new(),
                         output: OnceLock::new(),
                     }),
-                ))
+                )
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Vec<_>>();
         let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
         let index_bytes = |len| {
             let mut weight = hirsel_engine::NativeMetadataWeight::default();
@@ -356,16 +356,16 @@ impl InstanceTasks {
         registry.charged += charge;
         Ok(())
     }
-    fn put(&self, key: QueryId, bytes: &[u8]) -> Result<ProductRef, String> {
+    fn put(&self, key: QueryId, bytes: Vec<u8>) -> Result<ProductRef, String> {
         let domain = Domain {
             kind: key.kind,
             schema: 1,
         };
         let record = self
             .store
-            .put_content(domain, bytes)
+            .put_content(domain, &bytes)
             .ok_or("native task output transport failed")?;
-        if domain.reference(bytes) != Some(record) {
+        if domain.reference(&bytes) != Some(record) {
             return Err("native task output content identity differs".into());
         }
         let action = Action(ContentHash::of_parts(
@@ -373,11 +373,13 @@ impl InstanceTasks {
             [key.address.0.0.as_slice(), record.output.0.0.as_slice()],
         ));
         self.store.associate_product(key.address, action, record);
-        Ok(ProductRef {
-            address: key.address,
+        Ok(ProductRef::import_archive(
+            key.address,
             action,
-            record,
-        })
+            self.store
+                .admit_product_archive(record, bytes.into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        ))
     }
     pub fn failure(&self, message: &str) -> Reference {
         self.store
@@ -781,7 +783,7 @@ impl QueryTask for InstanceTask {
             if self.id.kind == INSTANCE_INPUT_KIND {
                 let bytes =
                     producer.producer_inputs(&source, &self.entry.key, &self.tasks.options)?;
-                let product = self.tasks.put(self.id, &bytes)?;
+                let product = self.tasks.put(self.id, bytes)?;
                 if self.entry.input.set(product.clone()).is_err()
                     && self.entry.input.get() != Some(&product)
                 {
@@ -978,13 +980,16 @@ impl DiscoveryTask {
                     Ok((
                         entry.key.instance.encoding().to_vec(),
                         product.address.0,
-                        product.record,
+                        product
+                            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                            .map_err(|e| e.to_string())?
+                            .reference(),
                     ))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             rows.sort_by(|a, b| a.0.cmp(&b.0));
             let bytes = serde_json::to_vec(&rows).map_err(|e| e.to_string())?;
-            let product = self.tasks.put(self.tasks.discovery, &bytes)?;
+            let product = self.tasks.put(self.tasks.discovery, bytes)?;
             if self.tasks.completed.set(product.clone()).is_err()
                 && self.tasks.completed.get() != Some(&product)
             {
@@ -1073,11 +1078,21 @@ impl InstanceTasks {
         let rows = scope
             .outputs
             .iter()
-            .map(|(key, output)| (key.instance.encoding(), output.product.product.record))
-            .collect::<Vec<_>>();
+            .map(|(key, output)| {
+                Ok((
+                    key.instance.encoding(),
+                    output
+                        .product
+                        .product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference(),
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         let product = self.put(
             self.callable_id(),
-            &serde_json::to_vec(&rows).map_err(|e| e.to_string())?,
+            serde_json::to_vec(&rows).map_err(|e| e.to_string())?,
         )?;
         self.callables
             .set((product.clone(), scope))
@@ -1189,7 +1204,11 @@ mod retained_tests {
     #[test]
     fn discovery_frontier_keeps_addresses_within_a_small_frame() {
         hirsel_engine::with_compiler_stack(|| {
-            let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::MemStore::default());
+            let transport = ProcessBudget::new(64 << 20);
+            let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::RequestStore::new(
+                Arc::new(hirsel_engine::store::MemStore::default()),
+                transport.reserve(64 << 20).unwrap(),
+            ));
             let mut engine = hirsel_engine::QueryEngine::new(
                 hirsel_engine::default_environment(),
                 crate::compiler_adapters(),
@@ -1280,7 +1299,11 @@ mod retained_tests {
     #[test]
     fn registry_metadata_refuses_one_less_and_releases_its_exact_partition() {
         hirsel_engine::with_compiler_stack(|| {
-            let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::MemStore::default());
+            let transport = ProcessBudget::new(64 << 20);
+            let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::RequestStore::new(
+                Arc::new(hirsel_engine::store::MemStore::default()),
+                transport.reserve(64 << 20).unwrap(),
+            ));
             let mut engine = hirsel_engine::QueryEngine::new(
                 hirsel_engine::default_environment(),
                 crate::compiler_adapters(),

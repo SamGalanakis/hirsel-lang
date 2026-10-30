@@ -48,6 +48,11 @@ fn selected(name: &str) -> bool {
 }
 
 fn observe(store: Arc<dyn ResultStore>, text: &str, fresh: bool, jobs: usize) -> Observed {
+    let transport = ProcessBudget::new(24 << 20);
+    let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+        store,
+        transport.reserve(24 << 20).unwrap(),
+    ));
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
         .with_result_store(store.clone());
     let file = engine
@@ -219,7 +224,16 @@ fn native_arena_recursive_source_edit_propagates_through_both_strata_without_rei
                 assert!(edited.candidates[name].1.is_empty(), "{name}");
                 assert!(edited.chosen[name].1.is_empty(), "{name}");
                 assert_ne!(
-                    initial.chosen[name].0.record, edited.chosen[name].0.record,
+                    initial.chosen[name]
+                        .0
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .unwrap()
+                        .reference(),
+                    edited.chosen[name]
+                        .0
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .unwrap()
+                        .reference(),
                     "{name}"
                 );
             }

@@ -10,16 +10,15 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
 fn product() -> ProductRef {
-    ProductRef {
-        address: Address(ContentHash::of_bytes(b"address")),
-        action: Action(ContentHash::of_bytes(b"complete action")),
-        record: Domain {
+    crate::fixture_product_bytes(
+        Address(ContentHash::of_bytes(b"address")),
+        Action(ContentHash::of_bytes(b"complete action")),
+        Domain {
             kind: 999,
             schema: 1,
-        }
-        .reference(b"output")
-        .unwrap(),
-    }
+        },
+        b"output",
+    )
 }
 
 /// A transport probe, not a compiler or a dependency/coalescing implementation.
@@ -178,10 +177,14 @@ fn host_shutdown_cancels_live_subscriptions_without_readiness() {
 fn query_failure_never_materializes_output() {
     let (mut host, runtime) = host();
     let mut request = host.request(&false).unwrap();
-    reply(&runtime, Poll::Ready(Err(product().record)));
+    let reference = product()
+        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+        .unwrap()
+        .reference();
+    reply(&runtime, Poll::Ready(Err(reference)));
     assert_eq!(
         request.poll(),
-        Poll::Ready(Err(RequestError::Query(product().record)))
+        Poll::Ready(Err(RequestError::Query(reference)))
     );
     drop(request);
     assert_eq!(

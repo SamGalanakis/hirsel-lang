@@ -17,7 +17,7 @@ const FAILURE: Domain = Domain {
     schema: 1,
 };
 struct SourceOwnership {
-    _allowance: MemoryReservation,
+    _allowance: Arc<MemoryReservation>,
     _front: Arc<FrontBodyQueries>,
     _lower: Arc<FrontLowerQueries>,
 }
@@ -73,7 +73,7 @@ pub struct FrontNativeDefinitionQueries {
     store: Arc<dyn ResultStore>,
     completed: Mutex<BTreeMap<ContentHash, (ProductRef, Arc<Data>)>>,
     failures: Mutex<BTreeMap<ContentHash, (Reference, QueryError)>>,
-    remaining: Mutex<u64>,
+    remaining: Arc<Mutex<u64>>,
     weight: MemoryWeight,
     errors: RuntimeErrors,
     _ownership: Arc<SourceOwnership>,
@@ -125,15 +125,19 @@ impl FrontNativeDefinitionQueries {
     }
 
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
-        definitions
-            .iter()
-            .try_fold(std::mem::size_of::<Self>() as u64, |total, path| {
+        definitions.iter().try_fold(
+            (std::mem::size_of::<Self>()
+                + std::mem::size_of::<Mutex<u64>>()
+                + std::mem::size_of::<MemoryReservation>()
+                + 4 * std::mem::size_of::<usize>()) as u64,
+            |total, path| {
                 total
                     .checked_add(bincode::serialized_size(path).ok()?.checked_mul(3)?)?
                     .checked_add(
                         (std::mem::size_of::<Input>() + 16 * std::mem::size_of::<usize>()) as u64,
                     )
-            })
+            },
+        )
     }
     pub fn query(&self, path: &DefPath) -> Option<QueryId> {
         self.ids.get(path).copied()
@@ -160,7 +164,7 @@ impl FrontNativeDefinitionQueries {
             .or_else(|| self.lower.failure(reference))
             .or_else(|| {
                 self.front
-                    .outcome(reference)
+                    .outcome(Err(reference))
                     .and_then(|o| o.outcome.result.err())
             })
     }
@@ -289,7 +293,7 @@ impl Task {
             Poll::Ready(Err(r)) => return Poll::Ready(Err(r)),
             Poll::Ready(Ok(p)) => p,
         };
-        let front = match owner.front.outcome(selected.record) {
+        let front = match owner.front.outcome(Ok(selected.clone())) {
             Some(front) => front,
             None => {
                 let Some(id) = owner.front.body_query(&self.path) else {
@@ -300,7 +304,7 @@ impl Task {
                     Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                     Poll::Ready(Ok(product)) => product,
                 };
-                let Some(front) = owner.front.outcome(selected.record) else {
+                let Some(front) = owner.front.outcome(Ok(selected.clone())) else {
                     return Poll::Ready(Err(owner.errors.protocol));
                 };
                 front
@@ -433,10 +437,6 @@ impl Task {
             }
             // Encoding is transient scratch. The retained source rows share
             // their producers' ownership; charge this durable payload once.
-            let charge = bytes.len() as u64;
-            let mut remaining = owner.remaining.lock().unwrap_or_else(|e| e.into_inner());
-            *remaining = remaining.checked_sub(charge).ok_or(owner.errors.resource)?;
-            drop(remaining);
             let record = owner
                 .store
                 .put_content(OUTPUT, &bytes)
@@ -445,11 +445,17 @@ impl Task {
                 "hirsel.front.native-definition-action.v1",
                 [self.id.address.0.0.as_slice(), record.output.0.0.as_slice()],
             ));
-            let product = ProductRef {
-                address: self.id.address,
+            let product = ProductRef::import_archive(
+                self.id.address,
                 action,
-                record,
-            };
+                ProductArchive::from_retained_bytes(
+                    record,
+                    bytes.into(),
+                    owner._ownership._allowance.clone(),
+                    owner.remaining.clone(),
+                )
+                .map_err(|_| owner.errors.resource)?,
+            );
             owner
                 .completed
                 .lock()
@@ -842,7 +848,7 @@ impl QueryEngine {
         let ownership = Arc::new(SourceOwnership {
             _front: front.clone(),
             _lower: lower.clone(),
-            _allowance: allowance,
+            _allowance: Arc::new(allowance),
         });
         let original_context = Arc::new(original_context.retain_owner(ownership.clone()));
         Ok(Arc::new(FrontNativeDefinitionQueries {
@@ -857,7 +863,7 @@ impl QueryEngine {
             store,
             completed: Mutex::new(BTreeMap::new()),
             failures: Mutex::new(BTreeMap::new()),
-            remaining: Mutex::new(output_budget),
+            remaining: Arc::new(Mutex::new(output_budget)),
             weight,
             errors,
             _ownership: ownership,

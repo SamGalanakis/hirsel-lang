@@ -61,7 +61,11 @@ fn ordinary_provider(backend: Backend) {
         let cache = root.join("objects");
         let open_store = || -> Arc<dyn ResultStore> { Arc::new(DirStore::new(cache.clone())) };
         let donor = {
-            let store = open_store();
+            let budget = runtime::ProcessBudget::new(24 << 20);
+            let store: Arc<dyn ResultStore> = Arc::new(RequestStore::new(
+                open_store(),
+                budget.reserve(24 << 20).unwrap(),
+            ));
             let mut config = hirsel_driver::COMPILER.configuration();
             config.store = store.clone();
             config.verify = Verify::On;

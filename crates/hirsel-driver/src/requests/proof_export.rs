@@ -181,7 +181,10 @@ impl QueryTask for Task {
             Ok((text, _)) => ContentHash::of_bytes(text.text().as_bytes()).0.to_vec(),
             Err(error) => error.as_bytes().to_vec(),
         };
-        let mut bytes = product.record.output.0.0.to_vec();
+        let Ok(input_archive) = product.archive(ArchiveAdmission::Retained) else {
+            return QueryPoll::Failed(owner.errors.resource);
+        };
+        let mut bytes = input_archive.reference().output.0.0.to_vec();
         bytes.extend_from_slice(&descriptor);
         let Some(record) = owner.store.put_content(OUTPUT, &bytes) else {
             return QueryPoll::Failed(owner.errors.resource);
@@ -193,11 +196,10 @@ impl QueryTask for Task {
                 record.output.0.0.as_slice(),
             ],
         ));
-        let product = ProductRef {
-            address: owner.query.address,
-            action,
-            record,
+        let Some(archive) = owner.store.open_product_archive(record) else {
+            return QueryPoll::Failed(owner.errors.resource);
         };
+        let product = ProductRef::import_archive(owner.query.address, action, archive);
         let (text, copy) = match built {
             Ok((text, copy)) => (Ok(text), Some(copy)),
             Err(error) => (Err(error), None),

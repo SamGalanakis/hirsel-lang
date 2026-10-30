@@ -14,7 +14,7 @@ pub use scope::FrontCheckScope;
 pub const FRONT_CHECK_KIND: u32 = 0x4600_000a;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_000b,
-    schema: 2,
+    schema: 3,
 };
 /// Engine-selected snapshots and source order. Clients submit operations and
 /// frozen input observations; the compiler host constructs this plan.
@@ -102,7 +102,8 @@ pub struct FrontCheckQueries {
     failures: Mutex<BTreeMap<ContentHash, (Reference, QueryError, Option<QueryKind>)>>,
     weight: MemoryWeight,
     errors: RuntimeErrors,
-    _allowance: MemoryReservation,
+    retention: Arc<Mutex<u64>>,
+    _allowance: Arc<MemoryReservation>,
 }
 impl FrontCheckQueries {
     pub(super) fn matches_inputs(
@@ -155,9 +156,16 @@ impl FrontCheckQueries {
             + std::mem::size_of::<DefId>()
             + 2 * std::mem::size_of::<DefPath>()
             + 128) as u64;
-        let base = weight.retained.checked_add(
-            (files as u64).checked_mul((2 * std::mem::size_of::<FileInput>() + 128) as u64)?,
-        )?;
+        let base = weight
+            .retained
+            .checked_add(
+                (files as u64).checked_mul((2 * std::mem::size_of::<FileInput>() + 128) as u64)?,
+            )?
+            .checked_add(
+                (std::mem::size_of::<Mutex<u64>>()
+                    + std::mem::size_of::<MemoryReservation>()
+                    + 4 * std::mem::size_of::<usize>()) as u64,
+            )?;
         definitions.iter().try_fold(base, |total, path| {
             total.checked_add(
                 path_slot.checked_add(bincode::serialized_size(path).ok()?.checked_mul(5)?)?,
@@ -385,9 +393,10 @@ impl Task {
                             Poll::Pending => return Ok(Some(vec![id])),
                             Poll::Ready(selected) => selected,
                         };
-                        let reference = selected.clone().map(|p| p.record).unwrap_or_else(|r| r);
-                        let Some(facts) = self.queries.plan.front.check_facts(reference) else {
-                            return Err(reference);
+                        let reference = selected.clone();
+                        let Some(facts) = self.queries.plan.front.check_facts(reference.clone())
+                        else {
+                            return Err(reference.err().unwrap_or(self.queries.errors.protocol));
                         };
                         self.reads.merge(&facts.reads);
                         file.source_rules |= facts.source_rules;
@@ -411,7 +420,10 @@ impl Task {
                                 }
                             }
                             Err(error) => {
-                                self.failed_front.push((path.clone(), reference));
+                                self.failed_front.push((
+                                    path.clone(),
+                                    reference.err().unwrap_or(self.queries.errors.protocol),
+                                ));
                                 file.error(error, facts.phase);
                             }
                         }
@@ -443,7 +455,7 @@ impl Task {
                             }
                             Err(reference) => {
                                 let (error, phase) = if let Some(output) =
-                                    self.queries.plan.front.check_facts(reference)
+                                    self.queries.plan.front.check_facts(Err(reference))
                                 {
                                     (
                                         output.result.err().ok_or(self.queries.errors.protocol)?,
@@ -495,7 +507,7 @@ impl Task {
                                             self.queries
                                                 .plan
                                                 .front
-                                                .outcome(reference)
+                                                .outcome(Err(reference))
                                                 .and_then(|o| o.outcome.result.err())
                                         })
                                         .ok_or(reference)?;
@@ -584,7 +596,7 @@ impl Task {
                                     .queries
                                     .plan
                                     .lower
-                                    .selected_reads(id, reference)
+                                    .selected_reads(id, Err(reference))
                                     .ok_or(reference)?;
                                 self.reads.merge(&reads);
                                 self.failed_lowered.push((path.clone(), reference));
@@ -646,12 +658,16 @@ impl Task {
                             Poll::Pending => return Ok(Some(vec![id])),
                             Poll::Ready(selected) => selected,
                         };
-                        let reference = selected.as_ref().map(|p| p.record).unwrap_or_else(|r| *r);
+                        let reference = selected
+                            .as_ref()
+                            .err()
+                            .copied()
+                            .unwrap_or(self.queries.errors.protocol);
                         let reads = self
                             .queries
                             .plan
                             .lower
-                            .selected_reads(id, reference)
+                            .selected_reads(id, selected.clone())
                             .ok_or(reference)?;
                         self.reads.merge(&reads);
                         if selected.is_err() {
@@ -731,6 +747,14 @@ impl Task {
             &queries.declarations,
             &mut diagnostics,
         );
+        let observed = scheduled_growth::publish_observations(
+            &queries.records,
+            &queries.anchors,
+            &*queries.store,
+            &reads,
+            queries.weight.scratch,
+        )
+        .ok_or(queries.errors.resource)?;
         let bytes = queries
             .records
             .encode(
@@ -741,16 +765,16 @@ impl Task {
                     &self
                         .front
                         .iter()
-                        .map(|(path, p)| (path, p.record))
+                        .map(|(path, p)| (path, p.address.0, p.action.0, p.domain()))
                         .collect::<Vec<_>>(),
                     &self
                         .lowered
                         .iter()
-                        .map(|(path, p)| (path, p.record))
+                        .map(|(path, p)| (path, p.address.0, p.action.0, p.domain()))
                         .collect::<Vec<_>>(),
                     &self.failed_front,
                     &self.failed_lowered,
-                    &reads,
+                    observed,
                 ),
             )
             .ok_or(queries.errors.resource)?;
@@ -768,11 +792,17 @@ impl Task {
                 record.output.0.0.as_slice(),
             ],
         ));
-        let product = ProductRef {
-            address: queries.query.address,
+        let product = ProductRef::import_archive(
+            queries.query.address,
             action,
-            record,
-        };
+            ProductArchive::from_retained_bytes(
+                record,
+                bytes.into(),
+                queries._allowance.clone(),
+                queries.retention.clone(),
+            )
+            .map_err(|_| queries.errors.resource)?,
+        );
         let checked = CheckOutput {
             completion,
             sources: queries.sources.clone(),
@@ -791,7 +821,7 @@ impl Task {
             Some((product.clone(), data));
         queries
             .store
-            .associate_product(product.address, product.action, product.record);
+            .associate_product(product.address, product.action, record);
         Ok(product)
     }
 }
@@ -998,7 +1028,8 @@ impl QueryEngine {
             failures: Mutex::new(BTreeMap::new()),
             weight,
             errors,
-            _allowance: allowance,
+            retention: Arc::new(Mutex::new(allowance.bytes() - required)),
+            _allowance: Arc::new(allowance),
         }))
     }
 }

@@ -194,10 +194,20 @@ impl ArenaTasks {
             .map(|(index, id)| {
                 selected
                     .get(&index)
-                    .map(|summary| (id.kind, id.address.0, summary.product.record))
-                    .ok_or("arena component has not completed")
+                    .ok_or_else(|| "arena component has not completed".to_owned())
+                    .and_then(|summary| {
+                        Ok((
+                            id.kind,
+                            id.address.0,
+                            summary
+                                .product
+                                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                .map_err(|e| e.to_string())?
+                                .reference(),
+                        ))
+                    })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, String>>()?;
         let bytes = serde_json::to_vec(&rows).map_err(|e| e.to_string())?;
         let domain = Domain {
             kind: ARENA_GRAPH_KIND,
@@ -219,11 +229,13 @@ impl ArenaTasks {
         ));
         self.store
             .associate_product(self.query.address, action, record);
-        let product = ProductRef {
-            address: self.query.address,
+        let product = ProductRef::import_archive(
+            self.query.address,
             action,
-            record,
-        };
+            self.store
+                .admit_product_archive(record, bytes.into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        );
         if let Err(other) = self.completed.set((product.clone(), graph))
             && self.completed.get().unwrap().0 != other.0
         {

@@ -358,12 +358,8 @@ impl Toolchain {
         let products = match store {
             Some(store) => store,
             None => {
-                let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
-                    .ok()
-                    .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
-                    .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
+                let (budget, cap) = crate::requests::host_budget();
                 let bytes = (cap / 8).min(128 << 20);
-                let budget = hirsel_engine::runtime::ProcessBudget::new(bytes);
                 std::sync::Arc::new(hirsel_engine::store::RequestStore::new(
                     std::sync::Arc::new(hirsel_engine::store::NoneStore),
                     budget

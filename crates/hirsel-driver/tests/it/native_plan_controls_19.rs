@@ -83,9 +83,15 @@ fn bodyless_keyed_inventory_survives_cross_open_and_refuses_missing_metadata() {
                         assert!(view.with_link_context(root, &supplied, |_| Ok(())).is_err());
                     }
                     let mut legacy = (**root).clone();
-                    legacy.product.record = store
-                        .put_content(root.product.record.domain, b"HIRNPL02")
+                    let reference = store
+                        .put_content(root.product.domain(), b"HIRNPL02")
                         .unwrap();
+                    legacy.product = crate::scheduled_front::imported_fixture(
+                        &*store,
+                        root.product.address,
+                        root.product.action,
+                        reference,
+                    );
                     assert!(
                         view.with_link_context(&Arc::new(legacy), readies, |_| Ok(()))
                             .is_err()

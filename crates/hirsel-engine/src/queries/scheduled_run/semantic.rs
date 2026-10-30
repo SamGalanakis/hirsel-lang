@@ -157,11 +157,13 @@ impl SemanticTask {
                 record.output.0.0.as_slice(),
             ],
         ));
-        let product = ProductRef {
-            address: self.node.query.address,
+        let product = ProductRef::import_archive(
+            self.node.query.address,
             action,
-            record,
-        };
+            queries
+                .admit_archive(record, bytes)
+                .map_err(|_| QueryError::NotImplemented)?,
+        );
         let mut remaining = queries
             .retention
             .lock()
@@ -176,7 +178,7 @@ impl SemanticTask {
             .insert(product.address.0, (product.clone(), entry));
         queries
             .store
-            .associate_product(product.address, product.action, product.record);
+            .associate_product(product.address, product.action, record);
         Ok(product)
     }
 }

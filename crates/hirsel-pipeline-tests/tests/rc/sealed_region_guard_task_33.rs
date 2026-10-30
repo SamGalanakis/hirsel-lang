@@ -33,7 +33,11 @@ impl QueryContext for Context {
 
 #[test]
 fn original_guard_task_waits_for_dependencies_and_keeps_its_existing_grant_with_output() {
-    let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+    let transport = ProcessBudget::new(64 << 20);
+    let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::RequestStore::new(
+        Arc::new(MemStore::default()),
+        transport.reserve(64 << 20).unwrap(),
+    ));
     let domain = Domain {
         kind: INSTANCE_KIND,
         schema: 1,
@@ -79,11 +83,8 @@ fn original_guard_task_waits_for_dependencies_and_keeps_its_existing_grant_with_
                             [encoded.as_slice()],
                         ));
                         store.associate_product(address, action, record);
-                        let product = ProductRef {
-                            address,
-                            action,
-                            record,
-                        };
+                        let product =
+                            crate::imported_fixture(store.as_ref(), address, action, record);
                         let kind = if index % 2 == 0 {
                             INSTANCE_KIND
                         } else {

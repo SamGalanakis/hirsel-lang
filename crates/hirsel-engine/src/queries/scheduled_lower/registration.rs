@@ -75,7 +75,7 @@ pub struct FrontRegistrationQueries {
     outcomes: Mutex<BTreeMap<ContentHash, Completed>>,
     weight: MemoryWeight,
     errors: RuntimeErrors,
-    remaining: Mutex<MemoryReservation>,
+    output_pool: MemoryReservationPool,
     total: u64,
     _inputs: MemoryReservation,
 }
@@ -83,6 +83,7 @@ impl FrontRegistrationQueries {
     pub fn input_bytes(definitions: &[DefPath]) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + 2 * size_of::<usize>());
+        weight.add(MemoryReservationPool::metadata_bytes() as usize);
         weight.tree::<ContentHash, Input>(definitions.len());
         weight.tree::<ContentHash, Completed>(definitions.len());
         weight.bytes()
@@ -99,12 +100,7 @@ impl FrontRegistrationQueries {
         Arc::new(Factory(self.clone()))
     }
     pub fn retained_bytes(&self) -> u64 {
-        self.total
-            - self
-                .remaining
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .bytes()
+        self.total - self.output_pool.available_bytes()
     }
     pub fn outcome(self: &Arc<Self>, product: ProductRef) -> Option<FrontRegistrationOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -116,7 +112,10 @@ impl FrontRegistrationQueries {
     }
     pub fn failed(self: &Arc<Self>, reference: Reference) -> Option<FrontRegistrationOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-        let (address, (_, data)) = outcomes.iter().find(|(_, (p, _))| p.record == reference)?;
+        let (address, (_, data)) = outcomes.iter().find(|(_, (p, _))| {
+            p.archive(ArchiveAdmission::Retained)
+                .is_ok_and(|archive| archive.reference() == reference)
+        })?;
         Some(FrontRegistrationOutput {
             definition: self.inputs[address].definition,
             data: data.clone(),
@@ -215,14 +214,13 @@ impl FrontRegistrationQueries {
                     .map_err(|_| self.errors.resource)?,
             );
         }
-        let mut remaining = self.remaining.lock().unwrap_or_else(|e| e.into_inner());
-        let allowance = remaining
-            .split(weight.bytes())
+        let allowance = self
+            .output_pool
+            .take(weight.bytes())
             .ok_or(self.errors.resource)?;
         Arc::get_mut(&mut data)
             .expect("unpublished generator output")
             ._allowance = Some(allowance);
-        drop(remaining);
         let failed = data.text.is_err();
         let record = self
             .lower
@@ -237,11 +235,12 @@ impl FrontRegistrationQueries {
                 record.output.0.0.as_slice(),
             ],
         ));
-        let product = ProductRef {
-            address: id.address,
+        let product = ProductRef::import_archive(
+            id.address,
             action,
-            record,
-        };
+            ProductArchive::from_encoded_in(record, bytes, &self.output_pool)
+                .map_err(|_| self.errors.resource)?,
+        );
         if !failed
             && let Some(decode_bytes) = weight
                 .bytes()
@@ -579,7 +578,14 @@ impl QueryEngine {
             );
         }
         let total = allowance.bytes();
-        let inputs_allowance = allowance.split(required).ok_or_else(refused)?;
+        let inputs_allowance = allowance
+            .split(
+                required
+                    .checked_sub(MemoryReservationPool::metadata_bytes())
+                    .ok_or_else(refused)?,
+            )
+            .ok_or_else(refused)?;
+        let output_pool = MemoryReservationPool::new(allowance).map_err(|_| refused())?;
         Ok(Arc::new(FrontRegistrationQueries {
             inputs,
             lower,
@@ -587,7 +593,7 @@ impl QueryEngine {
             outcomes: Mutex::new(BTreeMap::new()),
             weight,
             errors,
-            remaining: Mutex::new(allowance),
+            output_pool,
             total,
             _inputs: inputs_allowance,
         }))

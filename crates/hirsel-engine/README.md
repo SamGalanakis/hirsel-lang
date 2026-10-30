@@ -963,6 +963,17 @@ retire according to their separate execution and validation dependencies.
 scalar and worker Lower adapter calls, including discarded speculative work;
 `lower_evaluation` is a separate operation.
 
+The admitted runtime caches settled analyzed bodies until explicit eviction or
+Front admission pressure. Pressure evicts the oldest settled body outside
+unfinished roots and active continuation dependencies, provided no external
+handle pins it. Completed producers keep their semantic read edges without
+pinning consumed bodies. Eviction encodes nothing; an evicted body demand is
+an ordinary miss. Its existing settled Summary stays published, so equal body
+recomputation preserves early cutoff. Explicit archives keep their own leases.
+`RuntimeStats::body_evictions` counts pressure evictions. Freshly encoded
+Lower, native and semantic archives transfer their concrete buffers into their
+existing producer grants, without retaining duplicate request-transport reads.
+
 Image construction withholds production worker admission while producing
 portable receipts; the prior admission purpose is restored on success or error.
 This preserves imported constants without body recomputation while whole-universe

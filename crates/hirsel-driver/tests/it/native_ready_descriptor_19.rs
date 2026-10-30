@@ -122,7 +122,16 @@ fn actual_root_rejects_changed_owner_policy_and_c_bound_ready_summary() {
                     );
                 }
                 let mut wrong_schema = (**root).clone();
-                wrong_schema.product.record.domain.schema += 1;
+                let archive = root.product.archive(ArchiveAdmission::Retained).unwrap();
+                let mut domain = archive.reference().domain;
+                domain.schema += 1;
+                let reference = store.put_content(domain, archive.bytes()).unwrap();
+                wrong_schema.product = crate::scheduled_front::imported_fixture(
+                    &*store,
+                    root.product.address,
+                    root.product.action,
+                    reference,
+                );
                 assert!(
                     view.with_link_context(&Arc::new(wrong_schema), readies, |_| Ok(()))
                         .is_err()

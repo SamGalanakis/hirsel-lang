@@ -7,7 +7,7 @@
 //! Changed manifests still invoke the platform linker; no image patching.
 use super::queries::{InstanceAddress, NativeProducts, ReadyProduct};
 use hirsel_codec::{Snapshot, snapshot_struct};
-use hirsel_engine::runtime::ProductRef;
+use hirsel_engine::runtime::{ArchiveAdmission, ProductRef};
 use hirsel_engine::store::{Action, Address, Domain, MAX_RECORD, Output, Reference};
 use hirsel_engine::store::{ResultStore, VerifyStore};
 use hirsel_lir::stage::ObjectArtifact;
@@ -337,14 +337,24 @@ fn codegen_checked(
 ) -> Result<FragmentProduct, String> {
     let address = key.address();
     let mut reads = vec![
-        ready.product.record,
+        ready
+            .product
+            .archive(ArchiveAdmission::Retained)
+            .map_err(error)?
+            .reference(),
         ready.ready,
         ready.layout_closure,
         ready.emission_context,
         ready.unit_summary,
     ];
-    reads.extend(ready.optimizer_reads.iter().map(|p| p.record));
-    reads.extend(optimizer.iter().map(|p| p.record));
+    for product in ready.optimizer_reads.iter().chain(optimizer) {
+        reads.push(
+            product
+                .archive(ArchiveAdmission::Retained)
+                .map_err(error)?
+                .reference(),
+        );
+    }
     // References bind domains/lengths as well as content. Action revisions are
     // deliberately absent: equal settled outputs cut off downstream work.
     fragment_checked(
@@ -380,12 +390,10 @@ fn fragment_checked(
     } = identity;
     let action = action("hirsel.codegen.action.v2", address, reads);
     let mut cached = None;
-    if let Some(previous) = store.lookup_product(address).filter(|p| p.action == action) {
-        let product = ProductRef {
-            address,
-            action,
-            record: previous.reference,
-        };
+    if let Some(previous) = store.lookup_product(address).filter(|p| p.action == action)
+        && let Some(archive) = store.copy_product_archive(previous.reference)
+    {
+        let product = ProductRef::import_archive(address, action, archive);
         if let Ok(fragment) = fragment_product(store, product)
             && fragment.summary == summary
         {
@@ -421,7 +429,13 @@ fn fragment_checked(
     let expected = FRAGMENT
         .reference(bytes.as_bytes())
         .ok_or("native fragment exceeds record limit")?;
-    if cached.is_some_and(|old| old.product.record != expected) {
+    if cached
+        .as_ref()
+        .map(|old| old.product.archive(ArchiveAdmission::Retained))
+        .transpose()
+        .map_err(error)?
+        .is_some_and(|archive| archive.reference() != expected)
+    {
         return Err("recomputed object fragment differs from cached output".into());
     }
     let record = store
@@ -432,11 +446,13 @@ fn fragment_checked(
     }
     store.associate_product(address, action, record);
     Ok(FragmentProduct {
-        product: ProductRef {
+        product: ProductRef::import_archive(
             address,
             action,
-            record,
-        },
+            store
+                .admit_product_archive(record, bytes.into_bytes().into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        ),
         object,
         summary,
     })
@@ -461,7 +477,15 @@ fn link_checked(
 ) -> Result<LinkedProduct, String> {
     let mut fragments = Vec::with_capacity(inputs.fragments.len());
     for fragment in &inputs.fragments {
-        let record: FragmentRecord = get_record(store, FRAGMENT, fragment.product.record)?;
+        let record: FragmentRecord = get_record(
+            store,
+            FRAGMENT,
+            fragment
+                .product
+                .archive(ArchiveAdmission::Retained)
+                .map_err(error)?
+                .reference(),
+        )?;
         if Reference::from(record.object.clone()) != fragment.object
             || Reference::from(record.summary.clone()) != fragment.summary
         {
@@ -483,7 +507,16 @@ fn link_checked(
         fragments: fragments.into_iter().map(|(_, product)| product).collect(),
         ..inputs.clone()
     };
-    let mut reads: Vec<_> = inputs.fragments.iter().map(|f| f.product.record).collect();
+    let mut reads: Vec<_> = inputs
+        .fragments
+        .iter()
+        .map(|f| {
+            f.product
+                .archive(ArchiveAdmission::Retained)
+                .map(|a| a.reference())
+        })
+        .collect::<Result<_, _>>()
+        .map_err(error)?;
     reads.push(inputs.static_manifest);
     reads.extend(&inputs.runtime_archives);
     reads.extend(&inputs.foreign_inputs);
@@ -502,12 +535,10 @@ fn link_checked(
     let address = key.address();
     let action = action("hirsel.link.action.v1", address, &reads);
     let mut cached = None;
-    if let Some(previous) = store.lookup_product(address).filter(|p| p.action == action) {
-        let product = ProductRef {
-            address,
-            action,
-            record: previous.reference,
-        };
+    if let Some(previous) = store.lookup_product(address).filter(|p| p.action == action)
+        && let Some(archive) = store.copy_product_archive(previous.reference)
+    {
+        let product = ProductRef::import_archive(address, action, archive);
         if let Ok(linked) = linked_product(store, product) {
             if verify_store == VerifyStore::Off {
                 return Ok(linked);
@@ -525,23 +556,30 @@ fn link_checked(
         return Err("linker produced an empty executable".into());
     }
     let executable = put_blob(store, &bytes)?;
-    let record = put_record(
-        store,
-        LINKED,
-        &LinkedRecord {
-            executable: executable.into(),
-        },
-    )?;
-    if cached.is_some_and(|old| old.product.record != record) {
+    let descriptor = hirsel_codec::to_text(&LinkedRecord {
+        executable: executable.into(),
+    });
+    let record = store
+        .put_content(LINKED, descriptor.as_bytes())
+        .ok_or("native product publication failed")?;
+    if cached
+        .as_ref()
+        .map(|old| old.product.archive(ArchiveAdmission::Retained))
+        .transpose()
+        .map_err(error)?
+        .is_some_and(|archive| archive.reference() != record)
+    {
         return Err("recomputed executable differs from cached output".into());
     }
     store.associate_product(address, action, record);
     Ok(LinkedProduct {
-        product: ProductRef {
+        product: ProductRef::import_archive(
             address,
             action,
-            record,
-        },
+            store
+                .admit_product_archive(record, descriptor.into_bytes().into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        ),
         executable,
     })
 }
@@ -599,7 +637,14 @@ pub fn linked_product(
     store: &dyn ResultStore,
     product: ProductRef,
 ) -> Result<LinkedProduct, String> {
-    let record: LinkedRecord = get_record(store, LINKED, product.record)?;
+    let record: LinkedRecord = get_record(
+        store,
+        LINKED,
+        product
+            .archive(ArchiveAdmission::Retained)
+            .map_err(error)?
+            .reference(),
+    )?;
     let executable = record.executable.into();
     validate_link_input(store, executable)?;
     Ok(LinkedProduct {
@@ -612,7 +657,14 @@ pub fn fragment_product(
     store: &dyn ResultStore,
     product: ProductRef,
 ) -> Result<FragmentProduct, String> {
-    let record: FragmentRecord = get_record(store, FRAGMENT, product.record)?;
+    let record: FragmentRecord = get_record(
+        store,
+        FRAGMENT,
+        product
+            .archive(ArchiveAdmission::Retained)
+            .map_err(error)?
+            .reference(),
+    )?;
     let object = record.object.into();
     let summary = record.summary.into();
     require(store, summary)?;

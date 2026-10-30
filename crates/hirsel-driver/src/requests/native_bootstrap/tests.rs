@@ -46,6 +46,14 @@ fn native_emit_only_bootstrap_completes_actual_codegen_without_link_after_loader
     bootstrap_link_refusal(false, true);
 }
 
+fn fixture_store() -> Arc<dyn ResultStore> {
+    let budget = ProcessBudget::new(64 << 20);
+    Arc::new(hirsel_engine::store::RequestStore::new(
+        Arc::new(MemStore::default()),
+        budget.reserve(64 << 20).unwrap(),
+    ))
+}
+
 fn bootstrap_link_refusal(test_table: bool, emit_only: bool) {
     hirsel_engine::with_compiler_stack(|| {
         for jobs in [1, 2] {
@@ -62,7 +70,7 @@ fn bootstrap_link_refusal(test_table: bool, emit_only: bool) {
             )
             .unwrap();
             std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"bootstrap","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
-            let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+            let store = fixture_store();
             let mut program = crate::COMPILER
                 .with_config(CompileConfig {
                     jobs: Jobs::new(jobs),
@@ -378,7 +386,7 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
             let manifest = directory.path().join("hirsel.json");
             std::fs::write(&path, "pub fn main()->Result[(),u64]{Ok(())}\n").unwrap();
             std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"bootstrap","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
-            let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+            let store = fixture_store();
             let mut program = crate::COMPILER
                 .with_config(CompileConfig {
                     jobs: Jobs::new(jobs),
@@ -750,7 +758,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
             let manifest = directory.path().join("hirsel.json");
             std::fs::write(&path, "pub fn main()->Result[(),u64]{Ok(())}\n").unwrap();
             std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"bootstrap","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
-            let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+            let store = fixture_store();
             let budget = ProcessBudget::new(1 << 30);
             let launch = crate::HostLaunch::empty();
             let mut bound = if bind_run {
@@ -1428,7 +1436,7 @@ fn native_bootstrap_assesses_evidence_against_its_settled_source_root_before_ins
         let manifest = directory.path().join("hirsel.json");
         std::fs::write(directory.path().join("main.hir"), PROOF_SOURCE).unwrap();
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"proof_bootstrap","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
-        let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+        let store = fixture_store();
         let budget = ProcessBudget::new(1 << 30);
         let diagnostic = |message: &[u8]| {
             store
@@ -1619,7 +1627,7 @@ fn original_plan_inputs_bind_source_edits_membership_options_and_foreign_bytes()
         const SOURCE: &str = "fn helper(x:u64)->u64{x+1u64}\nfn main()->u64{helper(7u64)}";
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("plan.hir");
-        let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+        let store = fixture_store();
         let budget = ProcessBudget::new(1 << 30);
         let diagnostic = |message: &[u8]| {
             store
@@ -1719,7 +1727,12 @@ fn original_plan_inputs_bind_source_edits_membership_options_and_foreign_bytes()
                     )
                 })
                 .iter()
-                .map(|product| product.record)
+                .map(|product| {
+                    product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .unwrap()
+                        .reference()
+                })
                 .collect::<Vec<_>>()
         };
         let original = source_output(SOURCE);

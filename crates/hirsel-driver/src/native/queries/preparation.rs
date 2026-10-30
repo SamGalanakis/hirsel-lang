@@ -147,8 +147,20 @@ impl NativePreparationQueries {
         if product != output.product {
             return None;
         }
-        let bytes = self.store.get_content(product.record)?;
-        (OUTPUT.reference(&bytes) == Some(product.record)).then(|| output.clone())
+        let bytes = self.store.get_content(
+            product
+                .archive(ArchiveAdmission::Retained)
+                .ok()?
+                .reference(),
+        )?;
+        (OUTPUT.reference(&bytes)
+            == Some(
+                product
+                    .archive(ArchiveAdmission::Retained)
+                    .ok()?
+                    .reference(),
+            ))
+        .then(|| output.clone())
     }
     fn prepare(&self, entry: &Entry, source_product: ProductRef) -> Result<ProductRef, Reference> {
         if let Some(output) = entry.completed.get() {
@@ -175,7 +187,10 @@ impl NativePreparationQueries {
                 &(
                     source_product.address.0,
                     source_product.action.0,
-                    source_product.record,
+                    source_product
+                        .archive(ArchiveAdmission::Retained)
+                        .map_err(|_| self.errors.resource)?
+                        .reference(),
                 ),
             )
             .map_err(|_| self.errors.resource)?;
@@ -209,17 +224,19 @@ impl NativePreparationQueries {
             .put_content(OUTPUT, bytes)
             .filter(|reference| OUTPUT.reference(bytes) == Some(*reference))
             .ok_or(self.errors.resource)?;
-        let product = ProductRef {
-            address: entry.query.address,
-            action: Action(ContentHash::of_parts(
+        let product = ProductRef::import_archive(
+            entry.query.address,
+            Action(ContentHash::of_parts(
                 "hirsel.native.preparation-action.v1",
                 [
                     entry.query.address.0.0.as_slice(),
                     record.output.0.0.as_slice(),
                 ],
             )),
-            record,
-        };
+            self.store
+                .admit_product_archive(record, bytes.to_vec().into())
+                .ok_or(self.errors.resource)?,
+        );
         entry
             .completed
             .set(Arc::new(NativePreparedSource {
@@ -233,7 +250,7 @@ impl NativePreparationQueries {
             }))
             .map_err(|_| self.errors.protocol)?;
         self.store
-            .associate_product(product.address, product.action, product.record);
+            .associate_product(product.address, product.action, record);
         Ok(product)
     }
 }

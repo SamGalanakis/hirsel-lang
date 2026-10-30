@@ -181,24 +181,26 @@ impl OwnershipTasks {
         &self,
         query: QueryId,
         domain: Domain,
-        bytes: &[u8],
+        bytes: Vec<u8>,
         selected: &OnceLock<ProductRef>,
     ) -> Result<ProductRef, String> {
         let store = &self.native.snapshot.store;
         let record = store
-            .put_content(domain, bytes)
+            .put_content(domain, &bytes)
             .ok_or("ownership diagnostic transport exhausted")?;
-        if domain.reference(bytes) != Some(record) {
+        if domain.reference(&bytes) != Some(record) {
             return Err("ownership diagnostic content differs".into());
         }
-        let product = ProductRef {
-            address: query.address,
-            action: Action(ContentHash::of_parts(
+        let product = ProductRef::import_archive(
+            query.address,
+            Action(ContentHash::of_parts(
                 "hirsel.native.ownership-action.v1",
                 [query.address.0.0.as_slice(), record.output.0.0.as_slice()],
             )),
-            record,
-        };
+            store
+                .admit_product_archive(record, bytes.into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        );
         if let Some(previous) = selected.get() {
             if *previous != product {
                 return Err("ownership diagnostic completion changed".into());
@@ -208,7 +210,14 @@ impl OwnershipTasks {
                 .set(product.clone())
                 .map_err(|_| "ownership diagnostic published twice")?;
         }
-        store.associate_product(product.address, product.action, product.record);
+        store.associate_product(
+            product.address,
+            product.action,
+            product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
+        );
         Ok(product)
     }
     /// Only the exact output of this producer's selected root is admitted.
@@ -231,17 +240,36 @@ impl OwnershipTasks {
         let expected = serde_json::to_vec(
             &outputs
                 .iter()
-                .map(|p| (p.address.0, p.action.0, p.record))
-                .collect::<Vec<_>>(),
+                .map(|p| {
+                    Ok((
+                        p.address.0,
+                        p.action.0,
+                        p.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                            .map_err(|e| e.to_string())?
+                            .reference(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
         )
         .map_err(|e| e.to_string())?;
         let bytes = self
             .native
             .snapshot
             .store
-            .get_content(root.record)
+            .get_content(
+                root.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference(),
+            )
             .ok_or("missing ownership root")?;
-        if bytes.as_ref() != expected || ROOT.reference(&bytes) != Some(root.record) {
+        if bytes.as_ref() != expected
+            || ROOT.reference(&bytes)
+                != Some(
+                    root.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference(),
+                )
+        {
             return Err("ownership root descriptor differs".into());
         }
         Ok(outputs)
@@ -644,9 +672,21 @@ impl OwnershipTasks {
             .admitted(request.owner(&self.native), &environment)?;
         let bytes = snapshot
             .store
-            .get_content(product.record)
+            .get_content(
+                product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference(),
+            )
             .ok_or("missing ownership diagnostic unit")?;
-        if UNIT.reference(&bytes) != Some(product.record) {
+        if UNIT.reference(&bytes)
+            != Some(
+                product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference(),
+            )
+        {
             return Err("ownership diagnostic unit content differs".into());
         }
         let (
@@ -785,16 +825,19 @@ impl Task {
             match cx.read(query) {
                 Poll::Pending => waiting.push(query),
                 Poll::Ready(Err(error)) => return Err(error),
-                Poll::Ready(Ok(product))
-                    if product.address == query.address
-                        && expected.is_none_or(|record| record == product.record) =>
-                {
+                Poll::Ready(Ok(product)) => {
+                    let selected = product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| fail(e.to_string()))?
+                        .reference();
+                    if product.address != query.address
+                        || expected.is_some_and(|record| record != selected)
+                    {
+                        return Err(fail(
+                            "ownership dependency changed within immutable snapshot".into(),
+                        ));
+                    }
                     outputs.push(product)
-                }
-                _ => {
-                    return Err(fail(
-                        "ownership dependency changed within immutable snapshot".into(),
-                    ));
                 }
             }
         }
@@ -805,12 +848,21 @@ impl Task {
             let bytes = serde_json::to_vec(
                 &outputs
                     .iter()
-                    .map(|p| (p.address.0, p.action.0, p.record))
-                    .collect::<Vec<_>>(),
+                    .map(|p| {
+                        Ok((
+                            p.address.0,
+                            p.action.0,
+                            p.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                .map_err(|e| e.to_string())?
+                                .reference(),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+                    .map_err(fail)?,
             )
             .map_err(|e| fail(e.to_string()))?;
             owner
-                .publish(self.query, ROOT, &bytes, &owner.completed)
+                .publish(self.query, ROOT, bytes, &owner.completed)
                 .map(Ok)
                 .map_err(fail)
         } else {
@@ -840,7 +892,7 @@ impl Task {
             };
             let bytes = hirsel_codec::to_text(&(payload, observed.source_action.0));
             owner
-                .publish(self.query, UNIT, bytes.as_bytes(), &request.completed)
+                .publish(self.query, UNIT, bytes.into_bytes(), &request.completed)
                 .map(Ok)
                 .map_err(fail)
         }

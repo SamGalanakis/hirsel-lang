@@ -8,6 +8,20 @@ const SELECTED: Domain = Domain {
     schema: 1,
 };
 
+fn archive_reference(product: &ProductRef) -> Reference {
+    product
+        .archive(crate::runtime::ArchiveAdmission::Retained)
+        .unwrap()
+        .reference()
+}
+
+fn archive_pool() -> crate::runtime::MemoryReservationPool {
+    let budget = crate::runtime::ProcessBudget::new(64 << 20);
+    crate::runtime::MemoryReservationPool::new(budget.reserve(64 << 20).unwrap())
+        .ok()
+        .unwrap()
+}
+
 fn parameter(id: DefId) -> (DefId, GenericParameterRef) {
     (
         id,
@@ -64,6 +78,7 @@ fn summary(owner: DefId, edges: Vec<crate::GrowthEdge>) -> Arc<CheckedSummary> {
 fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs() {
     let (engine, source, ids, sites) = context();
     let store = crate::store::MemStore::default();
+    let pool = archive_pool();
     let records = NativeRecords::new(
         engine.types().clone(),
         Arc::new(crate::store::MemStore::default()),
@@ -72,6 +87,7 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
         records: &records,
         source: &source,
         store: &store,
+        archive_pool: &pool,
         namespace: Address(ContentHash::of_bytes(b"source components")),
         scratch: 8 << 20,
     };
@@ -117,13 +133,17 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
     };
     let first = producer.settle(&make(false, false)).unwrap();
     let changed = producer.settle(&make(true, false)).unwrap();
-    assert_eq!(first.membership.record, changed.membership.record);
+    assert_eq!(
+        archive_reference(&first.membership),
+        archive_reference(&changed.membership)
+    );
     assert_ne!(
         first.components[0].product.action,
         changed.components[0].product.action
     );
     assert_eq!(
-        first.components[0].product.record, changed.components[0].product.record,
+        archive_reference(&first.components[0].product),
+        archive_reference(&changed.components[0].product),
         "the settled verdict is the exact consumer cutoff even when its action changed"
     );
     assert_eq!(first.components[1].product, changed.components[1].product);
@@ -136,7 +156,7 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
         Arc::new(reads.clone()),
         crate::memo::Durability::Low,
         Some(crate::summary::SettledSummary::Test(
-            first.components[0].product.record.output.0,
+            archive_reference(&first.components[0].product).output.0,
         )),
     );
     let mut edits = crate::memo::ChangeSet::default();
@@ -149,7 +169,7 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
         Arc::new(reads.clone()),
         crate::memo::Durability::Low,
         Some(crate::summary::SettledSummary::Test(
-            changed.components[0].product.record.output.0,
+            archive_reference(&changed.components[0].product).output.0,
         )),
     );
     assert_eq!(
@@ -158,8 +178,8 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
     );
     let rejected = producer.settle(&make(true, true)).unwrap();
     assert_ne!(
-        changed.components[0].product.record,
-        rejected.components[0].product.record
+        archive_reference(&changed.components[0].product),
+        archive_reference(&rejected.components[0].product)
     );
     assert_eq!(&*rejected.components[0].growing, &[sites[0]]);
     let mut reordered = make(true, true);
@@ -175,6 +195,7 @@ fn equal_settled_component_stops_changed_member_and_preserves_unrelated_outputs(
 fn changed_observations_are_republished_before_equal_fact_cutoff() {
     let (engine, source, ids, _) = context();
     let store = crate::store::MemStore::default();
+    let pool = archive_pool();
     let records = NativeRecords::new(
         engine.types().clone(),
         Arc::new(crate::store::MemStore::default()),
@@ -183,6 +204,7 @@ fn changed_observations_are_republished_before_equal_fact_cutoff() {
         records: &records,
         source: &source,
         store: &store,
+        archive_pool: &pool,
         namespace: Address(ContentHash::of_bytes(b"observations")),
         scratch: 8 << 20,
     };
@@ -226,7 +248,7 @@ fn changed_observations_are_republished_before_equal_fact_cutoff() {
         let a = &a.components[0].product;
         let b = &b.components[0].product;
         assert_ne!(a.action, b.action);
-        assert_eq!(a.record, b.record);
+        assert_eq!(archive_reference(a), archive_reference(b));
         assert_eq!(store.lookup_product(b.address).unwrap().action, b.action);
     }
 }
@@ -235,6 +257,7 @@ fn changed_observations_are_republished_before_equal_fact_cutoff() {
 fn independently_selected_roots_sharing_a_lexical_owner_all_contribute() {
     let (engine, source, ids, sites) = context();
     let store = crate::store::MemStore::default();
+    let pool = archive_pool();
     let records = NativeRecords::new(
         engine.types().clone(),
         Arc::new(crate::store::MemStore::default()),
@@ -243,6 +266,7 @@ fn independently_selected_roots_sharing_a_lexical_owner_all_contribute() {
         records: &records,
         source: &source,
         store: &store,
+        archive_pool: &pool,
         namespace: Address(ContentHash::of_bytes(b"shared lexical owner")),
         scratch: 8 << 20,
     };
@@ -284,6 +308,7 @@ fn reordered_sources_preserve_canonical_settled_component_bytes() {
     for text in ["fn a(){}\nfn b(){}\n", "fn b(){}\nfn a(){}\n"] {
         let (engine, source, ids, sites) = context_with(text);
         let store = crate::store::MemStore::default();
+        let pool = archive_pool();
         let records = NativeRecords::new(
             engine.types().clone(),
             Arc::new(crate::store::MemStore::default()),
@@ -292,6 +317,7 @@ fn reordered_sources_preserve_canonical_settled_component_bytes() {
             records: &records,
             source: &source,
             store: &store,
+            archive_pool: &pool,
             namespace: Address(ContentHash::of_bytes(b"canonical source order")),
             scratch: 8 << 20,
         };
@@ -322,9 +348,9 @@ fn reordered_sources_preserve_canonical_settled_component_bytes() {
             .collect();
         assert_eq!(owners, ["a", "b"]);
         if let Some(previous) = previous {
-            assert_eq!(component.product.record, previous);
+            assert_eq!(archive_reference(&component.product), previous);
         }
-        previous = Some(component.product.record);
+        previous = Some(archive_reference(&component.product));
     }
 }
 
@@ -332,6 +358,7 @@ fn reordered_sources_preserve_canonical_settled_component_bytes() {
 fn stored_component_bytes_cannot_silence_an_unexecuted_growing_cycle() {
     let (engine, source, ids, sites) = context();
     let store = crate::store::MemStore::default();
+    let pool = archive_pool();
     let records = NativeRecords::new(
         engine.types().clone(),
         Arc::new(crate::store::MemStore::default()),
@@ -340,6 +367,7 @@ fn stored_component_bytes_cannot_silence_an_unexecuted_growing_cycle() {
         records: &records,
         source: &source,
         store: &store,
+        archive_pool: &pool,
         namespace: Address(ContentHash::of_bytes(b"untrusted growth bytes")),
         scratch: 8 << 20,
     };
@@ -369,7 +397,7 @@ fn stored_component_bytes_cannot_silence_an_unexecuted_growing_cycle() {
     let actual = producer.settle(&[fact]).unwrap();
     assert_eq!(&*actual.components[0].growing, &[sites[0]]);
     assert_eq!(
-        actual.components[0].product.record,
-        component.product.record
+        archive_reference(&actual.components[0].product),
+        archive_reference(&component.product)
     );
 }

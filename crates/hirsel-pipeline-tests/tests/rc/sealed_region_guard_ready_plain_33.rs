@@ -18,7 +18,11 @@ use std::sync::Arc;
 
 #[test]
 fn original_scalar_selected_guard_reaches_every_production_ready_unit() {
-    let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+    let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+    let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::RequestStore::new(
+        Arc::new(MemStore::default()),
+        budget.reserve(64 << 20).unwrap(),
+    ));
     let mut queries = ReadyQueries::new(store.clone());
     let context = store
         .put_content(EMISSION_CONTEXT_DOMAIN, b"original guarded Ready context")
@@ -47,11 +51,12 @@ fn original_scalar_selected_guard_reaches_every_production_ready_unit() {
                     .map(|equations| {
                         let bytes = serde_json::to_vec(&equations).unwrap();
                         let record = store.put_content(domain, &bytes).unwrap();
-                        let product = ProductRef {
-                            address: Address(ContentHash::of_bytes(&bytes)),
-                            action: Action(ContentHash([1; 32])),
+                        let product = crate::imported_fixture(
+                            store.as_ref(),
+                            Address(ContentHash::of_bytes(&bytes)),
+                            Action(ContentHash([1; 32])),
                             record,
-                        };
+                        );
                         store.associate_product(product.address, product.action, record);
                         Input {
                             query: hirsel_engine::runtime::QueryId {
@@ -139,7 +144,11 @@ fn original_scalar_selected_guard_reaches_every_production_ready_unit() {
 
 #[test]
 fn original_scalar_ready_refuses_foreign_or_malformed_guard_inputs_before_lowering() {
-    let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+    let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+    let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::RequestStore::new(
+        Arc::new(MemStore::default()),
+        budget.reserve(64 << 20).unwrap(),
+    ));
     let mut queries = ReadyQueries::new(store.clone());
     let context = store
         .put_content(EMISSION_CONTEXT_DOMAIN, b"guard refusal context")

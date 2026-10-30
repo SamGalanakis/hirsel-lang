@@ -502,7 +502,10 @@ impl NativeBootstrap {
         let bytes = serde_json::to_vec(&(
             compilation.address.0,
             compilation.action.0,
-            compilation.record,
+            compilation
+                .archive(ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
         ))
         .map_err(|e| e.to_string())?;
         let record = self
@@ -512,19 +515,21 @@ impl NativeBootstrap {
         if OUTPUT.reference(&bytes) != Some(record) {
             return Err("native bootstrap content identity differs".into());
         }
-        let product = ProductRef {
-            address: self.query.address,
-            action: Action(ContentHash::of_parts(
+        let product = ProductRef::import_archive(
+            self.query.address,
+            Action(ContentHash::of_parts(
                 "hirsel.host.native-bootstrap-action.v1",
                 [
                     self.query.address.0.0.as_slice(),
                     record.output.0.0.as_slice(),
                 ],
             )),
-            record,
-        };
+            self.store
+                .open_product_archive(record)
+                .ok_or("native publication archive exceeds admission")?,
+        );
         self.store
-            .associate_product(product.address, product.action, product.record);
+            .associate_product(product.address, product.action, record);
         self.completed
             .set(Completed {
                 product: product.clone(),

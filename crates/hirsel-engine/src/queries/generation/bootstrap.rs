@@ -210,7 +210,7 @@ impl QueryEngine {
                             .or_else(|| lower.failure(reference))
                             .or_else(|| {
                                 front
-                                    .outcome(reference)
+                                    .outcome(Err(reference))
                                     .and_then(|output| output.outcome.result.err())
                             }),
                         sources: self.sources.clone(),

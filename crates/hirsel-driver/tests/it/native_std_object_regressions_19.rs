@@ -29,7 +29,11 @@ fn http_reject_lowering_has_valid_projections() {
 #[test]
 fn ordinary_store_delete_has_one_consistent_entry_abi() {
     with_compiler_stack(|| {
-        let store: Arc<dyn ResultStore> = Arc::new(store::MemStore::default());
+        let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+        let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+            Arc::new(store::MemStore::default()),
+            budget.reserve(64 << 20).unwrap(),
+        ));
         let mut config = COMPILER.configuration();
         config.store = store.clone();
         let mut package = COMPILER

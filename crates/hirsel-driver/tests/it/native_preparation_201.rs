@@ -197,14 +197,9 @@ fn preparation_demands_one_source_and_keeps_closure_and_layout_views_after_regis
             assert!(!facts.anchors().is_empty());
             assert!(facts.definition().lower.is_some());
             let idle = preparation.query(&f.path("idle")).unwrap();
-            assert!(
-                preparation
-                    .outcome(ProductRef {
-                        address: idle.address,
-                        ..output
-                    })
-                    .is_none()
-            );
+            let mut crossed = output.clone();
+            crossed.address = idle.address;
+            assert!(preparation.outcome(crossed).is_none());
             // Nominal layout facts are separately demanded and have no entry.
             let token = preparation.query(&f.path("Token")).unwrap();
             let request = f.runtime.request(&[token]);
@@ -306,7 +301,13 @@ fn preparation_enforces_exact_view_admission_and_refuses_crossed_or_damaged_prod
         assert!(preparation.outcome(crossed).is_none());
         assert!(preparation.outcome(facts.source_product()).is_none());
         for damaged in [None, Some(Bytes::from(b"corrupt preparation".as_slice()))] {
-            *f.store.damaged.lock().unwrap() = Some((output.record, damaged));
+            *f.store.damaged.lock().unwrap() = Some((
+                output
+                    .archive(ArchiveAdmission::Retained)
+                    .unwrap()
+                    .reference(),
+                damaged,
+            ));
             assert!(preparation.outcome(output.clone()).is_none());
         }
         *f.store.damaged.lock().unwrap() = None;
@@ -357,7 +358,16 @@ fn preparation_binds_body_signature_and_private_layout_edits_without_verify_off_
         }
         for changed in &observations[1..] {
             assert_ne!(observations[0].action, changed.action);
-            assert_ne!(observations[0].record, changed.record);
+            assert_ne!(
+                observations[0]
+                    .archive(ArchiveAdmission::Retained)
+                    .unwrap()
+                    .reference(),
+                changed
+                    .archive(ArchiveAdmission::Retained)
+                    .unwrap()
+                    .reference()
+            );
         }
         let mut layouts = Vec::new();
         for text in [
@@ -371,6 +381,15 @@ fn preparation_binds_body_signature_and_private_layout_edits_without_verify_off_
             layouts.push(f.complete(&preparation, "Token"));
         }
         assert_ne!(layouts[0].action, layouts[1].action);
-        assert_ne!(layouts[0].record, layouts[1].record);
+        assert_ne!(
+            layouts[0]
+                .archive(ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+            layouts[1]
+                .archive(ArchiveAdmission::Retained)
+                .unwrap()
+                .reference()
+        );
     });
 }

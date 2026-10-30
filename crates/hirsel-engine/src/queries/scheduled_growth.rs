@@ -8,7 +8,11 @@ use std::{sync::Mutex, task::Poll};
 pub const FRONT_GROWTH_KIND: u32 = 0x4600_0008;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0009,
-    schema: 2,
+    schema: 3,
+};
+const OBSERVATIONS: Domain = Domain {
+    kind: 0x4600_0023,
+    schema: 1,
 };
 const FAILURE: Domain = Domain {
     kind: 0x4600_000c,
@@ -18,6 +22,7 @@ struct Data {
     facets: Arc<SourceGrowthFacets>,
     diagnostics: Arc<Vec<Diagnostic>>,
     reads: Arc<Reads>,
+    _reservation: Option<MemoryReservation>,
 }
 pub struct FrontGrowthQueries {
     query: QueryId,
@@ -34,6 +39,7 @@ pub struct FrontGrowthQueries {
     weight: MemoryWeight,
     errors: RuntimeErrors,
     output_budget: u64,
+    archive_pool: MemoryReservationPool,
     _allowance: MemoryReservation,
 }
 #[derive(Clone)]
@@ -64,6 +70,7 @@ impl FrontGrowthQueries {
             records: &self.records,
             source: &self.items,
             store: &*self.store,
+            archive_pool: &self.archive_pool,
             namespace: self.query.address,
             scratch: self.weight.scratch,
         }
@@ -170,8 +177,7 @@ impl Task {
             }
         }
         while let Some(Some(selected)) = self.selected.get(self.cursor).cloned() {
-            let reference = selected.clone().map(|p| p.record).unwrap_or_else(|r| r);
-            let Some(checked) = self.queries.front.checked(reference) else {
+            let Some(checked) = self.queries.front.checked(selected.clone()) else {
                 return Poll::Ready(Err(selected.err().unwrap_or(self.queries.errors.protocol)));
             };
             for call in &checked.summary.summary.calls {
@@ -189,12 +195,13 @@ impl Task {
             );
             self.reads.merge(&checked.reads);
             let observed = selected
+                .as_ref()
                 .map(|product| product.action.0)
-                .unwrap_or(reference.output.0);
+                .unwrap_or_else(|reference| reference.output.0);
             let Some(fact) = self.queries.producer().fact_observed(
                 self.queries.roots[self.cursor].address,
                 checked.summary,
-                reference,
+                selected.into(),
                 observed,
             ) else {
                 return Poll::Ready(Err(self.queries.errors.resource));
@@ -211,9 +218,9 @@ impl Task {
         if self.cursor < self.selected.len() {
             return Poll::Pending;
         }
-        Poll::Ready(self.complete())
+        Poll::Ready(self.complete(cx))
     }
-    fn complete(&mut self) -> Result<ProductRef, Reference> {
+    fn complete(&mut self, cx: &mut dyn QueryContext) -> Result<ProductRef, Reference> {
         let queries = &self.queries;
         let mut table_reads = ReadsBuilder::new();
         let mut provider =
@@ -249,11 +256,16 @@ impl Task {
             }
         };
         let facts = std::mem::take(&mut self.facts);
+        let fact_reservation = queries
+            .archive_pool
+            .take(self.fact_bytes)
+            .ok_or(queries.errors.resource)?;
         let facets = queries
             .producer()
             .settle(&facts)
             .ok_or(queries.errors.resource)?;
         drop(facts);
+        drop(fact_reservation);
         let diagnostics = crate::select_diagnostics(
             table_diagnostics
                 .into_iter()
@@ -276,25 +288,48 @@ impl Task {
         let outputs: Vec<_> = facets
             .components
             .iter()
-            .map(|component| component.product.record)
-            .collect();
+            .map(|component| {
+                component
+                    .product
+                    .archive(ArchiveAdmission::Retained)
+                    .map(|archive| archive.reference())
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|_| queries.errors.resource)?;
+        let membership = facets
+            .membership
+            .archive(ArchiveAdmission::Retained)
+            .map_err(|_| queries.errors.resource)?
+            .reference();
+        // Like Lower's descriptor/body records, retain one small descriptor
+        // and publish its complete observation rows as referenced content.
+        // The live read view independently retains its source admission.
+        let observed = publish_observations(
+            &queries.records,
+            &queries.items,
+            &*queries.store,
+            &reads,
+            queries.weight.scratch,
+        )
+        .ok_or(queries.errors.resource)?;
         let bytes = queries
             .records
             .encode(
                 &*queries.items,
-                &(facets.membership.record, &outputs, &diagnostics, &reads),
+                &(membership, &outputs, &diagnostics, observed),
             )
             .ok_or(queries.errors.resource)?;
         if bytes.len() as u64 > queries.weight.scratch {
             return Err(queries.errors.resource);
         }
-        let data = Arc::new(Data {
+        let mut data = Arc::new(Data {
             facets: Arc::new(facets),
             diagnostics: Arc::new(diagnostics),
             reads: queries
                 .front
-                .retained_reads(&Arc::new(reads))
+                .retained_reads(cx, &Arc::new(reads))
                 .ok_or(queries.errors.resource)?,
+            _reservation: None,
         });
         // Encoded bytes are temporary scratch and belong to the result store
         // after publication. Bound only the actual retained allocation graph.
@@ -306,6 +341,7 @@ impl Task {
                  facets,
                  diagnostics,
                  reads,
+                 _reservation: _,
              }| {
                 w.arc(facets, |w, facets| {
                     w.vec(&facets.components, |w, component| {
@@ -322,6 +358,14 @@ impl Task {
         if retained.bytes > queries.output_budget {
             return Err(queries.errors.resource);
         }
+        Arc::get_mut(&mut data)
+            .ok_or(queries.errors.protocol)?
+            ._reservation = Some(
+            queries
+                .archive_pool
+                .take(retained.bytes)
+                .ok_or(queries.errors.resource)?,
+        );
         let record = queries
             .store
             .put_content(OUTPUT, &bytes)
@@ -332,16 +376,18 @@ impl Task {
             "hirsel.front.source-growth.action.v2",
             [queries.query.address.0.0.as_slice(), bytes.as_slice()],
         ));
-        let product = ProductRef {
-            address: queries.query.address,
+        let product = ProductRef::import_archive(
+            queries.query.address,
             action,
-            record,
-        };
+            ProductArchive::from_encoded_in(record, bytes, &queries.archive_pool)
+                .ok()
+                .ok_or(queries.errors.resource)?,
+        );
         *queries.completed.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((product.clone(), data));
         queries
             .store
-            .associate_product(product.address, product.action, product.record);
+            .associate_product(product.address, product.action, record);
         Ok(product)
     }
 }
@@ -370,7 +416,7 @@ impl QueryEngine {
         root: &DefPath,
         front: Arc<FrontBodyQueries>,
         weight: MemoryWeight,
-        allowance: MemoryReservation,
+        mut allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontGrowthQueries>, QueryError> {
         let refusal = || {
@@ -409,6 +455,8 @@ impl QueryEngine {
             .bytes()
             .checked_sub(retained.bytes())
             .ok_or_else(refusal)?;
+        let output = allowance.split(output_budget).ok_or_else(refusal)?;
+        let archive_pool = MemoryReservationPool::new(output).map_err(|_| refusal())?;
         let query = QueryId {
             kind: FRONT_GROWTH_KIND,
             address: hirsel_artifact_store::Address(ContentHash::of_parts(
@@ -441,7 +489,63 @@ impl QueryEngine {
             weight,
             errors,
             output_budget,
+            archive_pool,
             _allowance: allowance,
         }))
+    }
+}
+
+pub(super) fn publish_observations(
+    records: &crate::NativeRecords,
+    source: &crate::NativeRecordContext,
+    store: &dyn ResultStore,
+    reads: &Reads,
+    scratch: u64,
+) -> Option<Reference> {
+    let bytes = records.encode(source, reads)?;
+    (bytes.len() as u64 <= scratch)
+        .then(|| store.put_content(OBSERVATIONS, &bytes))
+        .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observation_record_preserves_every_row_and_refuses_short_working_space() {
+        let engine = QueryEngine::new(crate::default_environment(), Default::default());
+        let source = crate::NativeRecordContext::capture(&engine);
+        let store = Arc::new(crate::store::MemStore::default());
+        let records = crate::NativeRecords::new(engine.types().clone(), store.clone());
+        let reads = Reads::from_vec(
+            (0u32..1024)
+                .map(|i| {
+                    (
+                        ReadKey::ExecutedBody(DefId::intern(&DefPath::core(&format!(
+                            "observed_{i}"
+                        )))),
+                        ContentHash::of_bytes(&i.to_le_bytes()),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+        let bytes = records.encode(&source, &reads).unwrap();
+        let reference = OBSERVATIONS.reference(&bytes).unwrap();
+        assert!(
+            publish_observations(&records, &source, &*store, &reads, bytes.len() as u64 - 1)
+                .is_none()
+        );
+        assert!(store.get_content(reference).is_none());
+        assert_eq!(
+            publish_observations(&records, &source, &*store, &reads, bytes.len() as u64),
+            Some(reference)
+        );
+        let restored: Reads = records
+            .decode(&source, &store.get_content(reference).unwrap())
+            .unwrap();
+        assert_eq!(restored, reads);
+        assert_eq!(restored.len(), 1024);
     }
 }

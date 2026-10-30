@@ -519,11 +519,12 @@ mod tests {
             }
             .reference(b"checked fixture")
             .unwrap();
-            let product = ProductRef {
-                address: Address(ContentHash::of_bytes(b"fixture root")),
-                action: Action(ContentHash::of_bytes(b"fixture action")),
-                record: reference,
-            };
+            let product = crate::fixture_product_bytes(
+                Address(ContentHash::of_bytes(b"fixture root")),
+                Action(ContentHash::of_bytes(b"fixture action")),
+                reference.domain,
+                b"checked fixture",
+            );
             let errors = RuntimeErrors {
                 resource: reference,
                 cycle: reference,

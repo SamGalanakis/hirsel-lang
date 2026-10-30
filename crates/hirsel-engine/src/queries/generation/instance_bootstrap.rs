@@ -171,6 +171,10 @@ fn finish(
         .settled
         .checked_add(round.settled)
         .ok_or_else(|| refused("runtime statistics overflow"))?;
+    stats.body_evictions = stats
+        .body_evictions
+        .checked_add(round.body_evictions)
+        .ok_or_else(|| refused("runtime statistics overflow"))?;
     stats.peak_bytes = stats.peak_bytes.max(round.peak_bytes);
     stats.workers = stats.workers.max(round.workers);
     Ok(())
@@ -356,7 +360,7 @@ impl QueryEngine {
                                     .or_else(|| lower.failure(reference))
                                     .or_else(|| {
                                         front
-                                            .outcome(reference)
+                                            .outcome(Err(reference))
                                             .and_then(|o| o.outcome.result.err())
                                     }),
                                 sources: self.sources.clone(),
@@ -439,7 +443,7 @@ impl QueryEngine {
                 executor.wait(request).map_err(|reference| Failure::Front {
                     reference,
                     error: front
-                        .outcome(reference)
+                        .outcome(Err(reference))
                         .and_then(|o| o.outcome.result.err()),
                     sources: self.sources.clone(),
                     owner: front.clone(),

@@ -271,8 +271,14 @@ impl OwnershipCompilation {
             .get()
             .ok_or("ownership dispatch is unavailable")?;
         dispatch.ownership.outputs(root.clone())?;
-        let bytes = serde_json::to_vec(&(root.address.0, root.action.0, root.record))
-            .map_err(|e| e.to_string())?;
+        let bytes = serde_json::to_vec(&(
+            root.address.0,
+            root.action.0,
+            root.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
+        ))
+        .map_err(|e| e.to_string())?;
         let domain = Domain {
             kind: OWNERSHIP_COMPILATION_KIND,
             schema: 1,
@@ -291,11 +297,13 @@ impl OwnershipCompilation {
                 record.output.0.0.as_slice(),
             ],
         ));
-        let product = ProductRef {
-            address: self.query.address,
+        let product = ProductRef::import_archive(
+            self.query.address,
             action,
-            record,
-        };
+            store
+                .admit_product_archive(record, bytes.into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        );
         store.associate_product(product.address, action, record);
         self.completed
             .set((product.clone(), root))

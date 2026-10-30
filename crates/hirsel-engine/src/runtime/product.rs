@@ -14,7 +14,7 @@ use hirsel_tir::DefinitionRef;
 use hirsel_types::{QueryOutput, TypeInterner};
 use std::{
     io,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 
 pub const LIVE_SUMMARY: Domain = Domain {
@@ -35,20 +35,88 @@ pub enum ArchiveAdmission<'a> {
 }
 
 #[derive(Clone)]
-pub(crate) struct ProductSource {
+pub(crate) struct SharedProductSource(Arc<ProductContext>);
+struct ProductContext {
     context: NativeRecordContext,
     records: NativeRecords,
+    _reservation: MemoryReservation,
+}
+#[derive(Clone)]
+pub(crate) enum ProductSourceInput {
+    Owned(NativeRecordContext, NativeRecords, Arc<dyn Send + Sync>),
+    Shared(SharedProductSource, Arc<dyn Send + Sync>),
+}
+pub(crate) struct ProductSource {
+    shared: SharedProductSource,
     _backing: Arc<dyn Send + Sync>,
 }
 impl ProductSource {
-    pub(crate) fn new(
+    pub(crate) fn prepare(
         context: NativeRecordContext,
         records: NativeRecords,
         backing: Arc<dyn Send + Sync>,
-    ) -> Option<Self> {
-        records.uses_types(context.record_types()).then_some(Self {
+    ) -> Option<ProductSourceInput> {
+        records
+            .uses_types(context.record_types())
+            .then_some(ProductSourceInput::Owned(context, records, backing))
+    }
+    pub(crate) fn metadata_bytes() -> u64 {
+        retained_arc_bytes(&std::mem::MaybeUninit::<ProductContext>::uninit())
+    }
+    pub(crate) fn admit_shared(
+        context: NativeRecordContext,
+        records: NativeRecords,
+        allowance: &mut MemoryReservation,
+    ) -> Option<SharedProductSource> {
+        if !records.uses_types(context.record_types()) {
+            return None;
+        }
+        let reservation = allowance.split(Self::metadata_bytes())?;
+        Some(SharedProductSource(Arc::new(ProductContext {
             context,
             records,
+            _reservation: reservation,
+        })))
+    }
+    pub(crate) fn backed(
+        shared: SharedProductSource,
+        backing: Arc<dyn Send + Sync>,
+    ) -> ProductSourceInput {
+        ProductSourceInput::Shared(shared, backing)
+    }
+    fn context(&self) -> &NativeRecordContext {
+        &self.shared.0.context
+    }
+    fn records(&self) -> &NativeRecords {
+        &self.shared.0.records
+    }
+    fn retained_bytes(&self) -> u64 {
+        self.shared.0._reservation.bytes()
+    }
+}
+impl ProductSourceInput {
+    fn metadata_bytes(&self) -> u64 {
+        match self {
+            Self::Owned(..) => ProductSource::metadata_bytes(),
+            Self::Shared(..) => 0,
+        }
+    }
+    fn types(&self) -> &Arc<TypeInterner> {
+        match self {
+            Self::Owned(context, ..) => context.record_types(),
+            Self::Shared(shared, _) => shared.0.context.record_types(),
+        }
+    }
+    fn admit(self, allowance: &mut MemoryReservation) -> Option<ProductSource> {
+        let (shared, backing) = match self {
+            Self::Owned(context, records, backing) => (
+                ProductSource::admit_shared(context, records, allowance)?,
+                backing,
+            ),
+            Self::Shared(shared, backing) => (shared, backing),
+        };
+        Some(ProductSource {
+            shared,
             _backing: backing,
         })
     }
@@ -101,7 +169,8 @@ impl<T> Owner<T> {
         // The owning codec declares its complete temporary working bound and
         // runs only under that partition. No encoding occurs during admission.
         let result = publish(&self.value, &self.source, &grant).and_then(|bytes| {
-            let retained = archive_bytes(bytes.capacity())
+            let bytes = bytes.into_boxed_slice();
+            let retained = archive_bytes(bytes.len())
                 .ok_or_else(|| io::Error::other("live product archive layout overflow"))?;
             if retained > grant.bytes() {
                 return Err(io::Error::from(io::ErrorKind::OutOfMemory));
@@ -161,11 +230,110 @@ impl ImportedAdmission {
     }
 }
 struct ArchiveOwner {
-    bytes: Vec<u8>,
+    bytes: Box<[u8]>,
     reference: Reference,
     _reservation: MemoryReservation,
 }
+struct RetainedArchiveLease {
+    _allowance: Arc<MemoryReservation>,
+    remaining: Arc<Mutex<u64>>,
+    bytes: u64,
+}
+impl Drop for RetainedArchiveLease {
+    fn drop(&mut self) {
+        let mut remaining = self.remaining.lock().unwrap_or_else(|e| e.into_inner());
+        *remaining += self.bytes;
+    }
+}
 impl ProductArchive {
+    /// Retain a checked archive in an already admitted producer partition.
+    /// `remaining` is the same quota used for that partition's other retained
+    /// allocations. Only the independent grant survives the producer.
+    pub fn open_retained(
+        store: &dyn crate::store::ResultStore,
+        reference: Reference,
+        allowance: Arc<MemoryReservation>,
+        remaining: Arc<Mutex<u64>>,
+    ) -> io::Result<Self> {
+        let bytes = store
+            .get_content(reference)
+            .ok_or_else(|| io::Error::other("product archive is unavailable"))?;
+        Self::from_retained_bytes(reference, bytes, allowance, remaining)
+    }
+    /// Transfer freshly encoded bytes into the producer's existing partition.
+    /// This retains the complete concrete backing without a transport reread.
+    pub(crate) fn from_retained_bytes(
+        reference: Reference,
+        bytes: Bytes,
+        allowance: Arc<MemoryReservation>,
+        remaining: Arc<Mutex<u64>>,
+    ) -> io::Result<Self> {
+        let charge = Self::checked_import_charge(reference, &bytes)?
+            .checked_add(retained_arc_bytes(&std::mem::MaybeUninit::<
+                RetainedArchiveLease,
+            >::uninit()))
+            .ok_or_else(|| io::Error::other("product archive backing layout overflow"))?;
+        let mut available = remaining.lock().unwrap_or_else(|e| e.into_inner());
+        if *available > allowance.bytes() {
+            return Err(io::Error::other(
+                "product archive quota exceeds its partition",
+            ));
+        }
+        let next = available
+            .checked_sub(charge)
+            .ok_or_else(|| io::Error::other("product archive backing admission exhausted"))?;
+        *available = next;
+        drop(available);
+        let owner = Arc::new(RetainedArchiveLease {
+            _allowance: allowance,
+            remaining,
+            bytes: charge,
+        });
+        let archive = Self::from_admitted_content(reference, bytes, charge, owner);
+        Ok(archive)
+    }
+    /// Import from an existing reusable producer partition. Detached archives
+    /// return their charge only after their final reader drops them.
+    pub fn open_in(
+        store: &dyn crate::store::ResultStore,
+        reference: Reference,
+        allowance: &super::MemoryReservationPool,
+    ) -> io::Result<Self> {
+        let bytes = store
+            .get_content(reference)
+            .ok_or_else(|| io::Error::other("product archive is unavailable"))?;
+        let charge = Self::checked_import_charge(reference, &bytes)?;
+        let reservation = allowance
+            .take(charge)
+            .ok_or_else(|| io::Error::other("product archive backing admission exhausted"))?;
+        Ok(Self(ArchiveBacking::Imported(Arc::new(ImportedArchive {
+            reference,
+            bytes,
+            admission: ImportedAdmission::Owned(reservation),
+        }))))
+    }
+    pub(crate) fn from_encoded_in(
+        reference: Reference,
+        bytes: Vec<u8>,
+        allowance: &super::MemoryReservationPool,
+    ) -> io::Result<Self> {
+        if reference.domain.reference(&bytes) != Some(reference) {
+            return Err(io::Error::other(
+                "product archive content differs from its reference",
+            ));
+        }
+        let bytes = bytes.into_boxed_slice();
+        let charge = archive_bytes(bytes.len())
+            .ok_or_else(|| io::Error::other("product archive backing layout overflow"))?;
+        let reservation = allowance
+            .take(charge)
+            .ok_or_else(|| io::Error::other("product archive backing admission exhausted"))?;
+        Ok(Self(ArchiveBacking::Materialized(Arc::new(ArchiveOwner {
+            reference,
+            bytes,
+            _reservation: reservation,
+        }))))
+    }
     pub fn bytes(&self) -> &[u8] {
         match &self.0 {
             ArchiveBacking::Materialized(owner) => &owner.bytes,
@@ -259,14 +427,20 @@ impl SummaryFacet {
     pub fn equivalent(&self, other: &Self) -> bool {
         self.same_owner(other)
             || SummaryView::from(&*self.0.value).equivalent(
-                self.0.source.context.record_types(),
+                self.0.source.context().record_types(),
                 SummaryView::from(&*other.0.value),
-                other.0.source.context.record_types(),
+                other.0.source.context().record_types(),
             )
     }
 }
 impl LiveSummaryProduct {
+    pub(super) fn same_owner(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.current, &other.current)
+    }
     pub(crate) fn value_bytes(value: &PublishedSummary) -> Option<u64> {
+        Self::shared_value_bytes(value)?.checked_add(ProductSource::metadata_bytes())
+    }
+    pub(crate) fn shared_value_bytes(value: &PublishedSummary) -> Option<u64> {
         // Storage equations have a separate admitted owner. Ordinary Summary
         // publication does not silently accept an unknown backing layout.
         if value.storage.is_some() {
@@ -285,10 +459,12 @@ impl LiveSummaryProduct {
     pub(crate) fn new(
         identity: (Address, Action),
         value: Arc<PublishedSummary>,
-        source: ProductSource,
+        source: ProductSourceInput,
         allowance: &mut MemoryReservation,
     ) -> Option<Self> {
-        let reservation = allowance.split(Self::value_bytes(&value)?)?;
+        let required = Self::shared_value_bytes(&value)?.checked_add(source.metadata_bytes())?;
+        let mut reservation = allowance.split(required)?;
+        let source = source.admit(&mut reservation)?;
         let current = Arc::new(Owner {
             address: identity.0,
             action: identity.1,
@@ -306,6 +482,9 @@ impl LiveSummaryProduct {
     pub fn value(&self) -> &PublishedSummary {
         &self.current.value
     }
+    pub(crate) fn value_arc(&self) -> Arc<PublishedSummary> {
+        self.current.value.clone()
+    }
     pub fn reads(&self) -> &Reads {
         &self.current.value.reads
     }
@@ -319,14 +498,20 @@ impl LiveSummaryProduct {
         self.current.domain
     }
     pub fn types(&self) -> &Arc<TypeInterner> {
-        self.current.source.context.record_types()
+        self.current.source.context().record_types()
     }
     pub fn retained_bytes(&self) -> u64 {
         self.current._reservation.bytes()
+            + self.current.source.retained_bytes()
             + if Arc::ptr_eq(&self.current, &self.facet.0) {
                 0
             } else {
                 self.facet.0._reservation.bytes()
+                    + if Arc::ptr_eq(&self.current.source.shared.0, &self.facet.0.source.shared.0) {
+                        0
+                    } else {
+                        self.facet.0.source.retained_bytes()
+                    }
             }
     }
     pub fn facet(&self) -> &SummaryFacet {
@@ -367,8 +552,8 @@ impl LiveSummaryProduct {
                     .reads
                     .encoding_working_bytes()
                     .and_then(|working| {
-                        source.records.encode_with_admission(
-                            &source.context,
+                        source.records().encode_with_admission(
+                            source.context(),
                             &**value,
                             grant,
                             working,
@@ -387,7 +572,13 @@ struct LowerValue {
     output: crate::FrontLowerOutput,
 }
 impl LiveLowerProduct {
+    pub(super) fn same_owner(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     pub fn required_bytes(value: &crate::FrontLowerOutput) -> Option<u64> {
+        Self::shared_required_bytes(value)?.checked_add(ProductSource::metadata_bytes())
+    }
+    fn shared_required_bytes(value: &crate::FrontLowerOutput) -> Option<u64> {
         let mut weight = Weight::default();
         for (_, bytes) in value.reads.allocations() {
             weight.add(bytes);
@@ -428,10 +619,13 @@ impl LiveLowerProduct {
     pub(crate) fn new(
         identity: (Address, Action),
         output: crate::FrontLowerOutput,
-        source: ProductSource,
+        source: ProductSourceInput,
         allowance: &mut MemoryReservation,
     ) -> Option<Self> {
-        let reservation = allowance.split(Self::required_bytes(&output)?)?;
+        let required =
+            Self::shared_required_bytes(&output)?.checked_add(source.metadata_bytes())?;
+        let mut reservation = allowance.split(required)?;
+        let source = source.admit(&mut reservation)?;
         Some(Self(Arc::new(Owner {
             address: identity.0,
             action: identity.1,
@@ -466,10 +660,10 @@ impl LiveLowerProduct {
         self.0.domain
     }
     pub fn types(&self) -> &Arc<TypeInterner> {
-        self.0.source.context.record_types()
+        self.0.source.context().record_types()
     }
     pub fn retained_bytes(&self) -> u64 {
-        self.0._reservation.bytes()
+        self.0._reservation.bytes() + self.0.source.retained_bytes()
     }
     pub fn archive(
         &self,
@@ -491,8 +685,8 @@ impl LiveLowerProduct {
                 .reads
                 .encoding_working_bytes()
                 .and_then(|working| {
-                    source.records.encode_with_admission(
-                        &source.context,
+                    source.records().encode_with_admission(
+                        source.context(),
                         &(
                             &value.output.output,
                             &value.output.reads,
@@ -521,17 +715,29 @@ pub const LIVE_ANALYZED: Domain = Domain {
 /// backing. It carries no verifier acceptance for a subsequently lowered body.
 #[derive(Clone)]
 pub struct LiveAnalyzedProduct(Arc<Owner<AnalyzedValue>>);
+pub(crate) struct WeakAnalyzedProduct(Weak<Owner<AnalyzedValue>>);
 struct AnalyzedValue {
     output: Arc<QueryOutput<crate::AnalyzedBody>>,
-    reads: Arc<Reads>,
+    summary: LiveSummaryProduct,
     phase: Option<crate::QueryKind>,
     diagnostic_phases: Vec<(hirsel_diag::Diagnostic, String)>,
 }
 impl LiveAnalyzedProduct {
+    pub(super) fn cache_only(&self) -> bool {
+        Arc::strong_count(&self.0) == 1 && Arc::strong_count(&self.0.value.output) == 1
+    }
+    pub(crate) fn downgrade(&self) -> WeakAnalyzedProduct {
+        WeakAnalyzedProduct(Arc::downgrade(&self.0))
+    }
+    pub(super) fn same_owner(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     pub fn required_bytes(outcome: &crate::ModeResult) -> Option<u64> {
+        Self::shared_required_bytes(outcome)?.checked_add(ProductSource::metadata_bytes())
+    }
+    pub(crate) fn shared_required_bytes(outcome: &crate::ModeResult) -> Option<u64> {
         let output = outcome.result.as_ref().ok()?;
         let mut weight = Weight::default();
-        weight.reads(&outcome.reads);
         weight.vec(&outcome.diagnostic_phases, |w, (diagnostic, phase)| {
             w.diagnostic(diagnostic);
             w.add(phase.capacity());
@@ -543,10 +749,20 @@ impl LiveAnalyzedProduct {
     pub(crate) fn new(
         identity: (Address, Action),
         outcome: crate::ModeResult,
-        source: ProductSource,
+        summary: LiveSummaryProduct,
+        source: ProductSourceInput,
         allowance: &mut MemoryReservation,
     ) -> Option<Self> {
-        let reservation = allowance.split(Self::required_bytes(&outcome)?)?;
+        if summary.value().definition.path() != &outcome.definition
+            || summary.reads() != outcome.reads.as_ref()
+            || !Arc::ptr_eq(summary.types(), source.types())
+        {
+            return None;
+        }
+        let required =
+            Self::shared_required_bytes(&outcome)?.checked_add(source.metadata_bytes())?;
+        let mut reservation = allowance.split(required)?;
+        let source = source.admit(&mut reservation)?;
         let output = outcome.result.ok()?;
         Some(Self(Arc::new(Owner {
             address: identity.0,
@@ -554,7 +770,7 @@ impl LiveAnalyzedProduct {
             domain: LIVE_ANALYZED,
             value: AnalyzedValue {
                 output,
-                reads: outcome.reads,
+                summary,
                 phase: outcome.phase,
                 diagnostic_phases: outcome.diagnostic_phases,
             },
@@ -567,7 +783,7 @@ impl LiveAnalyzedProduct {
         &self.0.value.output
     }
     pub fn reads(&self) -> &Arc<Reads> {
-        &self.0.value.reads
+        &self.0.value.summary.current.value.reads
     }
     pub fn phase(&self) -> Option<crate::QueryKind> {
         self.0.value.phase
@@ -585,34 +801,45 @@ impl LiveAnalyzedProduct {
         self.0.domain
     }
     pub fn retained_bytes(&self) -> u64 {
-        self.0._reservation.bytes()
+        self.0._reservation.bytes() + self.0.source.retained_bytes()
     }
     pub fn types(&self) -> &Arc<TypeInterner> {
-        self.0.source.context.record_types()
+        self.0.source.context().record_types()
     }
     pub fn archive(
         &self,
         scratch: &mut MemoryReservation,
         required: u64,
     ) -> io::Result<ProductArchive> {
-        self.0.archive_with(
-            ArchiveAdmission::Materialize {
-                scratch,
-                working_bytes: required,
-            },
-            |value, source, grant| {
-                crate::queries::encode_live_analyzed(
-                    &source.records,
-                    &source.context,
-                    &value.output,
-                    &value.reads,
-                    value.phase,
-                    &value.diagnostic_phases,
-                    grant,
-                )
-                .ok_or_else(|| io::Error::from(io::ErrorKind::OutOfMemory))
-            },
-        )
+        self.archive_with(ArchiveAdmission::Materialize {
+            scratch,
+            working_bytes: required,
+        })
+    }
+    pub(super) fn archive_with(
+        &self,
+        admission: ArchiveAdmission<'_>,
+    ) -> io::Result<ProductArchive> {
+        self.0.archive_with(admission, |value, source, grant| {
+            crate::queries::encode_live_analyzed(
+                source.records(),
+                source.context(),
+                &value.output,
+                &value.summary.current.value.reads,
+                value.phase,
+                &value.diagnostic_phases,
+                grant,
+            )
+            .ok_or_else(|| io::Error::from(io::ErrorKind::OutOfMemory))
+        })
+    }
+}
+impl WeakAnalyzedProduct {
+    pub(crate) fn upgrade(&self) -> Option<LiveAnalyzedProduct> {
+        self.0.upgrade().map(LiveAnalyzedProduct)
+    }
+    pub(crate) fn matches(&self, product: &LiveAnalyzedProduct) -> bool {
+        self.0.ptr_eq(&Arc::downgrade(&product.0))
     }
 }
 
@@ -659,12 +886,12 @@ mod tests {
     fn product_source(
         context: NativeRecordContext,
         backing: Arc<dyn Send + Sync>,
-    ) -> ProductSource {
+    ) -> ProductSourceInput {
         let records = NativeRecords::new(
             context.record_types().clone(),
             Arc::new(crate::store::MemStore::default()),
         );
-        ProductSource::new(context, records, backing).unwrap()
+        ProductSource::prepare(context, records, backing).unwrap()
     }
     #[test]
     fn live_summary_exact_admission_keeps_the_producer_until_eviction_and_last_view_drop() {
@@ -822,7 +1049,7 @@ mod tests {
             foreign.record_types().clone(),
             Arc::new(crate::store::MemStore::default()),
         );
-        assert!(ProductSource::new(source.clone(), foreign, backing.clone()).is_none());
+        assert!(ProductSource::prepare(source.clone(), foreign, backing.clone()).is_none());
         assert_eq!(
             allowance.bytes(),
             LiveSummaryProduct::value_bytes(&value).unwrap()
@@ -830,7 +1057,7 @@ mod tests {
         let product = LiveSummaryProduct::new(
             descriptor(),
             value.clone(),
-            ProductSource::new(source.clone(), records.clone(), backing).unwrap(),
+            ProductSource::prepare(source.clone(), records.clone(), backing).unwrap(),
             &mut allowance,
         )
         .unwrap();
@@ -878,6 +1105,77 @@ mod tests {
 
     #[test]
     fn summary_archive_pins_its_codec_and_refuses_foreign_source_binding() {
+        let (value, source) = fixture();
+        let (_, foreign) = fixture();
+        let budget = ProcessBudget::new(2 << 20);
+        let backing = Arc::new(budget.reserve(17).unwrap());
+        let mut allowance = budget
+            .reserve(LiveSummaryProduct::value_bytes(&value).unwrap())
+            .unwrap();
+        let records = NativeRecords::new(
+            source.record_types().clone(),
+            Arc::new(crate::store::MemStore::default()),
+        );
+        let foreign = NativeRecords::new(
+            foreign.record_types().clone(),
+            Arc::new(crate::store::MemStore::default()),
+        );
+        assert!(ProductSource::prepare(source.clone(), foreign, backing.clone()).is_none());
+        assert_eq!(
+            allowance.bytes(),
+            LiveSummaryProduct::value_bytes(&value).unwrap()
+        );
+        let product = LiveSummaryProduct::new(
+            descriptor(),
+            value.clone(),
+            ProductSource::prepare(source.clone(), records.clone(), backing).unwrap(),
+            &mut allowance,
+        )
+        .unwrap();
+        let mut short = budget.reserve(1).unwrap();
+        let (refused, allocation) = crate::test_alloc::measured(|| product.archive(&mut short, 1));
+        assert!(refused.is_err());
+        assert!(
+            allocation.peak <= short.bytes() as isize,
+            "archive allocated {} bytes under a {} byte working partition",
+            allocation.peak,
+            short.bytes(),
+        );
+        assert_eq!(short.bytes(), 1);
+        drop(refused);
+        drop(short);
+        let mut scratch = budget.reserve(1 << 20).unwrap();
+        assert_eq!(scratch.bytes(), 1 << 20);
+        let archive = product.archive(&mut scratch, 1 << 20).unwrap();
+        let decoded: PublishedSummary = records.decode(&source, archive.bytes()).unwrap();
+        assert_eq!(decoded.definition, value.definition);
+        assert_eq!(decoded.summary, value.summary);
+        assert_eq!(decoded.growth, value.growth);
+        assert_eq!(
+            decoded.checked.as_ref().unwrap().summary,
+            value.checked.as_ref().unwrap().summary
+        );
+        assert_eq!(
+            decoded.checked.as_ref().unwrap().growth,
+            value.checked.as_ref().unwrap().growth
+        );
+        assert_eq!(decoded.reads, value.reads);
+        assert_eq!(decoded.text, value.text);
+        let mut empty = budget.reserve(0).unwrap();
+        assert_eq!(
+            product.archive(&mut empty, u64::MAX).unwrap().reference(),
+            archive.reference(),
+            "cached materialization does not require another working grant",
+        );
+        drop(product);
+        drop(scratch);
+        assert_eq!(budget.reserved(), archive.retained_bytes());
+        drop(archive);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn summary_archive_bounded_vectors_pin_codec_and_refuse_foreign_source_binding() {
         for (name, read_count, type_edges) in [
             ("archive-admission-".repeat(1024), 0usize, 0usize),
             ("archive-reads".into(), 1024, 0),
@@ -945,7 +1243,7 @@ mod tests {
                 foreign.record_types().clone(),
                 Arc::new(crate::store::MemStore::default()),
             );
-            assert!(ProductSource::new(source.clone(), foreign, backing.clone()).is_none());
+            assert!(ProductSource::prepare(source.clone(), foreign, backing.clone()).is_none());
             assert_eq!(
                 allowance.bytes(),
                 LiveSummaryProduct::value_bytes(&value).unwrap()
@@ -953,7 +1251,7 @@ mod tests {
             let product = LiveSummaryProduct::new(
                 descriptor(),
                 value.clone(),
-                ProductSource::new(source.clone(), records.clone(), backing).unwrap(),
+                ProductSource::prepare(source.clone(), records.clone(), backing).unwrap(),
                 &mut allowance,
             )
             .unwrap();
@@ -1003,6 +1301,92 @@ mod tests {
     }
 
     #[test]
+    fn encoded_archive_transfers_complete_backing_and_lease_without_rereading_transport() {
+        let bytes = Bytes::from(b"complete encoded payload".to_vec());
+        let pointer = bytes.as_ptr();
+        let reference = LIVE_ANALYZED.reference(&bytes).unwrap();
+        let required = ProductArchive::checked_import_charge(reference, &bytes).unwrap()
+            + retained_arc_bytes(&std::mem::MaybeUninit::<RetainedArchiveLease>::uninit());
+        let budget = ProcessBudget::new(required);
+        let allowance = Arc::new(budget.reserve(required).unwrap());
+        let source = Arc::downgrade(&allowance);
+        let remaining = Arc::new(Mutex::new(required - 1));
+        assert!(
+            ProductArchive::from_retained_bytes(
+                reference,
+                bytes.clone(),
+                allowance.clone(),
+                remaining.clone()
+            )
+            .is_err()
+        );
+        assert_eq!(*remaining.lock().unwrap(), required - 1);
+        *remaining.lock().unwrap() = required;
+        let mut foreign = reference;
+        foreign.output.0.0[0] ^= 1;
+        assert!(
+            ProductArchive::from_retained_bytes(
+                foreign,
+                bytes.clone(),
+                allowance.clone(),
+                remaining.clone()
+            )
+            .is_err()
+        );
+        assert_eq!(*remaining.lock().unwrap(), required);
+        let archive = ProductArchive::from_retained_bytes(
+            reference,
+            bytes,
+            allowance.clone(),
+            remaining.clone(),
+        )
+        .unwrap();
+        assert_eq!(*remaining.lock().unwrap(), 0);
+        assert_eq!(archive.bytes().as_ptr(), pointer);
+        assert_eq!(archive.retained_bytes(), required);
+        let detached = archive.clone();
+        drop(archive);
+        drop(allowance);
+        assert!(source.upgrade().is_some());
+        assert_eq!(*remaining.lock().unwrap(), 0);
+        assert_eq!(detached.bytes(), b"complete encoded payload");
+        drop(detached);
+        assert!(source.upgrade().is_none());
+        assert_eq!(*remaining.lock().unwrap(), required);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn encoded_archive_pool_covers_spare_capacity_and_detached_views() {
+        let budget = ProcessBudget::new(1 << 20);
+        let pool = crate::runtime::MemoryReservationPool::new(budget.reserve(1 << 20).unwrap())
+            .ok()
+            .unwrap();
+        let before = pool.available_bytes();
+        let (archive, allocation) = crate::test_alloc::measured(|| {
+            let mut bytes = Vec::with_capacity(4096);
+            bytes.extend_from_slice(b"complete buffer");
+            let reference = LIVE_SUMMARY.reference(&bytes).unwrap();
+            ProductArchive::from_encoded_in(reference, bytes, &pool).unwrap()
+        });
+        let charged = before - pool.available_bytes();
+        assert!(allocation.live > 0);
+        assert!(charged >= allocation.live as u64);
+        assert_eq!(archive.retained_bytes(), charged);
+        let detached = archive.clone();
+        drop(archive);
+        drop(pool);
+        assert!(budget.reserved() >= charged);
+        assert_eq!(detached.bytes(), b"complete buffer");
+        assert_eq!(
+            detached.reference(),
+            LIVE_SUMMARY.reference(b"complete buffer").unwrap()
+        );
+        drop(detached);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
     fn imported_archive_admits_complete_range_backing_and_refuses_substitution() {
         struct Store(Bytes);
         impl crate::store::ResultStore for Store {
@@ -1043,7 +1427,7 @@ mod tests {
             charge,
             "substitution is refused before retaining bytes"
         );
-        let store = Store(bytes);
+        let store = Store(bytes.clone());
         let archive = ProductArchive::open(&store, reference, &mut exact).unwrap();
         assert_eq!(exact.bytes(), 0);
         assert_eq!(archive.retained_bytes(), charge);
@@ -1054,6 +1438,35 @@ mod tests {
         assert_eq!(budget.reserved(), charge);
         assert_eq!(reader.bytes(), b"complete");
         drop(reader);
+        assert_eq!(budget.reserved(), 0);
+
+        let charge =
+            charge + retained_arc_bytes(&std::mem::MaybeUninit::<RetainedArchiveLease>::uninit());
+        let budget = ProcessBudget::new(charge);
+        let allowance = Arc::new(budget.reserve(charge).unwrap());
+        let remaining = Arc::new(Mutex::new(charge));
+        let store = Store(bytes);
+        let first =
+            ProductArchive::open_retained(&store, reference, allowance.clone(), remaining.clone())
+                .unwrap();
+        let reader = first.clone();
+        assert_eq!(*remaining.lock().unwrap(), 0);
+        assert!(
+            ProductArchive::open_retained(&store, reference, allowance.clone(), remaining.clone(),)
+                .is_err()
+        );
+        drop(first);
+        assert_eq!(*remaining.lock().unwrap(), 0);
+        drop(reader);
+        assert_eq!(*remaining.lock().unwrap(), charge);
+        let replacement =
+            ProductArchive::open_retained(&store, reference, allowance.clone(), remaining.clone())
+                .unwrap();
+        assert_eq!(*remaining.lock().unwrap(), 0);
+        drop(allowance);
+        assert_eq!(budget.reserved(), charge);
+        drop(replacement);
+        assert_eq!(*remaining.lock().unwrap(), charge);
         assert_eq!(budget.reserved(), 0);
     }
 

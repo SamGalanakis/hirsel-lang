@@ -62,8 +62,8 @@ fn subject(key: &InstanceAddress, action: Action) -> ContentHash {
         ],
     )
 }
-fn record(product: &ReadyProduct) -> ReadyRecord {
-    (
+fn record(product: &ReadyProduct) -> Result<ReadyRecord, String> {
+    Ok((
         product.debug,
         product.ready,
         product.layout_closure,
@@ -72,9 +72,13 @@ fn record(product: &ReadyProduct) -> ReadyRecord {
         product
             .optimizer_reads
             .iter()
-            .map(|p| (p.address.0, p.record))
-            .collect(),
-    )
+            .map(|p| {
+                p.archive(ArchiveAdmission::Retained)
+                    .map(|archive| (p.address.0, archive.reference()))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?,
+    ))
 }
 
 pub use super::ready_source::ReadySourceFacts;
@@ -174,15 +178,15 @@ impl ReadyQueries {
         )?;
         let product = ready_product(
             self.store.as_ref(),
-            ProductRef {
+            ProductRef::import_archive(
                 address,
                 action,
-                record: previous.reference,
-            },
+                self.store.copy_product_archive(previous.reference)?,
+            ),
         )
         .ok()?;
         let expected: ReadyRecord = serde_json::from_slice(accepted.metadata()).ok()?;
-        if expected != record(&product)
+        if expected != record(&product).ok()?
             || product.ready != accepted.body()
             || product.layout_closure != accepted.layouts()
             || product.emission_context.domain != EMISSION_CONTEXT_DOMAIN
@@ -227,7 +231,7 @@ impl ReadyQueries {
         let current = self
             .lookup_inner(key, product.product.action, environment)
             .ok_or("Ready assembly lost current C admission")?;
-        if current.product != product.product || record(&current) != record(product) {
+        if current.product != product.product || record(&current)? != record(product)? {
             return Err("Ready assembly descriptor differs".into());
         }
         let bytes = self
@@ -258,7 +262,7 @@ impl ReadyQueries {
         let current = self
             .lookup_inner(key, product.product.action, environment)
             .ok_or("Ready materialization lost current C admission")?;
-        if current.product != product.product || record(&current) != record(product) {
+        if current.product != product.product || record(&current)? != record(product)? {
             return Err("Ready materialization descriptor differs".into());
         }
         let accepted = self
@@ -421,7 +425,13 @@ impl ReadyQueries {
         };
         let previous = self
             .lookup_inner(key, action, &environment)
-            .map(|p| p.product.record);
+            .map(|p| {
+                p.product
+                    .archive(ArchiveAdmission::Retained)
+                    .map(|archive| archive.reference())
+            })
+            .transpose()
+            .map_err(|e| e.to_string())?;
         let mut facts = miss.source.local(miss.options.regions);
         facts.guard = miss.guard.cloned();
         let context = ValidationContext::new(inputs);
@@ -475,8 +485,12 @@ impl ReadyQueries {
         let optimizer = miss
             .optimizer_reads
             .iter()
-            .map(|p| (p.address.0, p.record))
-            .collect();
+            .map(|p| {
+                p.archive(ArchiveAdmission::Retained)
+                    .map(|archive| (p.address.0, archive.reference()))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
         let payload: ReadyRecord = (
             miss.debug,
             output.body(),
@@ -503,7 +517,12 @@ impl ReadyQueries {
             action,
             &payload,
         )?;
-        if product.record != expected_record {
+        if product
+            .archive(ArchiveAdmission::Retained)
+            .map_err(|e| e.to_string())?
+            .reference()
+            != expected_record
+        {
             return Err("Ready descriptor content identity differs".into());
         }
         Ok((

@@ -55,12 +55,19 @@ impl NativeRootTasks {
             .completed_inputs()?
             .into_iter()
             .map(|(key, result)| {
-                (
-                    instance_query(&key, result.product.product.clone()),
-                    result.product.product.record,
-                )
+                result
+                    .product
+                    .product
+                    .archive(ArchiveAdmission::Retained)
+                    .map(|archive| {
+                        (
+                            instance_query(&key, result.product.product.clone()),
+                            archive.reference(),
+                        )
+                    })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
         reads.sort_by_key(|(key, _)| key.address.0);
         if (std::mem::size_of::<RootTask>()
             + reads.len() * std::mem::size_of::<(QueryId, Reference)>()) as u64
@@ -154,7 +161,10 @@ impl QueryTask for RootTask {
             match cx.read(*key) {
                 Poll::Pending => waiting.push(*key),
                 Poll::Ready(Ok(product))
-                    if product.address == key.address && product.record == *expected => {}
+                    if product.address == key.address
+                        && product
+                            .archive(ArchiveAdmission::Retained)
+                            .is_ok_and(|archive| archive.reference() == *expected) => {}
                 result => {
                     let error = match result {
                         Poll::Ready(Err(error)) => error,

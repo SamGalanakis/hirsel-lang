@@ -99,6 +99,7 @@ pub struct RuntimeStats {
     pub charged_bytes: u64,
     pub active: usize,
     pub settled: u64,
+    pub body_evictions: u64,
     pub bookkeeping_bytes: u64,
     pub workers: usize,
 }
@@ -140,6 +141,8 @@ struct Node {
     position: u32,
     visited: u32,
     live: bool,
+    in_flight: bool,
+    settled_at: u64,
     // A cancelled in-flight poll is drained before a new claim can replace it.
     discard: bool,
 }
@@ -767,6 +770,8 @@ impl State {
                 position: 0,
                 visited: 0,
                 live: true,
+                in_flight: false,
+                settled_at: 0,
                 discard: false,
             },
         );
@@ -853,6 +858,7 @@ impl State {
         let node = self.nodes.get_mut(&query).expect("claimed query");
         node.execution.as_mut().expect("active execution").task = Task::Send(None);
         node.status = Status::Settled(Box::new(result.clone()));
+        node.settled_at = self.stats.settled;
         self.stats.settled += 1;
         self.event(RuntimeEvent::Settled {
             query: id(query),
@@ -878,6 +884,46 @@ struct Context<'a> {
     pending: BTreeSet<u32>,
 }
 impl QueryContext for Context<'_> {
+    fn evict_body(&mut self) -> bool {
+        let mut state = self.shared.lock();
+        let roots = state
+            .requests
+            .values()
+            .flatten()
+            .copied()
+            .filter(|key| {
+                state
+                    .nodes
+                    .get(key)
+                    .is_some_and(|n| !matches!(n.status, Status::Settled(_)))
+            })
+            .collect::<Vec<_>>();
+        state.nodes.mark_in_flight(roots.into_iter());
+        let oldest = state
+            .nodes
+            .iter()
+            .filter_map(|(&key, node)| {
+                if node.in_flight || state.requests.values().any(|roots| roots.contains(&key)) {
+                    return None;
+                }
+                let Status::Settled(result) = &node.status else {
+                    return None;
+                };
+                let body = result.as_ref().as_ref().ok()?.analyzed_value()?;
+                body.cache_only().then_some((node.settled_at, key))
+            })
+            .min()
+            .map(|(_, key)| key);
+        let Some(key) = oldest else {
+            return false;
+        };
+        state.remove(key);
+        state.stats.body_evictions += 1;
+        state.account();
+        self.shared.changed.notify_all();
+        true
+    }
+
     fn read(&mut self, dependency: QueryId) -> Poll<Outcome> {
         let mut state = self.shared.lock();
         if state.stopped

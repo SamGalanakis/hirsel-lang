@@ -49,15 +49,13 @@ impl ReadPool {
     pub(crate) fn charged_bytes(&self) -> u64 {
         self.charged_bytes
     }
-    pub(crate) fn intern(
-        &mut self,
-        reads: &Reads,
-        allowance: &mut MemoryReservation,
-        remaining: &mut u64,
-    ) -> Option<Reads> {
+    pub(crate) fn required_bytes(&self, reads: &Reads) -> Option<u64> {
         if reads.is_empty() {
-            return Some(Reads::empty());
+            return Some(0);
         }
+        self.admission(reads).map(|(_, charge, _, _)| charge)
+    }
+    fn admission(&self, reads: &Reads) -> Option<(u64, u64, u64, u64)> {
         let missing = reads.iter().filter(|row| !self.rows.contains(*row)).count();
         let row_bytes = std::alloc::Layout::new::<[usize; 2]>()
             .extend(std::alloc::Layout::new::<ChargedRow>())
@@ -87,6 +85,18 @@ impl ReadPool {
             tree_bytes(self.rows.len().checked_add(missing)?)
                 .checked_sub(tree_bytes(self.rows.len()))?,
         )?;
+        Some((loaned, charge, row_bytes, shared_bytes))
+    }
+    pub(crate) fn intern(
+        &mut self,
+        reads: &Reads,
+        allowance: &mut MemoryReservation,
+        remaining: &mut u64,
+    ) -> Option<Reads> {
+        if reads.is_empty() {
+            return Some(Reads::empty());
+        }
+        let (loaned, charge, row_bytes, shared_bytes) = self.admission(reads)?;
         let after = remaining.checked_sub(charge)?;
         if allowance.bytes() < loaned {
             return None;

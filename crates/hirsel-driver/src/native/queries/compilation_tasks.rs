@@ -512,8 +512,16 @@ impl CompilationTasks {
         let bytes = serde_json::to_vec(
             &outputs
                 .iter()
-                .map(|product| (product.address.0, product.record))
-                .collect::<Vec<_>>(),
+                .map(|product| {
+                    Ok((
+                        product.address.0,
+                        product
+                            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                            .map_err(|e| e.to_string())?
+                            .reference(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
         )
         .map_err(|e| e.to_string())?;
         let domain = Domain {
@@ -535,11 +543,13 @@ impl CompilationTasks {
             ],
         ));
         store.associate_product(self.query.address, action, record);
-        let product = ProductRef {
-            address: self.query.address,
+        let product = ProductRef::import_archive(
+            self.query.address,
             action,
-            record,
-        };
+            store
+                .admit_product_archive(record, bytes.into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        );
         if let Err(other) = self.completed.set((product.clone(), outputs))
             && self.completed.get().unwrap().0 != other.0
         {
@@ -624,9 +634,17 @@ impl CompilationTask {
         if !waiting.is_empty() {
             return Ok(Err(waiting));
         }
+        let initializing = tasks.dispatch.get().is_none();
         let dispatch = tasks
             .initialize(selected[0].clone(), selected[1].clone())
             .map_err(|e| tasks.instances.failure(&e))?;
+        if initializing {
+            // Native Value admission is complete. Give the coming emission
+            // workspace the heap occupied by recomputable P-body cache entries.
+            // The runtime preserves every active or externally pinned value.
+            while cx.evict_body() {}
+            hirsel_intern::memory::checkpoint("native emission cache pressure");
+        }
         let mut outputs = Vec::new();
         for key in &dispatch.links {
             match cx.read(*key) {

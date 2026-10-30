@@ -25,9 +25,9 @@ pub struct FrontStorageQueries {
     records: crate::NativeRecords,
     weight: MemoryWeight,
     errors: RuntimeErrors,
-    retention: Mutex<u64>,
+    retention: Arc<Mutex<u64>>,
     executions: std::sync::atomic::AtomicU64,
-    _allowance: MemoryReservation,
+    _allowance: Arc<MemoryReservation>,
 }
 #[derive(Clone)]
 pub struct FrontStorageOutput {
@@ -39,13 +39,23 @@ impl FrontStorageQueries {
     /// The immutable front already owns the address/definition index. Only
     /// demanded recipes need a task or a completed output in this owner.
     pub fn input_bytes(_front: &FrontBodyQueries) -> Option<u64> {
-        Some(std::mem::size_of::<Self>() as u64)
+        Some(
+            (std::mem::size_of::<Self>()
+                + std::mem::size_of::<Mutex<u64>>()
+                + std::mem::size_of::<MemoryReservation>()
+                + 4 * std::mem::size_of::<usize>()) as u64,
+        )
     }
     /// The same shared-index owner before front construction.
     pub fn input_bytes_for_definitions<'a>(
         _definitions: impl IntoIterator<Item = &'a DefPath>,
     ) -> Option<u64> {
-        Some(std::mem::size_of::<Self>() as u64)
+        Some(
+            (std::mem::size_of::<Self>()
+                + std::mem::size_of::<Mutex<u64>>()
+                + std::mem::size_of::<MemoryReservation>()
+                + 4 * std::mem::size_of::<usize>()) as u64,
+        )
     }
     fn address(input: Key) -> Key {
         ContentHash::of_parts("hirsel.front.storage.address.v1", [input.0.as_slice()])
@@ -113,6 +123,7 @@ impl QueryFactory for StorageFactory {
             id,
             definition,
             admitted: false,
+            body: None,
             terminal,
         }))
     }
@@ -122,9 +133,15 @@ struct StorageTask {
     id: QueryId,
     definition: DefId,
     admitted: bool,
+    body: Option<Box<dyn QueryTask>>,
     terminal: Option<Result<ProductRef, Reference>>,
 }
-const _: () = assert!(std::mem::size_of::<StorageTask>() + 2 * std::mem::size_of::<usize>() <= 512);
+const _: () = assert!(
+    std::mem::size_of::<StorageTask>()
+        + std::mem::size_of::<BodyTask>()
+        + 4 * std::mem::size_of::<usize>()
+        <= 512
+);
 impl QueryTask for StorageTask {
     fn id(&self) -> QueryId {
         self.id
@@ -163,20 +180,48 @@ impl QueryTask for StorageTask {
             Poll::Pending => return QueryPoll::Waiting(vec![front]),
             Poll::Ready(Err(reference)) => Err(reference),
             Poll::Ready(Ok(product)) => {
-                if self.owner.front.outcome(product.record).is_some() {
+                if self.owner.front.outcome(Ok(product.clone())).is_some() {
                     self.run(product)
                 } else {
                     let Some(body) = self.owner.front.body_query(path) else {
                         return finish(Err(self.owner.errors.protocol));
                     };
-                    match cx.read(body) {
-                        Poll::Pending => return QueryPoll::Waiting(vec![body]),
-                        Poll::Ready(Err(error)) => Err(error),
-                        Poll::Ready(Ok(product)) => self.run(product),
+                    if self.body.is_none() {
+                        let task = match self.owner.front.factory().create(body) {
+                            Ok(task) => task,
+                            Err(error) => return finish(Err(error)),
+                        };
+                        let weight = task.weight();
+                        if weight.scratch > self.owner.weight.scratch
+                            || weight.stack > self.owner.weight.stack
+                        {
+                            drop(task);
+                            return match cx.read(body) {
+                                Poll::Pending => QueryPoll::Waiting(vec![body]),
+                                Poll::Ready(Err(error)) => finish(Err(error)),
+                                Poll::Ready(Ok(product)) => {
+                                    let selected = self.run(product);
+                                    self.terminal = Some(selected.clone());
+                                    finish(selected)
+                                }
+                            };
+                        }
+                        self.body = Some(task);
+                    }
+                    // Storage owns this one continuation under its existing
+                    // frame and working grant, just as the storage graph owns
+                    // one recipe. Its actual P read remains the dependency.
+                    match self.body.as_mut().unwrap().poll(cx) {
+                        QueryPoll::Waiting(dependencies) => {
+                            return QueryPoll::Waiting(dependencies);
+                        }
+                        QueryPoll::Failed(error) => Err(error),
+                        QueryPoll::Complete(product) => self.run(product),
                     }
                 }
             }
         };
+        self.body = None;
         self.terminal = Some(selected.clone());
         finish(selected)
     }
@@ -187,7 +232,7 @@ impl StorageTask {
         let path = self.definition.path();
         let body = owner
             .front
-            .outcome(product.record)
+            .outcome(Ok(product.clone()))
             .ok_or(owner.errors.protocol)?;
         let analyzed = body
             .outcome
@@ -257,11 +302,17 @@ impl StorageTask {
         let selected = if failed {
             Err(record)
         } else {
-            Ok(ProductRef {
-                address: self.id.address,
+            Ok(ProductRef::import_archive(
+                self.id.address,
                 action,
-                record,
-            })
+                ProductArchive::from_retained_bytes(
+                    record,
+                    bytes.into(),
+                    owner._allowance.clone(),
+                    owner.retention.clone(),
+                )
+                .map_err(|_| owner.errors.resource)?,
+            ))
         };
         owner
             .completed
@@ -279,7 +330,7 @@ impl StorageTask {
             owner
                 .front
                 .store
-                .associate_product(product.address, product.action, product.record);
+                .associate_product(product.address, product.action, record);
         }
         selected
     }
@@ -305,9 +356,9 @@ impl QueryEngine {
             records: source.records,
             weight,
             errors,
-            retention: Mutex::new(allowance.bytes() - inventory),
+            retention: Arc::new(Mutex::new(allowance.bytes() - inventory)),
             executions: std::sync::atomic::AtomicU64::new(0),
-            _allowance: allowance,
+            _allowance: Arc::new(allowance),
         }))
     }
 }

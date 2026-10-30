@@ -162,14 +162,18 @@ impl Plan {
             .map(|input| {
                 // Bind ordinary descriptor content, not its producer action. Equal
                 // recomputation preserves the physical selection's complete action.
-                (
+                Ok((
                     &input.equations,
                     (input.query.kind, input.query.address.0),
                     input.product.address.0,
-                    input.product.record,
-                )
+                    input
+                        .product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference(),
+                ))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, String>>()?;
         let bytes = serde_json::to_vec(&(
             crate::COMPILER_IDENTITY.as_slice(),
             query.address.0,
@@ -206,8 +210,21 @@ impl Plan {
                 .lookup_product(input.product.address)
                 .ok_or("missing seal-demand instance association")?;
             if current.action != input.product.action
-                || current.reference != input.product.record
-                || store.get_content(input.product.record).is_none()
+                || current.reference
+                    != input
+                        .product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference()
+                || store
+                    .get_content(
+                        input
+                            .product
+                            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                            .map_err(|e| e.to_string())?
+                            .reference(),
+                    )
+                    .is_none()
             {
                 return Err("seal-demand instance dependency changed".into());
             }
@@ -218,13 +235,10 @@ impl Plan {
             && let Some(bytes) = store.get_content(previous.reference)
             && let Ok(units) = serde_json::from_slice::<Vec<UnitDemand>>(&bytes)
             && self.check(&units).is_ok()
+            && let Some(archive) = store.copy_product_archive(previous.reference)
         {
             return Ok(Selection {
-                product: ProductRef {
-                    address: self.query.address,
-                    action: self.action,
-                    record: previous.reference,
-                },
+                product: ProductRef::import_archive(self.query.address, self.action, archive),
                 units,
                 allowances: vec![],
             });
@@ -247,11 +261,13 @@ impl Plan {
             .ok_or("seal-demand output publication failed")?;
         store.associate_product(self.query.address, self.action, record);
         Ok(Selection {
-            product: ProductRef {
-                address: self.query.address,
-                action: self.action,
-                record,
-            },
+            product: ProductRef::import_archive(
+                self.query.address,
+                self.action,
+                store
+                    .admit_product_archive(record, bytes.into())
+                    .ok_or("native product archive is unavailable or exceeds admission")?,
+            ),
             units,
             allowances: vec![],
         })

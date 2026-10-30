@@ -35,6 +35,11 @@ impl NativeProducts for NoNative {
 }
 const SCRIPT: &[u8] = b"#!/bin/sh\nprintf 'ready\\n'\nexit 0\n";
 fn fixture(store: Arc<dyn ResultStore>) -> LinkedProduct {
+    let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+    let store: Arc<dyn ResultStore> = Arc::new(hirsel_engine::store::RequestStore::new(
+        store,
+        budget.reserve(64 << 20).unwrap(),
+    ));
     let manifest = store
         .put_content(
             Domain {
@@ -108,7 +113,13 @@ fn existing_destination_does_not_mask_corrupt_or_missing_linked_record() {
     let mut ready = output(store, &destination);
     ready.ready(&[linked.product.clone()]).unwrap();
     // Physical path is used only to inject corruption, never by the adapter.
-    let record = hirsel_artifact_store::Store::new(root).output_path(linked.product.record);
+    let record = hirsel_artifact_store::Store::new(root).output_path(
+        linked
+            .product
+            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .unwrap()
+            .reference(),
+    );
     std::fs::write(&record, b"truncated").unwrap();
     assert!(ready.ready(&[linked.product.clone()]).is_err());
     std::fs::remove_file(record).unwrap();

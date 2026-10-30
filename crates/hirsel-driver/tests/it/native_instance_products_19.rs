@@ -9,7 +9,11 @@ use std::sync::Arc;
 #[test]
 fn native_instance_product_hits_require_current_c_without_value_materialization() {
     with_compiler_stack(|| {
-        let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
+        let budget = runtime::ProcessBudget::new(64 << 20);
+        let store: Arc<dyn store::ResultStore> = Arc::new(store::RequestStore::new(
+            Arc::new(store::MemStore::default()),
+            budget.reserve(64 << 20).unwrap(),
+        ));
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
         let file = engine

@@ -492,8 +492,14 @@ fn compile_settled<R>(
         .iter()
         .zip(&selected[..count])
         .filter(|(old, now)| {
-            old.as_ref()
-                .is_some_and(|old| old.action == now.action && old.reference == now.record)
+            old.as_ref().is_some_and(|old| {
+                old.action == now.action
+                    && old.reference
+                        == now
+                            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                            .unwrap()
+                            .reference()
+            })
         })
         .count();
     let artifacts = selected[..count]
@@ -556,7 +562,11 @@ fn compile_settled<R>(
 #[test]
 fn generic_lexical_callable_keeps_its_original_recipe_dependency() {
     with_compiler_stack(|| {
-        let store: Arc<dyn ResultStore> = Arc::new(store::MemStore::default());
+        let budget = ProcessBudget::new(64 << 20);
+        let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+            Arc::new(store::MemStore::default()),
+            budget.reserve(64 << 20).unwrap(),
+        ));
         let mut engine =
             QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters())
                 .with_result_store(store.clone());

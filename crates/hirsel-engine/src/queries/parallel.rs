@@ -1324,7 +1324,7 @@ mod frozen_task_tests {
                 .wait(request)
                 .expect_err("authored checker rejects after its reads");
             let held = queries
-                .outcome(error)
+                .outcome(Err(error))
                 .expect("failure metadata survives the task");
             let actual = &held.outcome;
             assert_eq!(actual.phase, Some(QueryKind::Check));

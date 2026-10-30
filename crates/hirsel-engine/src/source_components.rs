@@ -44,8 +44,23 @@ pub struct SourceGrowthFact {
     calls: Box<[DefId]>,
     summary: Arc<CheckedSummary>,
     definition: Address,
-    selected: Reference,
+    selected: SourceGrowthSelection,
     observed: ContentHash,
+}
+
+#[derive(Clone, Copy, serde::Serialize)]
+pub(crate) enum SourceGrowthSelection {
+    Live(ContentHash),
+    Archived(Reference),
+    Failed(Reference),
+}
+impl From<Result<ProductRef, Reference>> for SourceGrowthSelection {
+    fn from(selected: Result<ProductRef, Reference>) -> Self {
+        match selected {
+            Ok(product) => Self::Live(product.action.0),
+            Err(reference) => Self::Failed(reference),
+        }
+    }
 }
 
 impl SourceGrowthFact {
@@ -62,6 +77,7 @@ pub struct SourceGrowthProducer<'a> {
     pub records: &'a NativeRecords,
     pub source: &'a NativeRecordContext,
     pub store: &'a dyn ResultStore,
+    pub archive_pool: &'a crate::runtime::MemoryReservationPool,
     pub namespace: Address,
     pub scratch: u64,
 }
@@ -91,7 +107,7 @@ impl SourceGrowthProducer<'_> {
         self.fact_observed(
             definition,
             summary,
-            selected,
+            SourceGrowthSelection::Archived(selected),
             crate::store::payload_reads_hash(reads),
         )
     }
@@ -103,7 +119,7 @@ impl SourceGrowthProducer<'_> {
         &self,
         definition: Address,
         summary: Arc<CheckedSummary>,
-        selected: Reference,
+        selected: SourceGrowthSelection,
         observed: ContentHash,
     ) -> Option<SourceGrowthFact> {
         let count = summary
@@ -196,7 +212,7 @@ impl SourceGrowthProducer<'_> {
             [topology.as_slice()],
         ));
         let membership_product =
-            self.publish(address, action, MEMBERSHIP, &self.encode(&membership)?)?;
+            self.publish(address, action, MEMBERSHIP, self.encode(&membership)?)?;
         drop(topology);
         let mut by_owner: BTreeMap<DefId, Vec<&SourceGrowthFact>> = BTreeMap::new();
         for fact in facts {
@@ -225,7 +241,7 @@ impl SourceGrowthProducer<'_> {
                 })
                 .collect();
             let action = Action(ContentHash::of_parts(
-                "hirsel.source-growth.component.action.v3",
+                "hirsel.source-growth.component.action.v4",
                 [
                     member_bytes.as_slice(),
                     self.encode(&observations)?.as_slice(),
@@ -249,13 +265,9 @@ impl SourceGrowthProducer<'_> {
             });
             let growing = growing.into_boxed_slice();
             let bytes = self.encode(&(&members, &growing))?;
-            let record = self.publish(address, action, SETTLED, &bytes)?.record;
+            let product = self.publish(address, action, SETTLED, bytes)?;
             components.push(SourceGrowthComponent {
-                product: ProductRef {
-                    address,
-                    action,
-                    record,
-                },
+                product,
                 members: members.into(),
                 growing,
             });
@@ -276,15 +288,17 @@ impl SourceGrowthProducer<'_> {
         address: Address,
         action: Action,
         domain: Domain,
-        bytes: &[u8],
+        bytes: Vec<u8>,
     ) -> Option<ProductRef> {
-        let record = self.store.put_content(domain, bytes)?;
-        self.store.associate_product(address, action, record);
-        Some(ProductRef {
+        let record = self.store.put_content(domain, &bytes)?;
+        let product = ProductRef::import_archive(
             address,
             action,
-            record,
-        })
+            crate::runtime::ProductArchive::from_encoded_in(record, bytes, self.archive_pool)
+                .ok()?,
+        );
+        self.store.associate_product(address, action, record);
+        Some(product)
     }
 }
 

@@ -607,14 +607,29 @@ impl DemandInstances {
             operations: &operations,
             ..*environment
         };
-        let linkage = self
+        let linkage = match self
             .queries
             .linkage(key, output.product.product.action, &scoped)
-            .ok_or_else(|| format!(
-                "native instance dependency lost current C admission: {} body {} instance {:?}, library={}, action {:?}, record {:?}",
-                key.instance.definition(), key.instance.body(), key.instance.digest(),
-                output.facts.body.templates.library, output.product.product.action, output.product.product.record,
-            ))?;
+        {
+            Some(linkage) => linkage,
+            None => {
+                let record = output
+                    .product
+                    .product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference();
+                return Err(format!(
+                    "native instance dependency lost current C admission: {} body {} instance {:?}, library={}, action {:?}, record {:?}",
+                    key.instance.definition(),
+                    key.instance.body(),
+                    key.instance.digest(),
+                    output.facts.body.templates.library,
+                    output.product.product.action,
+                    record,
+                ));
+            }
+        };
         Ok((output.clone(), linkage))
     }
     pub(super) fn operations<'a>(

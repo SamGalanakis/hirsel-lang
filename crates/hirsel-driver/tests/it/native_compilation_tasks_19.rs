@@ -762,7 +762,12 @@ fn run_program_case_with_frame(
             .collect::<Vec<_>>();
         let records = outputs
             .iter()
-            .map(|output| output.record)
+            .map(|output| {
+                output
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .unwrap()
+                    .reference()
+            })
             .collect::<Vec<_>>();
         if let Some((old, launch)) = &previous {
             if fresh {

@@ -1,6 +1,8 @@
 //! Shared admitted-query runtime. Identities describe immutable products; none
 //! of these descriptors grants verifier or native-validator authority.
-use hirsel_artifact_store::{Action, Address, Reference};
+#[cfg(test)]
+use hirsel_artifact_store::Action;
+use hirsel_artifact_store::{Address, Reference};
 use std::task::Poll;
 mod budget;
 mod future_task;
@@ -8,11 +10,11 @@ mod product;
 mod scheduler;
 pub use budget::{MemoryReservation, MemoryReservationPool, ProcessBudget};
 pub use future_task::{LocalFutureTask, QueryReads};
-pub(crate) use product::ProductSource;
 pub use product::{
     ArchiveAdmission, LIVE_ANALYZED, LIVE_LOWER, LIVE_SUMMARY, LiveAnalyzedProduct,
     LiveLowerProduct, LiveSummaryProduct, ProductArchive, SummaryFacet,
 };
+pub(crate) use product::{ProductSource, SharedProductSource, WeakAnalyzedProduct};
 pub use scheduler::{
     AdmittedRuntime, RuntimeCompletion, RuntimeErrors, RuntimeEvent, RuntimeObserver, RuntimeStats,
 };
@@ -28,13 +30,23 @@ pub struct QueryId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RequestId(pub u64);
 
-/// Complete action and canonical output are separate from the logical address.
-/// Cloning a publication explicitly transfers a retained result to another reader.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProductRef {
-    pub address: Address,
-    pub action: Action,
-    pub record: Reference,
+mod published;
+pub use published::ProductRef;
+
+#[cfg(test)]
+pub(crate) fn test_product(
+    address: Address,
+    action: Action,
+    domain: hirsel_artifact_store::Domain,
+    bytes: &[u8],
+) -> ProductRef {
+    use crate::store::ResultStore;
+    let store = crate::store::MemStore::default();
+    let reference = store.put_content(domain, bytes).unwrap();
+    let budget = ProcessBudget::new((bytes.len() as u64).saturating_add(4096));
+    let mut allowance = budget.reserve(budget.limit()).unwrap();
+    let archive = ProductArchive::open(&store, reference, &mut allowance).unwrap();
+    ProductRef::import_archive(address, action, archive)
 }
 
 /// Upper bounds charged before polling. Retained includes continuation state,
@@ -56,6 +68,12 @@ pub enum QueryPoll {
 }
 
 pub trait QueryContext {
+    /// Evict the oldest settled, unpinned analyzed body outside unfinished
+    /// roots and active continuations. Producers call this before retrying a
+    /// refused admission.
+    fn evict_body(&mut self) -> bool {
+        false
+    }
     /// Records an actual dependency. Pending never blocks a worker thread.
     fn read(&mut self, key: QueryId) -> Poll<Result<ProductRef, Reference>>;
 }

@@ -138,11 +138,11 @@ impl InstanceQueries {
             return None;
         }
         Some(InstanceProduct {
-            product: ProductRef {
+            product: ProductRef::import_archive(
                 address,
-                action: previous.action,
-                record: previous.reference,
-            },
+                previous.action,
+                self.store.copy_product_archive(previous.reference)?,
+            ),
             value: record.0,
             layout_closure: record.1,
             local_equations: record.2,
@@ -298,7 +298,13 @@ impl InstanceQueries {
         };
         let previous = self
             .lookup_inner(key, action, &environment)
-            .map(|p| p.product.record);
+            .map(|p| {
+                p.product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map(|archive| archive.reference())
+                    .map_err(|e| e.to_string())
+            })
+            .transpose()?;
         self.counts.validations += 1;
         let (checked, output) = self
             .native
@@ -365,11 +371,13 @@ impl InstanceQueries {
         Ok((
             checked,
             Arc::new(InstanceProduct {
-                product: ProductRef {
+                product: ProductRef::import_archive(
                     address,
                     action,
-                    record: reference,
-                },
+                    self.store
+                        .admit_product_archive(reference, bytes.into())
+                        .ok_or("native product archive is unavailable or exceeds admission")?,
+                ),
                 value: record.0,
                 layout_closure: record.1,
                 local_equations: record.2,

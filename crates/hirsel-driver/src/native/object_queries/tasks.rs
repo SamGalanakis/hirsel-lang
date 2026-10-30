@@ -262,19 +262,24 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     ));
                 }
                 let copies = read(cx, &ids)?;
-                if copies
-                    .iter()
-                    .zip(&dependencies)
-                    .any(|(current, (id, expected))| {
-                        current.address != id.address
-                            || expected.clone().is_some_and(|old| {
-                                current.address != old.address || current.record != old.record
-                            })
-                    })
-                {
-                    return Err(failed(
-                        self.snapshot.failure("stale optimizer body dependency"),
-                    ));
+                for (current, (id, expected)) in copies.iter().zip(&dependencies) {
+                    let mismatch = if let Some(old) = expected {
+                        let current_archive = current
+                            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                            .map_err(|e| failed(self.snapshot.failure(&e.to_string())))?;
+                        let old_archive = old
+                            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                            .map_err(|e| failed(self.snapshot.failure(&e.to_string())))?;
+                        current.address != old.address
+                            || current_archive.reference() != old_archive.reference()
+                    } else {
+                        false
+                    };
+                    if current.address != id.address || mismatch {
+                        return Err(failed(
+                            self.snapshot.failure("stale optimizer body dependency"),
+                        ));
+                    }
                 }
                 let mut settled = vec![own];
                 settled.extend(copies);
@@ -324,8 +329,12 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                 let inputs = LinkInputs {
                     execution: outputs[outputs.len() - deps.execution.len()..]
                         .iter()
-                        .map(|p| p.record)
-                        .collect(),
+                        .map(|p| {
+                            p.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                                .map(|archive| archive.reference())
+                                .map_err(|e| failed(self.snapshot.failure(&e.to_string())))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
                     fragments,
                     static_manifest,
                     runtime_archives,

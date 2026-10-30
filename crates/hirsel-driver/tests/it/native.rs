@@ -17,6 +17,16 @@ use hirsel_engine::{
 };
 use std::path::PathBuf;
 
+fn admitted_native_store(
+    backend: std::sync::Arc<dyn hirsel_engine::store::ResultStore>,
+) -> std::sync::Arc<dyn hirsel_engine::store::ResultStore> {
+    let budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+    std::sync::Arc::new(hirsel_engine::store::RequestStore::new(
+        backend,
+        budget.reserve(64 << 20).unwrap(),
+    ))
+}
+
 /// A checked program with its frozen snapshot and reference observation.
 struct Checked {
     validated: ValidatedNativeInput,
@@ -1423,7 +1433,7 @@ fn original_callable_values_retain_their_thunk_owners_on_both_backends(path: &st
     use std::sync::Arc;
     with_compiler_stack(|| {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+        let store: Arc<dyn ResultStore> = admitted_native_store(Arc::new(MemStore::default()));
         let mut config = hirsel_driver::COMPILER.configuration();
         config.store = store.clone();
         config.verify = hirsel_engine::Verify::On;
@@ -1545,7 +1555,8 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
         assert_ne!(original.reference, edited.reference);
         for jobs in [1, 2, 8] {
             for validation in [Validation::Ready, Validation::EveryStage] {
-                let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+                let store: Arc<dyn ResultStore> =
+                    admitted_native_store(Arc::new(MemStore::default()));
                 let dir = scratch(&format!("copied-edit-{jobs}-{validation:?}"));
                 let tools = Toolchain::in_tree_diagnostic(&dir, &[&x86()]).unwrap();
                 let compile = |text: &str, store: Arc<dyn ResultStore>, link: bool| {
@@ -1599,7 +1610,11 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
                 let (warm, _) = compile(before, store.clone(), false);
                 assert_eq!(warm.hits, old.summaries.len());
                 let (rebuilt, rebuilt_exe) = compile(&after, store, true);
-                let (fresh, fresh_exe) = compile(&after, Arc::new(MemStore::default()), true);
+                let (fresh, fresh_exe) = compile(
+                    &after,
+                    admitted_native_store(Arc::new(MemStore::default())),
+                    true,
+                );
                 let artifacts = |ready: &crate::native_object_products_19::Objects| {
                     (ready.summaries.clone(), ready.objects.clone())
                 };
@@ -1659,8 +1674,18 @@ fn intrinsic_static_objects_survive_unrelated_layouts_and_import_replay() {
             (Backend::Llvm, OptLevel::None),
             (Backend::Llvm, OptLevel::Default),
         ] {
-            let a = compile(source, Arc::new(MemStore::default()), backend, opt);
-            let b = compile(&decoy, Arc::new(MemStore::default()), backend, opt);
+            let a = compile(
+                source,
+                admitted_native_store(Arc::new(MemStore::default())),
+                backend,
+                opt,
+            );
+            let b = compile(
+                &decoy,
+                admitted_native_store(Arc::new(MemStore::default())),
+                backend,
+                opt,
+            );
             let objects = |ready: &crate::native_object_products_19::Objects| {
                 ready
                     .summaries
@@ -1680,7 +1705,7 @@ fn intrinsic_static_objects_survive_unrelated_layouts_and_import_replay() {
                     shifted[key].imports
                 );
             }
-            let store = Arc::new(MemStore::default());
+            let store = admitted_native_store(Arc::new(MemStore::default()));
             compile(source, store.clone(), backend, opt);
             let replay = compile(&decoy, store, backend, opt);
             assert!(replay.hits > 0);
@@ -1899,7 +1924,8 @@ fn generated_body_sites_and_objects_do_not_depend_on_id_assignment() {
             with_compiler_stack(|| {
                 let mut transcript = String::new();
                 for (_, source, _, _, _) in generated_failure_sources() {
-                    let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+                    let store: Arc<dyn ResultStore> =
+                        admitted_native_store(Arc::new(MemStore::default()));
                     let (facts, reference) = generated_request_products(&source, store.clone());
                     transcript.push_str(&format!("{reference:?}\n"));
                     for backend in [Backend::Cranelift, Backend::Llvm] {
@@ -2063,13 +2089,14 @@ fn generated_body_objects_rebind_debug_and_failures_after_source_moves() {
             (Backend::Cranelift, OptLevel::None),
             (Backend::Llvm, OptLevel::Default),
         ] {
-            let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+            let store: Arc<dyn ResultStore> = admitted_native_store(Arc::new(MemStore::default()));
             let mut warm_engine = QueryEngine::new(default_environment(), compiler_adapters())
                 .with_result_store(store.clone());
             let mut baseline = None;
             for (version, (first, second)) in versions.iter().enumerate() {
                 let warm = load(&mut warm_engine, first, second);
-                let cold_store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+                let cold_store: Arc<dyn ResultStore> =
+                    admitted_native_store(Arc::new(MemStore::default()));
                 let mut fresh_engine = QueryEngine::new(default_environment(), compiler_adapters())
                     .with_result_store(cold_store.clone());
                 let fresh = load(&mut fresh_engine, first, second);

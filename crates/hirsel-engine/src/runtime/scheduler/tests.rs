@@ -25,11 +25,12 @@ fn trace(rt: &mut AdmittedRuntime) -> Arc<Events> {
     events
 }
 fn product(q: QueryId) -> ProductRef {
-    ProductRef {
-        address: q.address,
-        action: Action(q.address.0),
-        record: reference(&q.address.0.0),
-    }
+    crate::runtime::test_product(
+        q.address,
+        Action(q.address.0),
+        Domain { kind: 1, schema: 1 },
+        &q.address.0.0,
+    )
 }
 fn errors() -> RuntimeErrors {
     RuntimeErrors {
@@ -1730,6 +1731,8 @@ fn bare_node() -> super::Node {
         visited: 0,
         unsatisfied: 0,
         live: true,
+        in_flight: false,
+        settled_at: 0,
         discard: false,
     }
 }

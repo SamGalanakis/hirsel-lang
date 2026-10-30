@@ -104,7 +104,14 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 .collect::<Vec<_>>();
             for output in &outputs {
                 let product = (output.product.product).clone().unwrap();
-                let bytes = store.get_content(product.record).unwrap();
+                let bytes = store
+                    .get_content(
+                        product
+                            .archive(ArchiveAdmission::Retained)
+                            .unwrap()
+                            .reference(),
+                    )
+                    .unwrap();
                 if let Some(previous) = previous_products.insert(
                     (
                         verify == Verify::On,
@@ -161,7 +168,14 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 .find(|o| o.product.source.definition == program.entry)
                 .unwrap();
             let payload_bytes = store
-                .get_content((main_output.product.product).clone().unwrap().record)
+                .get_content(
+                    (main_output.product.product)
+                        .clone()
+                        .unwrap()
+                        .archive(ArchiveAdmission::Retained)
+                        .unwrap()
+                        .reference(),
+                )
                 .unwrap();
             let payload = payload_bytes.len() as u64;
             // Reuse settled producers, but give a fresh native owner exactly
@@ -206,7 +220,17 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 let result = bounded_runtime.wait(request);
                 if accepts {
                     let product = result.expect("one payload fits exactly")[0].clone();
-                    assert_eq!(store.get_content(product.record).unwrap(), payload_bytes);
+                    assert_eq!(
+                        store
+                            .get_content(
+                                product
+                                    .archive(ArchiveAdmission::Retained)
+                                    .unwrap()
+                                    .reference()
+                            )
+                            .unwrap(),
+                        payload_bytes
+                    );
                     assert_eq!(
                         bounded.outcome(product).unwrap().product.source.definition,
                         program.entry
@@ -237,7 +261,10 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
             let selected = definitions.iter().cloned().collect::<BTreeSet<_>>();
             let mut cache = NativeDiscoveryCache::new(
                 scalar.engine.types().clone(),
-                Arc::new(MemStore::default()),
+                Arc::new(store::RequestStore::new(
+                    Arc::new(MemStore::default()),
+                    budget.reserve(8 << 20).unwrap(),
+                )),
             );
             let scalar_codec =
                 NativeRecords::new(scalar.engine.types().clone(), Arc::new(MemStore::default()));
@@ -315,6 +342,7 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 "held ordinary body retains immutable source admission"
             );
             drop(main);
+            drop(cache);
             assert_eq!(budget.reserved(), 0);
         }
     });

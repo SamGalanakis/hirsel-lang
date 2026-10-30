@@ -114,7 +114,7 @@ pub struct FrontRunQueries {
     anchors: crate::NativeRecordContext,
     completed: Mutex<BTreeMap<ContentHash, (ProductRef, Arc<FrontRunOutput>)>>,
     failures: Mutex<BTreeMap<ContentHash, (Reference, QueryError)>>,
-    retention: Mutex<u64>,
+    retention: Arc<Mutex<u64>>,
     weight: MemoryWeight,
     errors: RuntimeErrors,
     ownership: Arc<Ownership>,
@@ -122,9 +122,21 @@ pub struct FrontRunQueries {
 struct Ownership {
     _front: Arc<FrontBodyQueries>,
     _lower: Arc<FrontLowerQueries>,
-    _allowance: MemoryReservation,
+    _allowance: Arc<MemoryReservation>,
 }
 impl FrontRunQueries {
+    fn admit_archive(
+        &self,
+        reference: Reference,
+        bytes: Vec<u8>,
+    ) -> std::io::Result<ProductArchive> {
+        ProductArchive::from_retained_bytes(
+            reference,
+            bytes.into(),
+            self.ownership._allowance.clone(),
+            self.retention.clone(),
+        )
+    }
     /// One source closure and canonical hash pass for a bounded set of launches.
     /// Each entry still has its own semantic revision, reach and callable facts.
     pub fn with_batch_roots(
@@ -142,13 +154,14 @@ impl FrontRunQueries {
         let charge = (bytes.len() as u64)
             .checked_add((roots.len() * std::mem::size_of::<DefPath>()) as u64)
             .ok_or_else(|| operational("Run batch inventory overflow"))?;
-        let remaining = this
+        let mut remaining = this
             .retention
-            .get_mut()
+            .lock()
             .unwrap_or_else(|error| error.into_inner());
         *remaining = remaining
             .checked_sub(charge)
             .ok_or_else(|| operational("Run batch roots exceed admission"))?;
+        drop(remaining);
         let query = QueryId {
             kind: FRONT_RUN_BATCH_KIND,
             address: hirsel_artifact_store::Address(ContentHash::of_parts(
@@ -211,10 +224,11 @@ impl FrontRunQueries {
         let charge = (bytes.len() as u64)
             .checked_add((roots.len() * std::mem::size_of::<DefPath>()) as u64)
             .ok_or_else(|| operational("native root inventory overflow"))?;
-        let remaining = this.retention.get_mut().unwrap_or_else(|e| e.into_inner());
+        let mut remaining = this.retention.lock().unwrap_or_else(|e| e.into_inner());
         *remaining = remaining
             .checked_sub(charge)
             .ok_or_else(|| operational("native source roots exceed Run admission"))?;
+        drop(remaining);
         let roots_identity =
             ContentHash::of_parts("hirsel.front.run.source-roots.v1", [bytes.as_slice()]);
         for id in this.ids.values_mut() {
@@ -236,16 +250,25 @@ impl FrontRunQueries {
     /// Potential root cursors and bodyless header/semantic-node slots. Exact
     /// canonical input content is charged by the constructor in addition.
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
-        definitions
-            .iter()
-            .try_fold(std::mem::size_of::<Self>() as u64, |n, path| {
+        definitions.iter().try_fold(
+            (std::mem::size_of::<Self>() as u64)
+                .checked_add(crate::memo::retained_arc_bytes(&std::mem::MaybeUninit::<
+                    Mutex<u64>,
+                >::uninit(
+                )))?
+                .checked_add(crate::memo::retained_arc_bytes(&std::mem::MaybeUninit::<
+                    MemoryReservation,
+                >::uninit(
+                )))?,
+            |n, path| {
                 n.checked_add(bincode::serialized_size(path).ok()?.checked_mul(5)?)?
                     .checked_add(
                         (std::mem::size_of::<Input>()
                             + std::mem::size_of::<QueryId>()
                             + 32 * std::mem::size_of::<usize>()) as u64,
                     )
-            })
+            },
+        )
     }
     pub fn output_bytes(weight: MemoryWeight) -> Option<u64> {
         weight
@@ -574,7 +597,7 @@ impl Task {
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Ready(Ok(product)) => product,
             };
-            let output = match queries.front.outcome(product.record) {
+            let output = match queries.front.outcome(Ok(product.clone())) {
                 Some(output) => output,
                 None => {
                     let Some(id) = queries.front.body_query(path) else {
@@ -585,7 +608,7 @@ impl Task {
                         Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                         Poll::Ready(Ok(product)) => product,
                     };
-                    let Some(output) = queries.front.outcome(product.record) else {
+                    let Some(output) = queries.front.outcome(Ok(product.clone())) else {
                         return Poll::Ready(Err(queries.failure_record(operational(format!(
                             "source body product for {path} is unavailable after materialization"
                         )))));
@@ -957,13 +980,17 @@ impl Task {
                 if weight.bytes() > queries.weight.retained {
                     return Err(operational("Run batch outputs exceed retained admission"));
                 }
+                let archive = product
+                    .archive(ArchiveAdmission::Retained)
+                    .map_err(|_| QueryError::NotImplemented)?;
+                let reference = archive.reference();
                 products.push((
                     product.address.0.0,
                     product.action.0.0,
-                    product.record.domain.kind,
-                    product.record.domain.schema,
-                    product.record.output.0.0,
-                    product.record.len,
+                    reference.domain.kind,
+                    reference.domain.schema,
+                    reference.output.0.0,
+                    reference.len,
                 ));
                 outputs.insert(root.clone(), output);
             }
@@ -979,14 +1006,16 @@ impl Task {
                 "hirsel.front.run.batch.action.v1",
                 [batch.address.0.0.as_slice(), record.output.0.0.as_slice()],
             ));
-            let product = ProductRef {
-                address: batch.address,
+            let product = ProductRef::import_archive(
+                batch.address,
                 action,
-                record,
-            };
+                queries
+                    .admit_archive(record, bytes)
+                    .map_err(|_| QueryError::NotImplemented)?,
+            );
             queries
                 .store
-                .associate_product(product.address, product.action, product.record);
+                .associate_product(product.address, product.action, record);
             *queries
                 .completed_batch
                 .lock()
@@ -1208,14 +1237,16 @@ impl Task {
             "hirsel.front.run.action.v1",
             [query.address.0.0.as_slice(), record.output.0.0.as_slice()],
         ));
-        let product = ProductRef {
-            address: query.address,
+        let product = ProductRef::import_archive(
+            query.address,
             action,
-            record,
-        };
+            queries
+                .admit_archive(record, bytes)
+                .map_err(|_| QueryError::NotImplemented)?,
+        );
         queries
             .store
-            .associate_product(product.address, product.action, product.record);
+            .associate_product(product.address, product.action, record);
         queries
             .completed
             .lock()
@@ -1567,13 +1598,13 @@ impl QueryEngine {
             store,
             completed: Mutex::new(BTreeMap::new()),
             failures: Mutex::new(BTreeMap::new()),
-            retention: Mutex::new(allowance.bytes() - required),
+            retention: Arc::new(Mutex::new(allowance.bytes() - required)),
             weight,
             errors,
             ownership: Arc::new(Ownership {
                 _front: front.clone(),
                 _lower: lower.clone(),
-                _allowance: allowance,
+                _allowance: Arc::new(allowance),
             }),
         }))
     }

@@ -105,7 +105,7 @@ impl FrontStorageGraphQueries {
             .or_else(|| self.growth.failure(reference))
             .or_else(|| {
                 self.front
-                    .outcome(reference)
+                    .outcome(Err(reference))
                     .and_then(|o| o.outcome.result.err())
             })
     }
@@ -531,11 +531,14 @@ impl Task {
             "hirsel.front.storage-graph.action.v1",
             [input.action.0.0.as_slice(), record.output.0.0.as_slice()],
         ));
-        let product = ProductRef {
-            address: owner.query.address,
+        let product = ProductRef::import_archive(
+            owner.query.address,
             action,
-            record,
-        };
+            owner
+                .store
+                .open_product_archive(record)
+                .ok_or(QueryError::NotImplemented)?,
+        );
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some((
             product.clone(),
             Arc::new(Data {
@@ -546,7 +549,7 @@ impl Task {
         ));
         owner
             .store
-            .associate_product(product.address, product.action, product.record);
+            .associate_product(product.address, product.action, record);
         Ok(product)
     }
 }

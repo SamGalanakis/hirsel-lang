@@ -1,5 +1,6 @@
 //! Native query descriptors. Content references convey integrity, never proof
 //! authority; materialization independently checks the native stage and inputs.
+use hirsel_engine::runtime::ArchiveAdmission;
 pub use hirsel_engine::runtime::ProductRef;
 use hirsel_engine::store::Reference;
 pub use hirsel_rc::arena_credit::equations::LocalArenaEquations;
@@ -388,18 +389,20 @@ pub fn ready_product(
     store: &dyn hirsel_engine::store::ResultStore,
     product: ProductRef,
 ) -> Result<ReadyProduct, String> {
-    if product.record.domain != READY_RECORD_DOMAIN {
+    let archive = product
+        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+        .map_err(|e| e.to_string())?;
+    let reference = archive.reference();
+    if reference.domain != READY_RECORD_DOMAIN {
         return Err("wrong Ready descriptor domain".into());
     }
     let current = store
         .lookup_product(product.address)
         .ok_or("missing Ready association")?;
-    if current.action != product.action || current.reference != product.record {
+    if current.action != product.action || current.reference != reference {
         return Err("Ready descriptor is no longer settled at this action".into());
     }
-    let bytes = store
-        .get_content(product.record)
-        .ok_or("missing Ready descriptor")?;
+    let bytes = archive.bytes();
     let (debug, ready, layout_closure, emission_context, unit_summary, optimizer): ReadyRecord =
         serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let mut optimizer_reads = Vec::new();
@@ -415,11 +418,13 @@ pub fn ready_product(
         if current.reference != record {
             return Err("optimizer dependency output changed".into());
         }
-        optimizer_reads.push(ProductRef {
+        optimizer_reads.push(ProductRef::import_archive(
             address,
-            action: current.action,
-            record,
-        });
+            current.action,
+            store
+                .copy_product_archive(record)
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        ));
     }
     Ok(ReadyProduct {
         product,
@@ -484,11 +489,13 @@ pub(crate) fn publish_ready_record(
         return Err("Ready descriptor content identity differs".into());
     }
     store.associate_product(address, action, record);
-    Ok(ProductRef {
+    Ok(ProductRef::import_archive(
         address,
         action,
-        record,
-    })
+        store
+            .admit_product_archive(record, bytes.into())
+            .ok_or("native product archive is unavailable or exceeds admission")?,
+    ))
 }
 
 mod instance_operations;

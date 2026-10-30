@@ -240,11 +240,10 @@ impl QueryTask for Task {
                 record.output.0.0.as_slice(),
             ],
         ));
-        let product = ProductRef {
-            address: owner.query.address,
-            action,
-            record,
+        let Some(archive) = owner.store.open_product_archive(record) else {
+            return QueryPoll::Failed(owner.errors.resource);
         };
+        let product = ProductRef::import_archive(owner.query.address, action, archive);
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some(Completed {
             product: product.clone(),
             artifacts,

@@ -519,11 +519,12 @@ mod tests {
         }
     }
     fn product(query: crate::runtime::QueryId) -> crate::runtime::ProductRef {
-        crate::runtime::ProductRef {
-            address: query.address,
-            action: crate::store::Action(query.address.0),
-            record: reference(&query.address.0.0),
-        }
+        crate::runtime::test_product(
+            query.address,
+            crate::store::Action(query.address.0),
+            crate::store::Domain { kind: 1, schema: 1 },
+            &query.address.0.0,
+        )
     }
     struct Leaf(bool);
     impl crate::runtime::QueryFactory for Leaf {

@@ -67,8 +67,11 @@ fn aware_source_request_publishes_a_taken_parameter_as_its_paired_return() {
 fn request_result(forward: bool, take: bool, mutable: bool, result: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
-        let store: Arc<dyn ResultStore> =
-            Arc::new(store::DirStore::new(directory.path().join("products")));
+        let transport_budget = hirsel_engine::runtime::ProcessBudget::new(64 << 20);
+        let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+            Arc::new(store::DirStore::new(directory.path().join("products"))),
+            transport_budget.reserve(64 << 20).unwrap(),
+        ));
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
         let file = engine
@@ -215,11 +218,12 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
                 .map(|(path, query)| {
                     (
                         *query,
-                        ProductRef {
-                            address: query.address,
-                            action: store::Action(query.address.0),
-                            record: products[path].body,
-                        },
+                        crate::scheduled_front::imported_fixture(
+                            &*store,
+                            query.address,
+                            store::Action(query.address.0),
+                            products[path].body,
+                        ),
                     )
                 })
                 .collect();
@@ -432,7 +436,11 @@ impl hirsel_driver::native::queries::source_inputs::NativeLowerProducts for Lowe
     ) -> Result<NativeOriginalProduct, String> {
         self.0
             .get(path)
-            .filter(|product| product.body == selected.record)
+            .filter(|product| {
+                selected
+                    .archive(runtime::ArchiveAdmission::Retained)
+                    .is_ok_and(|archive| product.body == archive.reference())
+            })
             .cloned()
             .ok_or_else(|| "unselected test Lower".into())
     }

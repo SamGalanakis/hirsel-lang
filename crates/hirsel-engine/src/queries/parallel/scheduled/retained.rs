@@ -43,6 +43,19 @@ fn metadata_inner(
         return None;
     }
     let mut weight = Weight::default();
+    if compact && outcome.result.is_ok() {
+        if let Some(summary) = &outcome.summary {
+            weight.arc(summary, |w, summary| {
+                definition(w, &summary.summary);
+                w.parameter_growth(&summary.growth);
+                if let Some(value) = &summary.checked {
+                    w.arc(value, checked);
+                }
+                w.reads(&summary.reads);
+            });
+        }
+    }
+    let published = weight.bytes;
     // Compact front rows retain the session's DefId, not this temporary path.
     if !compact {
         weight.def_path(&outcome.definition);
@@ -84,7 +97,7 @@ fn metadata_inner(
     for (_, reads) in memos {
         weight.reads(reads);
     }
-    Some(weight.bytes)
+    weight.bytes.checked_sub(published)
 }
 
 #[cfg(test)]
@@ -134,9 +147,12 @@ mod tests {
             FrontBodyQueries::input_bytes(&[long.definition])
         );
         let row = FrontOutcome::capture(
-            crate::store::Domain { kind: 1, schema: 1 }
-                .reference(b"row")
-                .unwrap(),
+            Some(
+                crate::store::Domain { kind: 1, schema: 1 }
+                    .reference(b"row")
+                    .unwrap(),
+            ),
+            None,
             short.clone(),
             selected,
             None,

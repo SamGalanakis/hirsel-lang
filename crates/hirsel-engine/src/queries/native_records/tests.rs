@@ -384,7 +384,8 @@ fn ownership_projection_is_charged_and_generated_changes_retire_both_directions(
     for (owner, occurrence) in old
         .bindings
         .owners
-        .values()
+        .iter()
+        .map(|(_, owner)| owner)
         .filter(|(owner, _)| owner.path().0.name.starts_with("$generated-source:a:"))
     {
         assert!(

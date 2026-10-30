@@ -105,6 +105,25 @@ impl Nodes {
             }
         }
     }
+    pub fn mark_in_flight(&mut self, roots: impl Iterator<Item = Key>) {
+        for node in &mut self.rows {
+            node.in_flight = false;
+        }
+        let mut pending: Vec<u32> = roots
+            .filter_map(|key| self.index.get(&key).copied())
+            .collect();
+        while let Some(slot) = pending.pop() {
+            let node = &mut self.rows[slot as usize];
+            if !node.in_flight && !matches!(node.status, Status::Dormant) {
+                node.in_flight = true;
+                // Completed producers own their results; their historical reads
+                // no longer pin the payloads consumed during computation.
+                if !matches!(node.status, Status::Settled(_)) {
+                    pending.extend(node.dependencies.iter().map(|edge| edge.target));
+                }
+            }
+        }
+    }
     pub fn iter(&self) -> impl Iterator<Item = (&Key, &Node)> {
         self.index.iter().filter_map(|(key, &slot)| {
             let node = &self.rows[slot as usize];

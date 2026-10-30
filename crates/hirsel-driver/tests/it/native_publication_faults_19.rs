@@ -131,7 +131,12 @@ fn original_missing_corrupt_metadata_and_failed_publication_recompute_without_lo
         let cold = compile(store.clone(), Verify::On);
         assert!(!cold.objects.is_empty());
         let (key, record) = cold.products.first().unwrap();
-        store.hidden.lock().unwrap().push(record.record);
+        store.hidden.lock().unwrap().push(
+            record
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .unwrap()
+                .reference(),
+        );
         let before = store.fragment_puts.load(Ordering::Relaxed);
         let missing = compile(store.clone(), Verify::On);
         assert!(
@@ -142,7 +147,14 @@ fn original_missing_corrupt_metadata_and_failed_publication_recompute_without_lo
         store.hidden.lock().unwrap().clear();
         let truncated = store
             .disk
-            .put_content(record.record.domain, b"truncated")
+            .put_content(
+                record
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .unwrap()
+                    .reference()
+                    .domain,
+                b"truncated",
+            )
             .unwrap();
         store.substituted.lock().unwrap().push((
             key.address(),

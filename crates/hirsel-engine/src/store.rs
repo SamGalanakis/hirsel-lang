@@ -176,6 +176,23 @@ pub trait ResultStore: Send + Sync {
     ) -> Option<crate::runtime::ProductArchive> {
         None
     }
+    /// Transfer a producer's complete immutable encoded backing into this
+    /// provider's existing admission, without reading the transport again.
+    fn admit_product_archive(
+        &self,
+        _reference: Reference,
+        _bytes: Bytes,
+    ) -> Option<crate::runtime::ProductArchive> {
+        None
+    }
+    /// Copy a checked payload into independently admitted compact backing.
+    /// This avoids retaining a provider's larger packed container.
+    fn copy_product_archive(
+        &self,
+        _reference: Reference,
+    ) -> Option<crate::runtime::ProductArchive> {
+        None
+    }
     /// Immutable content and logical action indexes use distinct addresses.
     /// Byte providers share their map; directory providers map content directly.
     fn get_content(&self, reference: Reference) -> Option<Bytes> {

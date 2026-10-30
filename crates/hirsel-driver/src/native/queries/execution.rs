@@ -85,29 +85,31 @@ impl ExecutionTasks {
         query: QueryId,
         domain: Domain,
         action: Action,
-        bytes: &[u8],
+        bytes: Vec<u8>,
     ) -> Result<ProductRef, String> {
         let store = &self.roots.native.snapshot.store;
         if self.roots.native.snapshot.verify_store == hirsel_engine::store::VerifyStore::Recompute
             && let Some(previous) = store
                 .lookup_product(query.address)
                 .filter(|p| p.action == action)
-            && domain.reference(bytes) != Some(previous.reference)
+            && domain.reference(&bytes) != Some(previous.reference)
         {
             return Err("recomputed execution product differs from cached output".into());
         }
         let record = store
-            .put_content(domain, bytes)
+            .put_content(domain, &bytes)
             .ok_or("execution publication exceeds admission")?;
-        if domain.reference(bytes) != Some(record) {
+        if domain.reference(&bytes) != Some(record) {
             return Err("execution content identity differs".into());
         }
         store.associate_product(query.address, action, record);
-        Ok(ProductRef {
-            address: query.address,
+        Ok(ProductRef::import_archive(
+            query.address,
             action,
-            record,
-        })
+            store
+                .admit_product_archive(record, bytes.into())
+                .ok_or("native product archive is unavailable or exceeds admission")?,
+        ))
     }
     fn plan(&self, root: ProductRef, reads: &[ProductRef]) -> Result<ProductRef, String> {
         let (mut native, selected) = self.roots.products(root.clone(), reads)?;
@@ -171,18 +173,29 @@ impl ExecutionTasks {
         let continuation = crate::native::continuation::plans(&program);
         crate::native::continuation::validate(&program, &continuation)
             .map_err(|e| e.to_string())?;
-        let dependencies = reads.iter().map(|p| p.record).collect::<Vec<_>>();
+        let dependencies = reads
+            .iter()
+            .map(|p| {
+                p.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map(|archive| archive.reference())
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let bytes = serde_json::to_vec(&(ahead.identity, continuation.identity, snapshot.context))
             .map_err(|e| e.to_string())?;
         let action = Action(ContentHash::of_parts(
             "hirsel.native.execution-action.v1",
-            [
-                serde_json::to_vec(&(root.record, dependencies, snapshot.context))
+            [serde_json::to_vec(&(
+                root.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
                     .map_err(|e| e.to_string())?
-                    .as_slice(),
-            ],
+                    .reference(),
+                dependencies,
+                snapshot.context,
+            ))
+            .map_err(|e| e.to_string())?
+            .as_slice()],
         ));
-        let product = self.publish(self.query, PLAN, action, &bytes)?;
+        let product = self.publish(self.query, PLAN, action, bytes)?;
         // Bodies belong only to a demanded planner/emitter/checker scope.
         // Keep one layout binding and capture declarations with the plans.
         snapshot
@@ -242,7 +255,13 @@ impl ExecutionTasks {
             let action = Action(ContentHash::of_parts(
                 "hirsel.native.execution-objects-action.v1",
                 [
-                    plan.record.output.0.0.as_slice(),
+                    plan.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference()
+                        .output
+                        .0
+                        .0
+                        .as_slice(),
                     snapshot.context.output.0.0.as_slice(),
                 ],
             ));
@@ -250,12 +269,9 @@ impl ExecutionTasks {
                 && let Some(previous) = store
                     .lookup_product(query.address)
                     .filter(|p| p.action == action)
+                && let Some(archive) = store.copy_product_archive(previous.reference)
             {
-                let product = ProductRef {
-                    address: query.address,
-                    action,
-                    record: previous.reference,
-                };
+                let product = ProductRef::import_archive(query.address, action, archive);
                 if let Ok(objects) = self.load_objects(product.clone()) {
                     crate::native::ahead::check_objects(program, &objects)
                         .map_err(|e| e.to_string())?;
@@ -296,7 +312,7 @@ impl ExecutionTasks {
             let text = hirsel_codec::to_text(&objects);
             let blob = crate::native::object_queries::store_link_input(store, text.as_bytes())?;
             let bytes = serde_json::to_vec(&blob).map_err(|e| e.to_string())?;
-            let product = self.publish(query, OBJECTS, action, &bytes)?;
+            let product = self.publish(query, OBJECTS, action, bytes)?;
             Ok(product)
         })
     }
@@ -304,7 +320,12 @@ impl ExecutionTasks {
         &self,
         product: ProductRef,
     ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, String> {
-        self.objects_from_reference(product.record)
+        self.objects_from_reference(
+            product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
+        )
     }
     pub(super) fn objects_from_reference(
         &self,

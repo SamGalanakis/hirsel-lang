@@ -188,11 +188,12 @@ mod tests {
         }
     }
     fn product(id: QueryId) -> ProductRef {
-        ProductRef {
-            address: id.address,
-            action: Action(id.address.0),
-            record: error(),
-        }
+        crate::runtime::test_product(
+            id.address,
+            Action(id.address.0),
+            Domain { kind: 1, schema: 1 },
+            b"resource",
+        )
     }
     fn error() -> Reference {
         Domain { kind: 1, schema: 1 }

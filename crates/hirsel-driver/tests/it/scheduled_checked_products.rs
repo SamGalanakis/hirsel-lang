@@ -189,11 +189,12 @@ fn products_case_with_decode_layout(
                 .unwrap();
             runtime.register(FRONT_CHECK_KIND, check.factory()).unwrap();
             let query = check.query();
-            let unknown = ProductRef {
-                address: query.address,
-                action: hirsel_artifact_store::Action(query.address.0),
-                record: errors.protocol,
-            };
+            let unknown = crate::scheduled_front::synthetic_fixture(
+                query.address,
+                hirsel_artifact_store::Action(query.address.0),
+                errors.protocol.domain,
+                b"protocol",
+            );
             assert!(
                 check
                     .completed_scope(unknown.clone(), budget.reserve(1 << 20).unwrap())

@@ -35,9 +35,9 @@ pub struct NativeRecordContext {
     bindings: Arc<SourceBindings>,
 }
 struct SourceBindings {
-    owners: BTreeMap<Anchor, (RecordOwner, u32)>,
-    anchors: BTreeMap<(RecordOwner, u32), Anchor>,
-    source_definitions: BTreeMap<Anchor, DefId>,
+    owners: Box<[(Anchor, (RecordOwner, u32))]>,
+    anchors: Box<[((RecordOwner, u32), Anchor)]>,
+    source_definitions: Box<[(Anchor, DefId)]>,
 }
 #[derive(Clone)]
 enum RecordOwner {
@@ -163,14 +163,15 @@ impl NativeRecordContext {
     pub(crate) fn input_bytes(&self) -> Option<u64> {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + size_of::<SourceBindings>() + 4 * size_of::<usize>());
-        weight.bulk_tree::<Anchor, (RecordOwner, u32)>(self.bindings.owners.len());
-        weight.bulk_tree::<(RecordOwner, u32), Anchor>(self.bindings.anchors.len());
-        weight.bulk_tree::<Anchor, DefId>(self.bindings.source_definitions.len());
+        weight.add(size_of_val(&*self.bindings.owners));
+        weight.add(size_of_val(&*self.bindings.anchors));
+        weight.add(size_of_val(&*self.bindings.source_definitions));
         for (owner, _) in self
             .bindings
             .owners
-            .values()
-            .chain(self.bindings.anchors.keys())
+            .iter()
+            .map(|(_, owner)| owner)
+            .chain(self.bindings.anchors.iter().map(|(owner, _)| owner))
         {
             if let RecordOwner::Written(path) = owner {
                 weight.arc(path);
@@ -184,10 +185,11 @@ impl NativeRecordContext {
     /// codec owner is content-bound and can differ from this declaration;
     /// selector ordinals are neither codec occurrences nor source bases.
     pub fn source_definition(&self, anchor: Anchor) -> Option<&DefPath> {
-        self.bindings
-            .source_definitions
-            .get(&anchor)
-            .map(|id| id.path())
+        let definitions = &self.bindings.source_definitions;
+        let position = definitions
+            .binary_search_by_key(&anchor, |(anchor, _)| *anchor)
+            .ok()?;
+        Some(definitions[position].1.path())
     }
 
     pub fn capture(engine: &QueryEngine) -> Self {
@@ -319,10 +321,12 @@ impl NativeRecordContext {
     }
 
     fn record_owner_ref(&self, anchor: Anchor) -> Option<(&DefPath, u32)> {
-        self.bindings
-            .owners
-            .get(&anchor)
-            .map(|(owner, occurrence)| (owner.path(), *occurrence))
+        let owners = &self.bindings.owners;
+        let position = owners
+            .binary_search_by_key(&anchor, |(anchor, _)| *anchor)
+            .ok()?;
+        let (owner, occurrence) = &owners[position].1;
+        Some((owner.path(), *occurrence))
     }
 }
 impl NativeRecordSource for NativeRecordContext {
@@ -330,16 +334,17 @@ impl NativeRecordSource for NativeRecordContext {
         &self.types
     }
     fn record_owner(&self, anchor: Anchor) -> Option<(DefPath, u32)> {
-        self.bindings
-            .owners
-            .get(&anchor)
-            .map(|(owner, occurrence)| (owner.path().clone(), *occurrence))
+        self.record_owner_ref(anchor)
+            .map(|(owner, occurrence)| (owner.clone(), occurrence))
     }
     fn record_source_anchor(&self, owner: &DefPath, occurrence: u32) -> Option<Anchor> {
-        self.bindings
-            .anchors
-            .get(&(RecordOwner::capture(owner), occurrence))
-            .copied()
+        let anchors = &self.bindings.anchors;
+        let position = anchors
+            .binary_search_by(|((selected, ordinal), _)| {
+                (selected.path(), *ordinal).cmp(&(owner, occurrence))
+            })
+            .ok()?;
+        Some(anchors[position].1)
     }
 }
 

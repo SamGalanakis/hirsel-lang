@@ -246,8 +246,14 @@ impl DemandInstances {
             crate::COMPILER_IDENTITY.as_slice(),
             originals
                 .iter()
-                .map(|(_, o)| o.product.product.record)
-                .collect::<Vec<_>>(),
+                .map(|(_, o)| {
+                    o.product
+                        .product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map(|archive| archive.reference())
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             options.scoped_specialization,
         ))
         .map_err(|e| e.to_string())?;
@@ -520,11 +526,12 @@ mod tests {
         let key = InstanceKey::new(&path, 0, &[], &types, None, None).unwrap();
         let record = INSTANCE_DISCOVERY_DOMAIN.reference(b"descriptor").unwrap();
         let product = Arc::new(InstanceProduct {
-            product: ProductRef {
-                address: hirsel_engine::store::Address(record.output.0),
-                action: Action(record.output.0),
-                record,
-            },
+            product: crate::fixture_product_bytes(
+                hirsel_engine::store::Address(record.output.0),
+                Action(record.output.0),
+                record.domain,
+                b"descriptor",
+            ),
             value: record,
             layout_closure: record,
             local_equations: record,

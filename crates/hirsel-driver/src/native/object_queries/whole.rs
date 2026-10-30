@@ -83,14 +83,25 @@ pub(super) fn codegen<N: NativeProducts, L>(
     let mut reads = Vec::new();
     for ready in &selected {
         reads.extend([
-            ready.product.record,
+            ready
+                .product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
             ready.ready,
             ready.layout_closure,
             ready.emission_context,
             ready.unit_summary,
         ]);
     }
-    reads.extend(queries.native.execution_read().map(|p| p.record));
+    if let Some(product) = queries.native.execution_read() {
+        reads.push(
+            product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference(),
+        );
+    }
     let summaries = selected
         .iter()
         .map(|ready| ready.unit_summary)

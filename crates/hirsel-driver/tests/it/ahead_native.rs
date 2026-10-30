@@ -116,7 +116,12 @@ fn request_objects(
             facts: facts.clone(),
         }
     });
-    let store = fixture.store.clone();
+    let budget = ProcessBudget::new(768 << 20);
+    let transport = ProcessBudget::new(24 << 20);
+    let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+        fixture.store.clone(),
+        transport.reserve(24 << 20).unwrap(),
+    ));
     // Direct graph fixtures share production's publication owner across all workers.
     let _publication = store.publication_scope();
     let facts = &fixture.facts;
@@ -161,7 +166,6 @@ fn request_objects(
         scratch: 32 << 20,
         stack: 0,
     };
-    let budget = ProcessBudget::new(768 << 20);
     let policy = ContentHash::of_bytes(b"ahead request fixture");
     let instances = InstanceTasks::new(
         inputs,

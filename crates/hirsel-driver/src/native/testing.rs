@@ -1,5 +1,5 @@
 //! Compile one package test executable and launch each test in a fresh process.
-use super::{Backend, NativeError, OptLevel, StageName, TargetSpec, Toolchain};
+use super::{Backend, NativeError, OptLevel, StageName, TargetSpec};
 use crate::requests::{
     CompileOperation, CompileRequest, CompileResult, CompilerRequests, NativeExecution,
     NativeRequest,
@@ -12,7 +12,7 @@ use hirsel_engine::{
 };
 use std::sync::Arc;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     process::Command,
     time::{Duration, Instant},
 };
@@ -71,7 +71,7 @@ impl Executable {
         path: &Path,
         discovery: &crate::testing::TestDiscovery,
         tests: &[Test],
-        selector: CompilerRequests,
+        mut selector: CompilerRequests,
         backend: Backend,
         optimization: OptLevel,
     ) -> Result<Self, NativeError> {
@@ -79,11 +79,6 @@ impl Executable {
             NativeError::new(StageName::Manifest, error.to_string())
         };
         let target = TargetSpec::x86_64_unknown_linux_gnu();
-        let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
-            .map(PathBuf::from)
-            .unwrap_or_else(super::runtime_cache::default_directory);
-        let tools = Arc::new(Toolchain::in_tree(&cache, &[&target])?);
-        let mut selector = selector.with_toolchain(tools);
         let request = CompileRequest {
             path: path.to_owned(),
             inputs: discovery.inputs.clone(),

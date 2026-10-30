@@ -4129,7 +4129,9 @@ mod malformed_tests {
     }
     #[test]
     fn live_analyzed_archive_keeps_source_and_complete_body_fields_under_exact_admission() {
-        use crate::runtime::{LIVE_ANALYZED, LiveAnalyzedProduct, ProcessBudget, ProductSource};
+        use crate::runtime::{
+            LIVE_ANALYZED, LiveAnalyzedProduct, LiveSummaryProduct, ProcessBudget, ProductSource,
+        };
         let mut identities = Vec::new();
         for (text, capture_case) in [
             ("fn main() { true }", false),
@@ -4192,20 +4194,43 @@ mod malformed_tests {
                 engine.result_store.clone().unwrap(),
             );
             let source =
-                ProductSource::new(source.clone(), records.clone(), backing.clone()).unwrap();
+                ProductSource::prepare(source.clone(), records.clone(), backing.clone()).unwrap();
             let identity = (
                 hirsel_artifact_store::Address(ContentHash::default()),
                 hirsel_artifact_store::Action(ContentHash::default()),
             );
+            let (summary, growth) = crate::summary::summarize(&engine.types, &output.value.typed);
+            let value = Arc::new(crate::PublishedSummary {
+                definition: DefId::intern(&outcome.definition),
+                text: syntax.text_hash,
+                summary,
+                growth,
+                storage: None,
+                checked: None,
+                reads: reads.clone(),
+            });
+            let mut summary_allowance = budget
+                .reserve(LiveSummaryProduct::value_bytes(&value).unwrap())
+                .unwrap();
+            let summary =
+                LiveSummaryProduct::new(identity, value, source.clone(), &mut summary_allowance)
+                    .unwrap();
             let mut short = budget.reserve(required - 1).unwrap();
             assert!(
-                LiveAnalyzedProduct::new(identity, outcome.clone(), source.clone(), &mut short)
-                    .is_none()
+                LiveAnalyzedProduct::new(
+                    identity,
+                    outcome.clone(),
+                    summary.clone(),
+                    source.clone(),
+                    &mut short
+                )
+                .is_none()
             );
             assert_eq!(short.bytes(), required - 1);
             drop(short);
             let mut exact = budget.reserve(required).unwrap();
-            let live = LiveAnalyzedProduct::new(identity, outcome, source, &mut exact).unwrap();
+            let live =
+                LiveAnalyzedProduct::new(identity, outcome, summary, source, &mut exact).unwrap();
             assert_eq!(exact.bytes(), 0);
             assert_eq!(live.retained_bytes(), required);
             assert!(Arc::ptr_eq(live.output(), &output));

@@ -42,6 +42,11 @@ fn import_engine_with_validation(
     store: Arc<dyn ResultStore>,
     validation: native::Validation,
 ) -> (Bodies, u64, u64) {
+    let budget = runtime::ProcessBudget::new(64 << 20);
+    let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+        store,
+        budget.reserve(64 << 20).unwrap(),
+    ));
     let facts = crate::native_front_fixture::products(&mut engine, roots).unwrap();
     let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
     let reader = facts

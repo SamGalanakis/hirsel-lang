@@ -160,7 +160,11 @@ impl NativeTasks {
                     },
                     summary.product.clone(),
                 ),
-                summary.product.record,
+                summary
+                    .product
+                    .archive(ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference(),
             ))
         };
         for (key, output) in &inputs {
@@ -182,7 +186,18 @@ impl NativeTasks {
                     .get(&member)
                     .ok_or("missing Ready instance dependency")?;
                 let q = instance_query(member_key, input.product.product.clone());
-                reads.insert(id(q), (q, input.product.product.record));
+                reads.insert(
+                    id(q),
+                    (
+                        q,
+                        input
+                            .product
+                            .product
+                            .archive(ArchiveAdmission::Retained)
+                            .map_err(|e| e.to_string())?
+                            .reference(),
+                    ),
+                );
                 let component = components
                     .get(&(true, member))
                     .ok_or("missing Ready chosen component")?;
@@ -207,7 +222,18 @@ impl NativeTasks {
                     .get(&owner(member))
                     .ok_or("missing component instance")?;
                 let q = instance_query(member, input.product.product.clone());
-                reads.insert(id(q), (q, input.product.product.record));
+                reads.insert(
+                    id(q),
+                    (
+                        q,
+                        input
+                            .product
+                            .product
+                            .archive(ArchiveAdmission::Retained)
+                            .map_err(|e| e.to_string())?
+                            .reference(),
+                    ),
+                );
                 for callee in &input.facts.body.callees {
                     let component = components
                         .get(&(key.stratum == ArenaStratum::Chosen, callee.clone()))
@@ -379,7 +405,10 @@ impl QueryTask for NativeTask {
                     return QueryPoll::Failed(error);
                 }
                 Poll::Ready(Ok(product))
-                    if product.address == key.address && product.record == *record => {}
+                    if product.address == key.address
+                        && product
+                            .archive(ArchiveAdmission::Retained)
+                            .is_ok_and(|archive| archive.reference() == *record) => {}
                 Poll::Ready(Ok(_)) => {
                     let error = self
                         .tasks

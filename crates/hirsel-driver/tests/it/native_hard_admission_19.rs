@@ -66,11 +66,12 @@ fn one_byte_short_refuses_with_resource_error_and_exact_need_executes() {
         kind: 0x7a000002,
         address,
     };
-    let product = ProductRef {
+    let product = crate::scheduled_front::imported_fixture(
+        &store,
         address,
-        action: Action(address.0),
-        record: diagnostic(b"completed"),
-    };
+        Action(address.0),
+        diagnostic(b"completed"),
+    );
     let weight = MemoryWeight {
         retained: 1024,
         scratch: 4096,

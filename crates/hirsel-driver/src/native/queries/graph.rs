@@ -483,11 +483,12 @@ mod retained_tests {
         plan.retain_owner(grant.clone());
         let keys = plan.component_keys.clone();
         let summary = Arc::new(ArenaSummary {
-            product: ProductRef {
-                address: owner.address(ARENA_CANDIDATES_KIND),
-                action: Action(ContentHash::default()),
-                record: reference,
-            },
+            product: crate::fixture_product_bytes(
+                owner.address(ARENA_CANDIDATES_KIND),
+                Action(ContentHash::default()),
+                reference.domain,
+                b"equations",
+            ),
             candidates: vec![(owner, Vec::new())],
             retained_owner: Some(grant.clone()),
         });

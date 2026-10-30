@@ -766,7 +766,7 @@ impl SourceProducts {
                             .map(|error| (error, Some(QueryKind::Lower)))
                     })
                     .or_else(|| {
-                        let outcome = front.outcome(reference)?.outcome;
+                        let outcome = front.outcome(Err(reference))?.outcome;
                         outcome.result.err().map(|error| (error, outcome.phase))
                     })
             });
@@ -1629,7 +1629,12 @@ pub(super) fn install(
             errors,
         )
         .map_err(&query_error)?;
-    if matches!(request.operation, CompileOperation::NativeOwnership(_)) {
+    if matches!(
+        request.operation,
+        CompileOperation::NativeOwnership(_)
+            | CompileOperation::NativeBuild(_)
+            | CompileOperation::NativeRun(_)
+    ) {
         front.compact_retained_reads();
     }
     // Before any task: this fresh graph adopts the selector's earlier accepted

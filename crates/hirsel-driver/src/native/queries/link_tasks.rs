@@ -106,15 +106,22 @@ fn address(kind: u32, bytes: &[u8]) -> QueryId {
         )),
     }
 }
-fn product(query: QueryId, record: Reference) -> ProductRef {
-    ProductRef {
-        address: query.address,
-        action: Action(ContentHash::of_parts(
+fn product(
+    store: &dyn ResultStore,
+    query: QueryId,
+    record: Reference,
+    bytes: Vec<u8>,
+) -> Result<ProductRef, String> {
+    Ok(ProductRef::import_archive(
+        query.address,
+        Action(ContentHash::of_parts(
             "hirsel.native.link-input-action.v1",
             [record.output.0.0.as_slice()],
         )),
-        record,
-    }
+        store
+            .admit_product_archive(record, bytes.into())
+            .ok_or("Link input archive exceeds admission")?,
+    ))
 }
 
 /// Immutable request plans plus the root producer's completed ordinary output.
@@ -310,18 +317,23 @@ impl LinkTasks {
     fn failure(&self, message: &str) -> Reference {
         self.root.native.failure(message)
     }
-    fn publish(&self, query: QueryId, domain: Domain, bytes: &[u8]) -> Result<ProductRef, String> {
+    fn publish(
+        &self,
+        query: QueryId,
+        domain: Domain,
+        bytes: Vec<u8>,
+    ) -> Result<ProductRef, String> {
         let expected = domain
-            .reference(bytes)
+            .reference(&bytes)
             .ok_or("Link task metadata exceeds record bound")?;
         let record = self
             .store()
-            .put_content(domain, bytes)
+            .put_content(domain, &bytes)
             .ok_or("Link task metadata publication failed")?;
         if record != expected {
             return Err("Link task metadata identity differs".into());
         }
-        let product = product(query, record);
+        let product = product(self.store(), query, record, bytes)?;
         self.store()
             .associate_product(query.address, product.action, record);
         Ok(product)
@@ -331,7 +343,13 @@ impl LinkTasks {
             .store()
             .lookup_product(product.address)
             .ok_or("missing Link task association")?;
-        if association.action != product.action || association.reference != product.record {
+        if association.action != product.action
+            || association.reference
+                != product
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference()
+        {
             return Err("Link task output changed".into());
         }
         Ok(())
@@ -341,12 +359,23 @@ impl LinkTasks {
         manifest: ProductRef,
     ) -> Result<(Arc<Plan>, ProductRef, Arc<NativeRootProduct>), String> {
         self.current(manifest.clone())?;
-        if manifest.record.domain != MANIFEST {
+        if manifest
+            .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+            .map_err(|e| e.to_string())?
+            .reference()
+            .domain
+            != MANIFEST
+        {
             return Err("wrong native Link manifest domain".into());
         }
         let bytes = self
             .store()
-            .get_content(manifest.record)
+            .get_content(
+                manifest
+                    .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                    .map_err(|e| e.to_string())?
+                    .reference(),
+            )
             .ok_or("missing native Link manifest")?;
         let (link, address, action, record): (ContentHash, ContentHash, ContentHash, Reference) =
             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
@@ -357,11 +386,16 @@ impl LinkTasks {
         if plan.manifest.address != manifest.address {
             return Err("native Link manifest address differs".into());
         }
-        let root_ref = ProductRef {
-            address: Address(address),
-            action: Action(action),
-            record,
-        };
+        let root_ref = ProductRef::import_archive(
+            Address(address),
+            Action(action),
+            self.root
+                .native
+                .snapshot
+                .store
+                .copy_product_archive(record)
+                .ok_or("Link root archive exceeds admission")?,
+        );
         let root = self.root.output(root_ref.clone())?;
         Ok((plan.clone(), root_ref, root))
     }
@@ -418,10 +452,12 @@ impl LeafTask {
                     plan.input.key.address().0,
                     root.address.0,
                     root.action.0,
-                    root.record,
+                    root.archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| QueryPoll::Failed(self.tasks.failure(&e.to_string())))?
+                        .reference(),
                 ))
                 .map_err(|e| QueryPoll::Failed(self.tasks.failure(&e.to_string())))?;
-                self.tasks.publish(self.request.query, MANIFEST, &bytes)
+                self.tasks.publish(self.request.query, MANIFEST, bytes)
             }
             Work::Input(leaf) => {
                 let reference = match leaf {
@@ -436,7 +472,7 @@ impl LeafTask {
                 }
                 let bytes = serde_json::to_vec(&reference)
                     .map_err(|e| QueryPoll::Failed(self.tasks.failure(&e.to_string())))?;
-                self.tasks.publish(self.request.query, INPUT, &bytes)
+                self.tasks.publish(self.request.query, INPUT, bytes)
             }
         };
         result.map_err(|e| QueryPoll::Failed(self.tasks.failure(&e)))
@@ -513,12 +549,23 @@ impl ObjectTaskSnapshot for LinkTasks {
     fn link_input(&self, product: ProductRef) -> Result<Reference, Reference> {
         let read = || -> Result<Reference, String> {
             self.current(product.clone())?;
-            if product.record.domain != INPUT {
+            if product
+                .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                .map_err(|e| e.to_string())?
+                .reference()
+                .domain
+                != INPUT
+            {
                 return Err("wrong Link input descriptor domain".into());
             }
             let bytes = self
                 .store()
-                .get_content(product.record)
+                .get_content(
+                    product
+                        .archive(hirsel_engine::runtime::ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference(),
+                )
                 .ok_or("missing Link input descriptor")?;
             let reference = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
             if self.store().get_content(reference).is_none() {
@@ -574,7 +621,14 @@ impl ObjectTaskSnapshot for LinkTasks {
             }
             let snapshot = self.root.native.snapshot.store.clone();
             let execution_objects = if let Some(execution) = &self.execution {
-                let objects = execution.objects_from_reference(settled.last().unwrap().record)?;
+                let objects = execution.objects_from_reference(
+                    settled
+                        .last()
+                        .unwrap()
+                        .archive(ArchiveAdmission::Retained)
+                        .map_err(|e| e.to_string())?
+                        .reference(),
+                )?;
                 execution.with_program(|program| {
                     crate::native::ahead::check_objects(program, &objects)
                         .map_err(|e| e.to_string())
