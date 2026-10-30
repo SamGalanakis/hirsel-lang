@@ -3,6 +3,37 @@ use hirsel_engine::{runtime::*, store::MemStore, *};
 use std::sync::Arc;
 
 #[test]
+fn concurrent_standalone_checks_wait_for_the_existing_inference_partition() {
+    let ready = std::sync::Barrier::new(4);
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let ready = &ready;
+            scope.spawn(move || {
+                with_compiler_stack(|| {
+                    let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+                    let context = default_context();
+                    let mut source = String::new();
+                    for index in 0..32 {
+                        source.push_str(&format!("fn helper_{index}()->u8{{1u8}}\n"));
+                    }
+                    source.push_str("pub fn main()->u8{helper_0()}\n");
+                    let file = engine.sources.add("concurrent.hir", source).unwrap();
+                    engine.parse_file(file, &context).unwrap();
+                    ready.wait();
+                    let checked = check_progress(&mut engine, file, &context).unwrap();
+                    assert!(
+                        checked
+                            .diagnostics
+                            .iter()
+                            .all(|diagnostic| diagnostic.severity != hirsel_diag::Severity::Error)
+                    );
+                });
+            });
+        }
+    });
+}
+
+#[test]
 fn admitted_private_facts_reuse_unchanged_inputs_and_refuse_body_and_membership_edits() {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();

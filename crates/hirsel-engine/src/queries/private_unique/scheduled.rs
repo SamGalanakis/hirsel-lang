@@ -3,7 +3,7 @@
 use super::*;
 use crate::runtime::*;
 use crate::store::{Entry as StoredEntry, EntryKey, VariantRef};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 const KIND: u32 = 0x4602_0001;
 pub(in crate::queries) fn standalone_budget() -> &'static Arc<ProcessBudget> {
@@ -755,15 +755,7 @@ impl QueryEngine {
             // The same per-module fixed point runs with declarations captured
             // by the existing worker. It never enters a scalar body query.
             let working = working_bytes;
-            let mut metadata = crate::NativeMetadataWeight::default();
-            metadata.add(size_of::<Inference>() + inputs.capacity() * size_of::<Input>());
-            metadata.tree::<DefPath, Vec<Arc<ItemSyntax>>>(2 * self.items.len());
-            for (path, values) in &self.items {
-                metadata.path(path);
-                metadata.path(path);
-                metadata.add(2 * values.capacity() * size_of::<Arc<ItemSyntax>>());
-            }
-            if metadata.bytes() > working / 2 {
+            if self.inference_input_bytes(inputs.capacity()) > working / 2 {
                 return Err(QueryError::Operational(hirsel_types::OperationalFailure {
                     operation: "private inference admission".into(),
                     message: "module inputs exceed the retained partition".into(),
@@ -839,21 +831,67 @@ impl QueryEngine {
         if self.private_bootstrap_active {
             return;
         }
+        static ADMISSION: RwLock<()> = RwLock::new(());
         let budget = standalone_budget();
-        let available = budget.limit().saturating_sub(budget.reserved());
-        if let Ok(reservation) = budget.reserve(available) {
-            self.private_bootstrap_active = true;
-            let _ = self.standalone_inference(reservation).inspect_err(|error| {
-                self.private_summary_failure = Some((self.graph.revision(), error.clone()));
-            });
-            self.private_bootstrap_active = false;
+        self.private_bootstrap_active = true;
+        let shared = ADMISSION.read().unwrap_or_else(|error| error.into_inner());
+        let result = budget
+            .reserve(self.standalone_inference_bytes())
+            .ok()
+            .map(|reservation| self.standalone_inference(reservation, false));
+        drop(shared);
+        let result = match result {
+            Some(Ok(false)) => Ok(()),
+            Some(Err(error))
+                if !matches!(&error, QueryError::Operational(failure)
+                    if failure.operation == "private inference admission") =>
+            {
+                Err(error)
+            }
+            _ => {
+                // Source registration can grow beyond the initial footprint.
+                // Drain shared inference before lending the existing remainder
+                // to that retry or to generated-source bootstrap.
+                let _exclusive = ADMISSION.write().unwrap_or_else(|error| error.into_inner());
+                let available = budget.limit().saturating_sub(budget.reserved());
+                match budget.reserve(available) {
+                    Ok(reservation) => self.standalone_inference(reservation, true).map(|_| ()),
+                    Err(_) => Ok(()),
+                }
+            }
+        };
+        self.private_bootstrap_active = false;
+        if let Err(error) = result {
+            self.private_summary_failure = Some((self.graph.revision(), error));
         }
     }
-    fn standalone_inference(&mut self, reservation: MemoryReservation) -> Result<(), QueryError> {
+    fn inference_input_bytes(&self, inputs: usize) -> u64 {
+        let mut metadata = crate::NativeMetadataWeight::default();
+        metadata.add(size_of::<Inference>() + inputs * size_of::<Input>());
+        metadata.tree::<DefPath, Vec<Arc<ItemSyntax>>>(2 * self.items.len());
+        for (path, values) in &self.items {
+            metadata.path(path);
+            metadata.path(path);
+            metadata.add(2 * values.capacity() * size_of::<Arc<ItemSyntax>>());
+        }
+        metadata.bytes()
+    }
+    fn standalone_inference_bytes(&self) -> u64 {
+        // Estimate push growth before registration. Each actual module still
+        // passes the exact retained-half check, with an exclusive retry on growth.
+        self.inference_input_bytes(self.items.len().saturating_mul(2).max(4))
+            .saturating_mul(2)
+            .saturating_add(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + 16384)
+    }
+    fn standalone_inference(
+        &mut self,
+        reservation: MemoryReservation,
+        bootstrap: bool,
+    ) -> Result<bool, QueryError> {
         let mut reservation =
             self.prepare_private_inference_with_registrations(reservation, &[])?;
         if self.private_inference_hosted {
-            return Ok(());
+            return Ok(false);
         }
         let definitions = self.front_source_roots();
         let generators = self.front_generator_roots(&definitions)?;
@@ -865,7 +903,10 @@ impl QueryEngine {
             })
         });
         if !missing {
-            return Ok(());
+            return Ok(false);
+        }
+        if !bootstrap {
+            return Ok(true);
         }
         let refused = || {
             QueryError::Operational(hirsel_types::OperationalFailure {
@@ -915,7 +956,7 @@ impl QueryEngine {
             errors,
         );
         self.result_store = previous;
-        result.map(|_| ()).map_err(|error| match error {
+        result.map(|_| false).map_err(|error| match error {
             FrontInstanceBootstrapError::Bootstrap(FrontRegistrationBootstrapError::Admission(
                 error,
             ))
