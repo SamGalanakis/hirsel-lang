@@ -327,10 +327,7 @@ impl NativeBootstrap {
             .map_err(|e| format!("native declarations: {e:?}"))?;
         let reader = facts
             .original_context
-            .reader(
-                facts.originals.iter().map(|p| (**p).clone()),
-                self.store.clone(),
-            )
+            .reader(facts.originals.iter().map(|p| (**p).clone()))
             .map_err(|e| format!("native original products: {e:?}"))?;
         let entries = declarations
             .context

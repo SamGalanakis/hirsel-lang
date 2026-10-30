@@ -54,9 +54,7 @@ pub fn forward(root:List[u64])->u64 {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        let reader = engine
-            .native_original_reader(&paths, store.clone())
-            .unwrap();
+        let reader = engine.native_original_reader(&paths).unwrap();
         let inputs = NativeInstanceInputs::from_products(declarations, reader).unwrap();
         let mut source = inputs.provider();
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();

@@ -15,8 +15,20 @@ pub(super) struct NodeId {
 }
 #[derive(Clone, Copy)]
 pub(super) struct Edge {
-    pub target: u32,
+    target: EdgeTarget,
     token: u32,
+}
+#[derive(Clone, Copy)]
+struct EdgeTarget(u32);
+// Dense admitted slots leave a pin bit inside the existing eight-byte edge.
+const BODY_CONSUMED: u32 = 1 << 31;
+impl Edge {
+    fn target(&self) -> u32 {
+        self.target.0 & !BODY_CONSUMED
+    }
+    fn body_consumed(&self) -> bool {
+        self.target.0 & BODY_CONSUMED != 0
+    }
 }
 #[derive(Clone, Copy)]
 pub(super) struct Subscriber {
@@ -51,7 +63,8 @@ impl Nodes {
     }
     pub fn can_insert(&self, key: Key, limit: usize) -> bool {
         self.serial < u32::MAX
-            && (self.index.contains_key(&key) || self.index.len() < limit.min(u32::MAX as usize))
+            && (self.index.contains_key(&key)
+                || self.index.len() < limit.min(BODY_CONSUMED as usize))
     }
     pub fn get(&self, key: &Key) -> Option<&Node> {
         let node = &self.rows[*self.index.get(key)? as usize];
@@ -101,7 +114,7 @@ impl Nodes {
             let node = &mut self.rows[slot as usize];
             if !node.live && !matches!(node.status, Status::Dormant) {
                 node.live = true;
-                pending.extend(node.dependencies.iter().map(|edge| edge.target));
+                pending.extend(node.dependencies.iter().map(|edge| edge.target()));
             }
         }
     }
@@ -119,7 +132,12 @@ impl Nodes {
                 // Completed producers own their results; their historical reads
                 // no longer pin the payloads consumed during computation.
                 if !matches!(node.status, Status::Settled(_)) {
-                    pending.extend(node.dependencies.iter().map(|edge| edge.target));
+                    pending.extend(
+                        node.dependencies
+                            .iter()
+                            .filter(|edge| !edge.body_consumed())
+                            .map(|edge| edge.target()),
+                    );
                 }
             }
         }
@@ -148,6 +166,7 @@ impl Nodes {
                 slot
             } else {
                 let slot = u32::try_from(self.rows.len()).expect("admitted slots");
+                assert!(slot < BODY_CONSUMED, "admitted edge slot");
                 node.position = slot;
                 self.rows.push(node);
                 self.keys.push(Some(key));
@@ -181,11 +200,11 @@ impl Nodes {
         let execution = node.execution.take();
         let dependencies = std::mem::take(&mut node.dependencies);
         for edge in dependencies {
-            self.edges.remove(&(slot, edge.target));
-            self.rows[edge.target as usize]
+            self.edges.remove(&(slot, edge.target()));
+            self.rows[edge.target() as usize]
                 .subscribers
                 .retain(|s| s.waiter != NodeId { slot, generation });
-            self.reclaim(edge.target);
+            self.reclaim(edge.target());
         }
         self.reclaim(slot);
         execution
@@ -229,7 +248,7 @@ impl Nodes {
                 self.repair_visits += 1;
                 for i in 0..self.rows[slot as usize].dependencies.len() {
                     self.repair_visits += 1;
-                    let next = self.rows[slot as usize].dependencies[i].target;
+                    let next = self.rows[slot as usize].dependencies[i].target();
                     if next == source.slot {
                         return None;
                     }
@@ -261,7 +280,7 @@ impl Nodes {
         let edge = self.rows[source.slot as usize].dependencies.len();
         self.edges.insert((source.slot, target.slot), edge as u32);
         self.rows[source.slot as usize].dependencies.push(Edge {
-            target: target.slot,
+            target: EdgeTarget(target.slot),
             token: 0,
         });
         self.rows[target.slot as usize]
@@ -271,6 +290,25 @@ impl Nodes {
                 edge: edge as u32,
             });
         Some(edge)
+    }
+    pub fn retain_body(&mut self, source: NodeId, edge: usize) {
+        if self.get_id(source).is_some() {
+            self.rows[source.slot as usize].dependencies[edge].target.0 &= !BODY_CONSUMED;
+        }
+    }
+    pub fn release_body(&mut self, source: NodeId, target: Key) {
+        if self.get_id(source).is_none() {
+            return;
+        }
+        let Some(&slot) = self.index.get(&target) else {
+            return;
+        };
+        let Some(&edge) = self.edges.get(&(source.slot, slot)) else {
+            return;
+        };
+        self.rows[source.slot as usize].dependencies[edge as usize]
+            .target
+            .0 |= BODY_CONSUMED;
     }
     pub fn subscribe(&mut self, source: NodeId, edge: usize, producer: NodeId) -> bool {
         let node = &mut self.rows[source.slot as usize];
@@ -297,7 +335,7 @@ impl Nodes {
             return None;
         }
         let edge = waiter.dependencies.get_mut(subscription.edge as usize)?;
-        if edge.target != producer.slot || edge.token != producer.generation {
+        if edge.target() != producer.slot || edge.token != producer.generation {
             return None;
         }
         edge.token = 0;
@@ -319,7 +357,7 @@ impl Nodes {
             let waiter = &mut self.rows[subscription.waiter.slot as usize];
             if waiter.generation == subscription.waiter.generation
                 && let Some(edge) = waiter.dependencies.get_mut(subscription.edge as usize)
-                && edge.target == producer.slot
+                && edge.target() == producer.slot
                 && edge.token != 0
             {
                 edge.token = producer.generation;

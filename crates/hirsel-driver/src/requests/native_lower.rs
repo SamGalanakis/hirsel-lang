@@ -224,15 +224,17 @@ mod tests {
             let crossed =
                 crate::fixture_product(&*store, selected.address, selected.action, failure);
             assert!(bridge.products.lower_product(&main, crossed).is_err());
+            let mut wrong_action = selected.clone();
+            wrong_action.action = hirsel_artifact_store::Action(
+                hirsel_syntax::ContentHash::of_bytes(b"wrong Lower action"),
+            );
+            assert!(bridge.products.lower_product(&main, wrong_action).is_err());
             let issued = product.verified.clone().expect("actual completed source V");
-            let reader = bridge
-                .context
-                .reader([product.clone()], store.clone())
-                .unwrap();
+            let reader = bridge.context.reader([product.clone()]).unwrap();
             assert!(reader.read(&main).is_some());
             *verifier.missing.lock().unwrap() = Some(issued.reference());
             // The host evicts only V's replay bytes; the admitted ordinary
-            // Lower descriptor still names the exact original source payload.
+            // Lower owner still retains the exact original source payload.
             let restored = reader
                 .read(&main)
                 .expect("ordinary original survives V eviction");
@@ -248,8 +250,19 @@ mod tests {
                 .encode_tir(reader.record_context().as_ref(), &changed)
                 .unwrap();
             let mut crossed_body = product;
-            crossed_body.body = store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap();
-            let crossed_reader = bridge.context.reader([crossed_body], store).unwrap();
+            let reference = store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap();
+            let context = reader.record_context();
+            crossed_body.body = NativeOriginalValue::Archive(
+                records
+                    .open_tir(
+                        context.clone(),
+                        store.get_content(reference).unwrap(),
+                        reference,
+                        context,
+                    )
+                    .unwrap(),
+            );
+            let crossed_reader = bridge.context.reader([crossed_body]).unwrap();
             assert!(
                 crossed_reader.read(&main).is_none(),
                 "a V output cannot rebind to changed original bytes"

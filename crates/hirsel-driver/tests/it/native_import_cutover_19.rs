@@ -51,10 +51,7 @@ fn import_engine_with_validation(
     let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
     let reader = facts
         .original_context
-        .reader(
-            facts.originals.iter().map(|product| (**product).clone()),
-            store.clone(),
-        )
+        .reader(facts.originals.iter().map(|product| (**product).clone()))
         .unwrap();
     drop(facts);
     let inputs = NativeInstanceInputs::from_products(declarations, reader).unwrap();

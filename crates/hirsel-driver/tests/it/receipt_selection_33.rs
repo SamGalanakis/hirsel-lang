@@ -60,10 +60,7 @@ fn source(text: &str) -> (QueryEngine, NativeOriginalReader, DefPath) {
     let facts = crate::native_front_fixture::products(&mut engine, &[path.clone()]).unwrap();
     let reader = facts
         .original_context
-        .reader(
-            facts.originals.iter().map(|product| (**product).clone()),
-            store,
-        )
+        .reader(facts.originals.iter().map(|product| (**product).clone()))
         .unwrap();
     (engine, reader, path)
 }

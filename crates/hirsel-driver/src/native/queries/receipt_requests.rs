@@ -193,7 +193,7 @@ pub(super) fn lexical(
     layouts.prepare_native_controls();
     hirsel_rc::instance::receipt_closure_binding(
         &declarations.program.types,
-        &original,
+        original.definition(),
         entry,
         &mut layouts,
     )

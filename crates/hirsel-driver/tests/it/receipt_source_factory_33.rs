@@ -27,10 +27,7 @@ fn engine(verify: Verify) -> (NativeOriginalReader, hirsel_syntax::DefPath) {
     let facts = crate::native_front_fixture::products(&mut engine, &[id.clone()]).unwrap();
     let reader = facts
         .original_context
-        .reader(
-            facts.originals.iter().map(|product| (**product).clone()),
-            store,
-        )
+        .reader(facts.originals.iter().map(|product| (**product).clone()))
         .unwrap();
     (reader, id)
 }

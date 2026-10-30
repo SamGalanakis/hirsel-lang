@@ -884,6 +884,12 @@ struct Context<'a> {
     pending: BTreeSet<u32>,
 }
 impl QueryContext for Context<'_> {
+    fn release_body(&mut self, dependency: QueryId) {
+        self.shared
+            .lock()
+            .nodes
+            .release_body(self.generation, key(dependency));
+    }
     fn evict_body(&mut self) -> bool {
         let mut state = self.shared.lock();
         let roots = state
@@ -909,8 +915,12 @@ impl QueryContext for Context<'_> {
                 let Status::Settled(result) = &node.status else {
                     return None;
                 };
-                let body = result.as_ref().as_ref().ok()?.analyzed_value()?;
-                body.cache_only().then_some((node.settled_at, key))
+                let product = result.as_ref().as_ref().ok()?;
+                let cache_only = product
+                    .analyzed_value()
+                    .is_some_and(|body| body.cache_only())
+                    || product.lower_value().is_some_and(|body| body.cache_only());
+                cache_only.then_some((node.settled_at, key))
             })
             .min()
             .map(|(_, key)| key);
@@ -962,6 +972,7 @@ impl QueryContext for Context<'_> {
             });
             edge
         };
+        state.nodes.retain_body(self.generation, edge);
         if let Some(result) = state.nodes.result(producer) {
             return Poll::Ready(result);
         }

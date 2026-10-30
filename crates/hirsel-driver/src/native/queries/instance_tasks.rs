@@ -434,7 +434,6 @@ impl InstanceTasks {
             self.source.provider_from_products(
                 &front.context,
                 selected.into_values().map(|(_, original)| original),
-                self.store.clone(),
             )?
         } else {
             self.source.provider()
@@ -772,11 +771,9 @@ impl QueryTask for InstanceTask {
                 } else {
                     vec![product.clone()]
                 };
-                self.tasks.source.provider_from_products(
-                    &front.context,
-                    products,
-                    self.tasks.store.clone(),
-                )?
+                self.tasks
+                    .source
+                    .provider_from_products(&front.context, products)?
             } else {
                 self.tasks.source.provider()
             };
@@ -1236,11 +1233,9 @@ mod retained_tests {
                 .cloned()
                 .collect::<Vec<_>>();
             let context = engine.native_original_context(&paths).unwrap();
-            let source = NativeInstanceInputs::from_products(
-                declarations,
-                context.reader([], store.clone()).unwrap(),
-            )
-            .unwrap();
+            let source =
+                NativeInstanceInputs::from_products(declarations, context.reader([]).unwrap())
+                    .unwrap();
             let budget = ProcessBudget::new(16 << 20);
             let tasks = InstanceTasks::new(
                 source,
@@ -1331,11 +1326,9 @@ mod retained_tests {
                 .cloned()
                 .collect::<Vec<_>>();
             let context = engine.native_original_context(&paths).unwrap();
-            let source = NativeInstanceInputs::from_products(
-                declarations,
-                context.reader([], store.clone()).unwrap(),
-            )
-            .unwrap();
+            let source =
+                NativeInstanceInputs::from_products(declarations, context.reader([]).unwrap())
+                    .unwrap();
             let budget = ProcessBudget::new(16 << 20);
             let make = |bytes| {
                 InstanceTasks::new(

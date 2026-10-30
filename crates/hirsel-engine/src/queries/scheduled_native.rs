@@ -10,7 +10,7 @@ use std::{sync::Mutex, task::Poll};
 pub const FRONT_NATIVE_DEFINITION_KIND: u32 = 0x4600_0017;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0018,
-    schema: 3,
+    schema: 4,
 };
 const FAILURE: Domain = Domain {
     kind: 0x4600_0019,
@@ -324,6 +324,7 @@ impl Task {
             && native_declaration(owner.lower.signatures().types(), &input.signature);
         let mut reads = ReadsBuilder::new();
         reads.merge(&front.outcome.reads);
+        let mut ordinary = None;
         let lower = if executable {
             let Some(id) = owner.lower.query(&self.path) else {
                 return Poll::Ready(Err(owner.errors.protocol));
@@ -333,6 +334,7 @@ impl Task {
                 Poll::Ready(Err(r)) => return Poll::Ready(Err(r)),
                 Poll::Ready(Ok(p)) => p,
             };
+            ordinary = owner.lower.native_product(selected.clone());
             let Some(output) = owner.lower.outcome(selected) else {
                 return Poll::Ready(Err(owner.errors.protocol));
             };
@@ -388,7 +390,6 @@ impl Task {
             let (source, contracts, requirements) = self
                 .complete(&front, &lower, finalizer, constant)
                 .map_err(|e| owner.fail(e))?;
-            let ordinary = lower.as_ref().map(FrontLowerOutput::native_product);
             let lower_identity = source
                 .lower
                 .as_ref()
@@ -410,7 +411,12 @@ impl Task {
                             .map(|source| (&source.text, source.site)),
                         &source.summary,
                         source.summary_identity,
-                        (ordinary.as_ref().map(|p| p.body), lower_identity),
+                        (
+                            ordinary
+                                .as_ref()
+                                .map(|p| (p.implementation_revision, p.signature)),
+                            lower_identity,
+                        ),
                         &source.audit,
                         &source.materialized,
                         source.representation.as_ref().map(|r| {

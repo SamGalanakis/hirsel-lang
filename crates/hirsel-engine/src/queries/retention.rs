@@ -41,6 +41,18 @@ impl Entry<hirsel_tir::DefinitionRef> {
 }
 
 impl QueryEngine {
+    pub(crate) fn native_lower_owner(&self, path: &DefPath) -> Option<Arc<dyn Send + Sync>> {
+        self.lowered
+            .get(&DefId::intern(path))
+            .cloned()
+            .map(|entry| entry as Arc<dyn Send + Sync>)
+            .or_else(|| {
+                self.lower_receipts
+                    .get(&DefId::intern(path))
+                    .cloned()
+                    .map(|entry| entry as Arc<dyn Send + Sync>)
+            })
+    }
     /// Evidence survives body eviction on the ordinary Lower receipt. The
     /// verifier still checks its weak body binding and complete environment.
     pub(super) fn lowered_verification(

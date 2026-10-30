@@ -37,10 +37,7 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
         let front = crate::native_front_fixture::products(&mut engine, &[]).unwrap();
         let reader = front
             .original_context
-            .reader(
-                front.originals.iter().map(|product| (**product).clone()),
-                store.clone(),
-            )
+            .reader(front.originals.iter().map(|product| (**product).clone()))
             .unwrap();
         let declarations =
             native::queries::declarations::NativeDeclarations::from_front(front.clone()).unwrap();
@@ -125,6 +122,7 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
         drop(reader);
         drop(front);
         drop(engine);
+        crate::native_front_fixture::release_host();
         assert!(
             weak.upgrade().is_none(),
             "facts retain no original Definition"
@@ -133,10 +131,7 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
         let front = crate::native_front_fixture::products(&mut fresh, &[]).unwrap();
         let reader = front
             .original_context
-            .reader(
-                front.originals.iter().map(|product| (**product).clone()),
-                store.clone(),
-            )
+            .reader(front.originals.iter().map(|product| (**product).clone()))
             .unwrap();
         let reopened = reader.input(&main).unwrap().0.unwrap().clone();
         assert_eq!(reopened.invocations().entry_body(), expected_entry);

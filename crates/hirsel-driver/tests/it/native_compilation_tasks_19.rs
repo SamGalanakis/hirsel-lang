@@ -459,10 +459,7 @@ fn run_program_case_with_frame(
         let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
         let lower = facts
             .original_context
-            .reader(
-                facts.originals.iter().map(|product| (**product).clone()),
-                store.clone(),
-            )
+            .reader(facts.originals.iter().map(|product| (**product).clone()))
             .unwrap();
         let semantic = facts.semantic.clone();
         let entries = declarations

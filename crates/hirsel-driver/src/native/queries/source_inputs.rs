@@ -17,7 +17,7 @@ pub type SourceObservation = (
     Option<Reference>,
 );
 pub type OriginalSource = (
-    hirsel_tir::DefinitionRef,
+    Arc<hirsel_engine::NativeOriginalBody>,
     Option<hirsel_rc::sealed_source::SourceInput>,
 );
 
@@ -78,7 +78,7 @@ pub trait NativeSourceProvider: NativeRecordSource {
             );
             let evidence = hirsel_rc::invocations::source_instance(
                 &program.types,
-                &original.0,
+                original.0.definition(),
                 &signatures,
                 &program.operations,
                 selected,
@@ -101,7 +101,7 @@ pub trait NativeSourceProvider: NativeRecordSource {
             if original.is_none() {
                 original = Some(self.original_source(path)?);
             }
-            let definition = &original.as_ref().unwrap().0;
+            let definition = original.as_ref().unwrap().0.definition();
             let program = &self.declarations().program;
             for row in &mut evidence.invocations {
                 let Some(callee) = &row.callee else {
@@ -264,10 +264,9 @@ impl NativeInstanceInputs {
         self: &Arc<Self>,
         context: &hirsel_engine::NativeOriginalContext,
         products: impl IntoIterator<Item = hirsel_engine::NativeOriginalProduct>,
-        store: Arc<dyn hirsel_engine::store::ResultStore>,
     ) -> Result<FrozenNativeSource, String> {
         let reader = context
-            .reader(products, store)
+            .reader(products)
             .map_err(|e| format!("settled source: {e:?}"))?;
         check_binding(&self.declarations, &reader)?;
         Ok(FrozenNativeSource {
@@ -372,6 +371,6 @@ impl NativeSourceProvider for FrozenNativeSource {
                 original.clone(),
             )
         });
-        Ok((original, source))
+        Ok((Arc::new(body), source))
     }
 }

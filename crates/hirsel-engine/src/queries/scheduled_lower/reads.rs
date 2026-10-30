@@ -184,6 +184,7 @@ mod tests {
         );
         let mut outcome = Outcome {
             result: Ok(Value::Lower(Box::new(LowerProduct {
+                live: None,
                 definition,
                 body,
                 diagnostics: Vec::new(),

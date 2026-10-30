@@ -96,12 +96,24 @@ enum Value {
     Lower(Box<LowerProduct>),
     Constant(Box<Constants>),
 }
+type RawLowerOutput = (
+    QueryOutput<DefinitionRef>,
+    Vec<(hirsel_syntax::ExprId, Materialized)>,
+);
 struct Computed {
     value: Value,
     verification: Option<(DefinitionRef, hirsel_validate::VerifiedDefinition)>,
+    raw: Option<RawLowerOutput>,
+}
+struct Publication {
+    domain: Domain,
+    bytes: hirsel_artifact_store::Bytes,
+    persist: bool,
+    raw: Option<RawLowerOutput>,
 }
 #[derive(Clone)]
 struct LowerProduct {
+    live: Option<WeakLowerProduct>,
     definition: DefId,
     body: Reference,
     diagnostics: Vec<Diagnostic>,
@@ -118,6 +130,9 @@ impl LowerProduct {
         &self,
         owner: &FrontLowerQueries,
     ) -> Option<Option<hirsel_validate::VerifiedDefinitionOutput>> {
+        if let Some(live) = self.live.as_ref().and_then(WeakLowerProduct::upgrade) {
+            return Some(live.observations().verified.clone());
+        }
         let Some(stored) = &self.verified else {
             return Some(None);
         };
@@ -138,6 +153,9 @@ impl LowerProduct {
             .map(Some)
     }
     fn dependencies(&self, owner: &FrontLowerQueries) -> Option<Vec<SignatureDependency>> {
+        if let Some(live) = self.live.as_ref().and_then(WeakLowerProduct::upgrade) {
+            return Some(live.output().dependencies.clone());
+        }
         match &self.archived_metadata {
             None => Some(self.dependencies.to_vec()),
             Some(archive) => archive.dependencies(
@@ -149,6 +167,9 @@ impl LowerProduct {
         }
     }
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
+        if let Some(live) = self.live.as_ref().and_then(WeakLowerProduct::upgrade) {
+            return Some(live.output().clone());
+        }
         let definition = decode_definition(owner, self.body)?;
         if definition.path != self.definition {
             return None;
@@ -189,10 +210,20 @@ impl Outcome {
         }
     }
     fn read_len(&self) -> usize {
+        if let Ok(Value::Lower(lower)) = &self.result
+            && let Some(live) = lower.live.as_ref().and_then(WeakLowerProduct::upgrade)
+        {
+            return live.reads().len();
+        }
         self.archive()
             .map_or_else(|| self.reads.len(), |archive| archive.len)
     }
     fn reads(&self, owner: &FrontLowerQueries) -> Option<Reads> {
+        if let Ok(Value::Lower(lower)) = &self.result
+            && let Some(live) = lower.live.as_ref().and_then(WeakLowerProduct::upgrade)
+        {
+            return Some(live.reads().clone());
+        }
         match self.archive() {
             None => Some(self.reads.clone()),
             Some(archive) => archive.load(
@@ -331,11 +362,11 @@ pub struct FrontLowerOutput {
     pub executed: bool,
     pub selections: Vec<(DefId, Vec<u64>)>,
     pub acceptance: Option<hirsel_validate::AcceptedArtifact>,
-    pub body: Reference,
     pub implementation_revision: ContentHash,
     pub signature: ContentHash,
     pub verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
     pub materialized: Vec<(hirsel_syntax::ExprId, Materialized)>,
+    query_observations: Option<ProductArchive>,
     owner: Arc<LowerSource>,
 }
 struct LowerSource {
@@ -366,15 +397,6 @@ impl FrontLowerOutput {
         )
     }
 
-    pub fn native_product(&self) -> crate::NativeOriginalProduct {
-        crate::NativeOriginalProduct {
-            definition: self.output.value.path.path().clone(),
-            implementation_revision: self.implementation_revision,
-            signature: self.signature,
-            body: self.body,
-            verified: self.verified.clone(),
-        }
-    }
     pub fn store(&self) -> &Arc<dyn ResultStore> {
         &self.owner.store
     }
@@ -509,40 +531,15 @@ impl FrontLowerQueries {
         id: QueryId,
         selected: Result<ProductRef, Reference>,
     ) -> Option<usize> {
-        let reference = match selected {
-            Ok(product) => product
-                .archive(ArchiveAdmission::Retained)
-                .ok()?
-                .reference(),
-            Err(reference) => reference,
-        };
-        self.outcomes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&(id.kind, id.address.0))
-            .filter(|(selected, _, _)| *selected == reference)
-            .map(|(_, outcome, _)| outcome.read_len())
+        Some(self.selected(id, selected)?.read_len())
     }
-    /// Exact settled descriptor, including failed Lower reads. This does not
-    /// decode a body, invoke a producer or accept another query's reference.
+    /// Complete settled reads from the exact selected owner.
     pub(crate) fn selected_reads(
         &self,
         id: QueryId,
         selected: Result<ProductRef, Reference>,
     ) -> Option<Arc<Reads>> {
-        let reference = match selected {
-            Ok(product) => product
-                .archive(ArchiveAdmission::Retained)
-                .ok()?
-                .reference(),
-            Err(reference) => reference,
-        };
-        self.outcomes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&(id.kind, id.address.0))
-            .filter(|(selected, _, _)| *selected == reference)
-            .and_then(|(_, outcome, _)| outcome.reads(self).map(Arc::new))
+        self.selected(id, selected)?.reads(self).map(Arc::new)
     }
     pub fn work_snapshot(&self) -> Vec<(DefPath, FrontLowerWork)> {
         self.work
@@ -955,6 +952,16 @@ impl FrontLowerQueries {
         Arc::new(Factory(self.clone()))
     }
     pub fn outcome(self: &Arc<Self>, product: ProductRef) -> Option<FrontLowerOutput> {
+        if let Some(live) = product.lower_value() {
+            self.selected(
+                QueryId {
+                    kind: FRONT_LOWER_KIND,
+                    address: product.address,
+                },
+                Ok(product.clone()),
+            )?;
+            return Some(live.observations().clone());
+        }
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let (reference, outcome, _) = outcomes.get(&(FRONT_LOWER_KIND, product.address.0))?;
         if *reference
@@ -996,35 +1003,52 @@ impl FrontLowerQueries {
             executed,
             selections,
             acceptance: lower.acceptance.clone(),
-            body: lower.body,
             implementation_revision: input.implementation,
             signature,
             verified: lower.verified(self)?,
             materialized,
+            query_observations: Some(product.archive(ArchiveAdmission::Retained).ok()?),
             owner: self.source.clone(),
         })
     }
     /// Native adaptation reads compact metadata only. Neither an unchanged
     /// Definition nor a native Value/Ready body is reconstructed here.
     pub fn native_product(&self, product: ProductRef) -> Option<crate::NativeOriginalProduct> {
-        let outcome = self.selected(
+        self.selected(
             QueryId {
                 kind: FRONT_LOWER_KIND,
                 address: product.address,
             },
-            Ok(product),
+            Ok(product.clone()),
         )?;
-        let Value::Lower(lower) = outcome.result.ok()? else {
-            return None;
-        };
-        let path = lower.definition.path();
+        let live = product.lower_value()?.clone();
+        let observations = live.observations();
         Some(crate::NativeOriginalProduct {
-            definition: path.clone(),
-            implementation_revision: self.inputs.get(path)?.implementation,
-            signature: self.snapshot.signature(lower.definition)?.ok()?.fingerprint,
-            body: lower.body,
-            verified: lower.verified(self)?,
+            definition: live.output().value.path.path().clone(),
+            implementation_revision: observations.implementation_revision,
+            signature: observations.signature,
+            verified: observations.verified.clone(),
+            body: crate::NativeOriginalValue::Live(live),
         })
+    }
+    /// Complete settled query observations for Check. This retains the existing
+    /// compact descriptor, without retaining or archiving the live TIR owner.
+    pub(crate) fn observation_product(&self, product: ProductRef) -> Option<ProductRef> {
+        let id = QueryId {
+            kind: FRONT_LOWER_KIND,
+            address: product.address,
+        };
+        self.selected(id, Ok(product.clone()))?;
+        let archive = product
+            .lower_value()?
+            .observations()
+            .query_observations
+            .clone()?;
+        Some(ProductRef::import_archive(
+            product.address,
+            product.action,
+            archive,
+        ))
     }
     pub fn failure(&self, reference: Reference) -> Option<QueryError> {
         self.outcomes
@@ -1039,19 +1063,20 @@ impl FrontLowerQueries {
             .cloned()
     }
     fn selected(&self, id: QueryId, selected: Result<ProductRef, Reference>) -> Option<Outcome> {
-        let reference = match selected {
-            Ok(product) => product
-                .archive(ArchiveAdmission::Retained)
-                .ok()?
-                .reference(),
-            Err(reference) => reference,
-        };
-        self.outcomes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.outcomes.lock().unwrap_or_else(|e| e.into_inner())
             .get(&(id.kind, id.address.0))
-            .filter(|(r, _, _)| *r == reference)
-            .map(|(_, o, _)| o.as_ref().clone())
+            .filter(|(reference, outcome, _)| match &selected {
+                Ok(product) => {
+                    if let Some(live) = product.lower_value() {
+                        product.address == live.address() && product.action == live.action()
+                            && matches!(&outcome.result, Ok(Value::Lower(lower)) if lower.live.as_ref().and_then(WeakLowerProduct::upgrade).is_some_and(|stored| stored.same_owner(live)))
+                    } else {
+                        product.archive(ArchiveAdmission::Retained).is_ok_and(|archive| archive.reference() == *reference)
+                    }
+                }
+                Err(failure) => failure == reference,
+            })
+            .map(|(_, outcome, _)| outcome.as_ref().clone())
     }
     async fn run(
         self: Arc<Self>,
@@ -1139,9 +1164,9 @@ impl FrontLowerQueries {
             self.compute(id.kind, &path, selection.as_ref(), &mut source)
                 .await
         };
-        let (mut result, verification) = match computed {
-            Ok(computed) => (Ok(computed.value), computed.verification),
-            Err(error) => (Err(error), None),
+        let (mut result, verification, raw) = match computed {
+            Ok(computed) => (Ok(computed.value), computed.verification, computed.raw),
+            Err(error) => (Err(error), None, None),
         };
         // A missing dependency outcome is a scheduler/transport refusal, not
         // a typed body error. Preserve its exact identity through all clones
@@ -1296,19 +1321,36 @@ impl FrontLowerQueries {
             execution_subject,
         };
         self.remember_carry(id, key, &bytes, &outcome);
-        self.publish(id, key, domain, bytes.into(), outcome, true)
+        self.publish(
+            id,
+            key,
+            outcome,
+            Publication {
+                domain,
+                bytes: bytes.into(),
+                persist: true,
+                raw,
+            },
+            &source.reads,
+        )
+        .await
     }
     /// Settle one descriptor: store it, admit its outcome under this producer's
     /// retention and associate a successful product.
-    fn publish(
+    async fn publish(
         &self,
         id: QueryId,
         key: &EntryKey,
-        domain: Domain,
-        bytes: hirsel_artifact_store::Bytes,
         mut outcome: Outcome,
-        persist: bool,
+        publication: Publication,
+        query_reads: &QueryReads,
     ) -> Result<ProductRef, Reference> {
+        let Publication {
+            domain,
+            bytes,
+            persist,
+            raw,
+        } = publication;
         let record = self
             .store
             .put_content(domain, &bytes)
@@ -1337,7 +1379,82 @@ impl FrontLowerQueries {
         if persist {
             self.remember_stored(id, key, record, &outcome);
         }
+        let raw = match (raw, &outcome.result) {
+            (Some(raw), _) => Some(raw),
+            (None, Ok(Value::Lower(lower))) => Some((
+                lower.decode(self).ok_or(self.errors.protocol)?,
+                self.records
+                    .decode(
+                        &self.anchors,
+                        &self
+                            .store
+                            .get_content(lower.materialized)
+                            .ok_or(self.errors.protocol)?,
+                    )
+                    .ok_or(self.errors.protocol)?,
+            )),
+            (None, _) => None,
+        };
+        let mut original = if let Some((output, materialized)) = raw {
+            Some({
+                let lower = match outcome.result.as_ref().map_err(|_| self.errors.protocol)? {
+                    Value::Lower(lower) => lower,
+                    _ => return Err(self.errors.protocol),
+                };
+                let path = output.value.path;
+                FrontLowerOutput {
+                    output,
+                    materialized,
+                    reads: outcome.reads.clone(),
+                    depth: outcome.depth.evidence(),
+                    execution: outcome.execution.clone(),
+                    execution_subject: outcome.execution_subject,
+                    executed: outcome.executed,
+                    selections: outcome.selections.clone(),
+                    acceptance: lower.acceptance.clone(),
+                    implementation_revision: self
+                        .inputs
+                        .get(path.path())
+                        .ok_or(self.errors.protocol)?
+                        .implementation,
+                    signature: self
+                        .snapshot
+                        .signature(path)
+                        .ok_or(self.errors.protocol)?
+                        .as_ref()
+                        .map_err(|_| self.errors.protocol)?
+                        .fingerprint,
+                    verified: lower.verified(self).unwrap_or(None),
+                    query_observations: None,
+                    owner: self.source.clone(),
+                }
+            })
+        } else {
+            None
+        };
         outcome.archive_reads(record);
+        let archive_bytes = if failed {
+            0
+        } else {
+            ProductArchive::retained_required_bytes(record, &bytes)
+                .map_err(|_| self.errors.resource)?
+        };
+        let live_bytes = if let Some(original) = &original {
+            LiveLowerProduct::retained_required_bytes(original).ok_or(self.errors.resource)?
+        } else {
+            0
+        };
+        let required = outcome
+            .retained_bytes()
+            .and_then(|bytes| bytes.checked_add(archive_bytes))
+            .and_then(|bytes| bytes.checked_add(live_bytes))
+            .and_then(|bytes| bytes.checked_add(outcome_table_bytes(1)))
+            .ok_or(self.errors.resource)?;
+        while *self.retention.lock().unwrap_or_else(|e| e.into_inner()) < required {
+            if !query_reads.evict_body().await {
+                return Err(self.errors.resource);
+            }
+        }
         let archive = if failed {
             None
         } else {
@@ -1351,6 +1468,26 @@ impl FrontLowerQueries {
                 .map_err(|_| self.errors.resource)?,
             )
         };
+        if let Some(original) = &mut original {
+            original.query_observations = archive.clone();
+        }
+        let live = original
+            .map(|original| {
+                LiveLowerProduct::from_retained(
+                    (id.address, action),
+                    original,
+                    self.anchors.clone(),
+                    self.records.clone(),
+                    self.source.clone(),
+                    self._allowance.clone(),
+                    self.retention.clone(),
+                )
+                .ok_or(self.errors.resource)
+            })
+            .transpose()?;
+        if let Ok(Value::Lower(lower)) = &mut outcome.result {
+            lower.live = live.as_ref().map(LiveLowerProduct::downgrade);
+        }
         let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -1368,14 +1505,18 @@ impl FrontLowerQueries {
             .and_then(|n| n.checked_sub(charge))
             .and_then(|n| n.checked_sub(table_growth))
             .ok_or(self.errors.resource)?;
-        outcomes.insert(selected, (record, Box::new(outcome), charge));
+        let replaced = outcomes.insert(selected, (record, Box::new(outcome), charge));
         *retention = remaining;
         drop(outcomes);
         drop(retention);
+        drop(replaced);
         if failed {
             return Err(record);
         }
         self.store.associate_product(id.address, action, record);
+        if let Some(live) = live {
+            return Ok(ProductRef::lower(live));
+        }
         Ok(ProductRef::import_archive(
             id.address,
             action,
@@ -1517,6 +1658,7 @@ impl FrontLowerQueries {
             return Ok(Computed {
                 value: Value::Constant(Box::new(Constants::new(value, constants))),
                 verification: None,
+                raw: None,
             });
         }
         if kind == FRONT_EVALUATE_KIND {
@@ -1570,6 +1712,7 @@ impl FrontLowerQueries {
             return Ok(Computed {
                 value: Value::Constant(Box::new(Constants::new(value, constants))),
                 verification: None,
+                raw: None,
             });
         }
         let lowering = self.lowering.as_deref().ok_or(QueryError::NotImplemented)?;
@@ -1657,8 +1800,18 @@ impl FrontLowerQueries {
         let mut dependencies = analyzed.dependencies.clone();
         dependencies.extend(output.dependencies);
         let constant_selection_bytes = constant_selection_bytes(&definition)?;
+        let raw = Some((
+            QueryOutput {
+                value: definition.clone(),
+                diagnostics: output.diagnostics.clone(),
+                dependencies: dependencies.clone(),
+            },
+            constants,
+        ));
         Ok(Computed {
+            raw,
             value: Value::Lower(Box::new(LowerProduct {
+                live: None,
                 constant_selection_bytes,
                 definition: definition.path,
                 body,

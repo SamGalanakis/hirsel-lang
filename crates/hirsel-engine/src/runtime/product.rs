@@ -39,7 +39,7 @@ pub(crate) struct SharedProductSource(Arc<ProductContext>);
 struct ProductContext {
     context: NativeRecordContext,
     records: NativeRecords,
-    _reservation: MemoryReservation,
+    _reservation: ValueAdmission,
 }
 #[derive(Clone)]
 pub(crate) enum ProductSourceInput {
@@ -75,7 +75,7 @@ impl ProductSource {
         Some(SharedProductSource(Arc::new(ProductContext {
             context,
             records,
-            _reservation: reservation,
+            _reservation: ValueAdmission::Owned(reservation),
         })))
     }
     pub(crate) fn backed(
@@ -129,7 +129,22 @@ struct Owner<T> {
     value: T,
     source: ProductSource,
     archive: Mutex<Option<ProductArchive>>,
-    _reservation: MemoryReservation,
+    _reservation: ValueAdmission,
+}
+enum ValueAdmission {
+    Owned(MemoryReservation),
+    Retained {
+        bytes: u64,
+        _owner: Arc<RetainedArchiveLease>,
+    },
+}
+impl ValueAdmission {
+    fn bytes(&self) -> u64 {
+        match self {
+            Self::Owned(value) => value.bytes(),
+            Self::Retained { bytes, .. } => *bytes,
+        }
+    }
 }
 impl<T> Owner<T> {
     #[cfg(test)]
@@ -260,6 +275,13 @@ impl ProductArchive {
             .ok_or_else(|| io::Error::other("product archive is unavailable"))?;
         Self::from_retained_bytes(reference, bytes, allowance, remaining)
     }
+    pub(crate) fn retained_required_bytes(reference: Reference, bytes: &Bytes) -> io::Result<u64> {
+        Self::checked_import_charge(reference, bytes)?
+            .checked_add(retained_arc_bytes(&std::mem::MaybeUninit::<
+                RetainedArchiveLease,
+            >::uninit()))
+            .ok_or_else(|| io::Error::other("product archive backing layout overflow"))
+    }
     /// Transfer freshly encoded bytes into the producer's existing partition.
     /// This retains the complete concrete backing without a transport reread.
     pub(crate) fn from_retained_bytes(
@@ -268,11 +290,7 @@ impl ProductArchive {
         allowance: Arc<MemoryReservation>,
         remaining: Arc<Mutex<u64>>,
     ) -> io::Result<Self> {
-        let charge = Self::checked_import_charge(reference, &bytes)?
-            .checked_add(retained_arc_bytes(&std::mem::MaybeUninit::<
-                RetainedArchiveLease,
-            >::uninit()))
-            .ok_or_else(|| io::Error::other("product archive backing layout overflow"))?;
+        let charge = Self::retained_required_bytes(reference, &bytes)?;
         let mut available = remaining.lock().unwrap_or_else(|e| e.into_inner());
         if *available > allowance.bytes() {
             return Err(io::Error::other(
@@ -434,7 +452,7 @@ impl SummaryFacet {
     }
 }
 impl LiveSummaryProduct {
-    pub(super) fn same_owner(&self, other: &Self) -> bool {
+    pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.current, &other.current)
     }
     pub(crate) fn value_bytes(value: &PublishedSummary) -> Option<u64> {
@@ -472,7 +490,7 @@ impl LiveSummaryProduct {
             value,
             source,
             archive: Mutex::new(None),
-            _reservation: reservation,
+            _reservation: ValueAdmission::Owned(reservation),
         });
         Some(Self {
             facet: SummaryFacet(current.clone()),
@@ -568,11 +586,29 @@ impl LiveSummaryProduct {
 /// remains in its existing verifier-owned product, outside facet equality.
 #[derive(Clone)]
 pub struct LiveLowerProduct(Arc<Owner<LowerValue>>);
+#[derive(Clone)]
+pub(crate) struct WeakLowerProduct(Weak<Owner<LowerValue>>);
+impl WeakLowerProduct {
+    pub(crate) fn upgrade(&self) -> Option<LiveLowerProduct> {
+        self.0.upgrade().map(LiveLowerProduct)
+    }
+}
 struct LowerValue {
     output: crate::FrontLowerOutput,
 }
 impl LiveLowerProduct {
-    pub(super) fn same_owner(&self, other: &Self) -> bool {
+    pub(crate) fn downgrade(&self) -> WeakLowerProduct {
+        WeakLowerProduct(Arc::downgrade(&self.0))
+    }
+    pub(super) fn cache_only(&self) -> bool {
+        Arc::strong_count(&self.0) == 1 && Arc::strong_count(&self.output().value) == 1
+    }
+    pub(crate) fn retained_required_bytes(value: &crate::FrontLowerOutput) -> Option<u64> {
+        Self::required_bytes(value)?.checked_add(retained_arc_bytes(&std::mem::MaybeUninit::<
+            RetainedArchiveLease,
+        >::uninit()))
+    }
+    pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
     pub fn required_bytes(value: &crate::FrontLowerOutput) -> Option<u64> {
@@ -633,7 +669,54 @@ impl LiveLowerProduct {
             value: LowerValue { output },
             source,
             archive: Mutex::new(None),
-            _reservation: reservation,
+            _reservation: ValueAdmission::Owned(reservation),
+        })))
+    }
+    /// Transfer a settled producer's existing partition into its live value.
+    /// Clones share this one lease; the last owner returns the exact charge.
+    pub(crate) fn from_retained(
+        identity: (Address, Action),
+        output: crate::FrontLowerOutput,
+        context: NativeRecordContext,
+        records: NativeRecords,
+        backing: Arc<dyn Send + Sync>,
+        allowance: Arc<MemoryReservation>,
+        remaining: Arc<Mutex<u64>>,
+    ) -> Option<Self> {
+        if !records.uses_types(context.record_types()) {
+            return None;
+        }
+        let bytes = Self::retained_required_bytes(&output)?;
+        let mut available = remaining.lock().unwrap_or_else(|e| e.into_inner());
+        *available = available.checked_sub(bytes)?;
+        drop(available);
+        let owner = Arc::new(RetainedArchiveLease {
+            _allowance: allowance.clone(),
+            remaining,
+            bytes,
+        });
+        let source = ProductSource {
+            shared: SharedProductSource(Arc::new(ProductContext {
+                context,
+                records,
+                _reservation: ValueAdmission::Retained {
+                    bytes: 0,
+                    _owner: owner.clone(),
+                },
+            })),
+            _backing: backing,
+        };
+        Some(Self(Arc::new(Owner {
+            address: identity.0,
+            action: identity.1,
+            domain: LIVE_LOWER,
+            value: LowerValue { output },
+            source,
+            archive: Mutex::new(None),
+            _reservation: ValueAdmission::Retained {
+                bytes,
+                _owner: owner,
+            },
         })))
     }
     pub fn output(&self) -> &QueryOutput<DefinitionRef> {
@@ -647,6 +730,9 @@ impl LiveLowerProduct {
     }
     /// Complete observations and local verifier-owned evidence from the
     /// original Lower operation. Archive bytes do not grant this authority.
+    pub(crate) fn bindings_hold(&self, context: &NativeRecordContext) -> bool {
+        self.0.source.context().bindings_hold(context)
+    }
     pub fn observations(&self) -> &crate::FrontLowerOutput {
         &self.0.value.output
     }
@@ -729,7 +815,7 @@ impl LiveAnalyzedProduct {
     pub(crate) fn downgrade(&self) -> WeakAnalyzedProduct {
         WeakAnalyzedProduct(Arc::downgrade(&self.0))
     }
-    pub(super) fn same_owner(&self, other: &Self) -> bool {
+    pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
     pub fn required_bytes(outcome: &crate::ModeResult) -> Option<u64> {
@@ -776,7 +862,7 @@ impl LiveAnalyzedProduct {
             },
             source,
             archive: Mutex::new(None),
-            _reservation: reservation,
+            _reservation: ValueAdmission::Owned(reservation),
         })))
     }
     pub fn output(&self) -> &Arc<QueryOutput<crate::AnalyzedBody>> {

@@ -260,10 +260,7 @@ fn ready_case_inner_mutation(
             let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
             let reader = facts
                 .original_context
-                .reader(
-                    facts.originals.iter().map(|product| (**product).clone()),
-                    store.clone(),
-                )
+                .reader(facts.originals.iter().map(|product| (**product).clone()))
                 .unwrap();
             let originals = facts
                 .originals

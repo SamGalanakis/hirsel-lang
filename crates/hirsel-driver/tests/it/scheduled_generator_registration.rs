@@ -1267,10 +1267,7 @@ fn accepted_generated_native_catalogue_preserves_raw_source_and_actual_lower_aut
                 assert!(source.audit.is_some());
                 let reader = native
                     .original_context()
-                    .reader(
-                        [output.original.as_deref().unwrap().clone()],
-                        program.engine.product_store().unwrap(),
-                    )
+                    .reader([output.original.as_deref().unwrap().clone()])
                     .unwrap();
                 runtime.shutdown();
                 let body = reader

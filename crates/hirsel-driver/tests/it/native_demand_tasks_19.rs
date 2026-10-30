@@ -65,10 +65,7 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
             let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
             let reader = facts
                 .original_context
-                .reader(
-                    facts.originals.iter().map(|product| (**product).clone()),
-                    store.clone(),
-                )
+                .reader(facts.originals.iter().map(|product| (**product).clone()))
                 .unwrap();
             let originals = facts
                 .originals
@@ -207,10 +204,7 @@ fn native_source_metadata_debits_one_grant_and_outlives_the_instance_registry() 
         engine.parse_file(file, &default_context()).unwrap();
         let facts = crate::native_front_fixture::products(&mut engine, &[]).unwrap();
         let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
-        let reader = facts
-            .original_context
-            .reader(std::iter::empty(), store.clone())
-            .unwrap();
+        let reader = facts.original_context.reader(std::iter::empty()).unwrap();
         drop(facts);
         let inputs = NativeInstanceInputs::from_products(declarations, reader).unwrap();
         drop(engine);

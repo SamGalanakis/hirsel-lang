@@ -589,7 +589,15 @@ impl Task {
                                     .ok_or(self.queries.errors.protocol)?;
                                 self.reads.merge(&output.reads);
                                 file.diagnostics.extend(output.output.diagnostics);
-                                self.lowered.push((path.clone(), product));
+                                self.lowered.push((
+                                    path.clone(),
+                                    self.queries
+                                        .plan
+                                        .lower
+                                        .observation_product(product)
+                                        .ok_or(self.queries.errors.protocol)?,
+                                ));
+                                cx.release_body(id);
                             }
                             Err(reference) => {
                                 let reads = self

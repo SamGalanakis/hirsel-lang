@@ -827,7 +827,6 @@ fn immutable_export_assessment_preserves_sidecar_decisions_after_controller_drop
 
 #[test]
 fn settled_original_assessment_binds_exported_bodies_without_a_native_snapshot() {
-    use std::sync::Arc;
     with_compiler_stack(|| {
         let entry = entry_path(&default_context());
         let text = sidecar(BUMP, &[(ENSURES, "proved"), (OVERFLOW, "proved")], |_| {});
@@ -842,14 +841,11 @@ fn settled_original_assessment_binds_exported_bodies_without_a_native_snapshot()
             .iter()
             .map(|section| section.path.clone())
             .collect::<Vec<_>>();
-        let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
-        let original = producer
-            .native_original_reader(&paths, store.clone())
-            .unwrap();
+        let original = producer.native_original_reader(&paths).unwrap();
         let missing = producer
             .native_original_context(&paths)
             .unwrap()
-            .reader(Vec::new(), store)
+            .reader(Vec::new())
             .unwrap();
         // The legacy snapshot is a test oracle only. The new assessment below
         // receives solely the original Lower reader and independently selected export.
@@ -881,9 +877,7 @@ fn settled_original_assessment_binds_exported_bodies_without_a_native_snapshot()
             .signature_hash = hirsel_syntax::ContentHash::default();
         assert!(Proofs::assess_original(&modified, &original, &evidence).is_err());
         let mut other = engine(BUMP);
-        let foreign = other
-            .native_original_reader(&paths, Arc::new(store::MemStore::default()))
-            .unwrap();
+        let foreign = other.native_original_reader(&paths).unwrap();
         assert!(Proofs::assess_original(&export, &foreign, &evidence).is_err());
 
         let mut duplicate = evidence.clone();
@@ -951,9 +945,7 @@ fn native_discovery_reports_actual_removals_on_cold_and_body_free_fresh_hits() {
                 .keys()
                 .cloned()
                 .collect::<Vec<_>>();
-            let original = producer
-                .native_original_reader(&paths, store.clone())
-                .unwrap();
+            let original = producer.native_original_reader(&paths).unwrap();
             let proofs = Proofs::assess_original(&export, &original, &evidence).unwrap();
             assert!(!proofs.discharge.is_empty());
             let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());

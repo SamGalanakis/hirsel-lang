@@ -183,6 +183,7 @@ impl FrontLowerQueries {
             }
             (
                 Value::Lower(Box::new(LowerProduct {
+                    live: None,
                     definition,
                     body,
                     diagnostics,
@@ -259,6 +260,20 @@ impl FrontLowerQueries {
         // length was bounded by this task's scratch partition above; detach
         // that payload before its archive takes a settled retention lease.
         let descriptor = descriptor.to_vec().into();
-        Some(self.publish(id, key, domain, descriptor, outcome, false))
+        Some(
+            self.publish(
+                id,
+                key,
+                outcome,
+                Publication {
+                    domain,
+                    bytes: descriptor,
+                    persist: false,
+                    raw: None,
+                },
+                query_reads,
+            )
+            .await,
+        )
     }
 }

@@ -361,7 +361,11 @@ fn original_body_decode_admission_precedes_provider_reads_and_preserves_scalar_t
             let actual = lower
                 .settled_definition_with_allowance(&program.entry, &exact)
                 .unwrap();
-            assert!(store.reads.load(Ordering::Relaxed) > before_reads);
+            assert_eq!(
+                store.reads.load(Ordering::Relaxed),
+                before_reads,
+                "live inspection performs no provider reads"
+            );
             assert_eq!(
                 lower.work_snapshot(),
                 before_work,
@@ -376,8 +380,8 @@ fn original_body_decode_admission_precedes_provider_reads_and_preserves_scalar_t
             let archived = lower
                 .settled_tir(&program.entry, budget.reserve(needed).unwrap())
                 .unwrap();
-            assert_eq!(archived.header().unwrap().path, actual.path);
-            assert_eq!(archived.materialize().unwrap(), *actual);
+            assert_eq!(archived.view().header().unwrap().path, actual.path);
+            assert_eq!(archived.view().materialize().unwrap(), *actual);
             assert_eq!(lower.work_snapshot(), before_work);
             runtime.shutdown();
         }

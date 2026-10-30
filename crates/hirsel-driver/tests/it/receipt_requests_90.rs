@@ -112,10 +112,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
             .collect();
         let reader = facts
             .original_context
-            .reader(
-                facts.originals.iter().map(|product| (**product).clone()),
-                store.clone(),
-            )
+            .reader(facts.originals.iter().map(|product| (**product).clone()))
             .unwrap();
         let declarations = NativeDeclarations::from_front(facts).unwrap();
         let front = Front::new(&reader);
@@ -208,7 +205,10 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
                         path.clone(),
                         QueryId {
                             kind: 0x7c90,
-                            address: store::Address(product.body.output.0),
+                            address: match &product.body {
+                                NativeOriginalValue::Live(live) => live.address(),
+                                _ => panic!("selected live Lower"),
+                            },
                         },
                     )
                 })
@@ -218,12 +218,10 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
                 .map(|(path, query)| {
                     (
                         *query,
-                        crate::scheduled_front::imported_fixture(
-                            &*store,
-                            query.address,
-                            store::Action(query.address.0),
-                            products[path].body,
-                        ),
+                        match &products[path].body {
+                            NativeOriginalValue::Live(live) => ProductRef::lower(live.clone()),
+                            _ => panic!("selected live Lower"),
+                        },
                     )
                 })
                 .collect();
@@ -400,10 +398,7 @@ pub fn inspect(root:List[u64])->u64 {forward(root)+forward_again(root)}
             crate::native_front_fixture::products(&mut changed, &[inspect.clone()]).unwrap();
         let reader = facts
             .original_context
-            .reader(
-                facts.originals.iter().map(|product| (**product).clone()),
-                store.clone(),
-            )
+            .reader(facts.originals.iter().map(|product| (**product).clone()))
             .unwrap();
         let declarations = NativeDeclarations::from_front(facts).unwrap();
         let changed = NativeInstanceInputs::from_products(declarations, reader).unwrap();
@@ -437,9 +432,7 @@ impl hirsel_driver::native::queries::source_inputs::NativeLowerProducts for Lowe
         self.0
             .get(path)
             .filter(|product| {
-                selected
-                    .archive(runtime::ArchiveAdmission::Retained)
-                    .is_ok_and(|archive| product.body == archive.reference())
+                matches!(&product.body, NativeOriginalValue::Live(live) if selected == runtime::ProductRef::lower(live.clone()))
             })
             .cloned()
             .ok_or_else(|| "unselected test Lower".into())

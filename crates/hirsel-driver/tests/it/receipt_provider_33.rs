@@ -42,9 +42,7 @@ fn receipt_provider_default_and_simulated_current_source_agree_and_stale_rows_re
             .unwrap();
         engine.parse_file(file, &default_context()).unwrap();
         let path = entry_path(&default_context());
-        let reader = engine
-            .native_original_reader(&[path.clone()], store)
-            .unwrap();
+        let reader = engine.native_original_reader(&[path.clone()]).unwrap();
         let front = Front::new(&reader);
         let original = front.original(&path).unwrap();
         let base = key_of(

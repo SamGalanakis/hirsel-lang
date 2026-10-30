@@ -498,6 +498,15 @@ impl CheckedTir {
     pub fn bind_types(&self) -> Option<()> {
         self.source.bind_types()
     }
+    /// Test a borrowed raw view's exact type/source context without loading
+    /// types or accepting its artifact. A different context must rebind at open.
+    pub fn matches_bindings(
+        &self,
+        types: &Arc<hirsel_types::TypeInterner>,
+        anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+    ) -> bool {
+        self.source.matches_bindings(types, anchor)
+    }
     pub fn backing(&self) -> &Bytes {
         self.source.envelope().backing()
     }

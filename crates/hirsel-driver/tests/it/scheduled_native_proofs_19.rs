@@ -207,10 +207,7 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
         .unwrap();
         let original = actual
             .original_context
-            .reader(
-                actual.originals.iter().map(|p| (**p).clone()),
-                store.clone(),
-            )
+            .reader(actual.originals.iter().map(|p| (**p).clone()))
             .unwrap();
         let inputs = native::queries::source_inputs::NativeInstanceInputs::from_products(
             declarations,

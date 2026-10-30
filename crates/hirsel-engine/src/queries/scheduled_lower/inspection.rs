@@ -37,7 +37,7 @@ impl FrontLowerQueries {
         self: &Arc<Self>,
         path: &DefPath,
         allowance: MemoryReservation,
-    ) -> Result<hirsel_product_codec::CheckedTir, QueryError> {
+    ) -> Result<crate::NativeOriginalValue, QueryError> {
         let id = self.query(path).ok_or(QueryError::NotImplemented)?;
         let outcomes = self
             .outcomes
@@ -62,6 +62,9 @@ impl FrontLowerQueries {
                 message: "captured decode buffers exceed caller working admission".into(),
             }));
         }
+        if let Some(live) = lower.live.as_ref().and_then(WeakLowerProduct::upgrade) {
+            return Ok(crate::NativeOriginalValue::Live(live.clone()));
+        }
         let reference = lower.body;
         drop(outcomes);
         let archive = self
@@ -84,7 +87,7 @@ impl FrontLowerQueries {
         {
             return Err(QueryError::NotImplemented);
         }
-        Ok(archive)
+        Ok(crate::NativeOriginalValue::Archive(archive))
     }
     /// Captured bound for an already settled ordered dependency sequence.
     /// This inspects metadata only, before any provider access or decoding.
@@ -134,6 +137,13 @@ impl FrontLowerQueries {
                 operation: "original dependency inspection".into(),
                 message: "captured decode buffers exceed caller working admission".into(),
             }));
+        }
+        if let Some(live) = lower.live.as_ref().and_then(WeakLowerProduct::upgrade) {
+            return Ok(FrontLowerDependencies {
+                dependencies: live.output().dependencies.clone(),
+                _owner: self.clone(),
+                _allowance: allowance,
+            });
         }
         let archive = match &lower.archived_metadata {
             Some(archive) => archive.clone(),

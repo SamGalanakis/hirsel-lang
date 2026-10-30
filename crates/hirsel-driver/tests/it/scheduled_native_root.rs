@@ -222,10 +222,7 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                 );
                 let reader = actual
                     .original_context
-                    .reader(
-                        actual.originals.iter().map(|p| (**p).clone()),
-                        store.clone(),
-                    )
+                    .reader(actual.originals.iter().map(|p| (**p).clone()))
                     .unwrap();
                 assert!(reader.read(&entry).is_some());
                 drop(reader);
@@ -260,10 +257,7 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                 );
                 let expected_reader = expected
                     .original_context
-                    .reader(
-                        expected.originals.iter().map(|product| (**product).clone()),
-                        expected_store.clone(),
-                    )
+                    .reader(expected.originals.iter().map(|product| (**product).clone()))
                     .unwrap();
                 assert_eq!(
                     codec.encode(&anchors, &actual.statics.constants),

@@ -187,9 +187,7 @@ pub(super) fn compile_roots_inspect<R>(
     let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
     let mut declarations = NativeDeclarations::collect(engine, &mut cache, requested).unwrap();
     let paths = declarations.sources.keys().cloned().collect::<Vec<_>>();
-    let original = engine
-        .native_original_reader(&paths, store.clone())
-        .unwrap();
+    let original = engine.native_original_reader(&paths).unwrap();
     for (path, source) in &mut declarations.sources {
         Arc::make_mut(source).lower = original
             .input(path)
@@ -240,10 +238,7 @@ pub(super) fn compile_front<R>(
     let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
     let original = facts
         .original_context
-        .reader(
-            facts.originals.iter().map(|product| (**product).clone()),
-            store.clone(),
-        )
+        .reader(facts.originals.iter().map(|product| (**product).clone()))
         .unwrap();
     compile_settled(
         declarations,

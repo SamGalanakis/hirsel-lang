@@ -371,6 +371,7 @@ impl FrontLowerQueries {
                 staged::Selections,
             ) = self.records.decode(&self.anchors, &row.descriptor)?;
             let lower = LowerProduct {
+                live: None,
                 definition,
                 body,
                 diagnostics,
@@ -427,23 +428,29 @@ impl FrontLowerQueries {
         if let Err(error) = self.restore_selections(&selections, query_reads).await {
             return Some(Err(error));
         }
-        let result = self.publish(
-            id,
-            key,
-            domain,
-            descriptor.clone().into(),
-            Outcome {
-                result: Ok(value),
-                reads,
-                reads_decode_bytes,
-                selections,
-                depth: depth.into(),
-                executed,
-                execution,
-                execution_subject: persistent::evaluation_subject(key, &descriptor),
-            },
-            false,
-        );
+        let result = self
+            .publish(
+                id,
+                key,
+                Outcome {
+                    result: Ok(value),
+                    reads,
+                    reads_decode_bytes,
+                    selections,
+                    depth: depth.into(),
+                    executed,
+                    execution,
+                    execution_subject: persistent::evaluation_subject(key, &descriptor),
+                },
+                Publication {
+                    domain,
+                    bytes: descriptor.clone().into(),
+                    persist: false,
+                    raw: None,
+                },
+                query_reads,
+            )
+            .await;
         if clean && result.is_ok() {
             self.clean_memos
                 .lock()

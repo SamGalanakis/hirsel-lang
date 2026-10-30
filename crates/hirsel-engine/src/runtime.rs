@@ -14,7 +14,9 @@ pub use product::{
     ArchiveAdmission, LIVE_ANALYZED, LIVE_LOWER, LIVE_SUMMARY, LiveAnalyzedProduct,
     LiveLowerProduct, LiveSummaryProduct, ProductArchive, SummaryFacet,
 };
-pub(crate) use product::{ProductSource, SharedProductSource, WeakAnalyzedProduct};
+pub(crate) use product::{
+    ProductSource, SharedProductSource, WeakAnalyzedProduct, WeakLowerProduct,
+};
 pub use scheduler::{
     AdmittedRuntime, RuntimeCompletion, RuntimeErrors, RuntimeEvent, RuntimeObserver, RuntimeStats,
 };
@@ -68,7 +70,11 @@ pub enum QueryPoll {
 }
 
 pub trait QueryContext {
-    /// Evict the oldest settled, unpinned analyzed body outside unfinished
+    /// The continuation has retained this dependency's complete observations
+    /// and released its raw body. Keep the semantic edge and subscriptions;
+    /// only its in-flight body pin ends, until the next read.
+    fn release_body(&mut self, _query: QueryId) {}
+    /// Evict the oldest settled, unpinned analyzed or Lower body outside unfinished
     /// roots and active continuations. Producers call this before retrying a
     /// refused admission.
     fn evict_body(&mut self) -> bool {

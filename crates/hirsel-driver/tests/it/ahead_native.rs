@@ -128,7 +128,7 @@ fn request_objects(
     let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
     let lower = facts
         .original_context
-        .reader(facts.originals.iter().map(|p| (**p).clone()), store.clone())
+        .reader(facts.originals.iter().map(|p| (**p).clone()))
         .unwrap();
     let entries = declarations.context.sources.iter().filter(|(path,_)| matches!(&declarations.program.signatures[*path].kind, hirsel_types::SignatureKind::Function(f) if f.generics.is_empty())).map(|(p,s)| (p.clone(),s.entry.0)).collect();
     let main = hirsel_engine::entry_path(&default_context());

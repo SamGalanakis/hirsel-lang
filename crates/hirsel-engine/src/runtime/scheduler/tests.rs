@@ -1825,6 +1825,22 @@ fn tokens_ignore_old_producer_and_waiter_generations_and_preserve_failed_edges()
     assert!(nodes.subscribe(old_waiter, edge, old_producer));
     assert!(!nodes.subscribe(old_waiter, edge, old_producer));
     assert_eq!(nodes[&key(query(0))].unsatisfied, 1);
+    nodes.mark_in_flight([key(query(0))].into_iter());
+    assert!(nodes[&key(query(1))].in_flight);
+    let edges = nodes.edge_count();
+    nodes.release_body(old_waiter, key(query(1)));
+    nodes.mark_in_flight([key(query(0))].into_iter());
+    assert!(!nodes[&key(query(1))].in_flight);
+    nodes.mark_live([key(query(0))].into_iter());
+    assert!(
+        nodes[&key(query(1))].live,
+        "body release preserves the full semantic closure"
+    );
+    assert_eq!(nodes.edge_count(), edges);
+    assert_eq!(nodes[&key(query(0))].unsatisfied, 1);
+    nodes.retain_body(old_waiter, edge);
+    nodes.mark_in_flight([key(query(0))].into_iter());
+    assert!(nodes[&key(query(1))].in_flight);
     nodes.remove(&key(query(1)));
     nodes.insert(key(query(1)), bare_node());
     nodes.transfer_subscriptions(key(query(1)));

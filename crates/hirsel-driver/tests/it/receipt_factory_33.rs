@@ -74,9 +74,7 @@ fn source_at(text: &str, name: &str) -> (NativeOriginalReader, DefPath) {
     let mut path = entry_path(&default_context());
     path.0.name = name.into();
     let roots = engine.native_source_roots(&[path.clone()]).unwrap();
-    let reader = engine
-        .native_original_reader(&roots.definitions, store)
-        .unwrap();
+    let reader = engine.native_original_reader(&roots.definitions).unwrap();
     (reader, path)
 }
 fn root(front: &Front<'_>, path: &DefPath) -> NamedInput {

@@ -148,7 +148,6 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                     outputs
                         .iter()
                         .filter_map(|output| output.original.as_deref().cloned()),
-                    store.clone(),
                 )
                 .unwrap();
             let work_before_metadata = lower.work_snapshot();
@@ -327,7 +326,14 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                         "actual V output for {path}"
                     );
                     if verify == Verify::Off {
-                        assert_eq!(reader.input(path).unwrap().1, Some(original.body))
+                        assert_eq!(reader.input(path).unwrap().1, None);
+                        let NativeOriginalValue::Live(live) = &original.body else {
+                            panic!("selected live Lower")
+                        };
+                        assert!(Arc::ptr_eq(
+                            reader.read(path).unwrap().definition(),
+                            &live.output().value
+                        ));
                     }
                 }
             }

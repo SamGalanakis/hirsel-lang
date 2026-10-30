@@ -1,5 +1,5 @@
-//! One immutable source snapshot's selected V-owned Lower envelopes. Decoding
-//! is miss-only and uses V's existing exact body/environment rechecks.
+//! Shared ordinary Lower owners and explicit checked archive inputs. Raw
+//! ownership grants no V/native acceptance; source and policy checks stay local.
 use crate::{
     DefinitionQueries, NativeRecordContext, NativeRecordSource, QueryEngine, QueryError,
     SignatureSnapshot, Verify,
@@ -18,8 +18,48 @@ pub struct NativeOriginalProduct {
     pub definition: DefPath,
     pub implementation_revision: ContentHash,
     pub signature: ContentHash,
-    pub body: hirsel_artifact_store::Reference,
+    pub body: NativeOriginalValue,
     pub verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
+}
+
+/// Raw input with its original immutable owner. Neither variant grants V or C.
+#[derive(Clone)]
+pub enum NativeOriginalValue {
+    Live(crate::runtime::LiveLowerProduct),
+    Scalar(Arc<NativeScalarLower>),
+    Archive(hirsel_product_codec::CheckedTir),
+}
+/// Scalar queries retain their complete memo, source map and exact context.
+/// Construction belongs to the ordinary QueryEngine, never an importer.
+pub struct NativeScalarLower {
+    definition: hirsel_tir::DefinitionRef,
+    _entry: Option<Arc<dyn Send + Sync>>,
+    _sources: hirsel_span::SourceMap,
+    _context: Arc<NativeRecordContext>,
+    implementation_revision: ContentHash,
+    signature: ContentHash,
+}
+impl NativeOriginalValue {
+    pub fn view(&self) -> hirsel_product_codec::TirView<'_> {
+        match self {
+            Self::Live(value) => hirsel_product_codec::TirView::Live(&value.output().value),
+            Self::Scalar(value) => hirsel_product_codec::TirView::Live(&value.definition),
+            Self::Archive(value) => hirsel_product_codec::TirView::Archived(value),
+        }
+    }
+    fn definition(&self) -> Option<hirsel_tir::DefinitionRef> {
+        match self {
+            Self::Live(value) => Some(value.output().value.clone()),
+            Self::Scalar(value) => Some(value.definition.clone()),
+            Self::Archive(value) => Some(Arc::new(value.materialize()?)),
+        }
+    }
+    fn reference(&self) -> Option<hirsel_artifact_store::Reference> {
+        match self {
+            Self::Archive(value) => Some(value.reference()),
+            _ => None,
+        }
+    }
 }
 
 /// Source bindings captured before Lower tasks run. This contains no source
@@ -46,7 +86,6 @@ impl NativeOriginalContext {
     pub fn reader(
         &self,
         products: impl IntoIterator<Item = NativeOriginalProduct>,
-        store: Arc<dyn crate::store::ResultStore>,
     ) -> Result<NativeOriginalReader, QueryError> {
         let mut selected = BTreeMap::new();
         let mut ordinary = BTreeMap::new();
@@ -56,7 +95,21 @@ impl NativeOriginalContext {
             if !seen.insert(path.clone())
                 || self.expected.get(&path)
                     != Some(&(product.implementation_revision, product.signature))
-                || product.body.domain != NATIVE_ORIGINAL_BODY
+                || product.body.view().header().is_none_or(|header| {
+                    header.path.path() != &path || header.signature_hash != product.signature
+                })
+                || matches!(&product.body, NativeOriginalValue::Live(live) if
+                    !live.bindings_hold(&self.anchors)
+                    || live.observations().implementation_revision != product.implementation_revision
+                    || live.observations().signature != product.signature
+                    || product.verified.as_ref().is_some_and(|output| live.observations().verified.as_ref() != Some(output)))
+                || matches!(&product.body, NativeOriginalValue::Scalar(value) if
+                    value.implementation_revision != product.implementation_revision
+                    || value.signature != product.signature
+                    || !value._context.bindings_hold(&self.anchors))
+                || matches!(&product.body, NativeOriginalValue::Archive(value) if
+                    !value.matches_bindings(self.anchors.record_types(), |path, occurrence|
+                        self.anchors.record_source_anchor(path, occurrence)))
                 || product
                     .verified
                     .as_ref()
@@ -66,19 +119,25 @@ impl NativeOriginalContext {
                     "settled Lower differs from its source snapshot",
                 ));
             }
-            // The request's ordinary transport outlives best-effort verifier
-            // storage. Keep its descriptor even when a V output is available.
+            // Retain the raw owner independently of best-effort verifier storage.
             ordinary.insert(
                 path.clone(),
                 OrdinarySource {
-                    reference: product.body,
+                    value: product.body,
                     implementation_revision: product.implementation_revision,
                     signature: product.signature,
                 },
             );
-            if self.reuse
+            if self.verify == Verify::On
+                && self.reuse
                 && self.cache.is_some()
-                && let Some(output) = product.verified
+                && let Some(output) = product.verified.filter(|output| {
+                    output.environment_holds(
+                        self.anchors.record_types(),
+                        self.policy,
+                        self.signatures.validation(&path.0.package),
+                    )
+                })
             {
                 selected.insert(
                     path,
@@ -101,8 +160,6 @@ impl NativeOriginalContext {
                 instances: self.instances.clone(),
             },
             ordinary,
-            records: crate::NativeRecords::new(self.anchors.record_types().clone(), store.clone()),
-            store,
             verify: self.verify,
             reuse: self.reuse,
         })
@@ -289,11 +346,9 @@ impl QueryEngine {
     }
 }
 
-/// A selected ordinary Lower archive is data, not V authority. The worker
-/// decodes it only on a native miss and runs the same independent source V
-/// against the frozen private view when Verify is on.
+/// Selected raw data and its immutable owner, independent of V authority.
 struct OrdinarySource {
-    reference: hirsel_artifact_store::Reference,
+    value: NativeOriginalValue,
     implementation_revision: ContentHash,
     signature: ContentHash,
 }
@@ -303,17 +358,22 @@ pub struct NativeOriginalReader {
     owner: Option<Arc<dyn Send + Sync>>,
     verified: NativeLowerReader,
     ordinary: BTreeMap<DefPath, OrdinarySource>,
-    records: crate::NativeRecords,
-    store: Arc<dyn crate::store::ResultStore>,
     verify: Verify,
     reuse: bool,
 }
 pub struct NativeOriginalBody {
     _owner: Option<Arc<dyn Send + Sync>>,
+    _raw: Option<NativeOriginalValue>,
     definition: hirsel_tir::DefinitionRef,
     output: Option<hirsel_validate::VerifiedDefinitionOutput>,
     implementation_revision: ContentHash,
     verification_ran: bool,
+}
+impl std::ops::Deref for NativeOriginalBody {
+    type Target = hirsel_tir::Definition;
+    fn deref(&self) -> &Self::Target {
+        &self.definition
+    }
 }
 impl NativeOriginalBody {
     pub fn definition(&self) -> &hirsel_tir::DefinitionRef {
@@ -348,7 +408,13 @@ impl NativeOriginalReader {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.add(std::mem::size_of::<Self>());
         weight.map(&self.verified.selected, |weight, path, _| weight.path(path));
-        weight.map(&self.ordinary, |weight, path, _| weight.path(path));
+        weight.map(&self.ordinary, |weight, path, source| {
+            weight.path(path);
+            if let NativeOriginalValue::Scalar(value) = &source.value {
+                weight.arc(value);
+                weight.source_snapshot(&value._sources);
+            }
+        });
         weight.bytes()
     }
 
@@ -380,28 +446,21 @@ impl NativeOriginalReader {
         let input = self.ordinary.get(path)?;
         Some((
             None,
-            Some(input.reference),
+            input.value.reference(),
             input.implementation_revision,
             input.signature,
         ))
     }
-    /// Checked raw source rows from the selected ordinary Lower publication.
-    /// This grants no V acceptance. Transforming consumers materialize explicitly.
-    pub fn archive(&self, path: &DefPath) -> Option<hirsel_product_codec::CheckedTir> {
+    /// Raw selected input retaining its original owner, without V acceptance.
+    pub fn raw(&self, path: &DefPath) -> Option<NativeOriginalValue> {
+        if let Some(source) = self.ordinary.get(path) {
+            return Some(source.value.clone());
+        }
         let retained: Arc<dyn Send + Sync> =
             Arc::new((self.verified.anchors.clone(), self.owner.clone()));
-        if let Some(archive) = self.verified.archive(path, retained.clone()) {
-            return Some(archive);
-        }
-        let source = self.ordinary.get(path)?;
-        let archive = self.records.open_tir(
-            self.verified.anchors.clone(),
-            self.store.get_content(source.reference)?,
-            source.reference,
-            retained,
-        )?;
-        let header = archive.header()?;
-        (header.path.path() == path && header.signature_hash == source.signature).then_some(archive)
+        self.verified
+            .archive(path, retained)
+            .map(NativeOriginalValue::Archive)
     }
     pub fn has_ordinary(&self) -> bool {
         self.ordinary
@@ -409,51 +468,79 @@ impl NativeOriginalReader {
             .any(|path| !self.verified.contains(path))
     }
     pub fn read(&self, path: &DefPath) -> Option<NativeOriginalBody> {
-        if let Some(body) = self.verified.read(path) {
+        let Some(source) = self.ordinary.get(path) else {
+            let body = self.verified.read(path)?;
             return Some(NativeOriginalBody {
                 _owner: self.owner.clone(),
+                _raw: None,
                 definition: body.definition,
                 output: Some(body.output),
                 implementation_revision: body.implementation_revision,
                 verification_ran: false,
             });
-        }
-        let source = self.ordinary.get(path)?;
-        let archive = self.archive(path)?;
-        let header = archive.header()?;
+        };
+        let raw = source.value.clone();
+        let view = raw.view();
+        let header = view.header()?;
         if header.path.path() != path
             || header.signature_hash != source.signature
             || !hirsel_validate::validate_instance_rows(
                 self.verified.anchors.record_types(),
                 &self.verified.instances,
                 path,
-                hirsel_product_codec::TirView::Archived(&archive),
+                view,
             )?
             .is_empty()
         {
             return None;
         }
-        let output = if let Some((output, _, _)) = self.verified.input(path) {
-            if !output.matches_archive(
-                &archive,
-                self.verified.anchors.record_types().clone(),
-                |anchor| self.verified.anchors.record_owner(anchor),
-                self.verified.policy,
-                self.verified.signatures.validation(&path.0.package),
-            ) {
-                return None;
+        let output = if self.verify == Verify::On && self.reuse {
+            if let Some((output, _, _)) = self.verified.input(path) {
+                let matches = match &raw {
+                    NativeOriginalValue::Archive(archive) => output.matches_archive(
+                        archive,
+                        self.verified.anchors.record_types().clone(),
+                        |anchor| self.verified.anchors.record_owner(anchor),
+                        self.verified.policy,
+                        self.verified.signatures.validation(&path.0.package),
+                    ),
+                    _ => output.matches_definition(
+                        &raw.definition()?,
+                        self.verified.anchors.record_types().clone(),
+                        |anchor| self.verified.anchors.record_owner(anchor),
+                        self.verified.policy,
+                        self.verified.signatures.validation(&path.0.package),
+                    ),
+                };
+                if !matches {
+                    return None;
+                }
+                Some(output.clone())
+            } else {
+                None
             }
-            Some(output.clone())
         } else {
             None
         };
         let verification_ran = if output.is_none() && self.verify == Verify::On {
             let _time = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
-            let artifact = hirsel_validate::Artifact::archived(
-                &archive,
-                self.verified.anchors.record_types().clone(),
-                |anchor| self.verified.anchors.record_owner(anchor),
-            )?;
+            let artifact = match &raw {
+                NativeOriginalValue::Archive(archive) => hirsel_validate::Artifact::archived(
+                    archive,
+                    self.verified.anchors.record_types().clone(),
+                    |anchor| self.verified.anchors.record_owner(anchor),
+                )?,
+                NativeOriginalValue::Live(live) => hirsel_validate::Artifact::new(
+                    &live.output().value,
+                    self.verified.anchors.record_types().clone(),
+                    |anchor| self.verified.anchors.record_owner(anchor),
+                ),
+                NativeOriginalValue::Scalar(value) => hirsel_validate::Artifact::new(
+                    &value.definition,
+                    self.verified.anchors.record_types().clone(),
+                    |anchor| self.verified.anchors.record_owner(anchor),
+                ),
+            };
             let (report, ran, _) = hirsel_validate::validate_with_receipt(
                 &artifact,
                 self.verified.signatures.validation(&path.0.package),
@@ -475,24 +562,22 @@ impl NativeOriginalReader {
         };
         Some(NativeOriginalBody {
             _owner: self.owner.clone(),
-            definition: Arc::new(archive.materialize()?),
+            definition: raw.definition()?,
+            _raw: Some(raw),
             output,
             implementation_revision: source.implementation_revision,
             verification_ran,
         })
     }
 }
+
 impl QueryEngine {
-    /// Complete ordinary source queries only where their current V envelope is
-    /// unavailable, transporting one original body at a time through the sole
-    /// type/anchor codec. No Definition collection survives this method.
+    /// Retain ordinary Lower values with their exact scalar memo/source owners.
     /// VerifyOff/recomputation/absent verifier never manufacture a V token.
     pub fn native_original_reader(
         &mut self,
         paths: &[DefPath],
-        transport: Arc<dyn crate::store::ResultStore>,
     ) -> Result<NativeOriginalReader, QueryError> {
-        let records = crate::NativeRecords::new(self.types.clone(), transport.clone());
         let cache = self.product_store().and_then(|store| store.verifier());
         let mut selected = BTreeMap::new();
         let mut ordinary = BTreeMap::new();
@@ -504,9 +589,11 @@ impl QueryEngine {
             }
             let revision = source.source.implementation_revision;
             let signature = source.signature.fingerprint;
-            if self.native_query_policy().reuse
+            let (definition, output) = self.native_definition_body_with_output(&source)?;
+            if self.verify == Verify::On
+                && self.native_query_policy().reuse
                 && cache.is_some()
-                && let Some(output) = source.lower.clone()
+                && let Some(output) = output
             {
                 selected.insert(
                     path.clone(),
@@ -516,33 +603,19 @@ impl QueryEngine {
                         signature,
                     },
                 );
-                continue;
             }
-            let (definition, output) = self.native_definition_body_with_output(&source)?;
-            if let Some(output) = output.filter(|_| cache.is_some()) {
-                selected.insert(
-                    path.clone(),
-                    Selected {
-                        output,
-                        implementation_revision: revision,
-                        signature,
-                    },
-                );
-                continue;
-            }
-            let bytes = records
-                .encode_tir(self, &definition)
-                .ok_or_else(|| source_transport("ordinary Lower encoding failed"))?;
-            let reference = transport
-                .put_content(NATIVE_ORIGINAL_BODY, &bytes)
-                .ok_or_else(|| source_transport("ordinary Lower transport failed"))?;
-            if NATIVE_ORIGINAL_BODY.reference(&bytes) != Some(reference) {
-                return Err(source_transport("ordinary Lower content identity differs"));
-            }
+            let context = Arc::new(NativeRecordContext::capture(self));
             ordinary.insert(
                 path.clone(),
                 OrdinarySource {
-                    reference,
+                    value: NativeOriginalValue::Scalar(Arc::new(NativeScalarLower {
+                        definition,
+                        _entry: self.native_lower_owner(path),
+                        _sources: self.sources.clone(),
+                        _context: context,
+                        implementation_revision: revision,
+                        signature,
+                    })),
                     implementation_revision: revision,
                     signature,
                 },
@@ -559,8 +632,6 @@ impl QueryEngine {
                 instances: Arc::new(self.instance_bodies(&paths)),
             },
             ordinary,
-            records,
-            store: transport,
             verify: self.verify,
             reuse: self.native_query_policy().reuse,
         })
@@ -624,7 +695,6 @@ impl QueryEngine {
                 },
             );
         }
-        let store: Arc<dyn crate::store::ResultStore> = Arc::new(crate::store::MemStore::default());
         Ok(NativeOriginalReader {
             owner: None,
             verified: NativeLowerReader {
@@ -636,8 +706,6 @@ impl QueryEngine {
                 instances: Arc::new(input.instance_bodies.clone()),
             },
             ordinary: BTreeMap::new(),
-            records: crate::NativeRecords::new(input.types.clone(), store.clone()),
-            store,
             verify: self.verify,
             reuse: true,
         })

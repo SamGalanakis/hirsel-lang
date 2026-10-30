@@ -16,7 +16,15 @@ type Outcome = Result<ProductRef, Reference>;
 fn key(query: QueryId) -> Key {
     (query.kind, query.address.0)
 }
+#[derive(Default)]
+enum Eviction {
+    #[default]
+    Idle,
+    Requested,
+    Completed(bool),
+}
 struct Reads {
+    eviction: Eviction,
     requested: BTreeMap<Key, QueryId>,
     completed: BTreeMap<Key, Outcome>,
     limit: usize,
@@ -27,6 +35,21 @@ struct Reads {
 #[derive(Clone)]
 pub struct QueryReads(Rc<RefCell<Reads>>);
 impl QueryReads {
+    /// Retry a producer admission using the runtime's existing unpinned-body
+    /// eviction policy. The request and result stay in this bounded mailbox.
+    pub(crate) async fn evict_body(&self) -> bool {
+        poll_fn(|_| {
+            let mut reads = self.0.borrow_mut();
+            match std::mem::take(&mut reads.eviction) {
+                Eviction::Completed(evicted) => Poll::Ready(evicted),
+                Eviction::Idle | Eviction::Requested => {
+                    reads.eviction = Eviction::Requested;
+                    Poll::Pending
+                }
+            }
+        })
+        .await
+    }
     pub async fn read(&self, query: QueryId) -> Outcome {
         poll_fn(|_| self.poll_read(query, false)).await
     }
@@ -96,6 +119,7 @@ impl LocalFutureTask {
         let max_reads = Self::read_capacity(weight.retained, std::mem::size_of::<F>(), max_reads)
             .ok_or(errors.resource)?;
         let reads = QueryReads(Rc::new(RefCell::new(Reads {
+            eviction: Eviction::Idle,
             requested: BTreeMap::new(),
             completed: BTreeMap::new(),
             limit: max_reads,
@@ -113,6 +137,10 @@ impl LocalFutureTask {
     }
     fn advance(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         loop {
+            if matches!(self.reads.0.borrow().eviction, Eviction::Requested) {
+                let evicted = cx.evict_body();
+                self.reads.0.borrow_mut().eviction = Eviction::Completed(evicted);
+            }
             let requested = self
                 .reads
                 .0
@@ -144,7 +172,10 @@ impl LocalFutureTask {
                     self.terminal = Some(result.clone());
                     return finish(result);
                 }
-                Poll::Pending if self.reads.0.borrow().requested.is_empty() => {
+                Poll::Pending
+                    if self.reads.0.borrow().requested.is_empty()
+                        && !matches!(self.reads.0.borrow().eviction, Eviction::Requested) =>
+                {
                     // External async operations cannot wake the query graph.
                     // Reject rather than leaving an unregistered sleeping task.
                     self.terminal = Some(Err(self.protocol));
@@ -211,6 +242,7 @@ mod tests {
     }
     fn reads() -> QueryReads {
         QueryReads(Rc::new(RefCell::new(Reads {
+            eviction: Eviction::Idle,
             requested: BTreeMap::new(),
             completed: BTreeMap::new(),
             limit: 0,

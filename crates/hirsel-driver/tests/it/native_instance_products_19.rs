@@ -56,7 +56,7 @@ fn native_instance_product_hits_require_current_c_without_value_materialization(
             &mut layouts,
             instances,
             id,
-            original,
+            original.definition().clone(),
         )
         .unwrap();
         let view = instances.view(id);

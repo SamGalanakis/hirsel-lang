@@ -83,9 +83,7 @@ impl Fixture {
                 )
             })
             .collect();
-        let lower = engine
-            .native_original_reader(&paths, store.clone())
-            .unwrap();
+        let lower = engine.native_original_reader(&paths).unwrap();
         for (path, source) in &mut declarations {
             Arc::make_mut(source).lower = lower
                 .input(path)
@@ -116,7 +114,7 @@ impl Fixture {
                 .unwrap(),
         );
         let signatures = engine.signature_snapshot();
-        let empty = engine.native_original_reader(&[], store.clone()).unwrap();
+        let empty = engine.native_original_reader(&[]).unwrap();
         program.definitions.clear();
         // The constructor cannot fall back to source/controller queries.
         drop(engine);

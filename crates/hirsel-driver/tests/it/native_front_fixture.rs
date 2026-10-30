@@ -61,6 +61,10 @@ thread_local! {
     static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
     static LOWERING_ALLOWED: Arc<AtomicBool> = Arc::new(AtomicBool::new(true));
 }
+pub(super) fn release_host() {
+    HOST.with(|host| drop(host.borrow_mut().take()));
+}
+
 fn guarded_adapters() -> PhaseAdapters {
     let mut adapters = hirsel_driver::compiler_adapters();
     adapters.lowering = Some(Arc::new(GuardedLowering(LOWERING_ALLOWED.with(Arc::clone))));
@@ -188,10 +192,7 @@ pub(super) fn inputs(
     let facts = products(engine, requested).unwrap();
     let reader = facts
         .original_context
-        .reader(
-            facts.originals.iter().map(|product| (**product).clone()),
-            engine.product_store().unwrap(),
-        )
+        .reader(facts.originals.iter().map(|product| (**product).clone()))
         .unwrap();
     let declarations =
         hirsel_driver::native::queries::declarations::NativeDeclarations::from_front(facts)

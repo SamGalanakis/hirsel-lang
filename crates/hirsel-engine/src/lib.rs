@@ -21,7 +21,8 @@ pub use native_queries::*;
 mod native_lower;
 pub use native_lower::{
     NATIVE_ORIGINAL_BODY, NativeLowerBody, NativeLowerReader, NativeOriginalBody,
-    NativeOriginalContext, NativeOriginalProduct, NativeOriginalReader,
+    NativeOriginalContext, NativeOriginalProduct, NativeOriginalReader, NativeOriginalValue,
+    NativeScalarLower,
 };
 mod native_input;
 pub use native_input::*;

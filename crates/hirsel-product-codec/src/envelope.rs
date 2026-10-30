@@ -367,6 +367,19 @@ impl BoundIndexedEnvelope {
     pub fn envelope(&self) -> &IndexedEnvelope {
         &self.envelope
     }
+    pub(crate) fn matches_bindings(
+        &self,
+        types: &std::sync::Arc<hirsel_types::TypeInterner>,
+        mut anchor: impl FnMut(&DefPath, u32) -> Option<hirsel_span::Anchor>,
+    ) -> bool {
+        std::sync::Arc::ptr_eq(types, &self.types.records.types)
+            && self.anchors.iter().enumerate().all(|(n, bound)| {
+                self.envelope.anchor(n as u32).is_some_and(|owner| {
+                    let (path, occurrence) = owner.to_owned();
+                    anchor(&path, occurrence) == Some(*bound)
+                })
+            })
+    }
     pub(crate) fn bind_types(&self) -> Option<()> {
         for n in 0..self.envelope.type_count() {
             self.types.records.get(self.envelope.type_reference(n)?)?;

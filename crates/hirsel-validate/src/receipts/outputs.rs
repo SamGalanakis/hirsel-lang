@@ -832,6 +832,20 @@ impl VerifiedDefinitionOutput {
             facts: self.invocations.clone(),
         }
     }
+    /// Check the complete current policy and private observations without
+    /// reading a body. This does not bind or accept a raw source artifact.
+    pub fn environment_holds(
+        &self,
+        types: &TypeInterner,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+    ) -> bool {
+        self.policy == policy
+            && self
+                .reads
+                .iter()
+                .all(|read| crate::input::read_holds_for_types(types, read, signatures))
+    }
     /// Rebind an already issued V output to an independently supplied original
     /// after its replay bytes were evicted. Exact canonical artifact identity,
     /// current private observations and policy are all checked here. Content

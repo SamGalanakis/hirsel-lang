@@ -160,6 +160,18 @@ impl QueryEngine {
     }
 }
 impl NativeRecordContext {
+    pub(crate) fn bindings_hold(&self, current: &Self) -> bool {
+        Arc::ptr_eq(&self.types, &current.types)
+            && (Arc::ptr_eq(&self.bindings, &current.bindings)
+                || self
+                    .bindings
+                    .anchors
+                    .iter()
+                    .all(|((owner, occurrence), anchor)| {
+                        current.record_source_anchor(owner.path(), *occurrence) == Some(*anchor)
+                    }))
+    }
+
     pub(crate) fn input_bytes(&self) -> Option<u64> {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + size_of::<SourceBindings>() + 4 * size_of::<usize>());

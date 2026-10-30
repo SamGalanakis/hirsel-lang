@@ -37,7 +37,7 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
             .unwrap()
             .source
             .clone();
-        let reader = context.reader([selected.clone()], store.clone()).unwrap();
+        let reader = context.reader([selected.clone()]).unwrap();
         let body = reader.read(&main).unwrap().definition().clone();
         let original = Arc::downgrade(&body);
         drop(reader);
@@ -49,10 +49,7 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
             ));
         }
         let complete = context
-            .reader(
-                facts.originals.iter().map(|product| (**product).clone()),
-                store.clone(),
-            )
+            .reader(facts.originals.iter().map(|product| (**product).clone()))
             .unwrap();
         let shared = NativeInstanceInputs::from_products(
             NativeDeclarations::from_front(facts.clone()).unwrap(),
@@ -66,7 +63,7 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
             ));
         }
         let empty = context
-            .reader(std::iter::empty::<NativeOriginalProduct>(), store.clone())
+            .reader(std::iter::empty::<NativeOriginalProduct>())
             .unwrap();
         let inputs = NativeInstanceInputs::from_products(declarations, empty).unwrap();
         let mut unavailable = inputs.provider();
@@ -74,13 +71,9 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
         assert!(unavailable.original_source(&main).is_err());
         let mut wrong = selected.clone();
         wrong.signature = Default::default();
-        assert!(
-            inputs
-                .provider_from_products(&context, [wrong], store.clone())
-                .is_err()
-        );
+        assert!(inputs.provider_from_products(&context, [wrong]).is_err());
         let mut pinned = inputs
-            .provider_from_products(&context, [selected.clone()], store.clone())
+            .provider_from_products(&context, [selected.clone()])
             .unwrap();
         assert_eq!(pinned.body_demands, 0);
         assert_eq!(pinned.source_verifications, 0);
@@ -92,9 +85,7 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
         );
         let mut ordinary = selected;
         ordinary.verified = None;
-        let mut ordinary = inputs
-            .provider_from_products(&context, [ordinary], store)
-            .unwrap();
+        let mut ordinary = inputs.provider_from_products(&context, [ordinary]).unwrap();
         assert!(ordinary.source_output(&main).unwrap().is_none());
         assert!(!ordinary.query_policy().reuse);
         drop(body);
@@ -105,8 +96,8 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
             &shared.declarations.sources[&main]
         ));
         assert!(
-            original.upgrade().is_none(),
-            "immutable worker inputs retain no original Definition"
+            original.upgrade().is_some(),
+            "immutable worker inputs retain the exact shared original Definition"
         );
         assert_eq!(
             pinned.original_source(&main).unwrap().0.signature_hash,

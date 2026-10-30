@@ -211,10 +211,7 @@ fn preparation_demands_one_source_and_keeps_closure_and_layout_views_after_regis
             let reader = f
                 .source
                 .original_context()
-                .reader(
-                    [facts.original().unwrap().as_ref().clone()],
-                    f.store.clone(),
-                )
+                .reader([facts.original().unwrap().as_ref().clone()])
                 .unwrap();
             let body = reader.read(&main).unwrap().definition().clone();
             let weak = Arc::downgrade(&body);

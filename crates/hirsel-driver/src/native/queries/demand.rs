@@ -1329,7 +1329,7 @@ impl DemandInstances {
             let restored = recipe.restore_selected(
                 &inputs.declarations().program,
                 &inputs.declarations().context,
-                original,
+                original.definition().clone(),
                 selected_receipt,
                 &mut layouts,
             )?;

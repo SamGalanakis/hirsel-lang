@@ -22,9 +22,42 @@ impl store::ResultStore for FreshBytes {
     }
 }
 
+#[derive(Default)]
+struct LiveStore {
+    bytes: MemStore,
+    missing: std::sync::atomic::AtomicBool,
+}
+impl ResultStore for LiveStore {
+    fn get_content(&self, reference: store::Reference) -> Option<store::Bytes> {
+        if self.missing.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        self.bytes.get_content(reference)
+    }
+    fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
+        self.bytes.put_content(domain, bytes)
+    }
+    fn get(&self, key: &store::EntryKey) -> Option<store::Bytes> {
+        self.bytes.get(key)
+    }
+    fn put(&self, key: &store::EntryKey, bytes: &[u8]) {
+        self.bytes.put(key, bytes);
+    }
+    fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+        self.bytes.verifier()
+    }
+    fn query_cache_enabled(&self) -> bool {
+        false
+    }
+    fn name(&self) -> &'static str {
+        "live-without-persistence"
+    }
+}
+
 #[test]
 fn stored_lower_reuses_unchanged_inputs_and_rechecks_edited_constant_dependencies() {
     check_lower_reuse(false);
+    check_live_lower_observations(true);
 }
 
 #[test]
@@ -180,6 +213,7 @@ fn check_lower_reuse(carry_across_stores: bool) {
                     }
                     runtime.shutdown();
                     drop(runtime);
+                    drop(products);
                     drop(front);
                     drop(lower);
                     drop(program);
@@ -204,12 +238,28 @@ fn check_lower_reuse(carry_across_stores: bool) {
 
 #[test]
 fn live_lower_retains_complete_observations_under_exact_admission() {
+    check_live_lower_observations(false);
+}
+
+fn check_live_lower_observations(live_only: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
         std::fs::write(&path, "pub fn main()->u8{comptime 7u8}\n").unwrap();
+        let input = if live_only {
+            let manifest = directory.path().join("hirsel.json");
+            std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"live_lower","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+            manifest
+        } else {
+            path
+        };
         for verify in [Verify::On, Verify::Off] {
-            let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+            let storage = Arc::new(LiveStore::default());
+            let store: Arc<dyn ResultStore> = if live_only {
+                storage.clone()
+            } else {
+                Arc::new(MemStore::default())
+            };
             let mut program = COMPILER
                 .with_config(CompileConfig {
                     store: store.clone(),
@@ -217,7 +267,7 @@ fn live_lower_retains_complete_observations_under_exact_admission() {
                     ..Default::default()
                 })
                 .with_owned_engines()
-                .load_program(&path)
+                .load_program(&input)
                 .unwrap();
             let budget = ProcessBudget::new(1 << 30);
             let errors = crate::scheduled_front::errors();
@@ -270,8 +320,40 @@ fn live_lower_retains_complete_observations_under_exact_admission() {
                 .register_local(FRONT_EVALUATE_KIND, lower.factory())
                 .unwrap();
             let request = runtime.request(&[lower.query(&program.entry).unwrap()]);
-            let product = runtime.wait(request).unwrap().remove(0);
+            let product = runtime
+                .wait(request)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "verify={verify:?}, resource={}, protocol={}, cycle={}, lower={:?}",
+                        error == errors.resource,
+                        error == errors.protocol,
+                        error == errors.cycle,
+                        lower.failure(error)
+                    );
+                })
+                .remove(0);
             let actual = lower.outcome(product.clone()).unwrap();
+            let published = product
+                .lower_value()
+                .expect("ordinary Lower publishes its admitted live owner");
+            assert!(Arc::ptr_eq(&published.output().value, &actual.output.value));
+            let reserved = budget.reserved();
+            let context = program
+                .engine
+                .native_original_context(&definitions)
+                .unwrap();
+            let reader = context
+                .reader([lower.native_product(product.clone()).unwrap()])
+                .unwrap();
+            assert_eq!(
+                budget.reserved(),
+                reserved,
+                "native consumers share the original admission"
+            );
+            let raw = reader.raw(&program.entry).unwrap();
+            let original = reader.read(&program.entry).unwrap();
+            assert!(Arc::ptr_eq(original.definition(), &actual.output.value));
+            drop(original);
             assert!(
                 !actual.materialized.is_empty(),
                 "exercise a real staged value"
@@ -344,6 +426,10 @@ fn live_lower_retains_complete_observations_under_exact_admission() {
                 records.encode(&program.engine, &materialized),
                 records.encode(&program.engine, &expected.materialized)
             );
+            let entry = program.entry.clone();
+            storage
+                .missing
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             let producer = Arc::downgrade(&lower);
             let front_producer = Arc::downgrade(&front);
             drop(expected);
@@ -372,6 +458,19 @@ fn live_lower_retains_complete_observations_under_exact_admission() {
             );
             assert!(budget.reserved() >= required + source_bytes);
             drop(live);
+            assert!(
+                source_owner.upgrade().is_some(),
+                "native consumer retains the original grant"
+            );
+            let original = reader
+                .read(&entry)
+                .expect("live owner survives a missing store and producer drop");
+            assert_eq!(original.output().is_some(), verify == Verify::On);
+            drop(original);
+            drop(reader);
+            assert!(source_owner.upgrade().is_some(), "raw view owns its grant");
+            drop(raw);
+            drop(context);
             assert!(source_owner.upgrade().is_none());
             assert_eq!(budget.reserved(), archive.retained_bytes());
             drop(archive);

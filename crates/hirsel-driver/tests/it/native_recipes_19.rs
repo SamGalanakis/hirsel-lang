@@ -50,7 +50,7 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
             &mut layouts,
             instances,
             main_id,
-            main_body,
+            main_body.definition().clone(),
         )
         .unwrap();
         let outer_id = instances
@@ -62,14 +62,14 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
             .unwrap();
         assert!(!instances.actuals[outer_id.index()].arguments.is_empty());
         let outer_body = source.original_source(&outer).unwrap().0;
-        let original = Arc::downgrade(&outer_body);
+        let original = Arc::downgrade(outer_body.definition());
         let (instances, _) = hirsel_rc::instance::discover_instance(
             &declarations.program,
             &declarations.context,
             &mut layouts,
             instances,
             outer_id,
-            outer_body,
+            outer_body.definition().clone(),
         )
         .unwrap();
         let closure = instances
@@ -93,9 +93,12 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
             })
             .collect();
         drop(instances);
+        drop(main_body);
+        drop(outer_body);
         drop(source);
         drop(inputs);
         drop(first);
+        crate::native_front_fixture::release_host();
         assert!(
             original.upgrade().is_none(),
             "recipes retain no original Definition"
@@ -126,7 +129,7 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
                 .restore(
                     &declarations.program,
                     &declarations.context,
-                    body,
+                    body.definition().clone(),
                     &mut layouts,
                 )
                 .unwrap();
@@ -230,7 +233,7 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
             &mut layouts,
             instances,
             id,
-            body,
+            body.definition().clone(),
         )
         .unwrap();
         let mut imported = hirsel_rc::import::import_instance(

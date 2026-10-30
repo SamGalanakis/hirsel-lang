@@ -350,12 +350,15 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
                 "provider substitutions preserve scalar values and expression identities"
             );
             let detached_source = NativeRecordContext::capture(&program.engine);
-            assert_eq!(actual.body.domain, NATIVE_ORIGINAL_BODY);
+            assert!(
+                products[0].lower_value().is_some(),
+                "ordinary Lower keeps a live owner"
+            );
             let native = program
                 .engine
                 .native_original_context(&[program.entry.clone()])
                 .unwrap()
-                .reader([actual.native_product()], store.clone())
+                .reader([lower.native_product(products[0].clone()).unwrap()])
                 .unwrap();
             assert!(native.read(&program.entry).is_some());
             let repeated = runtime.request(&[query]);

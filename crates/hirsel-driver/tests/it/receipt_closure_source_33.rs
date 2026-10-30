@@ -36,10 +36,7 @@ fn original(
     let facts = crate::native_front_fixture::products(&mut engine, &[probe.clone()]).unwrap();
     let reader = facts
         .original_context
-        .reader(
-            facts.originals.iter().map(|product| (**product).clone()),
-            store,
-        )
+        .reader(facts.originals.iter().map(|product| (**product).clone()))
         .unwrap();
     let original = reader.read(&probe).unwrap();
     (facts.signatures.clone(), reader, original)
