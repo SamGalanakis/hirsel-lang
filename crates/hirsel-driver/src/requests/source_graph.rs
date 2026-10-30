@@ -832,6 +832,7 @@ const BODY_CONTINUATIONS: u64 = 32;
 /// Runtime scratch is separate, and shared across the admitted worker width.
 struct Plan {
     snapshots: SnapshotPlan,
+    query_inventory: usize,
     query_capacity: usize,
     source_index_bytes: u64,
     body: MemoryWeight,
@@ -1058,11 +1059,29 @@ impl Plan {
         let default_capacity =
             AdmittedRuntime::default_query_capacity(config.jobs, limits.runtime_bytes)
                 .ok_or_else(|| uninstalled())?;
-        let query_capacity = inventory.max(default_capacity);
+        let query_inventory = inventory.max(default_capacity);
+        let nominal_working = AdmittedRuntime::working_bytes(config.jobs, limits.runtime_bytes)
+            .filter(|bytes| *bytes != 0)
+            .ok_or_else(|| {
+                ToolError::Runtime(
+                    "compiler runtime cannot admit its worker stacks and query inventory".into(),
+                )
+            })?;
+        let requested_metadata =
+            AdmittedRuntime::query_capacity_bytes(query_inventory).ok_or_else(|| uninstalled())?;
+        let query_capacity = if requested_metadata < nominal_working {
+            query_inventory
+        } else {
+            usize::try_from(
+                (nominal_working / 2)
+                    / AdmittedRuntime::query_capacity_bytes(1).ok_or_else(|| uninstalled())?,
+            )
+            .map_err(|_| uninstalled())?
+        };
         let bookkeeping =
             AdmittedRuntime::query_capacity_bytes(query_capacity).ok_or_else(|| uninstalled())?;
-        let working = AdmittedRuntime::working_bytes(config.jobs, limits.runtime_bytes)
-            .and_then(|bytes| bytes.checked_sub(bookkeeping))
+        let working = nominal_working
+            .checked_sub(bookkeeping)
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
                 ToolError::Runtime(
@@ -1126,6 +1145,7 @@ impl Plan {
                 check,
                 run,
             },
+            query_inventory,
             query_capacity,
             body: MemoryWeight {
                 retained,
@@ -2199,7 +2219,7 @@ pub(super) fn install(
     if let Some(query) = run.as_ref().and_then(|run| run.batch_query()) {
         inventory.insert((query.kind, query.address.0));
     }
-    if inventory.len() > plan.query_capacity {
+    if inventory.len() > plan.query_inventory {
         return Err(ToolError::Runtime(
             "compiler query inventory exceeds its planned admission".into(),
         ));
