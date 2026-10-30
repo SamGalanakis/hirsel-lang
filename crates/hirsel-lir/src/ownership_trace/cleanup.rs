@@ -150,9 +150,13 @@ pub(super) fn check<S: Stage>(unit: &LirUnit<S>, plan: &Plan) -> Result<(), Erro
     for extra in &plan.cleanups {
         let fail = || Error::InvalidCleanup(extra.marker);
         let source = sources.get(&extra.marker).copied().ok_or_else(fail)?;
-        if source.marker.kind != Kind::Drop
-            || source.marker.token != source.marker.owner
-            || address(unit, source.marker.token).is_none()
+        if !matches!(
+            (
+                source.marker.kind,
+                source.marker.token == source.marker.owner
+            ),
+            (Kind::Drop, true) | (Kind::Move, false)
+        ) || address(unit, source.marker.token).is_none()
             || address(unit, source.marker.token) != address(unit, extra.token)
             || (extra.trigger.unit == plan.unit && trigger(unit, extra.trigger.point).is_none())
             || !placements.insert(extra.point)
@@ -328,7 +332,7 @@ pub(super) fn transform<A: Stage, B: Stage>(
                     .ok_or_else(fail)?;
                 let resource = address(before, source.marker.token).ok_or_else(fail)?;
                 let data = address(after, Location::Address(current.1)).ok_or_else(fail)?;
-                if source.marker.kind != Kind::Drop
+                if !matches!(source.marker.kind, Kind::Drop | Kind::Move)
                     || resource.0 == data.0
                     || address(after, extra.token).as_ref() != Some(&resource)
                 {

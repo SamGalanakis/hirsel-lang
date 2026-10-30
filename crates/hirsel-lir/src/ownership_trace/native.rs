@@ -418,6 +418,18 @@ impl LeafPlan {
                             layout(result),
                         )?;
                     }
+                    Inst::Store { address, value, .. }
+                        if selection == Selection::Owned
+                            && super::check::static_literal(unit, value) =>
+                    {
+                        push(
+                            after,
+                            Kind::Create,
+                            Location::Address(address),
+                            Location::Address(address),
+                            unit.types[unit.addresses[address.index()].ty.index()].layout,
+                        )?;
+                    }
                     Inst::Store { address, value, .. } if owned(value) => {
                         push(
                             after,

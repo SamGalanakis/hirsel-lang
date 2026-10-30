@@ -2,7 +2,7 @@
 use hirsel_driver::{COMPILER, native, requests::*, resident::ObservedSession};
 use hirsel_engine::{CompileConfig, runtime::ProcessBudget, store::MemStore};
 use hirsel_run_schema::ownership_trace::{Action, Trace};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 pub(super) fn source_calls(source: &str, created: u64) {
     source_calls_exit(source, created, 0);
@@ -244,8 +244,24 @@ fn source_calls_selected(
                 })
                 .collect::<Vec<_>>()
         };
-        for trace in &traces[1..] {
-            assert_eq!(lifecycle(&traces[0]), lifecycle(trace));
+        if selection == hirsel_lir::ownership_trace::Selection::Owned {
+            let per_token = |trace: &Trace| {
+                let mut tokens = BTreeMap::new();
+                for (kind, token, value_type) in lifecycle(trace) {
+                    tokens
+                        .entry(token)
+                        .or_insert_with(Vec::new)
+                        .push((kind, value_type));
+                }
+                tokens
+            };
+            for trace in &traces[1..] {
+                assert_eq!(per_token(&traces[0]), per_token(trace));
+            }
+        } else {
+            for trace in &traces[1..] {
+                assert_eq!(lifecycle(&traces[0]), lifecycle(trace));
+            }
         }
         drop(execution);
         assert_eq!(budget.reserved(), 0);

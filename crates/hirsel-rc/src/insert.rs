@@ -259,6 +259,14 @@ pub fn insert_observed(
             source_drops.entry(slot).or_insert(row.marker.id);
         }
     }
+    for row in &plan.observations {
+        if row.marker.kind == hirsel_lir::ownership_trace::Kind::Move
+            && let hirsel_lir::ownership_trace::Location::Address(address) = row.marker.token
+            && let Some(slot) = whole_slot(address)
+        {
+            source_drops.entry(slot).or_insert(row.marker.id);
+        }
+    }
     let mut generated: Vec<_> = origins
         .generated
         .iter()

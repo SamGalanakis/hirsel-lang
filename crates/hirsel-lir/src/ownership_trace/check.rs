@@ -501,6 +501,17 @@ pub(super) fn mutable_alias<S>(unit: &LirUnit<S>, observation: &Observation) -> 
                 && matches!(argument.value, ArgumentValue::Address { address: actual, .. } if actual == address)))
 }
 
+pub(super) fn static_literal<S: Stage>(unit: &LirUnit<S>, value: ValueId) -> bool {
+    unit.values
+        .get(value.index())
+        .is_some_and(|info| info.holding == Holding::Plain)
+        && unit.instructions.iter().any(|inst| {
+            matches!(*inst, Inst::Const { result, constant }
+                if result == value && unit.tables.constants.get(constant.index()).is_some_and(|data|
+                    matches!(data.value, ConstantValue::String(_) | ConstantValue::Bytes(_))))
+        })
+}
+
 pub(super) fn binding<S: Stage>(
     unit: &LirUnit<S>,
     observation: &Observation,
@@ -626,6 +637,7 @@ pub(super) fn binding<S: Stage>(
                 ) => moved(Address(address), Value(result)),
                 (Inst::Store { address, value, .. }, Moment::After) => {
                     moved(Value(value), Address(address))
+                        || (same(Create, Address(address)) && static_literal(unit, value))
                 }
                 (Inst::Replace { address, value, displaced, if_live: false, .. }, Moment::After) => {
                     moved(Value(value), Address(address)) || matches!(tuple,

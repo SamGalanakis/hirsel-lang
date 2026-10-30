@@ -452,6 +452,52 @@ fn ownership_trace_creation_and_release_bind_to_their_actual_instructions() {
         check(&unit, &early).unwrap_err(),
         Error::InvalidBinding(early.observations[0].marker.id)
     );
+
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[], None);
+    let value = t.int(ENTRY);
+    let slot = t.slot(l::I64, SlotKind::Local, ROOT);
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
+    let address = t.at(ENTRY, slot, &[], &[]);
+    t.store(ENTRY, address, value, slot);
+    t.builder.push(
+        ENTRY,
+        Inst::StorageDead {
+            slot,
+            if_live: false,
+        },
+    );
+    t.builder.ret(ENTRY, None);
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table).into_raw();
+    let index = unit.blocks[ENTRY.index()]
+        .instructions
+        .get(&unit.instructions)
+        .unwrap()
+        .iter()
+        .position(|inst| matches!(inst, Inst::Store { .. }))
+        .unwrap();
+    let forged = Plan::selected(
+        &unit,
+        Selection::Owned,
+        vec![Observation {
+            point: Point::Instruction {
+                block: ENTRY,
+                index: index as u32,
+                moment: Moment::After,
+            },
+            marker: ObserveOwnership {
+                id: MarkerId(0),
+                site: unit.tables.source_anchors[0].site,
+                kind: Kind::Create,
+                token: Location::Address(address),
+                owner: Location::Address(address),
+            },
+        }],
+    );
+    assert_eq!(
+        check(&unit, &forged).unwrap_err(),
+        Error::InvalidBinding(MarkerId(0))
+    );
 }
 
 #[test]
@@ -6289,4 +6335,125 @@ fn ownership_trace_early_owned_release_covers_every_ready_take_and_retirement() 
             assert!(native::LeafPlan::from_relocated(&ready, &table, &missing).is_err());
         }
     }
+
+    let mut t = Lir::<Value>::new(&[(Passing::Take, l::BLK); 2], None);
+    let data = t.slot(l::BLK, SlotKind::Parameter(0), ROOT);
+    let data_version = t.version_of(data);
+    t.param(data_version);
+    let incoming = t.slot(l::BLK, SlotKind::Parameter(1), ROOT);
+    let incoming_version = t.version_of(incoming);
+    t.param(incoming_version);
+    let intermediate = t.slot(l::BLK, SlotKind::Local, ROOT);
+    let final_slot = t.slot(l::BLK, SlotKind::Local, ROOT);
+    t.builder
+        .push(ENTRY, Inst::StorageLive { slot: intermediate });
+    t.builder
+        .push(ENTRY, Inst::StorageLive { slot: final_slot });
+    let undo = [Undo::Drop(incoming), Undo::Drop(data)];
+    let data_address = t.at(ENTRY, data, &[], &undo);
+    let incoming_address = t.at(ENTRY, incoming, &[], &undo);
+    let intermediate_address = t.at(ENTRY, intermediate, &[], &undo);
+    let final_address = t.at(ENTRY, final_slot, &[], &undo);
+    let incoming = t.read(
+        ENTRY,
+        incoming_address,
+        incoming_version,
+        ReadMode::Take,
+        None,
+    );
+    let intermediate_version = t.store(ENTRY, intermediate_address, incoming, intermediate);
+    let taken = t.read(ENTRY, data_address, data_version, ReadMode::Take, None);
+    t.store(ENTRY, data_address, taken, data);
+    let taken = t.read(
+        ENTRY,
+        intermediate_address,
+        intermediate_version,
+        ReadMode::Take,
+        None,
+    );
+    t.store(ENTRY, final_address, taken, final_slot);
+    t.builder.push(
+        ENTRY,
+        Inst::StorageDead {
+            slot: intermediate,
+            if_live: false,
+        },
+    );
+    let exit = t.cleanup_exit(&[Undo::Drop(final_slot), Undo::Drop(data)], None);
+    t.builder.jump(ENTRY, exit, &[]);
+    let (before, table, _) = t.finish();
+    let before = checked_native_fixture(before, &table);
+    let input = native::LeafPlan::prepare_value_for_program(&before, &table).unwrap();
+    let source = input
+        .observations
+        .iter()
+        .find(|row| {
+            row.marker.kind == Kind::Move
+                && row.marker.token == Location::Address(intermediate_address)
+        })
+        .unwrap()
+        .marker
+        .id;
+    assert!(!input.observations.iter().any(|row| {
+        row.marker.kind == Kind::Drop
+            && matches!(row.marker.token, Location::Address(address)
+                if before.unit().addresses[address.index()].base == AddressBase::Slot(intermediate))
+    }));
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let lowered = hirsel_rc::observed::lower(
+        before.into_raw(),
+        &input,
+        &index,
+        &hirsel_rc::observed::Options {
+            placement: &hirsel_rc::placement::Options {
+                regions: false,
+                noalloc: false,
+            },
+            proofs: &Default::default(),
+            elide: true,
+            reuse: &hirsel_rc::reuse::Options { reuse: true },
+            finalizers: &Default::default(),
+        },
+    )
+    .unwrap();
+    let ready = checked_native_fixture(lowered.unit, &table);
+    let prepared = native::LeafPlan::from_relocated(&ready, &table, &lowered.plan).unwrap();
+    assert!(
+        prepared
+            .markers()
+            .any(|marker| marker.id == source && marker.kind == 1)
+    );
+    for original in input
+        .observations
+        .iter()
+        .filter(|row| row.marker.kind == Kind::Move)
+    {
+        assert!(
+            prepared.plan().observations.iter().any(|row| {
+                row.marker.id == original.marker.id && row.marker.kind == Kind::Move
+            })
+        );
+    }
+    let fallback = lowered
+        .plan
+        .cleanups
+        .iter()
+        .position(|row| row.marker == source && row.point != row.trigger.point)
+        .unwrap();
+    let mut missing = lowered.plan.clone();
+    missing.cleanups.remove(fallback);
+    assert!(native::LeafPlan::from_relocated(&ready, &table, &missing).is_err());
+    let other = lowered
+        .plan
+        .observations
+        .iter()
+        .find(|row| {
+            matches!(row.marker.token, Location::Address(address)
+                if matches!(ready.unit().addresses[address.index()].base,
+                    AddressBase::Slot(slot) if slot != intermediate))
+        })
+        .unwrap();
+    let mut forged = lowered.plan.clone();
+    forged.cleanups[fallback].marker = other.marker.id;
+    assert!(check(ready.unit(), &forged).is_err());
 }
