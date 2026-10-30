@@ -148,7 +148,7 @@ fn exhaustive_small_graphs_preserve_ordered_sites() {
 
 pub(super) fn source_compare(engine: &mut QueryEngine) -> Vec<Span> {
     let graph = engine.gen5_source_graph().unwrap();
-    let edges = graph.edges.into_vec();
+    let edges = graph.edges.to_vec();
     compare(&edges);
     let expected = old_sites(&edges);
     assert_eq!(growing_sites(&edges), expected);

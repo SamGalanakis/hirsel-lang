@@ -228,8 +228,8 @@ mod tests {
                             size_bindings: Box::new([]),
                         }]
                         .into(),
-                        calls: Box::new([]),
-                        staged: Box::new([]),
+                        calls: [].into(),
+                        staged: [].into(),
                     },
                     growth: Default::default(),
                 });

@@ -4599,8 +4599,8 @@ mod malformed_tests {
                         size_bindings: Box::new([]),
                     }]
                     .into(),
-                    calls: Box::new([]),
-                    staged: Box::new([]),
+                    calls: [].into(),
+                    staged: [].into(),
                 };
                 let mut published = PublishedSummary {
                     definition: summary.owner,

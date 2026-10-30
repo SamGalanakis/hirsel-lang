@@ -573,6 +573,32 @@ impl Weight<'_> {
             }
         }
     }
+    pub(crate) fn definition_summary(&mut self, summary: &crate::DefinitionSummary) {
+        if self.decode_vectors {
+            self.add(size_of_val(&*summary.frames).saturating_mul(2));
+            self.add(size_of_val(&*summary.calls).saturating_mul(2));
+            self.add(size_of_val(&*summary.staged).saturating_mul(2));
+        }
+        self.shared_values(&summary.frames, |w, frame| {
+            w.add(size_of_val(&*frame.size_bindings));
+        });
+        self.shared_values(&summary.calls, |w, call| {
+            w.add(size_of_val(&*call.arguments));
+        });
+        self.shared_values(&summary.staged, |w, (_, parameters)| {
+            w.add(size_of_val(&**parameters));
+        });
+    }
+    pub(crate) fn parameter_growth(&mut self, growth: &crate::ParameterGrowth) {
+        if self.decode_vectors {
+            self.add(size_of_val(&*growth.edges).saturating_mul(2));
+        }
+        self.shared_slice(&growth.edges);
+    }
+    pub(crate) fn checked_summary(&mut self, summary: &crate::CheckedSummary) {
+        self.definition_summary(&summary.summary);
+        self.parameter_growth(&summary.growth);
+    }
     pub(crate) fn generic(&mut self, value: &hirsel_types::GenericParameter) {
         match value {
             hirsel_types::GenericParameter::Type { name, bounds } => {

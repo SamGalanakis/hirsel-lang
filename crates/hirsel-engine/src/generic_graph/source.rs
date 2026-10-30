@@ -5,6 +5,7 @@ use crate::summary::{CheckedSummary, GenericParameterRef, GrowthEdge};
 use hirsel_diag::Diagnostic;
 use hirsel_span::Span;
 use hirsel_syntax::{ContentHash, DefId, DefPath};
+use hirsel_types::SharedSlice;
 use std::collections::{BTreeMap, BTreeSet};
 
 type Node = (DefId, GenericParameterRef);
@@ -14,7 +15,7 @@ type EdgeRef = (DefId, usize);
 pub(crate) struct SourceGrowth {
     roots: BTreeSet<DefId>,
     pending: BTreeMap<DefId, bool>,
-    products: BTreeMap<DefId, Box<[GrowthEdge]>>,
+    products: BTreeMap<DefId, SharedSlice<GrowthEdge>>,
     table_calls: BTreeMap<DefId, BTreeSet<DefPath>>,
     region_calls: BTreeSet<DefId>,
     components: BTreeMap<ContentHash, Vec<EdgeRef>>,

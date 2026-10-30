@@ -276,29 +276,12 @@ impl LiveSummaryProduct {
         if value.storage.is_some() {
             return None;
         }
-        fn summary(w: &mut Weight<'_>, value: &crate::DefinitionSummary) {
-            w.add(size_of_val(&*value.frames));
-            for frame in &value.frames {
-                w.add(size_of_val(&*frame.size_bindings));
-            }
-            w.add(size_of_val(&*value.calls));
-            for call in &value.calls {
-                w.add(size_of_val(&*call.arguments));
-            }
-            w.add(size_of_val(&*value.staged));
-            for (_, parameters) in &value.staged {
-                w.add(size_of_val(&**parameters));
-            }
-        }
         let mut weight = Weight::default();
         weight.add(retained_arc_bytes(value) as usize);
-        summary(&mut weight, &value.summary);
-        weight.add(size_of_val(&*value.growth.edges));
+        weight.definition_summary(&value.summary);
+        weight.parameter_growth(&value.growth);
         if let Some(checked) = &value.checked {
-            weight.arc(checked, |w, c| {
-                summary(w, &c.summary);
-                w.add(size_of_val(&*c.growth.edges));
-            });
+            weight.arc(checked, Weight::checked_summary);
         }
         weight.reads(&value.reads);
         Some(weight.bytes + owner_bytes::<Arc<PublishedSummary>>())
@@ -654,9 +637,9 @@ mod tests {
         let checked = Arc::new(CheckedSummary {
             summary: DefinitionSummary {
                 owner,
-                frames: Box::new([]),
-                calls: Box::new([]),
-                staged: Box::new([]),
+                frames: [].into(),
+                calls: [].into(),
+                staged: [].into(),
             },
             growth: ParameterGrowth::default(),
         });

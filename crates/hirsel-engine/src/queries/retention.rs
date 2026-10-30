@@ -336,9 +336,9 @@ mod tests {
             definition: id,
             summary: DefinitionSummary {
                 owner: id,
-                frames: Box::default(),
-                calls: Box::default(),
-                staged: Box::default(),
+                frames: Default::default(),
+                calls: Default::default(),
+                staged: Default::default(),
             },
             growth: Default::default(),
             storage: Default::default(),

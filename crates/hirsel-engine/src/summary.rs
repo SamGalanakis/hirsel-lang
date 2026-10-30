@@ -20,8 +20,8 @@ use crate::*;
 use hirsel_span::Span;
 use hirsel_syntax::{DefId, ExprId, ExprKind, LexicalOwner};
 use hirsel_types::{
-    BinderRef, CallTarget, GenericArgument, NameSite, ResolvedName, SiteRef, Size, SizeParamId,
-    SizeParameterRef, TypeId, TypeInterner, TypeKind, TypeParamId, TypeParameterRef,
+    BinderRef, CallTarget, GenericArgument, NameSite, ResolvedName, SharedSlice, SiteRef, Size,
+    SizeParamId, SizeParameterRef, TypeId, TypeInterner, TypeKind, TypeParamId, TypeParameterRef,
 };
 use std::collections::{BTreeSet, HashSet};
 mod facet;
@@ -87,12 +87,12 @@ pub struct SummaryCall {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct DefinitionSummary {
     pub owner: DefId,
-    pub frames: Box<[Frame]>,
-    pub calls: Box<[SummaryCall]>,
+    pub frames: SharedSlice<Frame>,
+    pub calls: SharedSlice<SummaryCall>,
     /// Each comptime region that reads enclosing sizes (a hidden size-generic
     /// constant), with those inputs in its constant's parameter order. The
     /// region is the `ComptimeRegion` frame with the same site.
-    pub staged: Box<[(NameSite, Box<[SizeParameterRef]>)]>,
+    pub staged: SharedSlice<(NameSite, Box<[SizeParameterRef]>)>,
 }
 /// One `ParameterGrowth` edge: from an owner parameter to a callee parameter.
 pub type GrowthEdge = (
@@ -105,7 +105,7 @@ pub type GrowthEdge = (
 /// whether it flows nested (strict growth), and the call site.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ParameterGrowth {
-    pub edges: Box<[GrowthEdge]>,
+    pub edges: SharedSlice<GrowthEdge>,
 }
 
 /// GEN-5's checked input, before modes add planned calls. Retained separately
@@ -133,6 +133,25 @@ pub struct PublishedSummary {
     pub reads: std::sync::Arc<crate::memo::Reads>,
     /// The owner's body and package-manifest key, as for a body memo.
     pub text: hirsel_syntax::ContentHash,
+}
+
+impl PublishedSummary {
+    pub(crate) fn share_checked_storage(&mut self) {
+        if let Some(checked) = &self.checked {
+            if self.summary.frames == checked.summary.frames {
+                self.summary.frames = checked.summary.frames.clone();
+            }
+            if self.summary.calls == checked.summary.calls {
+                self.summary.calls = checked.summary.calls.clone();
+            }
+            if self.summary.staged == checked.summary.staged {
+                self.summary.staged = checked.summary.staged.clone();
+            }
+            if self.growth.edges == checked.growth.edges {
+                self.growth.edges = checked.growth.edges.clone();
+            }
+        }
+    }
 }
 
 impl ParameterGrowth {

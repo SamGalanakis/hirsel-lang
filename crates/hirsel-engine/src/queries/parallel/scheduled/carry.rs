@@ -308,7 +308,7 @@ impl FactsRef<'_> {
         {
             w.arc(summary, |w, summary| {
                 retained::definition(w, &summary.summary);
-                w.add(size_of_val(&*summary.growth.edges));
+                w.parameter_growth(&summary.growth);
                 if let Some(checked) = &summary.checked {
                     w.arc(checked, retained::checked);
                 }
@@ -616,10 +616,13 @@ impl BodyTask {
         &self,
         reference: Reference,
         reads: Arc<Reads>,
-        facts: Facts,
+        mut facts: Facts,
         clean: bool,
         cached: bool,
     ) -> Option<Result<ProductRef, Reference>> {
+        if let Some(summary) = &mut facts.summary {
+            Arc::make_mut(summary).share_checked_storage();
+        }
         let queries = &self.queries;
         let input = &queries.inputs[&self.input];
         let mut memo_rows = vec![(
@@ -813,14 +816,14 @@ mod tests {
     #[test]
     fn carry_codec_layout_covers_independent_reads_diagnostics_and_summary_decode_peaks() {
         crate::with_compiler_stack(|| {
-            for width in [1, 4, 16, 64] {
+            for (width, full) in [(1, true), (4, true), (16, true), (64, true), (4096, false)] {
                 let anchor = Anchor::fresh();
                 let relocated = Anchor::fresh();
                 let owner = DefPath::core("portable");
                 let definition = DefId::intern(&owner);
                 let reads = Arc::new(
                     Reads::from_vec(
-                        (0..width)
+                        (0..if full { width } else { 0 })
                             .map(|i| {
                                 (
                                     ReadKey::Signature(DefId::intern(&DefPath::core(&format!(
@@ -845,8 +848,8 @@ mod tests {
                                 size_bindings: Box::new([]),
                             })
                             .collect(),
-                        calls: Box::new([]),
-                        staged: Box::new([]),
+                        calls: [].into(),
+                        staged: [].into(),
                     },
                     growth: Default::default(),
                 });
@@ -855,22 +858,27 @@ mod tests {
                         definition,
                         summary: checked.summary.clone(),
                         growth: checked.growth.clone(),
-                        checked: Some(checked.clone()),
+                        checked: full.then(|| checked.clone()),
                         storage: None,
                         reads: reads.clone(),
                         text: Default::default(),
                     })),
-                    checked: Some((checked, reads, Arc::new(OrderedSignatureReads::new(&[])))),
+                    checked: full
+                        .then(|| (checked, reads, Arc::new(OrderedSignatureReads::new(&[])))),
                     dead_arms: None,
-                    diagnostics: vec![Diagnostic::error(
-                        const { hirsel_diag::RuleId::of("CARRY-1") },
-                        Span {
-                            anchor,
-                            start: 0,
-                            end: 1,
-                        },
-                        "retained warning",
-                    )],
+                    diagnostics: if full {
+                        vec![Diagnostic::error(
+                            const { hirsel_diag::RuleId::of("CARRY-1") },
+                            Span {
+                                anchor,
+                                start: 0,
+                                end: 1,
+                            },
+                            "retained warning",
+                        )]
+                    } else {
+                        vec![]
+                    },
                     diagnostic_phases: vec![],
                     lowering: None,
                     table_keys: None,
@@ -907,8 +915,18 @@ mod tests {
                     "width={width}, peak={}, bound={bound}",
                     allocations.peak
                 );
-                assert_eq!(decoded.diagnostics[0].primary.anchor, relocated);
-                assert_eq!(decoded.summary.as_ref().unwrap().reads.len(), width);
+                if full {
+                    assert_eq!(decoded.diagnostics[0].primary.anchor, relocated);
+                    assert_eq!(decoded.summary.as_ref().unwrap().reads.len(), width);
+                    assert_eq!(
+                        decoded.checked.as_ref().unwrap().1,
+                        facts.checked.as_ref().unwrap().1
+                    );
+                }
+                assert_eq!(
+                    decoded.summary.as_ref().unwrap().reads,
+                    facts.summary.as_ref().unwrap().reads
+                );
                 assert_eq!(
                     decoded.summary.as_ref().unwrap().summary,
                     facts.summary.as_ref().unwrap().summary
@@ -916,10 +934,6 @@ mod tests {
                 assert_eq!(
                     decoded.summary.as_ref().unwrap().growth,
                     facts.summary.as_ref().unwrap().growth
-                );
-                assert_eq!(
-                    decoded.checked.as_ref().unwrap().1,
-                    facts.checked.as_ref().unwrap().1
                 );
             }
         });

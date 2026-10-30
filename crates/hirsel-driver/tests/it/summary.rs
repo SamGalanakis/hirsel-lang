@@ -415,7 +415,7 @@ fn growth_edges_give_the_checked_bodies_gen5_verdict_on_compiler_thread() {
             .definition_summaries()
             .unwrap()
             .into_iter()
-            .flat_map(|(_, growth)| growth.edges.into_vec())
+            .flat_map(|(_, growth)| growth.edges.into_iter())
             .collect();
         let graph = engine.gen5_source_graph().unwrap();
         assert_eq!(growing_sites(&edges), graph.growing_sites(), "{source}");

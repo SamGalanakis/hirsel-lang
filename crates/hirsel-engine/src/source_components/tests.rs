@@ -50,9 +50,9 @@ fn summary(owner: DefId, edges: Vec<crate::GrowthEdge>) -> Arc<CheckedSummary> {
     Arc::new(CheckedSummary {
         summary: DefinitionSummary {
             owner,
-            frames: Box::new([]),
-            calls: Box::new([]),
-            staged: Box::new([]),
+            frames: [].into(),
+            calls: [].into(),
+            staged: [].into(),
         },
         growth: ParameterGrowth {
             edges: edges.into(),

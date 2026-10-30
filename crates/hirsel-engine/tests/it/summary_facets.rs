@@ -27,7 +27,7 @@ fn summary(ty: TypeId) -> CheckedSummary {
                 site: Span::default(),
             }]
             .into(),
-            staged: Box::new([]),
+            staged: [].into(),
         },
         growth: ParameterGrowth::default(),
     }
@@ -57,7 +57,7 @@ fn independently_allocated_summary_projection_excludes_only_diagnostic_positions
             5 => b.summary.calls[0].target_frame = Some(0),
             6 => b.summary.calls[0].owning_frame = 1,
             7 => b.summary.calls[0].arguments = Box::new([]),
-            8 => b.summary.calls = Box::new([]),
+            8 => b.summary.calls = [].into(),
             _ => unreachable!(),
         }
         assert!(

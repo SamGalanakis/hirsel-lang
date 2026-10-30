@@ -441,6 +441,9 @@ impl FrontBodyQueries {
         checked: &mut CheckedProduct,
         memos: &mut [(crate::memo::MemoKey, Arc<Reads>)],
     ) -> Option<()> {
+        if let Some(summary) = &mut outcome.summary {
+            Arc::make_mut(summary).share_checked_storage();
+        }
         let Some(pool) = self.read_pool.get() else {
             return Some(());
         };
@@ -1159,6 +1162,9 @@ impl BodyTask {
                 crate::memo::MemoKey::new(QueryKind::Check, definition),
                 reads.clone(),
             ));
+        }
+        if let Some(summary) = &mut restored.outcome.summary {
+            Arc::make_mut(summary).share_checked_storage();
         }
         queries.retain(
             &restored.outcome,

@@ -4,22 +4,10 @@
 use super::*;
 use crate::memo::retained::Weight;
 pub(super) fn definition(weight: &mut Weight, summary: &DefinitionSummary) {
-    weight.add(size_of_val(&*summary.frames));
-    for frame in &summary.frames {
-        weight.add(size_of_val(&*frame.size_bindings));
-    }
-    weight.add(size_of_val(&*summary.calls));
-    for call in &summary.calls {
-        weight.add(size_of_val(&*call.arguments));
-    }
-    weight.add(size_of_val(&*summary.staged));
-    for (_, parameters) in &summary.staged {
-        weight.add(size_of_val(&**parameters));
-    }
+    weight.definition_summary(summary);
 }
 pub(super) fn checked(weight: &mut Weight, summary: &CheckedSummary) {
-    definition(weight, &summary.summary);
-    weight.add(size_of_val(&*summary.growth.edges));
+    weight.checked_summary(summary);
 }
 #[cfg(test)]
 pub(super) fn metadata(
@@ -76,7 +64,7 @@ fn metadata_inner(
     {
         weight.arc(summary, |w, summary| {
             definition(w, &summary.summary);
-            w.add(size_of_val(&*summary.growth.edges));
+            w.parameter_growth(&summary.growth);
             if let Some(value) = &summary.checked {
                 w.arc(value, checked);
             }
@@ -125,9 +113,9 @@ mod tests {
         let checked = Arc::new(CheckedSummary {
             summary: DefinitionSummary {
                 owner: DefId::intern(&DefPath::core("metadata")),
-                frames: Box::new([]),
-                calls: Box::new([]),
-                staged: Box::new([]),
+                frames: [].into(),
+                calls: [].into(),
+                staged: [].into(),
             },
             growth: Default::default(),
         });
@@ -161,9 +149,9 @@ mod tests {
         let checked = Arc::new(CheckedSummary {
             summary: DefinitionSummary {
                 owner: definition,
-                frames: Box::new([]),
-                calls: Box::new([]),
-                staged: Box::new([]),
+                frames: [].into(),
+                calls: [].into(),
+                staged: [].into(),
             },
             growth: Default::default(),
         });
@@ -189,7 +177,7 @@ mod tests {
         assert_eq!(restored.reads, original.reads);
         assert!(Arc::ptr_eq(restored.checked.as_ref().unwrap(), &checked));
         let mut different = (*original).clone();
-        different.summary.calls = vec![].into_boxed_slice();
+        different.summary.calls = vec![].into();
         different.summary.owner = DefId::intern(&DefPath::core("different"));
         let different = Arc::new(different);
         let captured = FrontSummary::capture(different.clone(), &selected, &reads);
@@ -205,9 +193,9 @@ mod tests {
         let checked = Arc::new(CheckedSummary {
             summary: DefinitionSummary {
                 owner: definition,
-                frames: Box::new([]),
-                calls: Box::new([]),
-                staged: Box::new([]),
+                frames: [].into(),
+                calls: [].into(),
+                staged: [].into(),
             },
             growth: Default::default(),
         });
