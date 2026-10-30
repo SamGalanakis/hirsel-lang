@@ -556,6 +556,17 @@ impl Reads {
             out.extend(value.0);
         }
     }
+    pub(crate) fn encoding_working_bytes(&self) -> Option<u64> {
+        let bytes = self.iter().try_fold(8u64, |bytes, (key, value)| {
+            bytes
+                .checked_add(u64::try_from(key.encoded_bytes()?).ok()?)?
+                .checked_add(value.0.len() as u64)
+        })?;
+        bytes
+            .max(8)
+            .checked_mul(4)?
+            .checked_add(size_of::<Vec<u8>>() as u64)
+    }
     pub fn decode(input: &mut &[u8]) -> Option<Reads> {
         if take(input, 4)? != b"HRD2" {
             return None;

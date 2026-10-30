@@ -343,7 +343,11 @@ enum Scope {
     /// Table rows, whose edges already are positions.
     Raw,
     /// Every id serialized, in order, each written as 0.
-    Collect(Vec<TypeId>),
+    Collect {
+        ids: Vec<TypeId>,
+        limit: usize,
+        refused: bool,
+    },
 }
 thread_local! {
     static SCOPE: RefCell<Vec<Scope>> = const { RefCell::new(vec![]) };
@@ -376,7 +380,34 @@ pub fn with_table_encoding<R>(t: &TypeInterner, roots: &[TypeId], f: impl FnOnce
 /// Serialize while recording every `TypeId` written (each as 0): the roots a
 /// persisted form whose ids are not otherwise enumerable encodes its table of.
 pub fn with_table_collection<R>(f: impl FnOnce() -> R) -> (R, Vec<TypeId>) {
-    SCOPE.with_borrow_mut(|s| s.push(Scope::Collect(vec![])));
+    with_bounded_table_collection(usize::MAX, f).expect("unbounded type collection")
+}
+
+pub fn collection_scope_working_bytes(additional: usize) -> Option<u64> {
+    SCOPE.with_borrow(|scopes| {
+        let needed = scopes.len().checked_add(additional)?;
+        let mut capacity = scopes.capacity();
+        if needed <= capacity {
+            return Some(0);
+        }
+        while capacity < needed {
+            capacity = capacity.checked_mul(2)?.max(4);
+        }
+        u64::try_from(capacity.checked_mul(size_of::<Scope>())?.checked_mul(2)?).ok()
+    })
+}
+
+pub fn with_bounded_table_collection<R>(
+    limit: usize,
+    f: impl FnOnce() -> R,
+) -> Option<(R, Vec<TypeId>)> {
+    SCOPE.with_borrow_mut(|s| {
+        s.push(Scope::Collect {
+            ids: vec![],
+            limit,
+            refused: false,
+        })
+    });
     struct Pop;
     impl Drop for Pop {
         fn drop(&mut self) {
@@ -386,11 +417,11 @@ pub fn with_table_collection<R>(f: impl FnOnce() -> R) -> (R, Vec<TypeId>) {
     let pop = Pop;
     let result = f();
     let ids = SCOPE.with_borrow_mut(|s| match s.last_mut() {
-        Some(Scope::Collect(ids)) => std::mem::take(ids),
+        Some(Scope::Collect { ids, refused, .. }) => (!*refused).then(|| std::mem::take(ids)),
         _ => unreachable!("the collection scope is innermost"),
     });
     drop(pop);
-    (result, ids)
+    Some((result, ids?))
 }
 
 /// Deserialize with table positions read as the ids `decode_table` gave them.
@@ -423,16 +454,32 @@ impl TypeId {
 
 impl serde::Serialize for TypeId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut exhausted = false;
         let position = SCOPE.with_borrow_mut(|scopes| match scopes.last_mut() {
             Some(Scope::Encode(index)) => Some(index.get(self).copied().unwrap_or(MISSING)),
             Some(Scope::Grow(builder)) => Some(builder.position(*self)),
             Some(Scope::Raw) => Some(self.raw_index()),
-            Some(Scope::Collect(ids)) => {
-                ids.push(*self);
-                Some(0)
+            Some(Scope::Collect {
+                ids,
+                limit,
+                refused,
+            }) => {
+                if ids.len() == *limit {
+                    *refused = true;
+                    exhausted = true;
+                    None
+                } else {
+                    ids.push(*self);
+                    Some(0)
+                }
             }
             _ => None,
         });
+        if exhausted {
+            return Err(serde::ser::Error::custom(
+                "type collection admission exhausted",
+            ));
+        }
         match position {
             Some(position) => serializer.serialize_u32(position),
             None => Err(serde::ser::Error::custom(

@@ -798,26 +798,47 @@ pub(crate) fn encode_live_analyzed(
     reads: &Reads,
     phase: Option<QueryKind>,
     diagnostic_phases: &[(Diagnostic, String)],
+    admission: &crate::runtime::MemoryReservation,
 ) -> Option<Vec<u8>> {
-    let body = QueryOutput {
-        value: Body::capture(source.record_types(), &output.value),
-        diagnostics: output.diagnostics.clone(),
-        dependencies: output.dependencies.clone(),
-    };
-    let syntax = (
-        &output.value.typed.syntax,
-        output.value.typed.syntax.occurrence,
-    );
-    records.encode(
-        source,
-        &(
-            syntax,
-            body,
-            reads,
-            phase.map(QueryKind::phase_name),
-            diagnostic_phases,
+    let value = &output.value;
+    let syntax = (&value.typed.syntax, value.typed.syntax.occurrence);
+    let phase = phase.map(QueryKind::phase_name);
+    let preflight = (
+        (
+            &value.typed.checked,
+            &value.typed.plans,
+            value.typed.unit,
+            value.typed.boolean,
+            &value.ownership,
+            &value.ownership.plain_types,
+            &value.ownership.silent_drop_types,
+            &value.results,
+            &value.call_allocations,
         ),
-    )
+        &output.diagnostics,
+        &output.dependencies,
+    );
+    let mut encoder = records.prepare_encoding(
+        source,
+        &(syntax, preflight, reads, phase, diagnostic_phases),
+        admission,
+        reads.encoding_working_bytes()?,
+    )?;
+    let body = encoder.capture(
+        crate::memo::retained::analyzed_capture_bytes(output)?,
+        value
+            .ownership
+            .plain_types
+            .iter()
+            .chain(&value.ownership.silent_drop_types)
+            .copied(),
+        || QueryOutput {
+            value: Body::capture(source.record_types(), value),
+            diagnostics: output.diagnostics.clone(),
+            dependencies: output.dependencies.clone(),
+        },
+    )?;
+    encoder.encode(&(syntax, body, reads, phase, diagnostic_phases))
 }
 
 pub(super) struct FrozenMode {
@@ -4110,15 +4131,38 @@ mod malformed_tests {
     fn live_analyzed_archive_keeps_source_and_complete_body_fields_under_exact_admission() {
         use crate::runtime::{LIVE_ANALYZED, LiveAnalyzedProduct, ProcessBudget, ProductSource};
         let mut identities = Vec::new();
-        for text in ["fn main() { true }", "fn main() { false }"] {
+        for (text, capture_case) in [
+            ("fn main() { true }", false),
+            ("fn main() { false }", false),
+            ("fn main() { true }", true),
+        ] {
             let (engine, syntax) = fixture_source(text);
             let record = record(&engine, &syntax);
             let output = record.output.unwrap();
-            let output = Arc::new(QueryOutput {
+            let mut output = QueryOutput {
                 value: output.value.restore(syntax.clone()),
                 diagnostics: output.diagnostics,
                 dependencies: output.dependencies,
-            });
+            };
+            let nominal_paths = ["archive-A", "archive-B"].map(DefPath::core);
+            if capture_case {
+                output.diagnostics.push(Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("BODY-1") },
+                    syntax.item.origin.span,
+                    "archive-capture".repeat(1024),
+                ));
+                for path in &nominal_paths {
+                    let nominal = engine.types.intern(hirsel_types::Type::with_kind(
+                        hirsel_types::TypeKind::Named {
+                            definition: DefId::intern(path),
+                            arguments: vec![].into(),
+                        },
+                    ));
+                    output.value.ownership.plain_types.insert(nominal);
+                    output.value.ownership.silent_drop_types.insert(nominal);
+                }
+            }
+            let output = Arc::new(output);
             let mut reads = ReadsBuilder::new();
             reads.record(ReadKey::Environment, engine.environment_value());
             let reads = Arc::new(reads.finish().unwrap());
@@ -4168,8 +4212,44 @@ mod malformed_tests {
             assert_eq!(live.reads(), &reads);
             assert_eq!(live.phase(), Some(QueryKind::Modes));
             assert_eq!(live.diagnostic_phases(), phases);
+            if capture_case {
+                let mut short = budget.reserve(4096).unwrap();
+                let (refused, allocated) =
+                    crate::test_alloc::measured(|| live.archive(&mut short, 4096));
+                assert!(refused.is_err());
+                assert!(
+                    allocated.peak <= 4096,
+                    "analyzed archive refusal allocated {} bytes under a 4096-byte partition",
+                    allocated.peak,
+                );
+                assert_eq!(short.bytes(), 4096);
+            }
+            let expected_body = QueryOutput {
+                value: Body::capture(&engine.types, &output.value),
+                diagnostics: output.diagnostics.clone(),
+                dependencies: output.dependencies.clone(),
+            };
+            let expected = records
+                .encode(
+                    &engine,
+                    &(
+                        (&output.value.typed.syntax, syntax.occurrence),
+                        expected_body,
+                        &*reads,
+                        Some(QueryKind::Modes.phase_name()),
+                        &phases,
+                    ),
+                )
+                .unwrap();
+            let mut definitions = hirsel_intern::persist::Numbering::default();
+            for path in nominal_paths.iter().rev() {
+                definitions.number(DefId::intern(path));
+            }
             let mut scratch = budget.reserve(1 << 20).unwrap();
-            let archive = live.archive(&mut scratch, 1 << 20).unwrap();
+            let archive = hirsel_syntax::with_def_numbering(&mut definitions, || {
+                live.archive(&mut scratch, 1 << 20).unwrap()
+            });
+            assert_eq!(archive.bytes(), expected);
             assert_eq!(archive.reference().domain, LIVE_ANALYZED);
             let ((mut decoded_syntax, occurrence), decoded, decoded_reads, phase, decoded_phases): (
                 (ItemSyntax, u32), QueryOutput<Body>, Reads, Option<String>, Vec<(Diagnostic, String)>
@@ -4178,6 +4258,8 @@ mod malformed_tests {
             assert_eq!(decoded_syntax.text_hash, syntax.text_hash);
             assert_eq!(decoded_syntax.item, syntax.item);
             assert_eq!(decoded_reads, *reads);
+            assert_eq!(decoded.diagnostics, output.diagnostics);
+            assert_eq!(decoded.dependencies, output.dependencies);
             assert_eq!(phase.as_deref(), Some(QueryKind::Modes.phase_name()));
             assert_eq!(decoded_phases, phases);
             let decoded = decoded.value.restore(Arc::new(decoded_syntax));

@@ -53,6 +53,28 @@ pub enum Scope<K> {
 }
 pub type Scopes<K> = RefCell<Vec<Scope<K>>>;
 
+pub fn scope_working_bytes<K: 'static>(
+    stack: &'static LocalKey<Scopes<K>>,
+    additional: usize,
+) -> Option<u64> {
+    stack.with_borrow(|scopes| {
+        let needed = scopes.len().checked_add(additional)?;
+        let mut capacity = scopes.capacity();
+        if needed <= capacity {
+            return Some(0);
+        }
+        while capacity < needed {
+            capacity = capacity.checked_mul(2)?.max(4);
+        }
+        u64::try_from(
+            capacity
+                .checked_mul(size_of::<Scope<K>>())?
+                .checked_mul(2)?,
+        )
+        .ok()
+    })
+}
+
 /// Run `f` with ids of `stack`'s kind serializing as their numbers in `numbering`.
 pub fn with_numbering<K: 'static, R>(
     stack: &'static LocalKey<Scopes<K>>,
@@ -145,6 +167,10 @@ pub fn with_symbol_source<R>(source: Arc<dyn Source<Symbol>>, f: impl FnOnce() -
 /// Run `f` with symbols persisted as spellings, even inside a name table.
 pub fn with_symbol_spellings<R>(f: impl FnOnce() -> R) -> R {
     with_inline(&SYMBOLS, f)
+}
+
+pub fn symbol_scope_working_bytes(additional: usize) -> Option<u64> {
+    scope_working_bytes(&SYMBOLS, additional)
 }
 
 pub(crate) fn symbol_number(symbol: Symbol) -> Option<u32> {

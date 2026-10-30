@@ -15,6 +15,13 @@ pub(crate) fn retained_analyzed_bytes(output: &Arc<QueryOutput<AnalyzedBody>>) -
     });
     weight.bytes
 }
+pub(crate) fn analyzed_capture_bytes(output: &QueryOutput<AnalyzedBody>) -> Option<u64> {
+    let mut weight = Weight::decoded();
+    weight.vec(&output.diagnostics, Weight::diagnostic);
+    weight.flat_vec(&output.dependencies);
+    weight.analyzed(&output.value);
+    weight.bytes.checked_mul(4)
+}
 impl Weight<'_> {
     fn contextual_name(&mut self, name: &ContextualName) {
         match name {

@@ -74,7 +74,13 @@ fn closed_spelling(t: &TypeInterner, ty: TypeId) -> Option<Arc<str>> {
 /// Persisted as the spellings, never as a session id.
 impl serde::Serialize for GeneratedActualKey {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        serde::Serialize::serialize(&self.spellings(), s)
+        use serde::ser::SerializeSeq;
+        let spellings = self.0.as_str().split(SEPARATOR).skip(1);
+        let mut sequence = s.serialize_seq(Some(spellings.clone().count()))?;
+        for spelling in spellings {
+            sequence.serialize_element(spelling)?;
+        }
+        sequence.end()
     }
 }
 impl<'de> serde::Deserialize<'de> for GeneratedActualKey {

@@ -176,6 +176,10 @@ pub fn with_def_paths<R>(f: impl FnOnce() -> R) -> R {
     persist::with_inline(&PERSIST, f)
 }
 
+pub fn def_path_scope_working_bytes(additional: usize) -> Option<u64> {
+    persist::scope_working_bytes(&PERSIST, additional)
+}
+
 /// Persisted as its DefPath, or as its number in a persisted definition table
 /// (`with_def_numbering`); never as a session id.
 impl serde::Serialize for DefId {

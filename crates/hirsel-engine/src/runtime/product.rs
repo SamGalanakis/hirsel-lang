@@ -382,12 +382,21 @@ impl LiveSummaryProduct {
         &self,
         admission: ArchiveAdmission<'_>,
     ) -> io::Result<ProductArchive> {
-        self.current.archive_with(admission, |value, source, _| {
-            source
-                .records
-                .encode(&source.context, &**value)
-                .ok_or_else(|| io::Error::other("live Summary archive encoding refused"))
-        })
+        self.current
+            .archive_with(admission, |value, source, grant| {
+                value
+                    .reads
+                    .encoding_working_bytes()
+                    .and_then(|working| {
+                        source.records.encode_with_admission(
+                            &source.context,
+                            &**value,
+                            grant,
+                            working,
+                        )
+                    })
+                    .ok_or_else(|| io::Error::other("live Summary archive encoding refused"))
+            })
     }
 }
 
@@ -497,22 +506,28 @@ impl LiveLowerProduct {
         &self,
         admission: ArchiveAdmission<'_>,
     ) -> io::Result<ProductArchive> {
-        self.0.archive_with(admission, |value, source, _| {
-            source
-                .records
-                .encode(
-                    &source.context,
-                    &(
-                        &value.output.output,
-                        &value.output.reads,
-                        &value.output.depth,
-                        &value.output.materialized,
-                        value.output.implementation_revision,
-                        value.output.signature,
-                        value.output.executed,
-                        &value.output.selections,
-                    ),
-                )
+        self.0.archive_with(admission, |value, source, grant| {
+            value
+                .output
+                .reads
+                .encoding_working_bytes()
+                .and_then(|working| {
+                    source.records.encode_with_admission(
+                        &source.context,
+                        &(
+                            &value.output.output,
+                            &value.output.reads,
+                            &value.output.depth,
+                            &value.output.materialized,
+                            value.output.implementation_revision,
+                            value.output.signature,
+                            value.output.executed,
+                            &value.output.selections,
+                        ),
+                        grant,
+                        working,
+                    )
+                })
                 .ok_or_else(|| io::Error::other("live Lower archive encoding refused"))
         })
     }
@@ -606,7 +621,7 @@ impl LiveAnalyzedProduct {
                 scratch,
                 working_bytes: required,
             },
-            |value, source, _| {
+            |value, source, grant| {
                 crate::queries::encode_live_analyzed(
                     &source.records,
                     &source.context,
@@ -614,6 +629,7 @@ impl LiveAnalyzedProduct {
                     &value.reads,
                     value.phase,
                     &value.diagnostic_phases,
+                    grant,
                 )
                 .ok_or_else(|| io::Error::other("live analyzed body archive encoding refused"))
             },
@@ -812,61 +828,126 @@ mod tests {
 
     #[test]
     fn summary_archive_pins_its_codec_and_refuses_foreign_source_binding() {
-        let (value, source) = fixture();
-        let (_, foreign) = fixture();
-        let budget = ProcessBudget::new(2 << 20);
-        let backing = Arc::new(budget.reserve(17).unwrap());
-        let mut allowance = budget
-            .reserve(LiveSummaryProduct::value_bytes(&value).unwrap())
+        for (name, read_count, type_edges) in [
+            ("archive-admission-".repeat(1024), 0usize, 0usize),
+            ("archive-reads".into(), 1024, 0),
+            ("archive-types".into(), 0, 1024),
+        ] {
+            let (mut value, source) = fixture();
+            let owner = DefId::intern(&DefPath::core(&name));
+            let changed = Arc::get_mut(&mut value).unwrap();
+            changed.definition = owner;
+            changed.summary.owner = owner;
+            changed.reads = Arc::new(
+                Reads::from_vec(
+                    (0..read_count)
+                        .map(|index| {
+                            let owner =
+                                DefId::intern(&DefPath::core(&format!("archive-read-{index}")));
+                            let mut output = [0; 32];
+                            output[..8].copy_from_slice(&(index as u64).to_le_bytes());
+                            (crate::ReadKey::Signature(owner), ContentHash(output))
+                        })
+                        .collect(),
+                )
+                .unwrap(),
+            );
+            if type_edges != 0 {
+                let types = source.record_types();
+                let unit = types.intern(hirsel_types::Type::unit());
+                let tuple = types.intern(hirsel_types::Type::with_kind(
+                    hirsel_types::TypeKind::Tuple(vec![unit; type_edges].into()),
+                ));
+                changed.summary.frames = Box::new([crate::Frame {
+                    site: hirsel_types::NameSite::Item,
+                    parent: None,
+                    kind: crate::FrameKind::Item,
+                    generic: false,
+                    size_bindings: Box::new([]),
+                }]);
+                changed.summary.calls = Box::new([crate::SummaryCall {
+                    callee: owner,
+                    binder: hirsel_syntax::LexicalOwner::first(owner.path())
+                        .site(hirsel_types::NameSite::Item),
+                    arguments: Box::new([hirsel_types::GenericArgument::Type(tuple)]),
+                    owning_frame: 0,
+                    target_frame: None,
+                    class: crate::CallClass::StaticSelection,
+                    site: Span::default(),
+                }]);
+            }
+            Arc::get_mut(changed.checked.as_mut().unwrap())
+                .unwrap()
+                .summary = changed.summary.clone();
+            let (_, foreign) = fixture();
+            let budget = ProcessBudget::new(2 << 20);
+            let backing = Arc::new(budget.reserve(17).unwrap());
+            let mut allowance = budget
+                .reserve(LiveSummaryProduct::value_bytes(&value).unwrap())
+                .unwrap();
+            let records = NativeRecords::new(
+                source.record_types().clone(),
+                Arc::new(crate::store::MemStore::default()),
+            );
+            let foreign = NativeRecords::new(
+                foreign.record_types().clone(),
+                Arc::new(crate::store::MemStore::default()),
+            );
+            assert!(ProductSource::new(source.clone(), foreign, backing.clone()).is_none());
+            assert_eq!(
+                allowance.bytes(),
+                LiveSummaryProduct::value_bytes(&value).unwrap()
+            );
+            let product = LiveSummaryProduct::new(
+                descriptor(),
+                value.clone(),
+                ProductSource::new(source.clone(), records.clone(), backing).unwrap(),
+                &mut allowance,
+            )
             .unwrap();
-        let records = NativeRecords::new(
-            source.record_types().clone(),
-            Arc::new(crate::store::MemStore::default()),
-        );
-        let foreign = NativeRecords::new(
-            foreign.record_types().clone(),
-            Arc::new(crate::store::MemStore::default()),
-        );
-        assert!(ProductSource::new(source.clone(), foreign, backing.clone()).is_none());
-        assert_eq!(
-            allowance.bytes(),
-            LiveSummaryProduct::value_bytes(&value).unwrap()
-        );
-        let product = LiveSummaryProduct::new(
-            descriptor(),
-            value.clone(),
-            ProductSource::new(source.clone(), records.clone(), backing).unwrap(),
-            &mut allowance,
-        )
-        .unwrap();
-        let mut scratch = budget.reserve(1 << 20).unwrap();
-        assert_eq!(scratch.bytes(), 1 << 20);
-        let archive = product.archive(&mut scratch, 1 << 20).unwrap();
-        let decoded: PublishedSummary = records.decode(&source, archive.bytes()).unwrap();
-        assert_eq!(decoded.definition, value.definition);
-        assert_eq!(decoded.summary, value.summary);
-        assert_eq!(decoded.growth, value.growth);
-        assert_eq!(
-            decoded.checked.as_ref().unwrap().summary,
-            value.checked.as_ref().unwrap().summary
-        );
-        assert_eq!(
-            decoded.checked.as_ref().unwrap().growth,
-            value.checked.as_ref().unwrap().growth
-        );
-        assert_eq!(decoded.reads, value.reads);
-        assert_eq!(decoded.text, value.text);
-        let mut empty = budget.reserve(0).unwrap();
-        assert_eq!(
-            product.archive(&mut empty, u64::MAX).unwrap().reference(),
-            archive.reference(),
-            "cached materialization does not require another working grant",
-        );
-        drop(product);
-        drop(scratch);
-        assert_eq!(budget.reserved(), archive.retained_bytes());
-        drop(archive);
-        assert_eq!(budget.reserved(), 0);
+            let working = 4096;
+            let mut short = budget.reserve(working).unwrap();
+            let (refused, allocated) =
+                crate::test_alloc::measured(|| product.archive(&mut short, working));
+            assert!(refused.is_err());
+            assert!(
+                allocated.peak <= working as isize,
+                "archive refusal allocated {} bytes under a {working}-byte working partition",
+                allocated.peak
+            );
+            assert_eq!(short.bytes(), working);
+            drop(short);
+            let expected = records.encode(&source, &*value).unwrap();
+            let mut scratch = budget.reserve(1 << 20).unwrap();
+            assert_eq!(scratch.bytes(), 1 << 20);
+            let archive = product.archive(&mut scratch, 1 << 20).unwrap();
+            assert_eq!(archive.bytes(), expected);
+            let decoded: PublishedSummary = records.decode(&source, archive.bytes()).unwrap();
+            assert_eq!(decoded.definition, value.definition);
+            assert_eq!(decoded.summary, value.summary);
+            assert_eq!(decoded.growth, value.growth);
+            assert_eq!(
+                decoded.checked.as_ref().unwrap().summary,
+                value.checked.as_ref().unwrap().summary
+            );
+            assert_eq!(
+                decoded.checked.as_ref().unwrap().growth,
+                value.checked.as_ref().unwrap().growth
+            );
+            assert_eq!(decoded.reads, value.reads);
+            assert_eq!(decoded.text, value.text);
+            let mut empty = budget.reserve(0).unwrap();
+            assert_eq!(
+                product.archive(&mut empty, u64::MAX).unwrap().reference(),
+                archive.reference(),
+                "cached materialization does not require another working grant",
+            );
+            drop(product);
+            drop(scratch);
+            assert_eq!(budget.reserved(), archive.retained_bytes());
+            drop(archive);
+            assert_eq!(budget.reserved(), 0);
+        }
     }
 
     #[test]

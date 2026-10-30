@@ -56,31 +56,43 @@ impl TypeKind {
     /// This does not describe owned payloads or separately executed closure bodies.
     /// Callers retain their own cycle, provenance and owned-payload traversal policies.
     pub fn graph_edges(&self) -> Vec<TypeGraphEdge> {
+        let mut count = 0;
+        self.visit_graph_edges(|_| count += 1);
+        let mut edges = Vec::with_capacity(count);
+        self.visit_graph_edges(|edge| edges.push(edge));
+        edges
+    }
+    pub fn visit_graph_edges(&self, mut visit: impl FnMut(TypeGraphEdge)) {
         use TypeEdgeRole as R;
-        let edge = |ty, role| TypeGraphEdge { ty, role };
+        let mut edge = |ty, role| visit(TypeGraphEdge { ty, role });
         match self {
-            Self::Tuple(ts) => ts.iter().map(|t| edge(*t, R::Component)).collect(),
-            Self::Box(t) => vec![edge(*t, R::Component)],
-            Self::Record(fs) => fs.iter().map(|f| edge(f.ty, R::Component)).collect(),
-            Self::Variant(vs) => vs
-                .iter()
-                .flat_map(|v| v.fields.iter().map(|f| edge(f.1, R::Component)))
-                .collect(),
-            Self::Named { arguments, .. } | Self::Builtin { arguments, .. } => arguments
-                .iter()
-                .filter_map(|a| match a {
-                    GenericArgument::Type(t) => Some(edge(*t, R::TypeArgument)),
-                    GenericArgument::Size(_) => None,
+            Self::Tuple(ts) => ts.iter().for_each(|t| edge(*t, R::Component)),
+            Self::Box(t) => edge(*t, R::Component),
+            Self::Record(fs) => fs.iter().for_each(|f| edge(f.ty, R::Component)),
+            Self::Variant(vs) => {
+                for variant in vs {
+                    for field in &variant.fields {
+                        edge(field.1, R::Component);
+                    }
+                }
+            }
+            Self::Named { arguments, .. } | Self::Builtin { arguments, .. } => {
+                arguments.iter().for_each(|a| {
+                    if let GenericArgument::Type(t) = a {
+                        edge(*t, R::TypeArgument);
+                    }
                 })
-                .collect(),
-            Self::Function(f) => f
-                .parameters
-                .iter()
-                .map(|p| edge(p.ty, R::FunctionParameter))
-                .chain([edge(f.result, R::FunctionResult)])
-                .chain(f.error.map(|t| edge(t, R::FunctionError)))
-                .collect(),
-            Self::Primitive(_) | Self::Parameter(_) | Self::Error => vec![],
+            }
+            Self::Function(f) => {
+                for parameter in &f.parameters {
+                    edge(parameter.ty, R::FunctionParameter);
+                }
+                edge(f.result, R::FunctionResult);
+                if let Some(error) = f.error {
+                    edge(error, R::FunctionError);
+                }
+            }
+            Self::Primitive(_) | Self::Parameter(_) | Self::Error => {}
         }
     }
 }

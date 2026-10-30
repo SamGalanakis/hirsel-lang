@@ -4,6 +4,8 @@
 hirsel_guard::install!();
 
 mod base;
+mod bounded;
+pub use bounded::RecordEncoding;
 mod envelope;
 mod indexed_types;
 pub use envelope::{AnchorRow, BoundIndexedEnvelope, IndexedEnvelope};

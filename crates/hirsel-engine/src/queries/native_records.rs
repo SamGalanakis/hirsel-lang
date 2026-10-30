@@ -315,6 +315,13 @@ impl NativeRecordContext {
             }),
         }
     }
+
+    fn record_owner_ref(&self, anchor: Anchor) -> Option<(&DefPath, u32)> {
+        self.bindings
+            .owners
+            .get(&anchor)
+            .map(|(owner, occurrence)| (owner.path(), *occurrence))
+    }
 }
 impl NativeRecordSource for NativeRecordContext {
     fn record_types(&self) -> &Arc<hirsel_types::TypeInterner> {
@@ -341,7 +348,59 @@ pub struct NativeRecords {
     records: Arc<TypeRecords>,
     types: Arc<hirsel_types::TypeInterner>,
 }
+
+pub(crate) struct NativeRecordEncoder<'a> {
+    encoding: hirsel_product_codec::RecordEncoding<'a>,
+    _admission: &'a crate::runtime::MemoryReservation,
+}
+impl NativeRecordEncoder<'_> {
+    pub(crate) fn capture<T>(
+        &mut self,
+        bytes: u64,
+        types: impl IntoIterator<Item = hirsel_types::TypeId>,
+        capture: impl FnOnce() -> T,
+    ) -> Option<T> {
+        self.encoding.capture(bytes, types, capture)
+    }
+
+    pub(crate) fn encode<T: Serialize>(self, value: &T) -> Option<Vec<u8>> {
+        self.encoding.encode(value)
+    }
+}
+
 impl NativeRecords {
+    pub(crate) fn prepare_encoding<'a, T: Serialize>(
+        &'a self,
+        source: &NativeRecordContext,
+        value: &T,
+        admission: &'a crate::runtime::MemoryReservation,
+        serialization_working: u64,
+    ) -> Option<NativeRecordEncoder<'a>> {
+        if !Arc::ptr_eq(&self.types, source.record_types()) {
+            return None;
+        }
+        Some(NativeRecordEncoder {
+            encoding: self.records.prepare_record_encoding(
+                value,
+                |anchor| source.record_owner_ref(anchor),
+                admission.bytes(),
+                serialization_working,
+            )?,
+            _admission: admission,
+        })
+    }
+
+    pub(crate) fn encode_with_admission<T: Serialize>(
+        &self,
+        source: &NativeRecordContext,
+        value: &T,
+        admission: &crate::runtime::MemoryReservation,
+        serialization_working: u64,
+    ) -> Option<Vec<u8>> {
+        self.prepare_encoding(source, value, admission, serialization_working)?
+            .encode(value)
+    }
+
     pub(crate) fn uses_types(&self, types: &Arc<hirsel_types::TypeInterner>) -> bool {
         Arc::ptr_eq(&self.types, types)
     }

@@ -14,7 +14,10 @@ mod origins;
 pub use hirsel_intern::IdHasher;
 #[cfg(feature = "id-salt")]
 pub use hirsel_intern::salt_ids;
-pub use ids::{DefId, DefMap, with_def_numbering, with_def_paths, with_def_source};
+pub use ids::{
+    DefId, DefMap, def_path_scope_working_bytes, with_def_numbering, with_def_paths,
+    with_def_source,
+};
 
 /// Stable SHA-256 digest of domain-separated, length-framed inputs (PROG-5).
 #[derive(

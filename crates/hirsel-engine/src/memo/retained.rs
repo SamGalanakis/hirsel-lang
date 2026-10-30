@@ -1,7 +1,7 @@
 //! Retained allocation accounting, adapted from Buck2 allocative's Arc and Vec
 //! visitors (third-party/NOTICES.md). This measures storage, never wire bytes.
 mod front;
-pub(crate) use front::retained_analyzed_bytes;
+pub(crate) use front::{analyzed_capture_bytes, retained_analyzed_bytes};
 mod signature;
 mod source_entry;
 pub(crate) use signature::retained_signature_payload_bytes;

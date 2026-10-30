@@ -380,15 +380,21 @@ mod tests {
         }
         let store = Arc::new(Memory::default());
         let (types, roots) = cycle(false, false);
-        let expected = TypeRecords::new(types, store.clone())
-            .encode(&roots)
-            .unwrap();
+        let records = TypeRecords::new(types, store.clone());
+        let expected = records.encode(&roots).unwrap();
+        let expected_record = records.encode_record(&roots, |_| None).unwrap();
         for reverse in [false, true] {
             for split in [false, true] {
                 let (types, roots) = cycle(reverse, split);
                 let records = TypeRecords::new(types, store.clone());
                 records.encode(&[roots[1]]).unwrap();
                 assert_eq!(records.encode(&roots).unwrap(), expected);
+                let bounded = records
+                    .prepare_record_encoding(&roots, |_| None, 1 << 20, 0)
+                    .unwrap()
+                    .encode(&roots)
+                    .unwrap();
+                assert_eq!(bounded, expected_record);
                 let checked = records.open_component(expected[0]).unwrap();
                 assert_eq!(checked.len(), 2);
                 assert_eq!(checked.dependency_count(), 1, "canonical external sharing");

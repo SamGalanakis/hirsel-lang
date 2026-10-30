@@ -80,6 +80,11 @@ pub enum AnchorCodec {
     Decode(Vec<Anchor>),
     /// An immutable image's anchors, shared by all its entry decoders.
     DecodeShared(std::sync::Arc<[Anchor]>),
+    BoundedCollect {
+        anchors: Vec<Anchor>,
+        limit: usize,
+        refused: bool,
+    },
 }
 thread_local! {
     static CODEC: std::cell::RefCell<Option<AnchorCodec>> =
@@ -92,6 +97,24 @@ pub fn with_anchor_codec<R>(codec: &mut AnchorCodec, f: impl FnOnce() -> R) -> R
     let result = f();
     *codec = CODEC.replace(outer).expect("anchor codec");
     result
+}
+pub fn with_bounded_anchor_collection<R>(
+    limit: usize,
+    f: impl FnOnce() -> R,
+) -> Option<(R, Vec<Anchor>)> {
+    let mut codec = AnchorCodec::BoundedCollect {
+        anchors: vec![],
+        limit,
+        refused: false,
+    };
+    let result = with_anchor_codec(&mut codec, f);
+    let AnchorCodec::BoundedCollect {
+        anchors, refused, ..
+    } = codec
+    else {
+        unreachable!()
+    };
+    (!refused).then_some((result, anchors))
 }
 impl serde::Serialize for Span {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -107,6 +130,24 @@ impl serde::Serialize for Span {
                 Ok(index as u32 + 1)
             }
             Some(AnchorCodec::Collect(_)) => Ok(0),
+            Some(AnchorCodec::BoundedCollect {
+                anchors,
+                limit,
+                refused,
+            }) if self.anchor != Anchor(0) => {
+                if let Some(index) = anchors.iter().position(|a| *a == self.anchor) {
+                    Ok(index as u32 + 1)
+                } else if anchors.len() == *limit {
+                    *refused = true;
+                    Err(serde::ser::Error::custom(
+                        "source collection admission exhausted",
+                    ))
+                } else {
+                    anchors.push(self.anchor);
+                    Ok(anchors.len() as u32)
+                }
+            }
+            Some(AnchorCodec::BoundedCollect { .. }) => Ok(0),
             Some(AnchorCodec::Encode(numbers)) if self.anchor != Anchor(0) => numbers
                 .get(&self.anchor)
                 .copied()
