@@ -841,14 +841,15 @@ mod tests {
                 let tuple = types.intern(hirsel_types::Type::with_kind(
                     hirsel_types::TypeKind::Tuple(vec![unit; type_edges].into()),
                 ));
-                changed.summary.frames = Box::new([crate::Frame {
+                changed.summary.frames = [crate::Frame {
                     site: hirsel_types::NameSite::Item,
                     parent: None,
                     kind: crate::FrameKind::Item,
                     generic: false,
                     size_bindings: Box::new([]),
-                }]);
-                changed.summary.calls = Box::new([crate::SummaryCall {
+                }]
+                .into();
+                changed.summary.calls = [crate::SummaryCall {
                     callee: owner,
                     binder: hirsel_syntax::LexicalOwner::first(owner.path())
                         .site(hirsel_types::NameSite::Item),
@@ -857,7 +858,8 @@ mod tests {
                     target_frame: None,
                     class: crate::CallClass::StaticSelection,
                     site: Span::default(),
-                }]);
+                }]
+                .into();
             }
             Arc::get_mut(changed.checked.as_mut().unwrap())
                 .unwrap()
