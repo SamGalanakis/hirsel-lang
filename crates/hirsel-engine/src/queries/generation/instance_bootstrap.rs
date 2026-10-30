@@ -255,120 +255,136 @@ impl QueryEngine {
         let mut selected: Vec<_> = ordered.into_iter().map(|(_, _, path)| path).collect();
         selected.shrink_to_fit();
         let runtime_bytes = runtime.bytes();
-        let mut accepted = Vec::new();
+        let mut accepted: Vec<Arc<AcceptedFrontRegistration>> = Vec::new();
         let mut stats = RuntimeStats::default();
+        let mut attempts = 0usize;
         // Same finite selection walk bound as discover_front_instances. Every
         // unfinished iteration must add a canonical instance or missing body.
         'round: for round in 1..=65536 {
-            accepted.clear();
-            if !selected.is_empty() {
-                accepted.reserve_exact(selected.len());
-                for path in &selected {
-                    if accepted
-                        .iter()
-                        .any(|registration| registration.validate(self).is_err())
-                    {
-                        continue 'round;
-                    }
-                    let bound = metadata_bound(&ordinary, &selected, None)
-                        .ok_or_else(|| refused("frontier metadata overflow"))?;
-                    if bound > metadata.bytes() {
-                        return Err(refused("frontier cursors exceed metadata partition"));
-                    }
-                    let count = ordinary
-                        .len()
-                        .checked_add(accepted.len())
-                        .ok_or_else(|| refused("frontier metadata overflow"))?;
-                    let mut paths = Vec::with_capacity(count);
-                    paths.extend(ordinary.iter().cloned());
-                    paths.extend(accepted.iter().map(|a| a.definition().clone()));
-                    let front = self
-                        .front_body_queries_with_registrations(
-                            &paths,
-                            &accepted,
-                            weight,
-                            borrow(&front_pool)?,
-                            errors,
-                        )
-                        .map_err(admission_error)?;
-                    let lower = self
-                        .front_lower_queries(
-                            &paths,
-                            front.clone(),
-                            weight,
-                            max_reads,
-                            borrow(&lower_pool)?,
-                            errors,
-                        )
-                        .map_err(admission_error)?;
-                    let registration = self
-                        .front_registration_queries(
-                            std::slice::from_ref(path),
-                            lower.clone(),
-                            weight,
-                            borrow(&text_pool)?,
-                            errors,
-                        )
-                        .map_err(admission_error)?;
-                    let capacity = FrontRegistrationBootstrap::required_queries(paths.len(), 1)
-                        .ok_or_else(|| refused("query inventory overflow"))?;
-                    let grant = runtime
-                        .split(runtime_bytes)
-                        .ok_or_else(|| refused("runtime partition unavailable"))?;
-                    let mut executor =
-                        AdmittedRuntime::with_query_capacity(jobs, grant, errors, capacity)
-                            .map_err(|e| refused(e.to_string()))?;
-                    executor
-                        .register(FRONT_BODY_KIND, front.factory())
-                        .map_err(refused)?;
-                    executor
-                        .register_local(FRONT_LOWER_KIND, lower.factory())
-                        .map_err(refused)?;
-                    executor
-                        .register_local(FRONT_EVALUATE_KIND, lower.factory())
-                        .map_err(refused)?;
-                    executor
-                        .register_local(FRONT_REGISTRATION_KIND, registration.factory())
-                        .map_err(refused)?;
-                    let query = registration.query(path).ok_or_else(|| {
-                        refused("selected generator is outside the registration view")
-                    })?;
-                    let request = executor.request(&[query]);
-                    let complete = executor.wait(request).map_err(|reference| {
-                        Failure::Bootstrap(FrontRegistrationBootstrapError::Runtime {
-                            reference,
-                            error: registration
-                                .failed(reference)
-                                .and_then(|o| o.text().err())
-                                .or_else(|| lower.failure(reference))
-                                .or_else(|| {
-                                    front
-                                        .outcome(reference)
-                                        .and_then(|o| o.outcome.result.err())
-                                }),
-                            sources: self.sources.clone(),
-                            owner: registration.clone(),
-                        })
-                    })?;
-                    let [product] = complete.as_slice() else {
-                        return Err(refused("generator completed another root inventory"));
-                    };
-                    let output = registration
-                        .outcome(product.clone())
-                        .ok_or_else(|| refused("generator output is unavailable"))?;
-                    accepted.push(
-                        self.accept_front_registration(output, borrow(&syntax_pool)?)
-                            .map_err(acceptance)?,
-                    );
-                    finish(&mut executor, &mut runtime, &mut stats)?;
-                    // Opaque outputs own only Data's measured reservation; all
-                    // completed producer inputs return before the discovery front.
-                    drop(executor);
-                    drop(registration);
-                    drop(lower);
-                    drop(front);
-                    self.adopt_completed_headers();
+            'prefix: loop {
+                attempts += 1;
+                if attempts > 65536 {
+                    return Err(refused("generator prefix did not settle"));
                 }
+                accepted.clear();
+                if !selected.is_empty() {
+                    accepted.reserve_exact(selected.len());
+                    for path in &selected {
+                        if accepted
+                            .iter()
+                            .any(|registration| registration.validate(self).is_err())
+                        {
+                            continue 'round;
+                        }
+                        let bound = metadata_bound(&ordinary, &selected, None)
+                            .ok_or_else(|| refused("frontier metadata overflow"))?;
+                        if bound > metadata.bytes() {
+                            return Err(refused("frontier cursors exceed metadata partition"));
+                        }
+                        let count = ordinary
+                            .len()
+                            .checked_add(accepted.len())
+                            .ok_or_else(|| refused("frontier metadata overflow"))?;
+                        let mut paths = Vec::with_capacity(count);
+                        paths.extend(ordinary.iter().cloned());
+                        paths.extend(accepted.iter().map(|a| a.definition().clone()));
+                        let front = self
+                            .front_body_queries_with_registrations(
+                                &paths,
+                                &accepted,
+                                weight,
+                                borrow(&front_pool)?,
+                                errors,
+                            )
+                            .map_err(admission_error)?;
+                        if accepted
+                            .iter()
+                            .any(|registration| registration.validate(self).is_err())
+                        {
+                            drop(front);
+                            continue 'prefix;
+                        }
+                        let lower = self
+                            .front_lower_queries(
+                                &paths,
+                                front.clone(),
+                                weight,
+                                max_reads,
+                                borrow(&lower_pool)?,
+                                errors,
+                            )
+                            .map_err(admission_error)?;
+                        let registration = self
+                            .front_registration_queries(
+                                std::slice::from_ref(path),
+                                lower.clone(),
+                                weight,
+                                borrow(&text_pool)?,
+                                errors,
+                            )
+                            .map_err(admission_error)?;
+                        let capacity = FrontRegistrationBootstrap::required_queries(paths.len(), 1)
+                            .ok_or_else(|| refused("query inventory overflow"))?;
+                        let grant = runtime
+                            .split(runtime_bytes)
+                            .ok_or_else(|| refused("runtime partition unavailable"))?;
+                        let mut executor =
+                            AdmittedRuntime::with_query_capacity(jobs, grant, errors, capacity)
+                                .map_err(|e| refused(e.to_string()))?;
+                        executor
+                            .register(FRONT_BODY_KIND, front.factory())
+                            .map_err(refused)?;
+                        executor
+                            .register_local(FRONT_LOWER_KIND, lower.factory())
+                            .map_err(refused)?;
+                        executor
+                            .register_local(FRONT_EVALUATE_KIND, lower.factory())
+                            .map_err(refused)?;
+                        executor
+                            .register_local(FRONT_REGISTRATION_KIND, registration.factory())
+                            .map_err(refused)?;
+                        let query = registration.query(path).ok_or_else(|| {
+                            refused("selected generator is outside the registration view")
+                        })?;
+                        let request = executor.request(&[query]);
+                        let complete = executor.wait(request).map_err(|reference| {
+                            Failure::Bootstrap(FrontRegistrationBootstrapError::Runtime {
+                                reference,
+                                error: registration
+                                    .failed(reference)
+                                    .and_then(|o| o.text().err())
+                                    .or_else(|| lower.failure(reference))
+                                    .or_else(|| {
+                                        front
+                                            .outcome(reference)
+                                            .and_then(|o| o.outcome.result.err())
+                                    }),
+                                sources: self.sources.clone(),
+                                owner: registration.clone(),
+                            })
+                        })?;
+                        let [product] = complete.as_slice() else {
+                            return Err(refused("generator completed another root inventory"));
+                        };
+                        let output = registration
+                            .outcome(product.clone())
+                            .ok_or_else(|| refused("generator output is unavailable"))?;
+                        self.adopt_completed_headers();
+                        accepted.push(
+                            self.accept_front_registration(output, borrow(&syntax_pool)?)
+                                .map_err(acceptance)?,
+                        );
+                        finish(&mut executor, &mut runtime, &mut stats)?;
+                        // Opaque outputs own only Data's measured reservation; all
+                        // completed producer inputs return before the discovery front.
+                        drop(executor);
+                        drop(registration);
+                        drop(lower);
+                        drop(front);
+                        self.adopt_completed_headers();
+                    }
+                }
+                break;
             }
             let bound = metadata_bound(&ordinary, &selected, None)
                 .ok_or_else(|| refused("frontier metadata overflow"))?;
