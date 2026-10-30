@@ -61,7 +61,7 @@ fn source_owned_and_resource_selections_keep_distinct_products_in_the_same_sessi
             let mut creates = 0;
             for product in execution.units() {
                 execution
-                    .with_unit(*product, |unit| {
+                    .with_unit(product.clone(), |unit| {
                         assert_eq!(unit.initial.selection, selection);
                         assert_eq!(unit.plan.selection, selection);
                         creates += unit
@@ -93,7 +93,7 @@ fn source_owned_and_resource_selections_keep_distinct_products_in_the_same_sessi
         );
         for (owner, other) in [(0, 1), (1, 0)] {
             for product in selections[other].units() {
-                assert!(selections[owner].with_unit(*product, |_| Ok(())).is_err());
+                assert!(selections[owner].with_unit(product.clone(), |_| Ok(())).is_err());
             }
         }
         drop(host);
