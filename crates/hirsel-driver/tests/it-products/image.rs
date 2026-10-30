@@ -62,6 +62,7 @@ fn imaged_generic_comptime_materializes_selected_client_sizes() {
             .execute(
                 &client,
                 CompileOperation::NativeOwnership(OwnershipRequest {
+                    selection: hirsel_lir::ownership_trace::Selection::Resources,
                     definition: None,
                     target: native::TargetSpec::x86_64_unknown_linux_gnu(),
                     validation: native::Validation::EveryStage,
