@@ -150,6 +150,7 @@ impl<'o> LayoutBuilder<'o> {
                 .relation
                 .parameter_roots()
                 .iter()
+                .filter(|p| !matches!(function.parameters.get(p.parameter().0 as usize), Some(parameter) if parameter.passing != hirsel_types::PassingMode::Borrow))
                 .map(|p| p.parameter().0)
                 .collect()
         } else {

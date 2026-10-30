@@ -385,6 +385,13 @@ fn borrowed_cursor_results_preserve_their_declared_source_through_containers() {
             "result {result:?}",
         );
     }
+    let mut result = types.store.get(boxed).unwrap().clone();
+    result.modes.relation = Relation::parameters([BinderRef::bound(ParamId(0))]);
+    let result = types.store.intern(result);
+    let callable = types.function(&[(PassingMode::Take, boxed)], result, Multiplicity::Many, 0);
+    builder
+        .fn_abi(&types.store, callable, CallableShape::Definition)
+        .unwrap();
     checked(builder);
 }
 
