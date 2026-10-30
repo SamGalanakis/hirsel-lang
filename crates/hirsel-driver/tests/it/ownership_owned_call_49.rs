@@ -246,12 +246,9 @@ fn source_calls_selected(
         };
         if selection == hirsel_lir::ownership_trace::Selection::Owned {
             let per_token = |trace: &Trace| {
-                let mut tokens = BTreeMap::new();
+                let mut tokens: BTreeMap<_, Vec<_>> = BTreeMap::new();
                 for (kind, token, value_type) in lifecycle(trace) {
-                    tokens
-                        .entry(token)
-                        .or_insert_with(Vec::new)
-                        .push((kind, value_type));
+                    tokens.entry(token).or_default().push((kind, value_type));
                 }
                 tokens
             };
