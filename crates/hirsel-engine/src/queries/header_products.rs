@@ -165,6 +165,17 @@ impl HeaderProducts {
             failures: engine.private_unique_failures.clone(),
         })
     }
+    fn declared_inputs(self: &Arc<Self>, engine: &QueryEngine) -> Option<Arc<Self>> {
+        (self.provisional
+            && engine.private_summary_active
+            && self.declarations.revision() == engine.declarations.revision()
+            && self.environment == engine.environment
+            && self.limits == engine.comptime_limits
+            && self.published_manifest == engine.published_manifest
+            && Arc::ptr_eq(&self.types, &engine.types)
+            && engine.private_signature_publications.is_empty())
+        .then(|| self.clone())
+    }
     fn execution(self: &Arc<Self>) -> QueryEngine {
         let mut engine =
             QueryEngine::new_with_hold_bytes(self.environment.clone(), self.adapters.adapters(), 0);
@@ -390,6 +401,11 @@ impl HeaderProducts {
 }
 
 impl QueryEngine {
+    pub(crate) fn declared_header_inputs(&self) -> Option<Arc<HeaderProducts>> {
+        self.header_products
+            .as_ref()
+            .and_then(|headers| headers.declared_inputs(self))
+    }
     pub(crate) fn adopt_completed_headers(&mut self) {
         let Some((stamp, snapshot)) = &self.snapshot else {
             return;

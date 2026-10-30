@@ -433,6 +433,12 @@ impl QueryEngine {
     ) -> Result<Vec<DefPath>, QueryError> {
         let mut roots = Vec::new();
         for path in definitions {
+            if self
+                .source_facts(path)
+                .is_some_and(|facts| facts.comptime.is_empty())
+            {
+                continue;
+            }
             let signature = self.item_signature(path)?.value;
             if !signature
                 .generics()

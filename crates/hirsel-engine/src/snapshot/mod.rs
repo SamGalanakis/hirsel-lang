@@ -624,7 +624,9 @@ impl QueryEngine {
         {
             return snapshot.clone();
         }
-        let headers = crate::queries::header_products::HeaderProducts::capture(self);
+        let headers = self
+            .declared_header_inputs()
+            .unwrap_or_else(|| crate::queries::header_products::HeaderProducts::capture(self));
         let row_sources = self
             .source_paths()
             .into_iter()
