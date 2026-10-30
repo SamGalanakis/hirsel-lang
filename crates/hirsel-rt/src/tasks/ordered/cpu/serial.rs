@@ -243,32 +243,11 @@ pub(crate) fn selected(ctx: *mut TaskCtx) -> bool {
     engine::with_driver(ctx, |d| d.cpu_batch.as_ref().is_some_and(|b| b.width == 1))
 }
 
-/// The typed CPU preclaim, rather than a private-alternate certificate,
-/// identifies the next ordinary callback. No private frame is being entered.
+/// Only the deferred sole root may run CPU children without cooperative turns.
+/// An active scheduler must retain those turns so other tasks can cancel the batch.
 pub(crate) fn pending(ctx: *mut TaskCtx, scope: u64) -> bool {
-    if let Some(root) = root(ctx) {
-        return unsafe { (*root).scope == Some(scope) && (*root).pending.is_some() };
-    }
-    if !engine::on(ctx) {
-        return false;
-    }
-    let parent = engine::current(ctx);
-    let claimed = engine::with_driver(ctx, |d| {
-        d.cpu_batch.as_ref().is_some_and(|batch| {
-            batch.width == 1
-                && batch
-                    .records
-                    .iter()
-                    .any(|row| row.pending_parent == Some(parent))
-        })
-    });
-    if !claimed {
-        return false;
-    }
-    role::with_role(ctx, |s| {
-        let scope = s.scope_handle(scope);
-        s.task(parent as u32).scopes.last() == Some(&scope)
-    })
+    root(ctx)
+        .is_some_and(|root| unsafe { (*root).scope == Some(scope) && (*root).pending.is_some() })
 }
 
 /// CPU storage is metered from Tasks projection, before captures allocate.
