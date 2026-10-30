@@ -640,6 +640,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                 crate::fiber::switch(&raw mut (*native).physical.idle_sp, sp);
                 #[cfg(all(feature = "tsan", target_arch = "x86_64", target_os = "linux"))]
                 crate::tsan_callbacks::clear();
+                crate::pool::cpu_scoped::probe::checkpoint(ctx);
                 // A scalar private or CPU quantum owns no shared state. Keep the same
                 // 1024-point checkpoint and every stop/save/fuel/barrier test,
                 // without taking the scheduler role for a quota-only return.
@@ -703,7 +704,6 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
             if (*native).cpu && (*native).physical.reason & 4 != 0 {
                 crate::pool::cpu_scoped::probe::boundary(ctx, (*native).physical.reason);
             }
-            crate::pool::cpu_scoped::probe::checkpoint(ctx);
             exec.idle.set((*native).physical.idle_sp);
             crate::stop::set_running(std::ptr::null_mut());
             if exec.leaving.get().is_some() {

@@ -1435,8 +1435,9 @@ pub(crate) unsafe fn start_ordered(ctx: *mut TaskCtx, width: u32, migrate: bool)
 /// # Safety
 /// As for start, before root publication.
 pub(crate) unsafe fn start_ordered_demand(ctx: *mut TaskCtx, width: u32, migrate: bool) {
-    let demand = !unsafe { (*ctx).run_ref().capacity.as_ref() }
-        .is_some_and(crate::managed_cores::Service::observed);
+    let demand = !migrate
+        && !unsafe { (*ctx).run_ref().capacity.as_ref() }
+            .is_some_and(crate::managed_cores::Service::observed);
     unsafe { start_with_home(ctx, width, migrate, true, demand) };
 }
 
@@ -1445,8 +1446,9 @@ pub(crate) unsafe fn start_ordered_demand(ctx: *mut TaskCtx, width: u32, migrate
 /// # Safety
 /// As for start, before root publication.
 pub(crate) unsafe fn start_demand(ctx: *mut TaskCtx, width: u32, migrate: bool) {
-    let demand = !unsafe { (*ctx).run_ref().capacity.as_ref() }
-        .is_some_and(crate::managed_cores::Service::observed);
+    let demand = !migrate
+        && !unsafe { (*ctx).run_ref().capacity.as_ref() }
+            .is_some_and(crate::managed_cores::Service::observed);
     unsafe { start_with_home(ctx, width, migrate, false, demand) };
 }
 

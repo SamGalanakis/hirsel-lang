@@ -2458,6 +2458,7 @@ pub(crate) unsafe fn execute(
     let deferred_placement = placement_run
         .filter(|_| {
             (ordered_enabled || production_free)
+                && !migrate
                 && replay.is_none()
                 && options.trace_events.is_none()
         })
