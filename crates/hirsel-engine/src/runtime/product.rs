@@ -93,29 +93,25 @@ impl<T> Owner<T> {
             working_bytes: required,
         } = admission
         else {
-            return Err(io::Error::other(
-                "live product archive needs working admission",
-            ));
+            return Err(io::Error::from(io::ErrorKind::OutOfMemory));
         };
         let mut grant = scratch
             .split(required)
-            .ok_or_else(|| io::Error::other("live product archive admission exhausted"))?;
+            .ok_or_else(|| io::Error::from(io::ErrorKind::OutOfMemory))?;
         // The owning codec declares its complete temporary working bound and
         // runs only under that partition. No encoding occurs during admission.
         let result = publish(&self.value, &self.source, &grant).and_then(|bytes| {
             let retained = archive_bytes(bytes.capacity())
                 .ok_or_else(|| io::Error::other("live product archive layout overflow"))?;
             if retained > grant.bytes() {
-                return Err(io::Error::other(
-                    "live product archive backing admission exhausted",
-                ));
+                return Err(io::Error::from(io::ErrorKind::OutOfMemory));
             }
             let reference = self
                 .domain
                 .reference(&bytes)
                 .ok_or_else(|| io::Error::other("live product archive exceeds the record limit"))?;
             let reservation = grant.split(retained).ok_or_else(|| {
-                io::Error::other("live product archive backing admission exhausted")
+                io::Error::from(io::ErrorKind::OutOfMemory)
             })?;
             Ok(ProductArchive(ArchiveBacking::Materialized(Arc::new(
                 ArchiveOwner {
@@ -378,7 +374,7 @@ impl LiveSummaryProduct {
                             working,
                         )
                     })
-                    .ok_or_else(|| io::Error::other("live Summary archive encoding refused"))
+                    .ok_or_else(|| io::Error::from(io::ErrorKind::OutOfMemory))
             })
     }
 }
@@ -511,7 +507,7 @@ impl LiveLowerProduct {
                         working,
                     )
                 })
-                .ok_or_else(|| io::Error::other("live Lower archive encoding refused"))
+                .ok_or_else(|| io::Error::from(io::ErrorKind::OutOfMemory))
         })
     }
 }
@@ -614,7 +610,7 @@ impl LiveAnalyzedProduct {
                     &value.diagnostic_phases,
                     grant,
                 )
-                .ok_or_else(|| io::Error::other("live analyzed body archive encoding refused"))
+                .ok_or_else(|| io::Error::from(io::ErrorKind::OutOfMemory))
             },
         )
     }
@@ -805,6 +801,78 @@ mod tests {
         drop(product);
         assert_eq!(budget.reserved(), archive.retained_bytes());
         assert_eq!(archive.bytes(), b"complete");
+        drop(archive);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn summary_archive_one_byte_refusal_pins_its_codec() {
+        let (value, source) = fixture();
+        let (_, foreign) = fixture();
+        let budget = ProcessBudget::new(2 << 20);
+        let backing = Arc::new(budget.reserve(17).unwrap());
+        let mut allowance = budget
+            .reserve(LiveSummaryProduct::value_bytes(&value).unwrap())
+            .unwrap();
+        let records = NativeRecords::new(
+            source.record_types().clone(),
+            Arc::new(crate::store::MemStore::default()),
+        );
+        let foreign = NativeRecords::new(
+            foreign.record_types().clone(),
+            Arc::new(crate::store::MemStore::default()),
+        );
+        assert!(ProductSource::new(source.clone(), foreign, backing.clone()).is_none());
+        assert_eq!(
+            allowance.bytes(),
+            LiveSummaryProduct::value_bytes(&value).unwrap()
+        );
+        let product = LiveSummaryProduct::new(
+            descriptor(),
+            value.clone(),
+            ProductSource::new(source.clone(), records.clone(), backing).unwrap(),
+            &mut allowance,
+        )
+        .unwrap();
+        let mut short = budget.reserve(1).unwrap();
+        let (refused, allocation) =
+            crate::test_alloc::measured(|| product.archive(&mut short, 1));
+        assert!(refused.is_err());
+        assert!(
+            allocation.peak <= short.bytes() as isize,
+            "archive allocated {} bytes under a {} byte working partition",
+            allocation.peak,
+            short.bytes(),
+        );
+        assert_eq!(short.bytes(), 1);
+        drop(refused);
+        drop(short);
+        let mut scratch = budget.reserve(1 << 20).unwrap();
+        assert_eq!(scratch.bytes(), 1 << 20);
+        let archive = product.archive(&mut scratch, 1 << 20).unwrap();
+        let decoded: PublishedSummary = records.decode(&source, archive.bytes()).unwrap();
+        assert_eq!(decoded.definition, value.definition);
+        assert_eq!(decoded.summary, value.summary);
+        assert_eq!(decoded.growth, value.growth);
+        assert_eq!(
+            decoded.checked.as_ref().unwrap().summary,
+            value.checked.as_ref().unwrap().summary
+        );
+        assert_eq!(
+            decoded.checked.as_ref().unwrap().growth,
+            value.checked.as_ref().unwrap().growth
+        );
+        assert_eq!(decoded.reads, value.reads);
+        assert_eq!(decoded.text, value.text);
+        let mut empty = budget.reserve(0).unwrap();
+        assert_eq!(
+            product.archive(&mut empty, u64::MAX).unwrap().reference(),
+            archive.reference(),
+            "cached materialization does not require another working grant",
+        );
+        drop(product);
+        drop(scratch);
+        assert_eq!(budget.reserved(), archive.retained_bytes());
         drop(archive);
         assert_eq!(budget.reserved(), 0);
     }
